@@ -27,8 +27,11 @@ A PR that breaks it does not merge.
 ```
 SURFACES   Web (Next.js) · Telegram · CLI · API
 STUDIOS    Coding · Image · Video · Audio · Business · Research   (plugins)
-KERNEL     Action Registry · Job Queue · Scheduler · Event Bus · Asset Library
-           Memory (pgvector) · Agent Loop · Recipe Registry · Benchmarks · Vault · Auth
+KERNEL     Orchestrator (run/step DAG) · Execution State Machine · Job Queue
+           Scheduler · Provider Router · Action Registry · Plugin Manager
+           Event Bus · Asset Library · Memory (pgvector) · Recipe Registry
+           Observability (traces · metrics · cost) · Benchmarks · Vault · Auth
+           Agent Loop (populates the DAG — Phase 2)
 PROVIDERS  local: ComfyUI · vLLM · FLUX · Wan · LTX · Kokoro · F5
            cloud: Claude · Gemini · Seedance · Runway · Higgsfield
 ```

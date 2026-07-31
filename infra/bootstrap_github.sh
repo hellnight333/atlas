@@ -62,7 +62,14 @@ ms "Phase 3 — Video Studio" \
    "Exit: t2v and i2v both run through the recipe system; local (Wan/LTX) and cloud (Seedance) selectable by policy alone."
 
 # ---------------------------------------------------------------- issues
+# Existing titles, so this script is safely re-runnable as the backlog grows.
+EXISTING_TITLES="$(gh issue list --repo "$REPO" --state all --limit 500 --json title --jq '.[].title' 2>/dev/null || true)"
+
 issue() { # issue <milestone> <labels> <title> <body>
+  if grep -Fxq "$3" <<<"$EXISTING_TITLES"; then
+    echo "    = $3 (exists)"
+    return
+  fi
   gh issue create --repo "$REPO" --milestone "$1" --label "$2" --title "$3" --body "$4" >/dev/null
   echo "    + $3"
 }
@@ -220,6 +227,36 @@ issue "$P0" "kernel,infra" "E2E smoke test and worker-kill resilience test" \
 
 **Phase 0 is not done until this passes in CI against a real worker.**"
 
+issue "$P0" "kernel" "Workflow DAG: runs, steps, dependencies" \
+"A single flat job cannot express real work. 'Product shot -> 5s video from that image -> add music -> assemble' is a **dependency graph**, not a queue entry.
+
+Introduce a \`Run\` that owns an ordered set of \`Step\`s with \`depends_on\` edges. A step becomes eligible only when its parents complete; outputs flow along the edges as inputs.
+
+**Scope discipline:** this issue delivers the *data model and executor* only. The **planner** that turns a plain-language brief into a DAG is Phase 2 (agent loop).
+
+The split is deliberate: the graph must exist in the schema from day one because retrofitting \`depends_on\` after six studios enqueue flat jobs is brutal. The planner that populates it can arrive whenever.
+
+**Done when:** a hand-authored 3-step DAG executes in dependency order, a mid-graph failure halts only the downstream branch, and a retry resumes without re-running completed steps."
+
+issue "$P0" "kernel" "Execution state machine, cancellation and pause" \
+"Job/run status must be an explicit state machine with **legal transitions enforced in the kernel**, not a free-text column.
+
+\`queued -> running -> {completed | failed | cancelled}\`, plus \`paused\` and \`retrying\`. Illegal transitions raise rather than silently corrupt state.
+
+**Cancellation must reach a running GPU job.** Build it now, on the heartbeat channel that already exists: the heartbeat response carries \`should_cancel\`, and the worker aborts, releases the lease and cleans up partial output. Adding this on day one is nearly free; bolting a cancel path onto a live fleet later is not.
+
+**Done when:** an in-flight ComfyUI job on the Z8 stops within one heartbeat interval of the operator hitting cancel, releases its GPU, and leaves no orphaned partial asset."
+
+issue "$P0" "kernel,infra" "Observability: trace IDs, structured logs, metrics" \
+"Currently scattered across other issues as an afterthought. It is a first-class kernel component and it belongs in **Phase 0**, because trace context must be threaded through from the very first line of kernel code — retrofitting it later means touching every call site.
+
+- OpenTelemetry-style \`trace_id\` / \`span_id\` propagated ingress -> run -> step -> job -> worker -> provider call
+- structured JSON logs, never free-text (\`docs/LESSONS_FROM_NAML.md\`: raw tracebacks are useless at 2am)
+- metrics: queue depth, lease age, job duration p50/p95, GPU utilisation per node, failure rate by provider
+- **structured failure reasons** — an enum plus detail, so 'why did this fail' is a query, not an archaeology session
+
+**Done when:** one \`trace_id\` from a web request retrieves the complete story including which GPU on which node ran it and what the provider returned."
+
 echo "==> Phase 1 issues"
 P1="Phase 1 — Recipes, benchmarks, routing"
 
@@ -252,6 +289,24 @@ issue "$P1" "infra" "Zero-downtime deploys" \
 Atlas rule: **workers are replaced, never reloaded.** The job queue makes this straightforward since in-flight work survives in Postgres.
 
 **Done when:** a deploy under sustained load drops zero requests and loses zero jobs."
+
+issue "$P1" "kernel,benchmark" "Cost ledger and spend guardrails" \
+"Every job records what it actually cost: cloud spend in currency, local jobs in GPU-seconds. Rolled up per run, per studio, per provider, per day.
+
+This is what makes 'local first' measurable rather than aspirational — you can finally answer *'what did cloud fallback cost me last month, and which recipe caused it?'*
+
+Guardrails on top: per-run and per-day spend ceilings that pause rather than fail, so a runaway agent loop cannot drain an account overnight.
+
+Depends on the Phase 0 observability plumbing."
+
+issue "$P1" "kernel" "Plugin lifecycle and kernel API versioning" \
+"Studios currently register at import time — implicit and fine for one studio, fragile at six.
+
+Formalise the contract: a studio declares a manifest (name, version, required kernel API version, actions, recipes, UI route). The kernel discovers, validates and enables plugins, and **refuses to load a studio built against an incompatible kernel API version** rather than failing mysteriously at runtime.
+
+**Deliberately lightweight.** No sandboxing, no dynamic hot-loading, no separate processes — that is over-engineering for a single-operator system. A manifest, a version check, and an enable/disable flag.
+
+**Done when:** a studio with a stale kernel API version fails to load with a clear message naming the mismatch."
 
 echo "==> Phase 2 issues"
 P2="Phase 2 — Agent loop + LLM tier"

@@ -10,10 +10,12 @@
 │              Research        — plugins, no direct provider    │
 │                                access, ever                   │
 ├──────────────────────────────────────────────────────────────┤
-│ KERNEL       Action Registry · Job Queue · Scheduler          │
-│              Event Bus · Asset Library · Memory (pgvector)    │
-│              Agent Loop · Recipe Registry · Benchmarks        │
-│              Vault · Auth / Tenancy                           │
+│ KERNEL       Orchestrator (run/step DAG) · State Machine      │
+│              Job Queue · Scheduler · Provider Router          │
+│              Action Registry · Plugin Manager · Event Bus     │
+│              Asset Library · Memory (pgvector) · Recipes      │
+│              Observability (traces·metrics·cost) · Benchmarks │
+│              Vault · Auth / Tenancy · Agent Loop              │
 ├──────────────────────────────────────────────────────────────┤
 │ PROVIDERS    local  ComfyUI · vLLM · FLUX · Wan · LTX ·       │
 │                     Kokoro · F5-TTS                           │
@@ -23,6 +25,52 @@
 ```
 
 ## Kernel components
+
+### Orchestrator — runs, steps, dependencies
+A single flat job cannot express real work. *"Product shot → 5s video from that image →
+add music → assemble"* is a dependency graph.
+
+A `Run` owns an ordered set of `Step`s with `depends_on` edges. A step becomes eligible
+only when its parents complete; outputs flow along edges as inputs.
+
+**The graph lives in the schema from day one; the planner that populates it arrives in
+Phase 2.** Retrofitting `depends_on` after six studios enqueue flat jobs is brutal — an
+LLM that authors DAGs can be added at any time.
+
+### Execution State Machine
+Status is an explicit machine with transitions enforced by the kernel, never a free-text
+column:
+
+```
+queued → running → { completed | failed | cancelled }
+         ↕ paused        ↳ retrying → running
+```
+
+Illegal transitions raise rather than silently corrupt state.
+
+**Cancellation reaches running GPU work** via the existing heartbeat: the response carries
+`should_cancel`, the worker aborts, releases the lease and cleans up partial output.
+Nearly free on day one; expensive to bolt onto a live fleet later.
+
+### Observability
+First-class, and **Phase 0** — trace context must be threaded from the first line of kernel
+code, since retrofitting it means touching every call site.
+
+- `trace_id` / `span_id` propagated ingress → run → step → job → worker → provider call
+- structured JSON logs, never free text
+- metrics: queue depth, lease age, job duration p50/p95, GPU utilisation per node,
+  failure rate per provider
+- **structured failure reasons** (enum + detail) so "why did this fail" is a query
+- cost per job — cloud spend in currency, local in GPU-seconds — rolled up per run,
+  studio, provider and day. This is what makes "local first" measurable, not aspirational.
+
+### Plugin Manager
+A studio declares a manifest: name, version, required kernel API version, actions,
+recipes, UI route. The kernel discovers, validates and enables plugins, and refuses to
+load a studio built against an incompatible kernel API version.
+
+Deliberately lightweight — no sandboxing, no hot-loading, no separate processes. That
+would be over-engineering for a single-operator system.
 
 ### Action Registry
 The typed capability catalog. Every operation Atlas can perform is a registered action
