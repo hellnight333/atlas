@@ -90,21 +90,45 @@ Postgres + pgvector. Three tiers: **brand** (tone, palette, do/don't), **project
 ## Compute topology
 
 ```
-      ┌──────────────────────────────┐
-      │  Hetzner 204.168.249.69      │   control plane, always-on
-      │  Postgres · Queue · Web · API │
-      └──────────────┬───────────────┘
-                     │  Tailscale (worker dials OUT — no inbound ports)
-       ┌─────────────┴─────────────┐
-       │                           │
-┌──────▼───────┐          ┌────────▼────────┐
-│ HP Z8 GPU 0  │  …GPU N  │  cloud adapters │
-│ ComfyUI/vLLM │          │  Claude/Gemini… │
-└──────┬───────┘          └─────────────────┘
-       │
-┌──────▼──────────────┐
-│ NAS — MinIO (S3)    │  content-addressed assets
-└─────────────────────┘
+        ┌───────────────────────────────┐
+        │  Hetzner 204.168.249.69       │  control plane, always-on
+        │  Postgres · Queue · Web · API │
+        └───────────────┬───────────────┘
+                        │  Tailscale — workers dial OUT, no inbound ports
+        ┌───────────────┼───────────────┬──────────────────┐
+        │               │               │                  │
+┌───────▼────────┐ ┌────▼──────────┐ ┌──▼──────────────┐   │
+│ HP Z8          │ │ Lenovo i9     │ │ cloud adapters  │   │
+│ Ubuntu 24.04   │ │ Ubuntu 24.04  │ │ Claude · Gemini │   │
+│ GPU 0 … GPU N  │ │ GPU 0         │ │ Seedance · …    │   │
+│ ComfyUI · vLLM │ │ ComfyUI·vLLM  │ └─────────────────┘   │
+└───────┬────────┘ └────┬──────────┘                       │
+        └───────┬───────┘                                  │
+        ┌───────▼─────────────┐                            │
+        │ NAS — MinIO (S3)    │◄───────────────────────────┘
+        │ content-addressed   │
+        └─────────────────────┘
+```
+
+## Fleet
+
+Both GPU nodes run an **identical** Ubuntu 24.04 LTS Server build — one OS, one image,
+one playbook, one set of bugs. Homogeneity is a deliberate choice; a mixed fleet doubles
+every operational surface for no benefit.
+
+Provision with `infra/provision_node.sh`. It runs in two stages (the NVIDIA driver needs a
+reboot between them) and is idempotent — safe to re-run.
+
+**Only the NVIDIA driver is installed on the host. CUDA is not.** CUDA ships inside the
+containers, so different workloads pin different CUDA versions without fighting each other
+and the host stays clean across driver upgrades.
+
+The scheduler routes purely on declared capability, so adding a third node is a
+provisioning task, not a code change:
+
+```
+job.capability_req{vram_gb: 48} → only nodes advertising ≥48GB are eligible
+job.capability_req{vram_gb: 12} → any node; cheapest/idlest wins
 ```
 
 Workers **poll**; the control plane never connects inward. No port forwarding, no NAT

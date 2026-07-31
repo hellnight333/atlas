@@ -46,12 +46,21 @@ This single primitive delivers modular + replaceable + benchmarked + documented 
 
 ## Compute topology
 
-| Node | Role |
-|---|---|
-| Hetzner `204.168.249.69` | Control plane. Always-on. Postgres, queue, web UI. |
-| HP Z8 (multi-GPU) | GPU workers, one process per GPU. Long-polls the queue over an **outbound** Tailscale tunnel. Never opens an inbound port. |
-| NAS | MinIO (S3 API). Content-addressed asset storage. |
-| Mac | Client only. |
+| Node | OS | Role |
+|---|---|---|
+| Hetzner `204.168.249.69` | — | Control plane. Always-on. Postgres, queue, web UI. |
+| HP Z8 (multi-GPU) | Ubuntu 24.04 LTS Server | GPU worker, one process per GPU. |
+| Lenovo i9 (single GPU) | Ubuntu 24.04 LTS Server | GPU worker. Same image, same playbook. |
+| NAS | — | MinIO (S3 API). Content-addressed asset storage. |
+| Mac | macOS | Client only. |
+
+Both GPU nodes run an identical build — one OS, one image, one playbook, one set of bugs.
+Fleet homogeneity is a deliberate architectural choice, not a coincidence.
+Provision with `infra/provision_node.sh` (two stages, reboot between).
+
+Workers **long-poll** the queue over an **outbound** Tailscale tunnel and never open an
+inbound port. Only the NVIDIA driver is installed on the host; CUDA ships inside the
+containers so workloads can pin their own version.
 
 Every generation is a `Job` with a declared capability requirement (VRAM, model family,
 modality). The scheduler routes it to whatever worker can serve it — local GPU, Hetzner

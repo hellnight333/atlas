@@ -163,17 +163,29 @@ issue "$P0" "providers" "ComfyUI headless provider adapter" \
 - map recipe pins onto graph inputs deterministically
 - surface node-level errors as structured failures, not raw tracebacks"
 
-issue "$P0" "infra" "Tailscale mesh: Hetzner control plane <-> HP Z8" \
-"Outbound-only connectivity from the Z8. No port forwarding, no NAT traversal, no dynamic DNS.
+issue "$P0" "infra" "Provision the GPU fleet: HP Z8 and Lenovo i9" \
+"Both nodes run an **identical** Ubuntu 24.04 LTS Server build — one OS, one image, one playbook, one set of bugs. Fleet homogeneity is deliberate.
 
-**Done when:** the Z8 reaches the control plane API with no inbound firewall rule on the Z8 side, and survives a router reboot without manual intervention."
+\`infra/provision_node.sh\` handles it in two idempotent stages (NVIDIA driver needs a reboot between them): base packages, headless NVIDIA driver, Docker CE, NVIDIA Container Toolkit, Tailscale.
 
-issue "$P0" "infra,providers" "HP Z8 GPU worker agent" \
-"One worker process per GPU. Registers, long-polls for a matching job, heartbeats, executes via a local runtime, uploads to MinIO, reports resolved params and timings.
+Only the driver goes on the host — **CUDA ships inside containers** so workloads pin their own version and the host stays clean across driver upgrades.
+
+**Done when:** \`docker run --rm --gpus all …  nvidia-smi -L\` lists every GPU on both nodes."
+
+issue "$P0" "infra" "Tailscale mesh: Hetzner control plane <-> GPU fleet" \
+"Outbound-only connectivity from every worker. No port forwarding, no NAT traversal, no dynamic DNS.
+
+**Done when:** both GPU nodes reach the control plane API with no inbound firewall rule on their side, and survive a router reboot without manual intervention."
+
+issue "$P0" "infra,providers" "GPU worker agent" \
+"One worker process per GPU, running on both the Z8 and the Lenovo. Registers, long-polls for a matching job, heartbeats, executes via a local runtime, uploads to MinIO, reports resolved params and timings.
 
 - \`CUDA_VISIBLE_DEVICES\` pinned per process
+- advertises real capability (\`vram_gb\`, model families, runtimes) so the scheduler routes on facts, not hostnames
 - clean shutdown releases the lease immediately rather than waiting for expiry
-- all dependencies baked into the image; nothing pip-installed at runtime"
+- all dependencies baked into the image; nothing pip-installed at runtime
+
+**Done when:** adding a third node requires provisioning only — zero code changes."
 
 issue "$P0" "studio:image,kernel" "Image Studio plugin" \
 "The first studio, and the reference implementation of the plugin contract: it registers **actions + recipes + one UI page**, and nothing else.
