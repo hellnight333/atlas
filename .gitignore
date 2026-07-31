@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+dist/
+.turbo/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Models & weights — these live on the NAS, not in git
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+*.gguf
+models/
+
+# Generated media — the Asset Library owns these
+outputs/
+assets/
+*.mp4
+*.mov
+*.wav
+*.png
+*.jpg
+!docs/**/*.png
+
+# OS
+.DS_Store
