@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import {
   useApprovalStore,
   useAssetStore,
+  useClusterStore,
   useWorkspaceIntelligenceStore,
   useWorkspaceStore,
 } from '../../../stores'
@@ -25,6 +26,18 @@ export function InspectorPanel() {
   const assetApproval =
     approvals.find((approval) => approval.asset_id && approval.asset_id === selectedAssetId) ??
     activeApproval
+
+  const clusterWorkers = useClusterStore((state) => state.workers)
+  const clusterLeases = useClusterStore((state) => state.leases)
+  const clusterReservations = useClusterStore((state) => state.reservations)
+  const activeWorkerDetail = useClusterStore((state) => state.activeWorker)
+
+  const inspectedExecution = activeWorkerDetail?.executions[0]
+  const executionWorker = clusterWorkers.find((w) => w.id === inspectedExecution?.worker_id)
+  const executionLease = clusterLeases.find((l) => l.id === inspectedExecution?.lease_id)
+  const executionReservation = clusterReservations.find(
+    (r) => r.id === inspectedExecution?.reservation_id,
+  )
 
   useEffect(() => {
     if (selectedAssetId) {
@@ -100,6 +113,56 @@ export function InspectorPanel() {
             </div>
           ) : (
             <div className="text-xs text-slate-400">No approval required for this object</div>
+          )}
+        </InspectorSection>
+        <InspectorSection title="Execution Placement">
+          {inspectedExecution ? (
+            <div className="space-y-1.5">
+              <InspectorRow
+                label="Worker"
+                value={executionWorker?.display_name ?? inspectedExecution.worker_id ?? 'unassigned'}
+              />
+              <InspectorRow
+                label="Worker Health"
+                value={
+                  executionWorker
+                    ? executionWorker.status === 'online' || executionWorker.status === 'busy'
+                      ? `healthy · ${executionWorker.current_load}/${executionWorker.max_concurrency}`
+                      : executionWorker.status
+                    : 'unknown'
+                }
+              />
+              <InspectorRow
+                label="Capability Match"
+                value={executionReservation?.capability || 'no constraint'}
+              />
+              <InspectorRow
+                label="Reservation"
+                value={
+                  executionReservation
+                    ? `${executionReservation.id} · ${executionReservation.state}`
+                    : (inspectedExecution.reservation_id ?? 'none')
+                }
+              />
+              <InspectorRow
+                label="Lease"
+                value={
+                  executionLease
+                    ? `${executionLease.state} · expires ${new Date(executionLease.expires_at).toLocaleTimeString()}`
+                    : (inspectedExecution.lease_id ?? 'none')
+                }
+              />
+              <InspectorRow
+                label="Placement Reason"
+                value={inspectedExecution.placement_reason ?? '—'}
+              />
+              <InspectorRow
+                label="Retry History"
+                value={`${inspectedExecution.attempts} attempt(s)`}
+              />
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">No execution selected</div>
           )}
         </InspectorSection>
         <InspectorSection title="Relationships">

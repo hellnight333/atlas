@@ -32,6 +32,14 @@ Runtime execution requested -> Approval gate -> (WAITING_APPROVAL | proceed)
 Nothing in Atlas is autonomous. When a declarative policy matches, the runtime pauses before a
 job exists and waits for a human decision. See `APPROVAL_SYSTEM.md`.
 
+## Distributed Execution Path
+
+Approval gate -> Placement gate -> Reservation -> Lease -> Worker -> Provider -> Asset
+
+Execution location is a scheduling decision, never a user decision. Work is created only once a
+worker slot is reserved, and every terminal path returns the slot. See
+`DISTRIBUTED_RUNTIME.md`.
+
 ## Change Governance
 
 Breaking architectural changes require an ADR and approval before implementation.

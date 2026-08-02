@@ -23,6 +23,17 @@ import type {
   ImageGenerationResult,
   ImageVariantRequest,
   ApprovalCreatePayload,
+  ClusterHealth,
+  ClusterLoad,
+  ClusterSnapshot,
+  ClusterSweepResult,
+  ExecutionLease,
+  ExecutionReservation,
+  WorkerDetail,
+  WorkerHeartbeatPayload,
+  WorkerNode,
+  WorkerRegisterPayload,
+  WorkerStatus,
   ApprovalDecisionPayload,
   ApprovalHistoryEvent,
   ApprovalPolicy,
@@ -117,6 +128,9 @@ export class MockProvider implements AtlasProvider {
   private agentTeams: AgentTeam[] = []
   private agentTeamMessages: Record<string, AgentMessage[]> = {}
   private knowledgeGraphs: Record<string, ProjectGraphPayload> = {}
+  private workers = new Map<string, WorkerNode>(mockWorkerSeed())
+  private reservations: ExecutionReservation[] = []
+  private leases: ExecutionLease[] = []
   private approvals = new Map<string, ApprovalRequest>()
   private approvalHistory: ApprovalHistoryEvent[] = []
   private approvalPolicies = new Map<string, ApprovalPolicy>()
@@ -1849,6 +1863,228 @@ export class MockProvider implements AtlasProvider {
       created_at: new Date().toISOString(),
     })
   }
+
+  async listWorkers(status?: WorkerStatus): Promise<WorkerNode[]> {
+    const workers = [...this.workers.values()]
+    return (status ? workers.filter((w) => w.status === status) : workers).sort((a, b) =>
+      a.display_name.localeCompare(b.display_name),
+    )
+  }
+
+  async getWorker(id: string): Promise<WorkerDetail | undefined> {
+    const worker = this.workers.get(id)
+    if (!worker) {
+      return undefined
+    }
+    return {
+      ...worker,
+      reservations: this.reservations.filter((r) => r.worker_id === id),
+      leases: this.leases.filter((l) => l.worker_id === id),
+      heartbeats: [],
+      executions: this.runtimeExecutions.filter((e) => e.worker_id === id),
+    }
+  }
+
+  async registerWorker(payload: WorkerRegisterPayload): Promise<WorkerNode> {
+    const now = new Date().toISOString()
+    const id = payload.workerId ?? `worker-${payload.hostname}`
+    const worker: WorkerNode = {
+      id,
+      hostname: payload.hostname,
+      display_name: payload.displayName ?? payload.hostname,
+      platform: payload.platform ?? 'unknown',
+      resources: {
+        cpu_cores: payload.resources?.cpu_cores ?? 0,
+        ram_gb: payload.resources?.ram_gb ?? 0,
+        gpu: payload.resources?.gpu ?? null,
+        vram_gb: payload.resources?.vram_gb ?? 0,
+        storage_gb: payload.resources?.storage_gb ?? 0,
+      },
+      capabilities: payload.capabilities ?? [],
+      current_load: 0,
+      max_concurrency: payload.maxConcurrency ?? 1,
+      status: 'online',
+      version: payload.version ?? '0.0.0',
+      tags: payload.tags ?? [],
+      metrics: emptyMetrics(),
+      metadata: {},
+      last_heartbeat_at: now,
+      registered_at: this.workers.get(id)?.registered_at ?? now,
+      updated_at: now,
+    }
+    this.workers.set(id, worker)
+    return worker
+  }
+
+  async sendWorkerHeartbeat(payload: WorkerHeartbeatPayload): Promise<WorkerNode> {
+    const worker = this.requireWorker(payload.workerId)
+    const updated: WorkerNode = {
+      ...worker,
+      status: payload.status ?? (worker.status === 'offline' ? 'online' : worker.status),
+      current_load: payload.currentLoad ?? worker.current_load,
+      metrics: { ...worker.metrics, ...payload.metrics },
+      last_heartbeat_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    this.workers.set(updated.id, updated)
+    return updated
+  }
+
+  async pauseWorker(id: string): Promise<WorkerNode> {
+    return this.setWorkerStatus(id, 'paused')
+  }
+
+  async resumeWorker(id: string): Promise<WorkerNode> {
+    return this.setWorkerStatus(id, 'online')
+  }
+
+  async drainWorker(id: string): Promise<WorkerNode> {
+    return this.setWorkerStatus(id, 'draining')
+  }
+
+  async getCluster(): Promise<ClusterSnapshot> {
+    return {
+      health: await this.getClusterHealth(),
+      load: await this.getClusterLoad(),
+      workers: await this.listWorkers(),
+      captured_at: new Date().toISOString(),
+    }
+  }
+
+  async getClusterHealth(): Promise<ClusterHealth> {
+    const workers = [...this.workers.values()]
+    const count = (status: WorkerStatus) => workers.filter((w) => w.status === status).length
+    return {
+      healthy: workers.some((w) => w.status === 'online' || w.status === 'busy'),
+      total_workers: workers.length,
+      online: count('online'),
+      offline: count('offline'),
+      draining: count('draining'),
+      paused: count('paused'),
+      errored: count('error'),
+      stale_heartbeats: [],
+      expired_leases: [],
+    }
+  }
+
+  async getClusterLoad(): Promise<ClusterLoad> {
+    const workers = [...this.workers.values()]
+    const totalCapacity = workers.reduce((sum, w) => sum + w.max_concurrency, 0)
+    const usedCapacity = workers.reduce((sum, w) => sum + w.current_load, 0)
+    return {
+      total_capacity: totalCapacity,
+      used_capacity: usedCapacity,
+      load_ratio: totalCapacity ? usedCapacity / totalCapacity : 0,
+      active_reservations: this.reservations.filter((r) => r.state === 'active').length,
+      active_leases: this.leases.filter((l) => l.state === 'active').length,
+      per_worker: workers.map((w) => ({
+        worker_id: w.id,
+        display_name: w.display_name,
+        status: w.status,
+        capabilities: w.capabilities,
+        current_load: w.current_load,
+        max_concurrency: w.max_concurrency,
+        load_ratio: w.max_concurrency ? w.current_load / w.max_concurrency : 0,
+        last_heartbeat_at: w.last_heartbeat_at ?? null,
+        healthy: w.status !== 'error' && w.status !== 'offline',
+      })),
+    }
+  }
+
+  async listReservations(workerId?: string): Promise<ExecutionReservation[]> {
+    return workerId ? this.reservations.filter((r) => r.worker_id === workerId) : this.reservations
+  }
+
+  async listLeases(workerId?: string): Promise<ExecutionLease[]> {
+    return workerId ? this.leases.filter((l) => l.worker_id === workerId) : this.leases
+  }
+
+  async listExecutionsWaitingPlacement(): Promise<RuntimeExecutionRecord[]> {
+    return this.runtimeExecutions.filter((e) => e.status === 'waiting_placement')
+  }
+
+  async sweepCluster(): Promise<ClusterSweepResult> {
+    return { workers_marked_offline: [], leases_expired: [], executions_recovered: [] }
+  }
+
+  async recoverExecution(executionId: string): Promise<RuntimeExecutionRecord> {
+    const execution = this.runtimeExecutions.find((e) => e.execution_id === executionId)
+    if (!execution) {
+      throw new Error('Runtime execution not found')
+    }
+    return execution
+  }
+
+  async retryPlacement(executionId: string): Promise<RuntimeExecutionRecord> {
+    return this.recoverExecution(executionId)
+  }
+
+  private requireWorker(id: string): WorkerNode {
+    const worker = this.workers.get(id)
+    if (!worker) {
+      throw new Error('Worker not found')
+    }
+    return worker
+  }
+
+  private setWorkerStatus(id: string, status: WorkerStatus): WorkerNode {
+    const worker = this.requireWorker(id)
+    const updated = { ...worker, status, updated_at: new Date().toISOString() }
+    this.workers.set(id, updated)
+    return updated
+  }
+}
+
+function emptyMetrics() {
+  return {
+    cpu_percent: 0,
+    ram_percent: 0,
+    gpu_percent: 0,
+    vram_used_gb: 0,
+    storage_used_gb: 0,
+  }
+}
+
+function mockWorkerSeed(): Array<[string, WorkerNode]> {
+  const now = new Date().toISOString()
+  const make = (
+    id: string,
+    displayName: string,
+    capabilities: string[],
+    status: WorkerStatus,
+    load: number,
+    slots: number,
+    vram: number,
+    tags: string[],
+  ): [string, WorkerNode] => [
+    id,
+    {
+      id,
+      hostname: id,
+      display_name: displayName,
+      platform: 'Ubuntu 24.04 LTS',
+      resources: { cpu_cores: 32, ram_gb: 128, gpu: vram ? 'NVIDIA' : null, vram_gb: vram, storage_gb: 4000 },
+      capabilities,
+      current_load: load,
+      max_concurrency: slots,
+      status,
+      version: '0.9.0',
+      tags,
+      metrics: { ...emptyMetrics(), gpu_percent: load ? 64 : 0 },
+      metadata: {},
+      last_heartbeat_at: now,
+      registered_at: now,
+      updated_at: now,
+    },
+  ]
+
+  return [
+    make('worker-local', 'Local Machine', ['text', 'image', 'python'], 'online', 0, 4, 0, ['local']),
+    make('worker-office-a6000', 'Office-A6000', ['image', 'video', 'training'], 'busy', 2, 2, 48, ['office', 'gpu']),
+    make('worker-office-4090', 'Office-4090', ['image', 'video'], 'online', 1, 3, 24, ['office', 'gpu']),
+    make('worker-home-lab', 'Home-Lab', ['text', 'embedding'], 'draining', 1, 2, 12, ['home']),
+    make('worker-cloud-gpu-01', 'Cloud-GPU-01', ['image', 'render'], 'offline', 0, 4, 80, ['cloud']),
+  ]
 }
 
 export const mockProvider = new MockProvider()

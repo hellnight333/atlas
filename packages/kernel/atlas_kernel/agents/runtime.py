@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
+from ..cluster.events import ExecutionRecovered
 from ..models import CapabilityRequest, Job, JobStatus, Run
 from ..repository import AtlasRepository
 from ..worker import Worker
@@ -52,6 +53,36 @@ class ApprovalVerdict:
     expired: bool = False
 
 
+@dataclass(frozen=True)
+class PlacementResult:
+    """What a placement gate tells the runtime about where an entry may run."""
+
+    placed: bool
+    worker_id: str | None = None
+    reservation_id: str | None = None
+    lease_id: str | None = None
+    reason: str = ""
+
+
+class PlacementGate(Protocol):
+    """Implemented by the cluster layer. Like ApprovalGate, the runtime knows
+    only this shape, so the cluster domain stays outside its dependencies."""
+
+    def place(
+        self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution_id: str
+    ) -> PlacementResult: ...
+
+    def release(
+        self,
+        *,
+        worker_id: str | None,
+        reservation_id: str | None,
+        lease_id: str | None,
+        reason: str = "completed",
+        expired: bool = False,
+    ) -> None: ...
+
+
 class ApprovalGate(Protocol):
     """Implemented by the approval layer. The runtime knows only this shape, so
     the approval domain stays outside the runtime's dependencies."""
@@ -62,7 +93,7 @@ class ApprovalGate(Protocol):
 
 
 class AgentRuntime:
-    def __init__(self, repository: AtlasRepository | None = None, event_bus: object | None = None, worker: Worker | None = None, max_gpu_jobs: int = 1, max_cpu_jobs: int = 4, max_provider_jobs: int = 4, approval_gate: ApprovalGate | None = None) -> None:
+    def __init__(self, repository: AtlasRepository | None = None, event_bus: object | None = None, worker: Worker | None = None, max_gpu_jobs: int = 1, max_cpu_jobs: int = 4, max_provider_jobs: int = 4, approval_gate: ApprovalGate | None = None, placement_gate: PlacementGate | None = None) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self.worker = worker
@@ -70,6 +101,7 @@ class AgentRuntime:
         self.max_cpu_jobs = max_cpu_jobs
         self.max_provider_jobs = max_provider_jobs
         self.approval_gate = approval_gate
+        self.placement_gate = placement_gate
 
     @staticmethod
     def transition(agent: Agent, next_status: AgentStatus) -> Agent:
@@ -152,6 +184,12 @@ class AgentRuntime:
         gated = self._apply_approval_gate(schedule, entry, execution)
         if gated is not None:
             return gated
+
+        # Placement. Work is only ever created once a worker slot is reserved
+        # and a lease is held, so nothing runs on a machine that never agreed.
+        unplaced = self._apply_placement_gate(schedule, entry, execution)
+        if unplaced is not None:
+            return unplaced
 
         token = RuntimeCancellationToken()
         if entry.status == QueueEntryStatus.CANCELLED:
@@ -286,6 +324,171 @@ class AgentRuntime:
         self.repository.update_schedule(schedule)
         return execution
 
+    def _apply_placement_gate(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+    ) -> RuntimeExecutionRecord | None:
+        """Returns a paused execution when no worker can take the entry, or
+        None once a reservation and lease are held."""
+        if self.placement_gate is None:
+            return None
+
+        result = self.placement_gate.place(schedule, entry, execution.execution_id)
+        now = datetime.now(UTC)
+
+        if result.placed:
+            execution.worker_id = result.worker_id
+            execution.reservation_id = result.reservation_id
+            execution.lease_id = result.lease_id
+            execution.placement_reason = result.reason
+            execution.updated_at = now
+            execution.timeline.append(
+                {
+                    "status": "assigned",
+                    "timestamp": now.isoformat(),
+                    "worker_id": result.worker_id,
+                    "lease_id": result.lease_id,
+                }
+            )
+            self.repository.update_runtime_execution(execution)
+            return None
+
+        execution.status = RuntimeExecutionStatus.WAITING_PLACEMENT
+        execution.placement_reason = result.reason
+        execution.updated_at = now
+        execution.timeline.append(
+            {
+                "status": execution.status.value,
+                "timestamp": now.isoformat(),
+                "reason": result.reason,
+            }
+        )
+        self.repository.update_runtime_execution(execution)
+        entry.status = QueueEntryStatus.WAITING_PLACEMENT
+        self.repository.update_schedule(schedule)
+        return execution
+
+    def _release_placement(
+        self, execution: RuntimeExecutionRecord, reason: str, expired: bool = False
+    ) -> None:
+        """Every terminal path releases the worker slot. A leaked lease would
+        permanently shrink cluster capacity."""
+        if self.placement_gate is None or execution.lease_id is None:
+            return
+        self.placement_gate.release(
+            worker_id=execution.worker_id,
+            reservation_id=execution.reservation_id,
+            lease_id=execution.lease_id,
+            reason=reason,
+            expired=expired,
+        )
+        execution.lease_id = None
+        execution.reservation_id = None
+
+    def resume_after_placement(
+        self,
+        execution_id: str,
+        *,
+        retry_policy: RuntimeRetryPolicy | None = None,
+        timeout_seconds: float = 30.0,
+        heartbeat_interval_seconds: float = 0.05,
+    ) -> RuntimeExecutionRecord:
+        """Retries placement for an execution that had nowhere to run."""
+        if self.repository is None or self.event_bus is None or self.worker is None:
+            raise ValueError("Runtime is not configured for execution")
+
+        execution = self.repository.get_runtime_execution(execution_id)
+        if execution is None:
+            raise ValueError("Runtime execution not found")
+        if execution.status is not RuntimeExecutionStatus.WAITING_PLACEMENT:
+            raise ValueError(
+                f"Execution {execution_id} is {execution.status.value}, not waiting for placement"
+            )
+
+        schedule = self.repository.get_schedule(execution.schedule_id)
+        if schedule is None:
+            raise ValueError("Schedule not found")
+        entry = next((e for e in schedule.queue_entries if e.id == execution.entry_id), None)
+        if entry is None:
+            raise ValueError("Queue entry not found")
+
+        entry.status = QueueEntryStatus.READY
+        self.repository.update_schedule(schedule)
+        return self.execute_entry(
+            schedule,
+            entry,
+            retry_policy=retry_policy or execution.retry_policy,
+            timeout_seconds=timeout_seconds,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            execution=execution,
+        )
+
+    def recover_execution(
+        self, execution_id: str, reason: str = "worker failure"
+    ) -> RuntimeExecutionRecord:
+        """Requeues an execution stranded by a dead worker or an expired lease.
+
+        The lease is expired rather than released, the worker slot is returned,
+        and the entry goes back to READY so the dispatcher can place it
+        elsewhere on the next attempt.
+        """
+        if self.repository is None:
+            raise ValueError("Runtime is not configured for execution")
+
+        execution = self.repository.get_runtime_execution(execution_id)
+        if execution is None:
+            raise ValueError("Runtime execution not found")
+
+        self._release_placement(execution, reason=reason, expired=True)
+
+        now = datetime.now(UTC)
+        previous_worker = execution.worker_id
+        execution.status = RuntimeExecutionStatus.QUEUED
+        execution.worker_id = None
+        execution.placement_reason = reason
+        execution.error = None
+        execution.updated_at = now
+        execution.timeline.append(
+            {
+                "status": "recovered",
+                "timestamp": now.isoformat(),
+                "reason": reason,
+                "previous_worker_id": previous_worker,
+            }
+        )
+        self.repository.update_runtime_execution(execution)
+
+        schedule = self.repository.get_schedule(execution.schedule_id)
+        if schedule is not None:
+            for entry in schedule.queue_entries:
+                if entry.id == execution.entry_id:
+                    entry.status = QueueEntryStatus.READY
+                    entry.retry_count += 1
+                    entry.started_time = None
+                    break
+            self.repository.update_schedule(schedule)
+
+        if self.event_bus is not None:
+            self.event_bus.publish(
+                ExecutionRecovered(
+                    execution_id=execution_id,
+                    worker_id=previous_worker or "",
+                    reason=reason,
+                )
+            )
+        return execution
+
+    def list_waiting_placement(self) -> list[RuntimeExecutionRecord]:
+        if self.repository is None:
+            return []
+        return [
+            execution
+            for execution in self.repository.list_runtime_executions()
+            if execution.status is RuntimeExecutionStatus.WAITING_PLACEMENT
+        ]
+
     def resume_after_approval(
         self,
         execution_id: str,
@@ -364,6 +567,7 @@ class AgentRuntime:
         execution.cancellation_requested = True
         execution.updated_at = datetime.now(UTC)
         if execution.status in {RuntimeExecutionStatus.PENDING, RuntimeExecutionStatus.QUEUED, RuntimeExecutionStatus.PREPARING}:
+            self._release_placement(execution, reason="cancelled", expired=False)
             execution.status = RuntimeExecutionStatus.CANCELLED
             execution.completed_at = execution.updated_at
         self.repository.update_runtime_execution(execution)
@@ -450,6 +654,7 @@ class AgentRuntime:
 
     def _mark_completed(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
+        self._release_placement(execution, reason="completed", expired=False)
         execution.status = RuntimeExecutionStatus.COMPLETED
         execution.completed_at = now
         execution.updated_at = now
@@ -464,6 +669,7 @@ class AgentRuntime:
 
     def _mark_failed(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
+        self._release_placement(execution, reason="failed", expired=False)
         execution.status = RuntimeExecutionStatus.FAILED
         execution.error = reason
         execution.completed_at = now
@@ -478,6 +684,7 @@ class AgentRuntime:
 
     def _mark_cancelled(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
+        self._release_placement(execution, reason="cancelled", expired=False)
         execution.status = RuntimeExecutionStatus.CANCELLED
         execution.error = reason
         execution.cancellation_requested = True
@@ -493,6 +700,7 @@ class AgentRuntime:
 
     def _mark_timed_out(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
+        self._release_placement(execution, reason="timed out", expired=True)
         execution.status = RuntimeExecutionStatus.TIMED_OUT
         execution.timeout_reason = reason
         execution.completed_at = now

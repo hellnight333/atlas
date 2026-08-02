@@ -697,6 +697,163 @@ export type AgentPlanRequest = {
   goal: string
 }
 
+export type WorkerStatus =
+  | 'online'
+  | 'offline'
+  | 'busy'
+  | 'paused'
+  | 'draining'
+  | 'error'
+  | 'updating'
+
+export type WorkerResources = {
+  cpu_cores: number
+  ram_gb: number
+  gpu?: string | null
+  vram_gb: number
+  storage_gb: number
+}
+
+export type WorkerMetrics = {
+  cpu_percent: number
+  ram_percent: number
+  gpu_percent: number
+  vram_used_gb: number
+  storage_used_gb: number
+}
+
+export type WorkerNode = {
+  id: string
+  hostname: string
+  display_name: string
+  platform: string
+  resources: WorkerResources
+  capabilities: string[]
+  current_load: number
+  max_concurrency: number
+  status: WorkerStatus
+  version: string
+  tags: string[]
+  metrics: WorkerMetrics
+  metadata: Record<string, unknown>
+  last_heartbeat_at?: string | null
+  registered_at: string
+  updated_at: string
+}
+
+export type WorkerHeartbeatRecord = {
+  id: string
+  worker_id: string
+  status: WorkerStatus
+  current_load: number
+  metrics: WorkerMetrics
+  created_at: string
+}
+
+export type ReservationStatus = 'pending' | 'active' | 'released' | 'cancelled'
+
+export type ExecutionReservation = {
+  id: string
+  worker_id: string
+  schedule_id: string
+  entry_id: string
+  execution_id?: string | null
+  capability: string
+  priority: number
+  state: ReservationStatus
+  reason: string
+  metadata: Record<string, unknown>
+  created_at: string
+  released_at?: string | null
+}
+
+export type LeaseStatus = 'active' | 'expired' | 'released'
+
+export type ExecutionLease = {
+  id: string
+  reservation_id: string
+  worker_id: string
+  execution_id: string
+  state: LeaseStatus
+  lease_seconds: number
+  created_at: string
+  renewed_at?: string | null
+  expires_at: string
+  released_at?: string | null
+}
+
+export type WorkerDetail = WorkerNode & {
+  reservations: ExecutionReservation[]
+  leases: ExecutionLease[]
+  heartbeats: WorkerHeartbeatRecord[]
+  executions: RuntimeExecutionRecord[]
+}
+
+export type WorkerSummary = {
+  worker_id: string
+  display_name: string
+  status: WorkerStatus
+  capabilities: string[]
+  current_load: number
+  max_concurrency: number
+  load_ratio: number
+  last_heartbeat_at?: string | null
+  healthy: boolean
+}
+
+export type ClusterHealth = {
+  healthy: boolean
+  total_workers: number
+  online: number
+  offline: number
+  draining: number
+  paused: number
+  errored: number
+  stale_heartbeats: string[]
+  expired_leases: string[]
+}
+
+export type ClusterLoad = {
+  total_capacity: number
+  used_capacity: number
+  load_ratio: number
+  active_reservations: number
+  active_leases: number
+  per_worker: WorkerSummary[]
+}
+
+export type ClusterSnapshot = {
+  health: ClusterHealth
+  load: ClusterLoad
+  workers: WorkerNode[]
+  captured_at: string
+}
+
+export type ClusterSweepResult = {
+  workers_marked_offline: string[]
+  leases_expired: string[]
+  executions_recovered: string[]
+}
+
+export type WorkerRegisterPayload = {
+  hostname: string
+  displayName?: string
+  platform?: string
+  resources?: Partial<WorkerResources>
+  capabilities?: string[]
+  maxConcurrency?: number
+  version?: string
+  tags?: string[]
+  workerId?: string
+}
+
+export type WorkerHeartbeatPayload = {
+  workerId: string
+  status?: WorkerStatus
+  currentLoad?: number
+  metrics?: Partial<WorkerMetrics>
+}
+
 export type SchedulerPriority = 'immediate' | 'high' | 'normal' | 'low' | 'background'
 
 export type QueueEntryStatus =
@@ -704,6 +861,7 @@ export type QueueEntryStatus =
   | 'ready'
   | 'blocked'
   | 'waiting_approval'
+  | 'waiting_placement'
   | 'preparing'
   | 'running'
   | 'paused'
@@ -766,6 +924,7 @@ export type RuntimeExecutionStatus =
   | 'queued'
   | 'waiting_approval'
   | 'approval_rejected'
+  | 'waiting_placement'
   | 'preparing'
   | 'running'
   | 'completed'
@@ -809,6 +968,11 @@ export type RuntimeExecutionRecord = {
   run_id?: string | null
   job_id?: string | null
   asset_id?: string | null
+  approval_id?: string | null
+  worker_id?: string | null
+  lease_id?: string | null
+  reservation_id?: string | null
+  placement_reason?: string | null
   output: Record<string, unknown>
   cancellation_requested: boolean
   timeline: RuntimeTimelineEntry[]
@@ -1183,4 +1347,20 @@ export interface AtlasProvider {
   listApprovalPolicies(projectId?: string): Promise<ApprovalPolicy[]>
   upsertApprovalPolicy(policy: Partial<ApprovalPolicy> & { name: string }): Promise<ApprovalPolicy>
   listExecutionsWaitingApproval(): Promise<RuntimeExecutionRecord[]>
+  listWorkers(status?: WorkerStatus): Promise<WorkerNode[]>
+  getWorker(id: string): Promise<WorkerDetail | undefined>
+  registerWorker(payload: WorkerRegisterPayload): Promise<WorkerNode>
+  sendWorkerHeartbeat(payload: WorkerHeartbeatPayload): Promise<WorkerNode>
+  pauseWorker(id: string): Promise<WorkerNode>
+  resumeWorker(id: string): Promise<WorkerNode>
+  drainWorker(id: string): Promise<WorkerNode>
+  getCluster(): Promise<ClusterSnapshot>
+  getClusterHealth(): Promise<ClusterHealth>
+  getClusterLoad(): Promise<ClusterLoad>
+  listReservations(workerId?: string): Promise<ExecutionReservation[]>
+  listLeases(workerId?: string): Promise<ExecutionLease[]>
+  listExecutionsWaitingPlacement(): Promise<RuntimeExecutionRecord[]>
+  sweepCluster(): Promise<ClusterSweepResult>
+  recoverExecution(executionId: string, reason?: string): Promise<RuntimeExecutionRecord>
+  retryPlacement(executionId: string): Promise<RuntimeExecutionRecord>
 }

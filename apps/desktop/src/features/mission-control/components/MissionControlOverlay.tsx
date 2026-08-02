@@ -1,8 +1,10 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { Button, Panel, ProjectCard } from '../../../components'
 import {
   useActivityStore,
+  useClusterStore,
   useMissionControlStore,
   useProjectStore,
   useWorkspaceIntelligenceStore,
@@ -18,9 +20,23 @@ export function MissionControlOverlay() {
   const currentExecution = useWorkflowStore((state) => state.currentExecution)
   const graph = useWorkspaceIntelligenceStore((state) => state.graph)
 
+  const clusterHealth = useClusterStore((state) => state.health)
+  const clusterLoad = useClusterStore((state) => state.load)
+  const workers = useClusterStore((state) => state.workers)
+  const waitingPlacement = useClusterStore((state) => state.waitingPlacement)
+  const loadCluster = useClusterStore((state) => state.loadCluster)
+
+  useEffect(() => {
+    if (open) {
+      void loadCluster()
+    }
+  }, [loadCluster, open])
+
   if (!open) {
     return null
   }
+
+  const failedWorkers = workers.filter((w) => w.status === 'offline' || w.status === 'error')
 
   return (
     <section className="fixed inset-0 z-50 bg-slate-950/95 p-6 text-slate-100">
@@ -69,6 +85,56 @@ export function MissionControlOverlay() {
             <li className="rounded bg-slate-900 px-2 py-2">Execution Graph available from runtime-linked nodes.</li>
             <li className="rounded bg-slate-900 px-2 py-2">Agent Graph available from agent and team nodes.</li>
             <li className="rounded bg-slate-900 px-2 py-2">Asset Graph available from lineage and reference edges.</li>
+          </ul>
+        </Panel>
+        <Panel
+          title="Cluster Health"
+          subtitle={
+            clusterHealth
+              ? clusterHealth.healthy
+                ? 'All workers reporting'
+                : 'Cluster degraded'
+              : 'Loading…'
+          }
+        >
+          <ul className="space-y-2 text-sm text-slate-300">
+            <li className="rounded bg-slate-900 px-2 py-2">
+              Workers: {clusterHealth?.total_workers ?? 0} · online {clusterHealth?.online ?? 0} ·
+              offline {clusterHealth?.offline ?? 0}
+            </li>
+            <li className="rounded bg-slate-900 px-2 py-2">
+              Capacity: {clusterLoad?.used_capacity ?? 0}/{clusterLoad?.total_capacity ?? 0} ·
+              leases {clusterLoad?.active_leases ?? 0}
+            </li>
+            {waitingPlacement.length > 0 ? (
+              <li className="rounded bg-amber-500/10 px-2 py-2 text-amber-200">
+                {waitingPlacement.length} execution(s) awaiting placement
+              </li>
+            ) : null}
+            {failedWorkers.length > 0 ? (
+              <li className="rounded bg-rose-500/10 px-2 py-2 text-rose-200">
+                Worker failures: {failedWorkers.map((w) => w.display_name).join(', ')}
+              </li>
+            ) : (
+              <li className="rounded bg-slate-900 px-2 py-2">No worker failures</li>
+            )}
+          </ul>
+          <Button className="mt-2 w-full" onClick={() => navigate('/cluster')}>
+            Open Cluster Studio
+          </Button>
+        </Panel>
+        <Panel title="Worker Map" subtitle="Execution placement across machines">
+          <ul className="space-y-2 text-sm text-slate-300">
+            {workers.length === 0 ? (
+              <li className="rounded bg-slate-900 px-2 py-2">No workers registered</li>
+            ) : (
+              workers.map((worker) => (
+                <li key={worker.id} className="rounded bg-slate-900 px-2 py-2">
+                  {worker.display_name} · {worker.status} · {worker.current_load}/
+                  {worker.max_concurrency} slots
+                </li>
+              ))
+            )}
           </ul>
         </Panel>
         <Panel title="Current Workspace" subtitle="Fast context routing">

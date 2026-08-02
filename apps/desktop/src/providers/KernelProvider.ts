@@ -21,6 +21,17 @@ import type {
   ChatMessage,
   ChatMessageRequest,
   ApprovalCreatePayload,
+  ClusterHealth,
+  ClusterLoad,
+  ClusterSnapshot,
+  ClusterSweepResult,
+  ExecutionLease,
+  ExecutionReservation,
+  WorkerDetail,
+  WorkerHeartbeatPayload,
+  WorkerNode,
+  WorkerRegisterPayload,
+  WorkerStatus,
   ApprovalDecisionPayload,
   ApprovalHistoryEvent,
   ApprovalPolicy,
@@ -748,6 +759,89 @@ export class KernelProvider implements AtlasProvider {
 
   async listExecutionsWaitingApproval(): Promise<RuntimeExecutionRecord[]> {
     return this.client.get(atlasEndpoints.approvalWaitingExecutions)
+  }
+
+  async listWorkers(status?: WorkerStatus): Promise<WorkerNode[]> {
+    const suffix = status ? `?status=${encodeURIComponent(status)}` : ''
+    return this.client.get(`${atlasEndpoints.workers}${suffix}`)
+  }
+
+  async getWorker(id: string): Promise<WorkerDetail | undefined> {
+    return this.client.get(atlasEndpoints.workerById(id))
+  }
+
+  async registerWorker(payload: WorkerRegisterPayload): Promise<WorkerNode> {
+    return this.client.post(atlasEndpoints.workerRegister, {
+      hostname: payload.hostname,
+      display_name: payload.displayName,
+      platform: payload.platform ?? 'unknown',
+      resources: payload.resources ?? {},
+      capabilities: payload.capabilities ?? [],
+      max_concurrency: payload.maxConcurrency ?? 1,
+      version: payload.version ?? '0.0.0',
+      tags: payload.tags ?? [],
+      worker_id: payload.workerId,
+    })
+  }
+
+  async sendWorkerHeartbeat(payload: WorkerHeartbeatPayload): Promise<WorkerNode> {
+    return this.client.post(atlasEndpoints.workerHeartbeat, {
+      worker_id: payload.workerId,
+      status: payload.status,
+      current_load: payload.currentLoad,
+      metrics: payload.metrics,
+    })
+  }
+
+  async pauseWorker(id: string): Promise<WorkerNode> {
+    return this.client.post(atlasEndpoints.workerPause(id), {})
+  }
+
+  async resumeWorker(id: string): Promise<WorkerNode> {
+    return this.client.post(atlasEndpoints.workerResume(id), {})
+  }
+
+  async drainWorker(id: string): Promise<WorkerNode> {
+    return this.client.post(atlasEndpoints.workerDrain(id), {})
+  }
+
+  async getCluster(): Promise<ClusterSnapshot> {
+    return this.client.get(atlasEndpoints.cluster)
+  }
+
+  async getClusterHealth(): Promise<ClusterHealth> {
+    return this.client.get(atlasEndpoints.clusterHealth)
+  }
+
+  async getClusterLoad(): Promise<ClusterLoad> {
+    return this.client.get(atlasEndpoints.clusterLoad)
+  }
+
+  async listReservations(workerId?: string): Promise<ExecutionReservation[]> {
+    const suffix = workerId ? `?worker_id=${encodeURIComponent(workerId)}` : ''
+    return this.client.get(`${atlasEndpoints.clusterReservations}${suffix}`)
+  }
+
+  async listLeases(workerId?: string): Promise<ExecutionLease[]> {
+    const suffix = workerId ? `?worker_id=${encodeURIComponent(workerId)}` : ''
+    return this.client.get(`${atlasEndpoints.clusterLeases}${suffix}`)
+  }
+
+  async listExecutionsWaitingPlacement(): Promise<RuntimeExecutionRecord[]> {
+    return this.client.get(atlasEndpoints.clusterWaitingPlacement)
+  }
+
+  async sweepCluster(): Promise<ClusterSweepResult> {
+    return this.client.post(atlasEndpoints.clusterSweep, {})
+  }
+
+  async recoverExecution(executionId: string, reason?: string): Promise<RuntimeExecutionRecord> {
+    const suffix = reason ? `?reason=${encodeURIComponent(reason)}` : ''
+    return this.client.post(`${atlasEndpoints.clusterRecover(executionId)}${suffix}`, {})
+  }
+
+  async retryPlacement(executionId: string): Promise<RuntimeExecutionRecord> {
+    return this.client.post(atlasEndpoints.clusterRetryPlacement(executionId), {})
   }
 }
 

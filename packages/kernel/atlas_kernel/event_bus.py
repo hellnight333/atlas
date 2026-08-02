@@ -43,6 +43,20 @@ from .approval.events import (
     ExecutionRequested,
     ExecutionWaitingApproval,
 )
+from .cluster.events import (
+    ExecutionAssigned,
+    ExecutionMoved,
+    ExecutionRecovered,
+    LeaseExpired,
+    ReservationCreated,
+    ReservationReleased,
+    WorkerDisconnected,
+    WorkerDraining,
+    WorkerHeartbeatReceived,
+    WorkerPaused,
+    WorkerRegistered,
+    WorkerResumed,
+)
 from .event_types import AtlasEvent
 
 
@@ -397,6 +411,18 @@ DEFAULT_EVENT_TYPES: tuple[type[AtlasEvent], ...] = (
     ExecutionApproved,
     ExecutionRejected,
     ExecutionExpired,
+    WorkerRegistered,
+    WorkerDisconnected,
+    WorkerHeartbeatReceived,
+    WorkerPaused,
+    WorkerResumed,
+    WorkerDraining,
+    ExecutionAssigned,
+    ExecutionMoved,
+    ExecutionRecovered,
+    LeaseExpired,
+    ReservationCreated,
+    ReservationReleased,
 )
 
 

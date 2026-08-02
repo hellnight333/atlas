@@ -22,6 +22,17 @@ from .agents.models import (
     AgentTeam,
     AgentTeamStatus,
 )
+from .cluster.models import (
+    ExecutionLease,
+    ExecutionReservation,
+    LeaseState,
+    ReservationState,
+    WorkerNode,
+    WorkerHeartbeat,
+    WorkerMetrics,
+    WorkerResources,
+    WorkerState,
+)
 from .approval.models import (
     ApprovalCondition,
     ApprovalDecision,
@@ -1863,14 +1874,16 @@ class AtlasRepository:
                     execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                     payload, status, attempts, retry_policy, created_at, updated_at,
                     started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                    error, provider_name, run_id, job_id, asset_id, approval_id, output,
+                    error, provider_name, run_id, job_id, asset_id, approval_id,
+                    worker_id, lease_id, reservation_id, placement_reason, output,
                     cancellation_requested, timeline
                 )
                 VALUES (
                     :execution_id, :schedule_id, :entry_id, :agent_id, :plan_id, :action,
                     :payload, :status, :attempts, :retry_policy, :created_at, :updated_at,
                     :started_at, :heartbeat_at, :deadline_at, :completed_at, :timeout_reason,
-                    :error, :provider_name, :run_id, :job_id, :asset_id, :approval_id, :output,
+                    :error, :provider_name, :run_id, :job_id, :asset_id, :approval_id,
+                    :worker_id, :lease_id, :reservation_id, :placement_reason, :output,
                     :cancellation_requested, :timeline
                 )
                 ON CONFLICT (execution_id) DO NOTHING
@@ -1899,6 +1912,10 @@ class AtlasRepository:
                     "job_id": execution.job_id,
                     "asset_id": execution.asset_id,
                     "approval_id": execution.approval_id,
+                    "worker_id": execution.worker_id,
+                    "lease_id": execution.lease_id,
+                    "reservation_id": execution.reservation_id,
+                    "placement_reason": execution.placement_reason,
                     "output": json.dumps(execution.output, default=_json_value),
                     "cancellation_requested": execution.cancellation_requested,
                     "timeline": json.dumps(execution.timeline, default=_json_value),
@@ -1927,6 +1944,10 @@ class AtlasRepository:
                     job_id = :job_id,
                     asset_id = :asset_id,
                     approval_id = :approval_id,
+                    worker_id = :worker_id,
+                    lease_id = :lease_id,
+                    reservation_id = :reservation_id,
+                    placement_reason = :placement_reason,
                     output = :output,
                     cancellation_requested = :cancellation_requested,
                     timeline = :timeline
@@ -1949,6 +1970,10 @@ class AtlasRepository:
                     "job_id": execution.job_id,
                     "asset_id": execution.asset_id,
                     "approval_id": execution.approval_id,
+                    "worker_id": execution.worker_id,
+                    "lease_id": execution.lease_id,
+                    "reservation_id": execution.reservation_id,
+                    "placement_reason": execution.placement_reason,
                     "output": json.dumps(execution.output, default=_json_value),
                     "cancellation_requested": execution.cancellation_requested,
                     "timeline": json.dumps(execution.timeline, default=_json_value),
@@ -1964,7 +1989,8 @@ class AtlasRepository:
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                       error, provider_name, run_id, job_id, asset_id, approval_id, output,
+                       error, provider_name, run_id, job_id, asset_id, approval_id,
+                       worker_id, lease_id, reservation_id, placement_reason, output,
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 WHERE execution_id = :execution_id
@@ -1982,7 +2008,8 @@ class AtlasRepository:
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                       error, provider_name, run_id, job_id, asset_id, approval_id, output,
+                       error, provider_name, run_id, job_id, asset_id, approval_id,
+                       worker_id, lease_id, reservation_id, placement_reason, output,
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 ORDER BY created_at DESC
@@ -2590,9 +2617,13 @@ class AtlasRepository:
             job_id=row[20],
             asset_id=row[21],
             approval_id=row[22],
-            output=row[23] if isinstance(row[23], dict) else json.loads(row[23]) if row[23] else {},
-            cancellation_requested=bool(row[24]),
-            timeline=row[25] if isinstance(row[25], list) else json.loads(row[25]) if row[25] else [],
+            worker_id=row[23],
+            lease_id=row[24],
+            reservation_id=row[25],
+            placement_reason=row[26],
+            output=row[27] if isinstance(row[27], dict) else json.loads(row[27]) if row[27] else {},
+            cancellation_requested=bool(row[28]),
+            timeline=row[29] if isinstance(row[29], list) else json.loads(row[29]) if row[29] else [],
         )
 
     def _row_to_agent_assignment(self, row: Any) -> AgentAssignment:
@@ -2928,6 +2959,337 @@ class AtlasRepository:
 
 
     # ------------------------------------------------------------------
+    # Cluster (Milestone 009): workers, heartbeats, reservations, leases.
+    # ------------------------------------------------------------------
+
+    def upsert_worker(self, worker: WorkerNode) -> WorkerNode:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_workers (
+                    id, hostname, display_name, platform, resources, capabilities,
+                    current_load, max_concurrency, status, version, tags, metrics,
+                    metadata, last_heartbeat_at, registered_at, updated_at
+                )
+                VALUES (
+                    :id, :hostname, :display_name, :platform, :resources, :capabilities,
+                    :current_load, :max_concurrency, :status, :version, :tags, :metrics,
+                    :metadata, :last_heartbeat_at, :registered_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    hostname = :hostname,
+                    display_name = :display_name,
+                    platform = :platform,
+                    resources = :resources,
+                    capabilities = :capabilities,
+                    current_load = :current_load,
+                    max_concurrency = :max_concurrency,
+                    status = :status,
+                    version = :version,
+                    tags = :tags,
+                    metrics = :metrics,
+                    metadata = :metadata,
+                    last_heartbeat_at = :last_heartbeat_at,
+                    updated_at = :updated_at
+                """),
+                {
+                    "id": worker.id,
+                    "hostname": worker.hostname,
+                    "display_name": worker.display_name,
+                    "platform": worker.platform,
+                    "resources": json.dumps(worker.resources.model_dump(mode="json")),
+                    "capabilities": json.dumps(worker.capabilities),
+                    "current_load": worker.current_load,
+                    "max_concurrency": worker.max_concurrency,
+                    "status": worker.status.value,
+                    "version": worker.version,
+                    "tags": json.dumps(worker.tags),
+                    "metrics": json.dumps(worker.metrics.model_dump(mode="json")),
+                    "metadata": json.dumps(worker.metadata, default=_json_value),
+                    "last_heartbeat_at": worker.last_heartbeat_at,
+                    "registered_at": worker.registered_at,
+                    "updated_at": worker.updated_at,
+                },
+            )
+            session.commit()
+        return worker
+
+    def get_worker(self, worker_id: str) -> WorkerNode | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_WORKER_COLUMNS} FROM atlas_workers WHERE id = :id"),
+                {"id": worker_id},
+            ).fetchone()
+        return self._row_to_worker(row) if row else None
+
+    def get_worker_by_hostname(self, hostname: str) -> WorkerNode | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    f"SELECT {_WORKER_COLUMNS} FROM atlas_workers WHERE hostname = :hostname "
+                    "ORDER BY registered_at LIMIT 1"
+                ),
+                {"hostname": hostname},
+            ).fetchone()
+        return self._row_to_worker(row) if row else None
+
+    def list_workers(self) -> list[WorkerNode]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(f"SELECT {_WORKER_COLUMNS} FROM atlas_workers ORDER BY display_name, id")
+            ).fetchall()
+        return [self._row_to_worker(row) for row in rows]
+
+    def delete_worker(self, worker_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM atlas_workers WHERE id = :id"), {"id": worker_id})
+            session.commit()
+
+    def create_worker_heartbeat(self, heartbeat: WorkerHeartbeat) -> WorkerHeartbeat:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_worker_heartbeats (id, worker_id, status, current_load, metrics, created_at)
+                VALUES (:id, :worker_id, :status, :current_load, :metrics, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": heartbeat.id,
+                    "worker_id": heartbeat.worker_id,
+                    "status": heartbeat.status.value,
+                    "current_load": heartbeat.current_load,
+                    "metrics": json.dumps(heartbeat.metrics.model_dump(mode="json")),
+                    "created_at": heartbeat.created_at,
+                },
+            )
+            session.commit()
+        return heartbeat
+
+    def list_worker_heartbeats(
+        self, worker_id: str | None = None, limit: int = 50
+    ) -> list[WorkerHeartbeat]:
+        query = (
+            "SELECT id, worker_id, status, current_load, metrics, created_at "
+            "FROM atlas_worker_heartbeats WHERE 1=1"
+        )
+        params: dict[str, Any] = {}
+        if worker_id is not None:
+            query += " AND worker_id = :worker_id"
+            params["worker_id"] = worker_id
+        query += " ORDER BY created_at DESC, id DESC LIMIT :limit"
+        params["limit"] = limit
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [
+            WorkerHeartbeat(
+                id=row[0],
+                worker_id=row[1],
+                status=WorkerState(row[2]),
+                current_load=row[3],
+                metrics=WorkerMetrics.model_validate(_as_dict(row[4])),
+                created_at=row[5],
+            )
+            for row in rows
+        ]
+
+    def create_reservation(self, reservation: ExecutionReservation) -> ExecutionReservation:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_reservations (
+                    id, worker_id, schedule_id, entry_id, execution_id, capability,
+                    priority, state, reason, metadata, created_at, released_at
+                )
+                VALUES (
+                    :id, :worker_id, :schedule_id, :entry_id, :execution_id, :capability,
+                    :priority, :state, :reason, :metadata, :created_at, :released_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                self._reservation_params(reservation),
+            )
+            session.commit()
+        return reservation
+
+    def update_reservation(self, reservation: ExecutionReservation) -> ExecutionReservation:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_reservations
+                SET state = :state, reason = :reason, execution_id = :execution_id,
+                    released_at = :released_at, metadata = :metadata
+                WHERE id = :id
+                """),
+                self._reservation_params(reservation),
+            )
+            session.commit()
+        return reservation
+
+    def get_reservation(self, reservation_id: str) -> ExecutionReservation | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_RESERVATION_COLUMNS} FROM atlas_reservations WHERE id = :id"),
+                {"id": reservation_id},
+            ).fetchone()
+        return self._row_to_reservation(row) if row else None
+
+    def list_reservations(
+        self, worker_id: str | None = None, execution_id: str | None = None
+    ) -> list[ExecutionReservation]:
+        query = f"SELECT {_RESERVATION_COLUMNS} FROM atlas_reservations WHERE 1=1"
+        params: dict[str, Any] = {}
+        if worker_id is not None:
+            query += " AND worker_id = :worker_id"
+            params["worker_id"] = worker_id
+        if execution_id is not None:
+            query += " AND execution_id = :execution_id"
+            params["execution_id"] = execution_id
+        query += " ORDER BY created_at DESC, id DESC"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_reservation(row) for row in rows]
+
+    def create_lease(self, lease: ExecutionLease) -> ExecutionLease:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_leases (
+                    id, reservation_id, worker_id, execution_id, state, lease_seconds,
+                    created_at, renewed_at, expires_at, released_at
+                )
+                VALUES (
+                    :id, :reservation_id, :worker_id, :execution_id, :state, :lease_seconds,
+                    :created_at, :renewed_at, :expires_at, :released_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                self._lease_params(lease),
+            )
+            session.commit()
+        return lease
+
+    def update_lease(self, lease: ExecutionLease) -> ExecutionLease:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_leases
+                SET state = :state, lease_seconds = :lease_seconds, renewed_at = :renewed_at,
+                    expires_at = :expires_at, released_at = :released_at
+                WHERE id = :id
+                """),
+                self._lease_params(lease),
+            )
+            session.commit()
+        return lease
+
+    def get_lease(self, lease_id: str) -> ExecutionLease | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_LEASE_COLUMNS} FROM atlas_leases WHERE id = :id"),
+                {"id": lease_id},
+            ).fetchone()
+        return self._row_to_lease(row) if row else None
+
+    def list_leases(
+        self, worker_id: str | None = None, execution_id: str | None = None
+    ) -> list[ExecutionLease]:
+        query = f"SELECT {_LEASE_COLUMNS} FROM atlas_leases WHERE 1=1"
+        params: dict[str, Any] = {}
+        if worker_id is not None:
+            query += " AND worker_id = :worker_id"
+            params["worker_id"] = worker_id
+        if execution_id is not None:
+            query += " AND execution_id = :execution_id"
+            params["execution_id"] = execution_id
+        query += " ORDER BY created_at DESC, id DESC"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_lease(row) for row in rows]
+
+    def list_executions_by_worker(self, worker_id: str) -> list[RuntimeExecutionRecord]:
+        return [e for e in self.list_runtime_executions() if e.worker_id == worker_id]
+
+    def _reservation_params(self, reservation: ExecutionReservation) -> dict[str, Any]:
+        return {
+            "id": reservation.id,
+            "worker_id": reservation.worker_id,
+            "schedule_id": reservation.schedule_id,
+            "entry_id": reservation.entry_id,
+            "execution_id": reservation.execution_id,
+            "capability": reservation.capability,
+            "priority": reservation.priority,
+            "state": reservation.state.value,
+            "reason": reservation.reason,
+            "metadata": json.dumps(reservation.metadata, default=_json_value),
+            "created_at": reservation.created_at,
+            "released_at": reservation.released_at,
+        }
+
+    def _lease_params(self, lease: ExecutionLease) -> dict[str, Any]:
+        return {
+            "id": lease.id,
+            "reservation_id": lease.reservation_id,
+            "worker_id": lease.worker_id,
+            "execution_id": lease.execution_id,
+            "state": lease.state.value,
+            "lease_seconds": lease.lease_seconds,
+            "created_at": lease.created_at,
+            "renewed_at": lease.renewed_at,
+            "expires_at": lease.expires_at,
+            "released_at": lease.released_at,
+        }
+
+    def _row_to_worker(self, row: Any) -> WorkerNode:
+        return WorkerNode(
+            id=row[0],
+            hostname=row[1],
+            display_name=row[2],
+            platform=row[3],
+            resources=WorkerResources.model_validate(_as_dict(row[4])),
+            capabilities=[str(c) for c in _as_list(row[5])],
+            current_load=row[6],
+            max_concurrency=row[7],
+            status=WorkerState(row[8]),
+            version=row[9],
+            tags=[str(t) for t in _as_list(row[10])],
+            metrics=WorkerMetrics.model_validate(_as_dict(row[11])),
+            metadata=_as_dict(row[12]),
+            last_heartbeat_at=row[13],
+            registered_at=row[14],
+            updated_at=row[15],
+        )
+
+    def _row_to_reservation(self, row: Any) -> ExecutionReservation:
+        return ExecutionReservation(
+            id=row[0],
+            worker_id=row[1],
+            schedule_id=row[2],
+            entry_id=row[3],
+            execution_id=row[4],
+            capability=row[5],
+            priority=row[6],
+            state=ReservationState(row[7]),
+            reason=row[8],
+            metadata=_as_dict(row[9]),
+            created_at=row[10],
+            released_at=row[11],
+        )
+
+    def _row_to_lease(self, row: Any) -> ExecutionLease:
+        return ExecutionLease(
+            id=row[0],
+            reservation_id=row[1],
+            worker_id=row[2],
+            execution_id=row[3],
+            state=LeaseState(row[4]),
+            lease_seconds=row[5],
+            created_at=row[6],
+            renewed_at=row[7],
+            expires_at=row[8],
+            released_at=row[9],
+        )
+
+    # ------------------------------------------------------------------
     # Approvals (Milestone 008). History is append-only: there is deliberately
     # no update or delete method for atlas_approval_history.
     # ------------------------------------------------------------------
@@ -3221,6 +3583,23 @@ class AtlasRepository:
             expires_at=row[28],
             decided_at=row[29],
         )
+
+
+_WORKER_COLUMNS = (
+    "id, hostname, display_name, platform, resources, capabilities, current_load, "
+    "max_concurrency, status, version, tags, metrics, metadata, last_heartbeat_at, "
+    "registered_at, updated_at"
+)
+
+_RESERVATION_COLUMNS = (
+    "id, worker_id, schedule_id, entry_id, execution_id, capability, priority, state, "
+    "reason, metadata, created_at, released_at"
+)
+
+_LEASE_COLUMNS = (
+    "id, reservation_id, worker_id, execution_id, state, lease_seconds, created_at, "
+    "renewed_at, expires_at, released_at"
+)
 
 
 _APPROVAL_REQUEST_COLUMNS = (

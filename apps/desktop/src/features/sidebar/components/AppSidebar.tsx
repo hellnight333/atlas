@@ -14,6 +14,7 @@ const items = [
   { label: 'Agent Studio', to: '/agent-studio' },
   { label: 'Automation Studio', to: '/automation' },
   { label: 'Approval Center', to: '/approvals' },
+  { label: 'Cluster Studio', to: '/cluster' },
   { label: 'Mission Control', to: '/mission-control' },
   { label: 'Activity Center', to: '/activity-center' },
 ]

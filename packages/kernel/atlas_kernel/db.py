@@ -543,8 +543,72 @@ def init_db() -> None:
         )
         """))
         conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_workers (
+            id TEXT PRIMARY KEY,
+            hostname TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT 'unknown',
+            resources JSONB NOT NULL DEFAULT '{}',
+            capabilities JSONB NOT NULL DEFAULT '[]',
+            current_load INTEGER NOT NULL DEFAULT 0,
+            max_concurrency INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT '0.0.0',
+            tags JSONB NOT NULL DEFAULT '[]',
+            metrics JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            last_heartbeat_at TIMESTAMP WITH TIME ZONE,
+            registered_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_worker_heartbeats (
+            id TEXT PRIMARY KEY,
+            worker_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            current_load INTEGER NOT NULL DEFAULT 0,
+            metrics JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_reservations (
+            id TEXT PRIMARY KEY,
+            worker_id TEXT NOT NULL,
+            schedule_id TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            execution_id TEXT,
+            capability TEXT NOT NULL DEFAULT '',
+            priority INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            released_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_leases (
+            id TEXT PRIMARY KEY,
+            reservation_id TEXT NOT NULL,
+            worker_id TEXT NOT NULL,
+            execution_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            lease_seconds INTEGER NOT NULL DEFAULT 120,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            renewed_at TIMESTAMP WITH TIME ZONE,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            released_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text("""
         ALTER TABLE atlas_runtime_executions
-        ADD COLUMN IF NOT EXISTS approval_id TEXT
+        ADD COLUMN IF NOT EXISTS approval_id TEXT,
+        ADD COLUMN IF NOT EXISTS worker_id TEXT,
+        ADD COLUMN IF NOT EXISTS lease_id TEXT,
+        ADD COLUMN IF NOT EXISTS reservation_id TEXT,
+        ADD COLUMN IF NOT EXISTS placement_reason TEXT
         """))
         conn.execute(text("""
         ALTER TABLE atlas_runs

@@ -50,7 +50,7 @@ from .runtime import AgentRuntime
 
 
 class AgentFoundation:
-    def __init__(self, repository: AtlasRepository, event_bus: EventBus, worker: object | None = None, approval_gate: object | None = None) -> None:
+    def __init__(self, repository: AtlasRepository, event_bus: EventBus, worker: object | None = None, approval_gate: object | None = None, placement_gate: object | None = None) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self._context_builder = PlannerContextBuilder(repository)
@@ -58,7 +58,7 @@ class AgentFoundation:
         self._scheduler = AgentScheduler(repository=repository, event_bus=event_bus)
         # The gate must reach this runtime too: every execution path has to be
         # gated, not just the one the composition root hands out.
-        self._runtime = AgentRuntime(repository=repository, event_bus=event_bus, worker=worker, approval_gate=approval_gate)
+        self._runtime = AgentRuntime(repository=repository, event_bus=event_bus, worker=worker, approval_gate=approval_gate, placement_gate=placement_gate)
 
     def create_agent(self, request: AgentCreate) -> Agent:
         memory_id = request.memory_id or f"agent-memory-{uuid4().hex[:12]}"

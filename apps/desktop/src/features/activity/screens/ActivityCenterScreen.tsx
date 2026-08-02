@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 
 import { ActivityCard, Panel } from '../../../components'
-import { useActivityStore, useApprovalStore } from '../../../stores'
+import { useActivityStore, useApprovalStore, useClusterStore } from '../../../stores'
 
 export function ActivityCenterScreen() {
   const jobs = useActivityStore((state) => state.jobs)
@@ -11,12 +11,18 @@ export function ActivityCenterScreen() {
   const loadApprovals = useApprovalStore((state) => state.loadApprovals)
   const loadWaitingExecutions = useApprovalStore((state) => state.loadWaitingExecutions)
 
+  const workers = useClusterStore((state) => state.workers)
+  const waitingPlacement = useClusterStore((state) => state.waitingPlacement)
+  const loadCluster = useClusterStore((state) => state.loadCluster)
+
   useEffect(() => {
     void loadApprovals()
     void loadWaitingExecutions()
-  }, [loadApprovals, loadWaitingExecutions])
+    void loadCluster()
+  }, [loadApprovals, loadWaitingExecutions, loadCluster])
 
   const pending = approvals.filter((approval) => approval.state === 'pending')
+  const failedWorkers = workers.filter((w) => w.status === 'offline' || w.status === 'error')
 
   return (
     <section className="grid flex-1 gap-4 p-4 xl:grid-cols-[1.2fr_1fr]">
@@ -36,6 +42,40 @@ export function ActivityCenterScreen() {
               </div>
               <p className="mt-1 text-xs text-amber-200/70">
                 {approval.reason || 'Awaiting a human decision'}
+              </p>
+            </Link>
+          ))}
+          {failedWorkers.map((worker) => (
+            <Link
+              key={worker.id}
+              to="/cluster"
+              className="block rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 hover:border-rose-400"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-rose-100">{worker.display_name}</span>
+                <span className="text-xs uppercase tracking-widest text-rose-300">
+                  worker {worker.status}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-rose-200/70">
+                Work assigned here will be recovered onto another machine.
+              </p>
+            </Link>
+          ))}
+          {waitingPlacement.map((execution) => (
+            <Link
+              key={execution.execution_id}
+              to="/cluster"
+              className="block rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 hover:border-amber-400"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-amber-100">{execution.action}</span>
+                <span className="text-xs uppercase tracking-widest text-amber-300">
+                  awaiting placement
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-amber-200/70">
+                {execution.placement_reason ?? 'No worker available'}
               </p>
             </Link>
           ))}

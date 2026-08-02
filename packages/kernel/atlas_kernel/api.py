@@ -26,6 +26,14 @@ from .approval.models import (
     ApprovalState,
 )
 from .approval.service import ApprovalError, SelfApprovalError
+from .cluster.models import (
+    HeartbeatReport,
+    WorkerMetrics,
+    WorkerRegistration,
+    WorkerResources,
+    WorkerState,
+)
+from .cluster.worker_registry import WorkerRegistryError
 from .composition_root import create_runtime
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
@@ -81,12 +89,18 @@ execution_policy = runtime.execution_policy
 graph_service = runtime.graph_service
 automation_engine = runtime.automation_engine
 approval_service = runtime.approval_service
+worker_registry = runtime.worker_registry
+heartbeat_service = runtime.heartbeat_service
+lease_manager = runtime.lease_manager
+dispatcher = runtime.dispatcher
+cluster_state = runtime.cluster_state
 agent_runtime = runtime.agent_runtime
 agent_foundation = AgentFoundation(
     repository=repository,
     event_bus=event_bus,
     worker=runtime.worker,
     approval_gate=runtime.approval_gate,
+    placement_gate=runtime.dispatcher,
 )
 
 
@@ -149,6 +163,31 @@ class SchedulerCreateRequest(BaseModel):
     priority: SchedulerPriority = SchedulerPriority.NORMAL
     available_executors: list[str] = Field(default_factory=list)
     execution_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkerRegisterRequest(BaseModel):
+    hostname: str
+    display_name: str | None = None
+    platform: str = "unknown"
+    resources: WorkerResources = Field(default_factory=WorkerResources)
+    capabilities: list[str] = Field(default_factory=list)
+    max_concurrency: int = 1
+    version: str = "0.0.0"
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    worker_id: str | None = None
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    worker_id: str
+    status: WorkerState | None = None
+    current_load: int | None = None
+    metrics: WorkerMetrics | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkerActionRequest(BaseModel):
+    actor: str = "system"
 
 
 class ApprovalCreateRequest(BaseModel):
@@ -2795,6 +2834,160 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.get("/workers")
+def list_workers(status: WorkerState | None = None) -> list[dict[str, object]]:
+    return [w.model_dump(mode="json") for w in worker_registry.list_workers(status=status)]
+
+
+@app.post("/workers/register")
+def register_worker(request: WorkerRegisterRequest) -> dict[str, object]:
+    worker = worker_registry.register(
+        WorkerRegistration(
+            hostname=request.hostname,
+            display_name=request.display_name,
+            platform=request.platform,
+            resources=request.resources,
+            capabilities=list(request.capabilities),
+            max_concurrency=request.max_concurrency,
+            version=request.version,
+            tags=list(request.tags),
+            metadata=dict(request.metadata),
+            worker_id=request.worker_id,
+        )
+    )
+    return worker.model_dump(mode="json")
+
+
+@app.post("/workers/heartbeat")
+def worker_heartbeat(request: WorkerHeartbeatRequest) -> dict[str, object]:
+    try:
+        worker = heartbeat_service.record(
+            HeartbeatReport(
+                worker_id=request.worker_id,
+                status=request.status,
+                current_load=request.current_load,
+                metrics=request.metrics,
+                metadata=dict(request.metadata),
+            )
+        )
+    except WorkerRegistryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return worker.model_dump(mode="json")
+
+
+@app.get("/workers/{worker_id}")
+def get_worker(worker_id: str) -> dict[str, object]:
+    worker = worker_registry.get(worker_id)
+    if worker is None:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    payload = worker.model_dump(mode="json")
+    payload["reservations"] = [
+        r.model_dump(mode="json") for r in lease_manager.list_active_reservations(worker_id)
+    ]
+    payload["leases"] = [
+        lease.model_dump(mode="json") for lease in lease_manager.list_active_leases(worker_id)
+    ]
+    payload["heartbeats"] = [
+        hb.model_dump(mode="json") for hb in heartbeat_service.history(worker_id, limit=20)
+    ]
+    payload["executions"] = [
+        e.model_dump(mode="json") for e in repository.list_executions_by_worker(worker_id)
+    ]
+    return payload
+
+
+@app.post("/workers/{worker_id}/pause")
+def pause_worker(worker_id: str, request: WorkerActionRequest | None = None) -> dict[str, object]:
+    return _worker_action(worker_registry.pause, worker_id, request)
+
+
+@app.post("/workers/{worker_id}/resume")
+def resume_worker(worker_id: str, request: WorkerActionRequest | None = None) -> dict[str, object]:
+    return _worker_action(worker_registry.resume, worker_id, request)
+
+
+@app.post("/workers/{worker_id}/drain")
+def drain_worker(worker_id: str, request: WorkerActionRequest | None = None) -> dict[str, object]:
+    return _worker_action(worker_registry.drain, worker_id, request)
+
+
+@app.get("/cluster")
+def get_cluster() -> dict[str, object]:
+    return cluster_state.snapshot().model_dump(mode="json")
+
+
+@app.get("/cluster/health")
+def get_cluster_health() -> dict[str, object]:
+    return cluster_state.health().model_dump(mode="json")
+
+
+@app.get("/cluster/load")
+def get_cluster_load() -> dict[str, object]:
+    return cluster_state.load().model_dump(mode="json")
+
+
+@app.get("/cluster/reservations")
+def list_cluster_reservations(worker_id: str | None = None) -> list[dict[str, object]]:
+    return [
+        r.model_dump(mode="json") for r in repository.list_reservations(worker_id=worker_id)
+    ]
+
+
+@app.get("/cluster/leases")
+def list_cluster_leases(worker_id: str | None = None) -> list[dict[str, object]]:
+    return [lease.model_dump(mode="json") for lease in repository.list_leases(worker_id=worker_id)]
+
+
+@app.get("/cluster/waiting-placement")
+def list_waiting_placement() -> list[dict[str, object]]:
+    return [e.model_dump(mode="json") for e in agent_runtime.list_waiting_placement()]
+
+
+@app.post("/cluster/sweep")
+def sweep_cluster() -> dict[str, object]:
+    """Runs the failure detectors and recovers anything stranded. Idempotent."""
+    offline = heartbeat_service.detect_timeouts()
+    expired = lease_manager.expire_due()
+    recovered = [
+        agent_runtime.recover_execution(lease.execution_id, reason="lease expired").execution_id
+        for lease in expired
+    ]
+    return {
+        "workers_marked_offline": [w.id for w in offline],
+        "leases_expired": [lease.id for lease in expired],
+        "executions_recovered": recovered,
+    }
+
+
+@app.post("/cluster/executions/{execution_id}/recover")
+def recover_execution(execution_id: str, reason: str = "manual intervention") -> dict[str, object]:
+    try:
+        execution = agent_runtime.recover_execution(execution_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return execution.model_dump(mode="json")
+
+
+@app.post("/cluster/executions/{execution_id}/retry-placement")
+def retry_placement(execution_id: str) -> dict[str, object]:
+    try:
+        execution = agent_runtime.resume_after_placement(execution_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return execution.model_dump(mode="json")
+
+
+def _worker_action(
+    operation: object, worker_id: str, request: WorkerActionRequest | None
+) -> dict[str, object]:
+    actor = request.actor if request else "system"
+    try:
+        worker = operation(worker_id, actor)  # type: ignore[operator]
+    except WorkerRegistryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return worker.model_dump(mode="json")
 
 
 @app.post("/approvals")

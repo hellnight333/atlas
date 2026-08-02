@@ -8,6 +8,11 @@ from .approval.gate import RuntimeApprovalGate
 from .approval.policies import ApprovalPolicyEngine
 from .approval.service import ApprovalService
 from .asset_system import AssetService
+from .cluster.cluster_state import ClusterStateService
+from .cluster.dispatcher import Dispatcher
+from .cluster.heartbeat_service import HeartbeatService
+from .cluster.lease_manager import LeaseManager
+from .cluster.worker_registry import WorkerRegistry
 from .automation_engine import AutomationEngine
 from .db import init_db
 from .event_bus import EventBus
@@ -43,6 +48,11 @@ class AtlasRuntime:
     agent_scheduler: AgentScheduler
     approval_service: ApprovalService
     approval_gate: RuntimeApprovalGate
+    worker_registry: WorkerRegistry
+    heartbeat_service: HeartbeatService
+    lease_manager: LeaseManager
+    dispatcher: Dispatcher
+    cluster_state: ClusterStateService
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
@@ -103,11 +113,29 @@ def create_runtime(
         policy_engine=ApprovalPolicyEngine(),
     )
     approval_gate = RuntimeApprovalGate(service=approval_service, event_bus=event_bus)
+    worker_registry = WorkerRegistry(repository=repository, event_bus=event_bus)
+    heartbeat_service = HeartbeatService(
+        repository=repository, event_bus=event_bus, registry=worker_registry
+    )
+    lease_manager = LeaseManager(repository=repository, event_bus=event_bus)
+    dispatcher = Dispatcher(
+        registry=worker_registry, lease_manager=lease_manager, event_bus=event_bus
+    )
+    cluster_state = ClusterStateService(
+        repository=repository,
+        registry=worker_registry,
+        heartbeats=heartbeat_service,
+        lease_manager=lease_manager,
+    )
+    # A single-machine install is a cluster of one: register the in-process
+    # worker so nothing needs configuring for Atlas to keep working.
+    worker_registry.ensure_local_worker()
     agent_runtime = AgentRuntime(
         repository=repository,
         event_bus=event_bus,
         worker=worker,
         approval_gate=approval_gate,
+        placement_gate=dispatcher,
     )
     orchestrator = Orchestrator(
         state_machine=state_machine,
@@ -141,6 +169,11 @@ def create_runtime(
         agent_scheduler=agent_scheduler,
         approval_service=approval_service,
         approval_gate=approval_gate,
+        worker_registry=worker_registry,
+        heartbeat_service=heartbeat_service,
+        lease_manager=lease_manager,
+        dispatcher=dispatcher,
+        cluster_state=cluster_state,
         orchestrator=orchestrator,
         workflow_delegate=workflow_delegate,
         workflow_engine=workflow_engine,
