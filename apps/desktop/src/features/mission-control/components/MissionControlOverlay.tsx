@@ -5,6 +5,7 @@ import { Button, Panel, ProjectCard } from '../../../components'
 import {
   useActivityStore,
   useClusterStore,
+  useOrganizationStore,
   useMissionControlStore,
   useProjectStore,
   useWorkspaceIntelligenceStore,
@@ -26,11 +27,18 @@ export function MissionControlOverlay() {
   const waitingPlacement = useClusterStore((state) => state.waitingPlacement)
   const loadCluster = useClusterStore((state) => state.loadCluster)
 
+  const activeOrg = useOrganizationStore((state) => state.activeOrganization)
+  const orgMembers = useOrganizationStore((state) => state.members)
+  const orgPolicySets = useOrganizationStore((state) => state.policySets)
+  const orgAudit = useOrganizationStore((state) => state.auditRecords)
+  const loadOrganizations = useOrganizationStore((state) => state.loadOrganizations)
+
   useEffect(() => {
     if (open) {
       void loadCluster()
+      void loadOrganizations()
     }
-  }, [loadCluster, open])
+  }, [loadCluster, loadOrganizations, open])
 
   if (!open) {
     return null
@@ -122,6 +130,48 @@ export function MissionControlOverlay() {
           <Button className="mt-2 w-full" onClick={() => navigate('/cluster')}>
             Open Cluster Studio
           </Button>
+        </Panel>
+        <Panel
+          title="Organization Health"
+          subtitle={activeOrg ? `${activeOrg.name} · ${activeOrg.license.tier}` : 'No organization'}
+        >
+          <ul className="space-y-2 text-sm text-slate-300">
+            <li className="rounded bg-slate-900 px-2 py-2">
+              Members: {orgMembers.length} · Policies: {orgPolicySets.length}
+            </li>
+            <li className="rounded bg-slate-900 px-2 py-2">
+              Seats: {orgMembers.length}/{activeOrg?.license.seats ?? 0} · Workers allowed:{' '}
+              {activeOrg?.license.max_workers ?? 0}
+            </li>
+            {activeOrg && orgMembers.length > activeOrg.license.seats ? (
+              <li className="rounded bg-rose-500/10 px-2 py-2 text-rose-200">
+                Policy violation: seat limit exceeded
+              </li>
+            ) : (
+              <li className="rounded bg-slate-900 px-2 py-2">No policy violations</li>
+            )}
+            {activeOrg && !activeOrg.allow_shared_pool ? (
+              <li className="rounded bg-amber-500/10 px-2 py-2 text-amber-200">
+                Shared worker pool is forbidden for this organization
+              </li>
+            ) : null}
+          </ul>
+        </Panel>
+        <Panel title="Audit Alerts" subtitle="Recent governance activity">
+          <ul className="space-y-2 text-sm text-slate-300">
+            {orgAudit.length === 0 ? (
+              <li className="rounded bg-slate-900 px-2 py-2">No audit activity</li>
+            ) : (
+              orgAudit.slice(0, 5).map((record) => (
+                <li key={record.id} className="rounded bg-slate-900 px-2 py-2">
+                  <span className="text-xs uppercase tracking-widest text-slate-500">
+                    {record.action}
+                  </span>
+                  <div className="text-slate-200">{record.summary}</div>
+                </li>
+              ))
+            )}
+          </ul>
         </Panel>
         <Panel title="Worker Map" subtitle="Execution placement across machines">
           <ul className="space-y-2 text-sm text-slate-300">

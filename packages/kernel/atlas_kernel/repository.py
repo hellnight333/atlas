@@ -22,6 +22,24 @@ from .agents.models import (
     AgentTeam,
     AgentTeamStatus,
 )
+from .organization.models import (
+    AuditAction,
+    AuditRecord,
+    Branding,
+    Identity,
+    IdentityProviderKind,
+    License,
+    Membership,
+    MembershipScope,
+    Organization,
+    Permission,
+    PolicyDomain,
+    PolicyScopeKind,
+    PolicySet,
+    Role,
+    Team,
+    TeamKind,
+)
 from .cluster.models import (
     ExecutionLease,
     ExecutionReservation,
@@ -2959,6 +2977,550 @@ class AtlasRepository:
 
 
     # ------------------------------------------------------------------
+    # Organization (Milestone 010). Audit records are append-only: there is
+    # deliberately no update or delete method for atlas_audit_records.
+    # ------------------------------------------------------------------
+
+    def upsert_organization(self, organization: Organization) -> Organization:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_organizations (
+                    id, name, slug, description, tenant_id, workspace_ids, branding,
+                    license, allow_shared_pool, active, metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :name, :slug, :description, :tenant_id, :workspace_ids, :branding,
+                    :license, :allow_shared_pool, :active, :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = :name, slug = :slug, description = :description,
+                    workspace_ids = :workspace_ids, branding = :branding, license = :license,
+                    allow_shared_pool = :allow_shared_pool, active = :active,
+                    metadata = :metadata, updated_at = :updated_at
+                """),
+                {
+                    "id": organization.id,
+                    "name": organization.name,
+                    "slug": organization.slug,
+                    "description": organization.description,
+                    "tenant_id": organization.tenant_id,
+                    "workspace_ids": json.dumps(organization.workspace_ids),
+                    "branding": json.dumps(organization.branding.model_dump(mode="json")),
+                    "license": json.dumps(organization.license.model_dump(mode="json")),
+                    "allow_shared_pool": organization.allow_shared_pool,
+                    "active": organization.active,
+                    "metadata": json.dumps(organization.metadata, default=_json_value),
+                    "created_at": organization.created_at,
+                    "updated_at": organization.updated_at,
+                },
+            )
+            session.commit()
+        return organization
+
+    def get_organization(self, organization_id: str) -> Organization | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_ORGANIZATION_COLUMNS} FROM atlas_organizations WHERE id = :id"),
+                {"id": organization_id},
+            ).fetchone()
+        return self._row_to_organization(row) if row else None
+
+    def get_organization_by_slug(self, slug: str) -> Organization | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_ORGANIZATION_COLUMNS} FROM atlas_organizations WHERE slug = :slug"),
+                {"slug": slug},
+            ).fetchone()
+        return self._row_to_organization(row) if row else None
+
+    def list_organizations(self) -> list[Organization]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(f"SELECT {_ORGANIZATION_COLUMNS} FROM atlas_organizations ORDER BY name, id")
+            ).fetchall()
+        return [self._row_to_organization(row) for row in rows]
+
+    def delete_organization(self, organization_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM atlas_organizations WHERE id = :id"), {"id": organization_id}
+            )
+            session.commit()
+
+    def upsert_team(self, team: Team) -> Team:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_teams (
+                    id, organization_id, name, kind, description, project_ids, studio_ids,
+                    worker_ids, automation_rule_ids, metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :organization_id, :name, :kind, :description, :project_ids, :studio_ids,
+                    :worker_ids, :automation_rule_ids, :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = :name, kind = :kind, description = :description,
+                    project_ids = :project_ids, studio_ids = :studio_ids,
+                    worker_ids = :worker_ids, automation_rule_ids = :automation_rule_ids,
+                    metadata = :metadata, updated_at = :updated_at
+                """),
+                {
+                    "id": team.id,
+                    "organization_id": team.organization_id,
+                    "name": team.name,
+                    "kind": team.kind.value,
+                    "description": team.description,
+                    "project_ids": json.dumps(team.project_ids),
+                    "studio_ids": json.dumps(team.studio_ids),
+                    "worker_ids": json.dumps(team.worker_ids),
+                    "automation_rule_ids": json.dumps(team.automation_rule_ids),
+                    "metadata": json.dumps(team.metadata, default=_json_value),
+                    "created_at": team.created_at,
+                    "updated_at": team.updated_at,
+                },
+            )
+            session.commit()
+        return team
+
+    def get_team(self, team_id: str) -> Team | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_TEAM_COLUMNS} FROM atlas_teams WHERE id = :id"),
+                {"id": team_id},
+            ).fetchone()
+        return self._row_to_team(row) if row else None
+
+    def list_teams(self, organization_id: str | None = None) -> list[Team]:
+        query = f"SELECT {_TEAM_COLUMNS} FROM atlas_teams WHERE 1=1"
+        params: dict[str, Any] = {}
+        if organization_id is not None:
+            query += " AND organization_id = :organization_id"
+            params["organization_id"] = organization_id
+        query += " ORDER BY name, id"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_team(row) for row in rows]
+
+    def upsert_role(self, role: Role) -> Role:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_roles (
+                    id, name, description, permissions, organization_id, builtin,
+                    metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :name, :description, :permissions, :organization_id, :builtin,
+                    :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = :name, description = :description, permissions = :permissions,
+                    builtin = :builtin, metadata = :metadata, updated_at = :updated_at
+                """),
+                {
+                    "id": role.id,
+                    "name": role.name,
+                    "description": role.description,
+                    "permissions": json.dumps([p.value for p in role.permissions]),
+                    "organization_id": role.organization_id,
+                    "builtin": role.builtin,
+                    "metadata": json.dumps(role.metadata, default=_json_value),
+                    "created_at": role.created_at,
+                    "updated_at": role.updated_at,
+                },
+            )
+            session.commit()
+        return role
+
+    def get_role(self, role_id: str) -> Role | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_ROLE_COLUMNS} FROM atlas_roles WHERE id = :id"),
+                {"id": role_id},
+            ).fetchone()
+        return self._row_to_role(row) if row else None
+
+    def list_roles(self) -> list[Role]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(f"SELECT {_ROLE_COLUMNS} FROM atlas_roles ORDER BY name, id")
+            ).fetchall()
+        return [self._row_to_role(row) for row in rows]
+
+    def delete_role(self, role_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM atlas_roles WHERE id = :id"), {"id": role_id})
+            session.commit()
+
+    def upsert_identity(self, identity: Identity) -> Identity:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_identities (
+                    id, subject, display_name, email, provider, provider_subject,
+                    active, metadata, created_at, last_login_at
+                )
+                VALUES (
+                    :id, :subject, :display_name, :email, :provider, :provider_subject,
+                    :active, :metadata, :created_at, :last_login_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    display_name = :display_name, email = :email, provider = :provider,
+                    provider_subject = :provider_subject, active = :active,
+                    metadata = :metadata, last_login_at = :last_login_at
+                """),
+                {
+                    "id": identity.id,
+                    "subject": identity.subject,
+                    "display_name": identity.display_name,
+                    "email": identity.email,
+                    "provider": identity.provider.value,
+                    "provider_subject": identity.provider_subject,
+                    "active": identity.active,
+                    "metadata": json.dumps(identity.metadata, default=_json_value),
+                    "created_at": identity.created_at,
+                    "last_login_at": identity.last_login_at,
+                },
+            )
+            session.commit()
+        return identity
+
+    def get_identity(self, identity_id: str) -> Identity | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_IDENTITY_COLUMNS} FROM atlas_identities WHERE id = :id"),
+                {"id": identity_id},
+            ).fetchone()
+        return self._row_to_identity(row) if row else None
+
+    def get_identity_by_subject(self, subject: str) -> Identity | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_IDENTITY_COLUMNS} FROM atlas_identities WHERE subject = :subject"),
+                {"subject": subject},
+            ).fetchone()
+        return self._row_to_identity(row) if row else None
+
+    def list_identities(self) -> list[Identity]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(f"SELECT {_IDENTITY_COLUMNS} FROM atlas_identities ORDER BY display_name, id")
+            ).fetchall()
+        return [self._row_to_identity(row) for row in rows]
+
+    def upsert_membership(self, membership: Membership) -> Membership:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_memberships (
+                    id, identity_id, organization_id, scope, scope_id, role_ids, team_ids,
+                    active, expires_at, metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :identity_id, :organization_id, :scope, :scope_id, :role_ids, :team_ids,
+                    :active, :expires_at, :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    scope = :scope, scope_id = :scope_id, role_ids = :role_ids,
+                    team_ids = :team_ids, active = :active, expires_at = :expires_at,
+                    metadata = :metadata, updated_at = :updated_at
+                """),
+                {
+                    "id": membership.id,
+                    "identity_id": membership.identity_id,
+                    "organization_id": membership.organization_id,
+                    "scope": membership.scope.value,
+                    "scope_id": membership.scope_id,
+                    "role_ids": json.dumps(membership.role_ids),
+                    "team_ids": json.dumps(membership.team_ids),
+                    "active": membership.active,
+                    "expires_at": membership.expires_at,
+                    "metadata": json.dumps(membership.metadata, default=_json_value),
+                    "created_at": membership.created_at,
+                    "updated_at": membership.updated_at,
+                },
+            )
+            session.commit()
+        return membership
+
+    def get_membership(self, membership_id: str) -> Membership | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_MEMBERSHIP_COLUMNS} FROM atlas_memberships WHERE id = :id"),
+                {"id": membership_id},
+            ).fetchone()
+        return self._row_to_membership(row) if row else None
+
+    def list_memberships(
+        self, organization_id: str | None = None, identity_id: str | None = None
+    ) -> list[Membership]:
+        query = f"SELECT {_MEMBERSHIP_COLUMNS} FROM atlas_memberships WHERE 1=1"
+        params: dict[str, Any] = {}
+        if organization_id is not None:
+            query += " AND organization_id = :organization_id"
+            params["organization_id"] = organization_id
+        if identity_id is not None:
+            query += " AND identity_id = :identity_id"
+            params["identity_id"] = identity_id
+        query += " ORDER BY created_at, id"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_membership(row) for row in rows]
+
+    def delete_membership(self, membership_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM atlas_memberships WHERE id = :id"), {"id": membership_id}
+            )
+            session.commit()
+
+    def upsert_policy_set(self, policy_set: PolicySet) -> PolicySet:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_policy_sets (
+                    id, organization_id, scope, scope_id, domain, settings, locked_keys,
+                    enabled, metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :organization_id, :scope, :scope_id, :domain, :settings, :locked_keys,
+                    :enabled, :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    scope = :scope, scope_id = :scope_id, domain = :domain,
+                    settings = :settings, locked_keys = :locked_keys, enabled = :enabled,
+                    metadata = :metadata, updated_at = :updated_at
+                """),
+                {
+                    "id": policy_set.id,
+                    "organization_id": policy_set.organization_id,
+                    "scope": policy_set.scope.value,
+                    "scope_id": policy_set.scope_id,
+                    "domain": policy_set.domain.value,
+                    "settings": json.dumps(policy_set.settings, default=_json_value),
+                    "locked_keys": json.dumps(policy_set.locked_keys),
+                    "enabled": policy_set.enabled,
+                    "metadata": json.dumps(policy_set.metadata, default=_json_value),
+                    "created_at": policy_set.created_at,
+                    "updated_at": policy_set.updated_at,
+                },
+            )
+            session.commit()
+        return policy_set
+
+    def get_policy_set(self, policy_set_id: str) -> PolicySet | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_POLICY_SET_COLUMNS} FROM atlas_policy_sets WHERE id = :id"),
+                {"id": policy_set_id},
+            ).fetchone()
+        return self._row_to_policy_set(row) if row else None
+
+    def list_policy_sets(
+        self, organization_id: str | None = None, domain: PolicyDomain | None = None
+    ) -> list[PolicySet]:
+        query = f"SELECT {_POLICY_SET_COLUMNS} FROM atlas_policy_sets WHERE 1=1"
+        params: dict[str, Any] = {}
+        if organization_id is not None:
+            query += " AND organization_id = :organization_id"
+            params["organization_id"] = organization_id
+        if domain is not None:
+            query += " AND domain = :domain"
+            params["domain"] = domain.value
+        query += " ORDER BY created_at, id"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_policy_set(row) for row in rows]
+
+    def delete_policy_set(self, policy_set_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM atlas_policy_sets WHERE id = :id"), {"id": policy_set_id}
+            )
+            session.commit()
+
+    def create_audit_record(self, record: AuditRecord) -> AuditRecord:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_audit_records (
+                    id, organization_id, actor_id, actor_display, action, target_type,
+                    target_id, summary, before, after, metadata, created_at
+                )
+                VALUES (
+                    :id, :organization_id, :actor_id, :actor_display, :action, :target_type,
+                    :target_id, :summary, :before, :after, :metadata, :created_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": record.id,
+                    "organization_id": record.organization_id,
+                    "actor_id": record.actor_id,
+                    "actor_display": record.actor_display,
+                    "action": record.action.value,
+                    "target_type": record.target_type,
+                    "target_id": record.target_id,
+                    "summary": record.summary,
+                    "before": json.dumps(record.before, default=_json_value),
+                    "after": json.dumps(record.after, default=_json_value),
+                    "metadata": json.dumps(record.metadata, default=_json_value),
+                    "created_at": record.created_at,
+                },
+            )
+            session.commit()
+        return record
+
+    def get_audit_record(self, audit_id: str) -> AuditRecord | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_AUDIT_COLUMNS} FROM atlas_audit_records WHERE id = :id"),
+                {"id": audit_id},
+            ).fetchone()
+        return self._row_to_audit_record(row) if row else None
+
+    def list_audit_records(
+        self,
+        organization_id: str | None = None,
+        action: AuditAction | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+        since: datetime | None = None,
+        limit: int = 200,
+    ) -> list[AuditRecord]:
+        query = f"SELECT {_AUDIT_COLUMNS} FROM atlas_audit_records WHERE 1=1"
+        params: dict[str, Any] = {}
+        if organization_id is not None:
+            query += " AND organization_id = :organization_id"
+            params["organization_id"] = organization_id
+        if action is not None:
+            query += " AND action = :action"
+            params["action"] = action.value
+        if actor_id is not None:
+            query += " AND actor_id = :actor_id"
+            params["actor_id"] = actor_id
+        if target_id is not None:
+            query += " AND target_id = :target_id"
+            params["target_id"] = target_id
+        if since is not None:
+            query += " AND created_at >= :since"
+            params["since"] = since
+        query += " ORDER BY created_at DESC, id DESC LIMIT :limit"
+        params["limit"] = limit
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_audit_record(row) for row in rows]
+
+    def _row_to_organization(self, row: Any) -> Organization:
+        return Organization(
+            id=row[0],
+            name=row[1],
+            slug=row[2],
+            description=row[3],
+            tenant_id=row[4],
+            workspace_ids=[str(w) for w in _as_list(row[5])],
+            branding=Branding.model_validate(_as_dict(row[6])),
+            license=License.model_validate(_as_dict(row[7])),
+            allow_shared_pool=bool(row[8]),
+            active=bool(row[9]),
+            metadata=_as_dict(row[10]),
+            created_at=row[11],
+            updated_at=row[12],
+        )
+
+    def _row_to_team(self, row: Any) -> Team:
+        return Team(
+            id=row[0],
+            organization_id=row[1],
+            name=row[2],
+            kind=TeamKind(row[3]),
+            description=row[4],
+            project_ids=[str(v) for v in _as_list(row[5])],
+            studio_ids=[str(v) for v in _as_list(row[6])],
+            worker_ids=[str(v) for v in _as_list(row[7])],
+            automation_rule_ids=[str(v) for v in _as_list(row[8])],
+            metadata=_as_dict(row[9]),
+            created_at=row[10],
+            updated_at=row[11],
+        )
+
+    def _row_to_role(self, row: Any) -> Role:
+        return Role(
+            id=row[0],
+            name=row[1],
+            description=row[2],
+            permissions=[Permission(p) for p in _as_list(row[3])],
+            organization_id=row[4],
+            builtin=bool(row[5]),
+            metadata=_as_dict(row[6]),
+            created_at=row[7],
+            updated_at=row[8],
+        )
+
+    def _row_to_identity(self, row: Any) -> Identity:
+        return Identity(
+            id=row[0],
+            subject=row[1],
+            display_name=row[2],
+            email=row[3],
+            provider=IdentityProviderKind(row[4]),
+            provider_subject=row[5],
+            active=bool(row[6]),
+            metadata=_as_dict(row[7]),
+            created_at=row[8],
+            last_login_at=row[9],
+        )
+
+    def _row_to_membership(self, row: Any) -> Membership:
+        return Membership(
+            id=row[0],
+            identity_id=row[1],
+            organization_id=row[2],
+            scope=MembershipScope(row[3]),
+            scope_id=row[4],
+            role_ids=[str(v) for v in _as_list(row[5])],
+            team_ids=[str(v) for v in _as_list(row[6])],
+            active=bool(row[7]),
+            expires_at=row[8],
+            metadata=_as_dict(row[9]),
+            created_at=row[10],
+            updated_at=row[11],
+        )
+
+    def _row_to_policy_set(self, row: Any) -> PolicySet:
+        return PolicySet(
+            id=row[0],
+            organization_id=row[1],
+            scope=PolicyScopeKind(row[2]),
+            scope_id=row[3],
+            domain=PolicyDomain(row[4]),
+            settings=_as_dict(row[5]),
+            locked_keys=[str(v) for v in _as_list(row[6])],
+            enabled=bool(row[7]),
+            metadata=_as_dict(row[8]),
+            created_at=row[9],
+            updated_at=row[10],
+        )
+
+    def _row_to_audit_record(self, row: Any) -> AuditRecord:
+        return AuditRecord(
+            id=row[0],
+            organization_id=row[1],
+            actor_id=row[2],
+            actor_display=row[3],
+            action=AuditAction(row[4]),
+            target_type=row[5],
+            target_id=row[6],
+            summary=row[7],
+            before=_as_dict(row[8]),
+            after=_as_dict(row[9]),
+            metadata=_as_dict(row[10]),
+            created_at=row[11],
+        )
+
+    # ------------------------------------------------------------------
     # Cluster (Milestone 009): workers, heartbeats, reservations, leases.
     # ------------------------------------------------------------------
 
@@ -3584,6 +4146,40 @@ class AtlasRepository:
             decided_at=row[29],
         )
 
+
+_ORGANIZATION_COLUMNS = (
+    "id, name, slug, description, tenant_id, workspace_ids, branding, license, "
+    "allow_shared_pool, active, metadata, created_at, updated_at"
+)
+
+_TEAM_COLUMNS = (
+    "id, organization_id, name, kind, description, project_ids, studio_ids, worker_ids, "
+    "automation_rule_ids, metadata, created_at, updated_at"
+)
+
+_ROLE_COLUMNS = (
+    "id, name, description, permissions, organization_id, builtin, metadata, created_at, updated_at"
+)
+
+_IDENTITY_COLUMNS = (
+    "id, subject, display_name, email, provider, provider_subject, active, metadata, "
+    "created_at, last_login_at"
+)
+
+_MEMBERSHIP_COLUMNS = (
+    "id, identity_id, organization_id, scope, scope_id, role_ids, team_ids, active, "
+    "expires_at, metadata, created_at, updated_at"
+)
+
+_POLICY_SET_COLUMNS = (
+    "id, organization_id, scope, scope_id, domain, settings, locked_keys, enabled, "
+    "metadata, created_at, updated_at"
+)
+
+_AUDIT_COLUMNS = (
+    "id, organization_id, actor_id, actor_display, action, target_type, target_id, "
+    "summary, before, after, metadata, created_at"
+)
 
 _WORKER_COLUMNS = (
     "id, hostname, display_name, platform, resources, capabilities, current_load, "

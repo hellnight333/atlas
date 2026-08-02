@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +35,24 @@ from .cluster.models import (
     WorkerState,
 )
 from .cluster.worker_registry import WorkerRegistryError
+from .organization.identity import IdentityError
+from .organization.models import (
+    AuditAction,
+    Branding,
+    IdentityProviderKind,
+    License,
+    MembershipScope,
+    Permission,
+    PolicyDomain,
+    PolicyScopeKind,
+    PolicySet,
+    TeamKind,
+)
+from .organization.service import (
+    CrossOrganizationError,
+    OrganizationError,
+    PermissionDeniedError,
+)
 from .composition_root import create_runtime
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
@@ -94,6 +113,9 @@ heartbeat_service = runtime.heartbeat_service
 lease_manager = runtime.lease_manager
 dispatcher = runtime.dispatcher
 cluster_state = runtime.cluster_state
+organization_service = runtime.organization_service
+identity_service = runtime.identity_service
+audit_service = runtime.audit_service
 agent_runtime = runtime.agent_runtime
 agent_foundation = AgentFoundation(
     repository=repository,
@@ -163,6 +185,88 @@ class SchedulerCreateRequest(BaseModel):
     priority: SchedulerPriority = SchedulerPriority.NORMAL
     available_executors: list[str] = Field(default_factory=list)
     execution_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class OrganizationCreateRequest(BaseModel):
+    name: str
+    slug: str | None = None
+    description: str = ""
+    branding: Branding | None = None
+    license: License | None = None
+    actor_id: str = "system"
+
+
+class OrganizationUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    branding: Branding | None = None
+    license: License | None = None
+    allow_shared_pool: bool | None = None
+    active: bool | None = None
+    actor_id: str = "system"
+
+
+class MemberAddRequest(BaseModel):
+    identity_id: str
+    role_ids: list[str] = Field(default_factory=list)
+    team_ids: list[str] = Field(default_factory=list)
+    scope: MembershipScope = MembershipScope.ORGANIZATION
+    scope_id: str | None = None
+    expires_at: datetime | None = None
+    actor_id: str = "system"
+
+
+class MembershipUpdateRequest(BaseModel):
+    role_ids: list[str] | None = None
+    team_ids: list[str] | None = None
+    active: bool | None = None
+    expires_at: datetime | None = None
+    actor_id: str = "system"
+
+
+class RoleCreateRequest(BaseModel):
+    name: str
+    permissions: list[Permission] = Field(default_factory=list)
+    organization_id: str | None = None
+    description: str = ""
+    actor_id: str = "system"
+
+
+class RoleUpdateRequest(BaseModel):
+    permissions: list[Permission] = Field(default_factory=list)
+    actor_id: str = "system"
+
+
+class TeamCreateRequest(BaseModel):
+    organization_id: str
+    name: str
+    kind: TeamKind = TeamKind.CUSTOM
+    description: str = ""
+    actor_id: str = "system"
+
+
+class PolicySetRequest(BaseModel):
+    id: str | None = None
+    organization_id: str
+    domain: PolicyDomain
+    scope: PolicyScopeKind = PolicyScopeKind.ORGANIZATION
+    scope_id: str | None = None
+    settings: dict[str, object] = Field(default_factory=dict)
+    locked_keys: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    actor_id: str = "system"
+
+
+class IdentityCreateRequest(BaseModel):
+    subject: str
+    display_name: str
+    email: str | None = None
+    provider: IdentityProviderKind = IdentityProviderKind.LOCAL
+
+
+class WorkerAssignRequest(BaseModel):
+    organization_id: str | None = None
+    actor_id: str = "system"
 
 
 class WorkerRegisterRequest(BaseModel):
@@ -2834,6 +2938,272 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.get("/organizations")
+def list_organizations(identity_id: str | None = None) -> list[dict[str, object]]:
+    orgs = organization_service.list_organizations(identity_id=identity_id)
+    return [org.model_dump(mode="json") for org in orgs]
+
+
+@app.post("/organizations")
+def create_organization(request: OrganizationCreateRequest) -> dict[str, object]:
+    try:
+        organization = organization_service.create_organization(
+            name=request.name,
+            slug=request.slug,
+            description=request.description,
+            branding=request.branding,
+            license=request.license,
+            actor_id=request.actor_id,
+        )
+    except OrganizationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return organization.model_dump(mode="json")
+
+
+@app.get("/organizations/{organization_id}")
+def get_organization(organization_id: str) -> dict[str, object]:
+    organization = organization_service.get_organization(organization_id)
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    payload = organization.model_dump(mode="json")
+    payload["teams"] = [
+        t.model_dump(mode="json") for t in organization_service.list_teams(organization_id)
+    ]
+    payload["members"] = [
+        m.model_dump(mode="json") for m in organization_service.list_members(organization_id)
+    ]
+    payload["roles"] = [
+        r.model_dump(mode="json") for r in organization_service.list_roles(organization_id)
+    ]
+    payload["policy_sets"] = [
+        p.model_dump(mode="json")
+        for p in organization_service.list_policy_sets(organization_id=organization_id)
+    ]
+    return payload
+
+
+@app.put("/organizations/{organization_id}")
+def update_organization(
+    organization_id: str, request: OrganizationUpdateRequest
+) -> dict[str, object]:
+    changes = request.model_dump(exclude_unset=True, exclude_none=True, exclude={"actor_id"})
+    try:
+        organization = organization_service.update_organization(
+            organization_id, changes, actor_id=request.actor_id
+        )
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return organization.model_dump(mode="json")
+
+
+@app.post("/organizations/{organization_id}/members")
+def add_organization_member(
+    organization_id: str, request: MemberAddRequest
+) -> dict[str, object]:
+    try:
+        membership = organization_service.add_member(
+            organization_id=organization_id,
+            identity_id=request.identity_id,
+            role_ids=request.role_ids,
+            team_ids=request.team_ids,
+            scope=request.scope,
+            scope_id=request.scope_id,
+            expires_at=request.expires_at,
+            actor_id=request.actor_id,
+        )
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return membership.model_dump(mode="json")
+
+
+@app.get("/organizations/{organization_id}/members")
+def list_organization_members(organization_id: str) -> list[dict[str, object]]:
+    return [m.model_dump(mode="json") for m in organization_service.list_members(organization_id)]
+
+
+@app.put("/organizations/{organization_id}/members/{membership_id}")
+def update_organization_member(
+    organization_id: str, membership_id: str, request: MembershipUpdateRequest
+) -> dict[str, object]:
+    changes = request.model_dump(exclude_unset=True, exclude_none=True, exclude={"actor_id"})
+    try:
+        membership = organization_service.update_membership(
+            membership_id, changes, actor_id=request.actor_id
+        )
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return membership.model_dump(mode="json")
+
+
+@app.delete("/organizations/{organization_id}/members/{membership_id}")
+def remove_organization_member(
+    organization_id: str, membership_id: str, actor_id: str = "system"
+) -> dict[str, object]:
+    try:
+        organization_service.remove_member(organization_id, membership_id, actor_id=actor_id)
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"membership_id": membership_id, "removed": True}
+
+
+@app.get("/organizations/{organization_id}/permissions/{identity_id}")
+def resolve_identity_permissions(
+    organization_id: str, identity_id: str
+) -> dict[str, object]:
+    resolution = organization_service.resolve_permissions(identity_id, organization_id)
+    return resolution.model_dump(mode="json")
+
+
+@app.post("/organizations/{organization_id}/workers/{worker_id}")
+def assign_worker_to_organization(
+    organization_id: str, worker_id: str, request: WorkerAssignRequest | None = None
+) -> dict[str, object]:
+    target = request.organization_id if request else organization_id
+    actor = request.actor_id if request else "system"
+    try:
+        organization_service.assign_worker(worker_id, target, actor_id=actor)
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"worker_id": worker_id, "organization_id": target}
+
+
+@app.get("/roles")
+def list_roles(organization_id: str | None = None) -> list[dict[str, object]]:
+    return [r.model_dump(mode="json") for r in organization_service.list_roles(organization_id)]
+
+
+@app.post("/roles")
+def create_role(request: RoleCreateRequest) -> dict[str, object]:
+    role = organization_service.create_role(
+        name=request.name,
+        permissions=request.permissions,
+        organization_id=request.organization_id,
+        description=request.description,
+        actor_id=request.actor_id,
+    )
+    return role.model_dump(mode="json")
+
+
+@app.put("/roles/{role_id}")
+def update_role(role_id: str, request: RoleUpdateRequest) -> dict[str, object]:
+    try:
+        role = organization_service.update_role(
+            role_id, request.permissions, actor_id=request.actor_id
+        )
+    except OrganizationError as exc:
+        status = 404 if "not found" in str(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return role.model_dump(mode="json")
+
+
+@app.get("/permissions")
+def list_permissions() -> list[dict[str, str]]:
+    return organization_service.list_permissions()
+
+
+@app.get("/teams")
+def list_teams(organization_id: str | None = None) -> list[dict[str, object]]:
+    return [t.model_dump(mode="json") for t in organization_service.list_teams(organization_id)]
+
+
+@app.post("/teams")
+def create_team(request: TeamCreateRequest) -> dict[str, object]:
+    try:
+        team = organization_service.create_team(
+            organization_id=request.organization_id,
+            name=request.name,
+            kind=request.kind,
+            description=request.description,
+            actor_id=request.actor_id,
+        )
+    except OrganizationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return team.model_dump(mode="json")
+
+
+@app.get("/policies")
+def list_policies(
+    organization_id: str | None = None, domain: PolicyDomain | None = None
+) -> list[dict[str, object]]:
+    policy_sets = organization_service.list_policy_sets(
+        organization_id=organization_id, domain=domain
+    )
+    return [p.model_dump(mode="json") for p in policy_sets]
+
+
+@app.put("/policies")
+def upsert_policy(request: PolicySetRequest) -> dict[str, object]:
+    payload = request.model_dump(exclude={"actor_id", "id"})
+    policy_set = PolicySet(**payload) if request.id is None else PolicySet(id=request.id, **payload)
+    stored = organization_service.upsert_policy_set(policy_set, actor_id=request.actor_id)
+    return stored.model_dump(mode="json")
+
+
+@app.get("/policies/resolve")
+def resolve_policy(
+    organization_id: str,
+    domain: PolicyDomain,
+    workspace_id: str | None = None,
+    project_id: str | None = None,
+    object_id: str | None = None,
+) -> dict[str, object]:
+    resolved = organization_service.resolve_policy(
+        domain=domain,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        object_id=object_id,
+    )
+    return resolved.model_dump(mode="json")
+
+
+@app.get("/audit")
+def list_audit(
+    organization_id: str | None = None,
+    action: AuditAction | None = None,
+    actor_id: str | None = None,
+    target_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, object]]:
+    records = audit_service.list_records(
+        organization_id=organization_id,
+        action=action,
+        actor_id=actor_id,
+        target_id=target_id,
+        limit=limit,
+    )
+    return [r.model_dump(mode="json") for r in records]
+
+
+@app.get("/audit/{audit_id}")
+def get_audit_record(audit_id: str) -> dict[str, object]:
+    record = audit_service.get(audit_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Audit record not found")
+    return record.model_dump(mode="json")
+
+
+@app.get("/identities")
+def list_identities() -> list[dict[str, object]]:
+    return [i.model_dump(mode="json") for i in identity_service.list_identities()]
+
+
+@app.post("/identities")
+def create_identity(request: IdentityCreateRequest) -> dict[str, object]:
+    identity = identity_service.create_identity(
+        subject=request.subject,
+        display_name=request.display_name,
+        email=request.email,
+        provider=request.provider,
+    )
+    return identity.model_dump(mode="json")
+
+
+@app.get("/identity-providers")
+def list_identity_providers() -> list[dict[str, object]]:
+    return identity_service.providers()
 
 
 @app.get("/workers")

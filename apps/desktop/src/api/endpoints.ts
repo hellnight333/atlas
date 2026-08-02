@@ -112,4 +112,23 @@ export const atlasEndpoints = {
   clusterSweep: '/api/cluster/sweep',
   clusterRecover: (id: string) => `/api/cluster/executions/${id}/recover`,
   clusterRetryPlacement: (id: string) => `/api/cluster/executions/${id}/retry-placement`,
+  organizations: '/api/organizations',
+  organizationById: (id: string) => `/api/organizations/${id}`,
+  organizationMembers: (id: string) => `/api/organizations/${id}/members`,
+  organizationMember: (orgId: string, membershipId: string) =>
+    `/api/organizations/${orgId}/members/${membershipId}`,
+  organizationPermissions: (orgId: string, identityId: string) =>
+    `/api/organizations/${orgId}/permissions/${identityId}`,
+  organizationWorker: (orgId: string, workerId: string) =>
+    `/api/organizations/${orgId}/workers/${workerId}`,
+  orgRoles: '/api/roles',
+  orgRoleById: (id: string) => `/api/roles/${id}`,
+  orgPermissions: '/api/permissions',
+  orgTeams: '/api/teams',
+  policies: '/api/policies',
+  policiesResolve: '/api/policies/resolve',
+  audit: '/api/audit',
+  auditById: (id: string) => `/api/audit/${id}`,
+  identities: '/api/identities',
+  identityProviders: '/api/identity-providers',
 } as const

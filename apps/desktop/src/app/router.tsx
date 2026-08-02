@@ -3,6 +3,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import { ActivityCenterScreen } from '../features/activity/screens/ActivityCenterScreen'
 import { ApprovalCenterScreen } from '../features/approval/screens/ApprovalCenterScreen'
 import { ClusterStudioScreen } from '../features/cluster/screens/ClusterStudioScreen'
+import { OrganizationStudioScreen } from '../features/organization/screens/OrganizationStudioScreen'
 import { AssetWorkspaceScreen } from '../features/assets/screens/AssetWorkspaceScreen'
 import { AutomationStudioScreen } from '../features/automation/screens/AutomationStudioScreen'
 import { DesktopOverviewScreen } from '../features/projects/screens/DesktopOverviewScreen'
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: 'automation', element: <AutomationStudioScreen /> },
       { path: 'approvals', element: <ApprovalCenterScreen /> },
       { path: 'cluster', element: <ClusterStudioScreen /> },
+      { path: 'organizations', element: <OrganizationStudioScreen /> },
       { path: 'mission-control', element: <HomeWorkspaceScreen /> },
       { path: 'activity-center', element: <ActivityCenterScreen /> },
     ],

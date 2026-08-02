@@ -603,6 +603,113 @@ def init_db() -> None:
         )
         """))
         conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_organizations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            tenant_id TEXT NOT NULL,
+            workspace_ids JSONB NOT NULL DEFAULT '[]',
+            branding JSONB NOT NULL DEFAULT '{}',
+            license JSONB NOT NULL DEFAULT '{}',
+            allow_shared_pool BOOLEAN NOT NULL DEFAULT TRUE,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_teams (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            project_ids JSONB NOT NULL DEFAULT '[]',
+            studio_ids JSONB NOT NULL DEFAULT '[]',
+            worker_ids JSONB NOT NULL DEFAULT '[]',
+            automation_rule_ids JSONB NOT NULL DEFAULT '[]',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_roles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            permissions JSONB NOT NULL DEFAULT '[]',
+            organization_id TEXT,
+            builtin BOOLEAN NOT NULL DEFAULT FALSE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_identities (
+            id TEXT PRIMARY KEY,
+            subject TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            email TEXT,
+            provider TEXT NOT NULL,
+            provider_subject TEXT,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            last_login_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_memberships (
+            id TEXT PRIMARY KEY,
+            identity_id TEXT NOT NULL,
+            organization_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            scope_id TEXT,
+            role_ids JSONB NOT NULL DEFAULT '[]',
+            team_ids JSONB NOT NULL DEFAULT '[]',
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_policy_sets (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            scope_id TEXT,
+            domain TEXT NOT NULL,
+            settings JSONB NOT NULL DEFAULT '{}',
+            locked_keys JSONB NOT NULL DEFAULT '[]',
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_audit_records (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT,
+            actor_id TEXT NOT NULL DEFAULT 'system',
+            actor_display TEXT NOT NULL DEFAULT 'system',
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL DEFAULT '',
+            target_id TEXT,
+            summary TEXT NOT NULL DEFAULT '',
+            before JSONB NOT NULL DEFAULT '{}',
+            after JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
         ALTER TABLE atlas_runtime_executions
         ADD COLUMN IF NOT EXISTS approval_id TEXT,
         ADD COLUMN IF NOT EXISTS worker_id TEXT,

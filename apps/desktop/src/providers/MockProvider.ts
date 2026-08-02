@@ -23,6 +23,24 @@ import type {
   ImageGenerationResult,
   ImageVariantRequest,
   ApprovalCreatePayload,
+  AuditAction,
+  AuditRecord,
+  IdentityProviderStatus,
+  MemberAddPayload,
+  OrgIdentity,
+  OrgMembership,
+  OrgPermission,
+  OrgPolicySet,
+  OrgRole,
+  OrgTeam,
+  Organization,
+  OrganizationCreatePayload,
+  OrganizationDetail,
+  PermissionResolution,
+  PolicyDomain,
+  PolicySetPayload,
+  ResolvedPolicy,
+  TeamKind,
   ClusterHealth,
   ClusterLoad,
   ClusterSnapshot,
@@ -128,6 +146,13 @@ export class MockProvider implements AtlasProvider {
   private agentTeams: AgentTeam[] = []
   private agentTeamMessages: Record<string, AgentMessage[]> = {}
   private knowledgeGraphs: Record<string, ProjectGraphPayload> = {}
+  private organizations = new Map<string, Organization>(mockOrganizationSeed())
+  private orgTeams: OrgTeam[] = mockTeamSeed()
+  private orgRoles: OrgRole[] = mockRoleSeed()
+  private orgMemberships: OrgMembership[] = []
+  private orgPolicySets: OrgPolicySet[] = []
+  private auditRecords: AuditRecord[] = mockAuditSeed()
+  private orgIdentities: OrgIdentity[] = mockIdentitySeed()
   private workers = new Map<string, WorkerNode>(mockWorkerSeed())
   private reservations: ExecutionReservation[] = []
   private leases: ExecutionLease[] = []
@@ -2033,7 +2058,493 @@ export class MockProvider implements AtlasProvider {
     this.workers.set(id, updated)
     return updated
   }
+
+  async listOrganizations(): Promise<Organization[]> {
+    return [...this.organizations.values()]
+  }
+
+  async getOrganization(id: string): Promise<OrganizationDetail | undefined> {
+    const organization = this.organizations.get(id)
+    if (!organization) {
+      return undefined
+    }
+    return {
+      ...organization,
+      teams: this.orgTeams.filter((t) => t.organization_id === id),
+      members: this.orgMemberships.filter((m) => m.organization_id === id),
+      roles: this.orgRoles.filter((r) => !r.organization_id || r.organization_id === id),
+      policy_sets: this.orgPolicySets.filter((p) => p.organization_id === id),
+    }
+  }
+
+  async createOrganization(payload: OrganizationCreatePayload): Promise<Organization> {
+    const now = new Date().toISOString()
+    const id = `org-${this.organizations.size + 1}`
+    const organization: Organization = {
+      id,
+      name: payload.name,
+      slug: payload.slug ?? payload.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      description: payload.description ?? '',
+      tenant_id: `tenant-${id}`,
+      workspace_ids: [],
+      branding: { display_name: payload.name, logo_uri: null, accent_color: null, theme: null },
+      license: { tier: 'team', seats: 10, max_workers: 5, features: [], expires_at: null },
+      allow_shared_pool: true,
+      active: true,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    }
+    this.organizations.set(id, organization)
+    return organization
+  }
+
+  async updateOrganization(id: string, changes: Partial<Organization>): Promise<Organization> {
+    const organization = this.requireOrganization(id)
+    const updated = { ...organization, ...changes, updated_at: new Date().toISOString() }
+    this.organizations.set(id, updated)
+    return updated
+  }
+
+  async listOrganizationMembers(id: string): Promise<OrgMembership[]> {
+    return this.orgMemberships.filter((m) => m.organization_id === id)
+  }
+
+  async addOrganizationMember(id: string, payload: MemberAddPayload): Promise<OrgMembership> {
+    const now = new Date().toISOString()
+    const membership: OrgMembership = {
+      id: `membership-${this.orgMemberships.length + 1}`,
+      identity_id: payload.identityId,
+      organization_id: id,
+      scope: payload.scope ?? 'organization',
+      scope_id: payload.scopeId ?? null,
+      role_ids: payload.roleIds ?? [],
+      team_ids: payload.teamIds ?? [],
+      active: true,
+      expires_at: payload.expiresAt ?? null,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    }
+    this.orgMemberships.push(membership)
+    return membership
+  }
+
+  async removeOrganizationMember(organizationId: string, membershipId: string): Promise<void> {
+    this.orgMemberships = this.orgMemberships.filter(
+      (m) => !(m.id === membershipId && m.organization_id === organizationId),
+    )
+  }
+
+  async resolveIdentityPermissions(
+    organizationId: string,
+    identityId: string,
+  ): Promise<PermissionResolution> {
+    const memberships = this.orgMemberships.filter(
+      (m) => m.organization_id === organizationId && m.identity_id === identityId && m.active,
+    )
+    const roleIds = memberships.flatMap((m) => m.role_ids)
+    const permissions = [
+      ...new Set(
+        this.orgRoles.filter((r) => roleIds.includes(r.id)).flatMap((r) => r.permissions),
+      ),
+    ]
+    return {
+      identity_id: identityId,
+      organization_id: organizationId,
+      permissions,
+      grants: permissions.map((permission) => {
+        const role = this.orgRoles.find(
+          (r) => roleIds.includes(r.id) && r.permissions.includes(permission),
+        )
+        return {
+          permission,
+          granted: true,
+          role_id: role?.id ?? null,
+          role_name: role?.name ?? null,
+          membership_id: memberships[0]?.id ?? null,
+          reason: `granted by role '${role?.name ?? 'unknown'}'`,
+        }
+      }),
+      role_ids: roleIds,
+      team_ids: memberships.flatMap((m) => m.team_ids),
+    }
+  }
+
+  async assignWorkerToOrganization(organizationId: string, workerId: string): Promise<void> {
+    const worker = this.workers.get(workerId)
+    if (worker) {
+      this.workers.set(workerId, {
+        ...worker,
+        metadata: { ...worker.metadata, organization_id: organizationId },
+      })
+    }
+  }
+
+  async listOrgRoles(organizationId?: string): Promise<OrgRole[]> {
+    return organizationId
+      ? this.orgRoles.filter((r) => !r.organization_id || r.organization_id === organizationId)
+      : this.orgRoles
+  }
+
+  async createOrgRole(payload: {
+    name: string
+    permissions: OrgPermission[]
+    organizationId?: string
+    description?: string
+  }): Promise<OrgRole> {
+    const now = new Date().toISOString()
+    const role: OrgRole = {
+      id: `role-custom-${this.orgRoles.length + 1}`,
+      name: payload.name,
+      description: payload.description ?? '',
+      permissions: payload.permissions,
+      organization_id: payload.organizationId ?? null,
+      builtin: false,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    }
+    this.orgRoles.push(role)
+    return role
+  }
+
+  async updateOrgRole(roleId: string, permissions: OrgPermission[]): Promise<OrgRole> {
+    const role = this.orgRoles.find((r) => r.id === roleId)
+    if (!role) {
+      throw new Error('Role not found')
+    }
+    if (role.builtin) {
+      throw new Error('Built-in role cannot be modified')
+    }
+    role.permissions = permissions
+    role.updated_at = new Date().toISOString()
+    return role
+  }
+
+  async listOrgPermissions(): Promise<Array<{ permission: OrgPermission; name: string }>> {
+    return MOCK_PERMISSIONS.map((permission) => ({
+      permission,
+      name: permission.replace('.', '_').toUpperCase(),
+    }))
+  }
+
+  async listOrgTeams(organizationId?: string): Promise<OrgTeam[]> {
+    return organizationId
+      ? this.orgTeams.filter((t) => t.organization_id === organizationId)
+      : this.orgTeams
+  }
+
+  async createOrgTeam(payload: {
+    organizationId: string
+    name: string
+    kind?: TeamKind
+    description?: string
+  }): Promise<OrgTeam> {
+    const now = new Date().toISOString()
+    const team: OrgTeam = {
+      id: `team-${this.orgTeams.length + 1}`,
+      organization_id: payload.organizationId,
+      name: payload.name,
+      kind: payload.kind ?? 'custom',
+      description: payload.description ?? '',
+      project_ids: [],
+      studio_ids: [],
+      worker_ids: [],
+      automation_rule_ids: [],
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    }
+    this.orgTeams.push(team)
+    return team
+  }
+
+  async listPolicySets(organizationId?: string, domain?: PolicyDomain): Promise<OrgPolicySet[]> {
+    return this.orgPolicySets.filter(
+      (p) =>
+        (!organizationId || p.organization_id === organizationId) &&
+        (!domain || p.domain === domain),
+    )
+  }
+
+  async upsertPolicySet(payload: PolicySetPayload): Promise<OrgPolicySet> {
+    const now = new Date().toISOString()
+    const id = payload.id ?? `policyset-${this.orgPolicySets.length + 1}`
+    const policySet: OrgPolicySet = {
+      id,
+      organization_id: payload.organizationId,
+      scope: payload.scope ?? 'organization',
+      scope_id: payload.scopeId ?? null,
+      domain: payload.domain,
+      settings: payload.settings ?? {},
+      locked_keys: payload.lockedKeys ?? [],
+      enabled: payload.enabled ?? true,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    }
+    this.orgPolicySets = [...this.orgPolicySets.filter((p) => p.id !== id), policySet]
+    return policySet
+  }
+
+  async resolvePolicy(params: {
+    organizationId: string
+    domain: PolicyDomain
+    workspaceId?: string
+    projectId?: string
+    objectId?: string
+  }): Promise<ResolvedPolicy> {
+    const settings: Record<string, unknown> = {}
+    const sources: Record<string, string> = {}
+    const chain: string[] = []
+    const locked = new Set<string>()
+
+    for (const scope of ['organization', 'workspace', 'project', 'object'] as const) {
+      const sets = this.orgPolicySets.filter(
+        (p) =>
+          p.enabled &&
+          p.organization_id === params.organizationId &&
+          p.domain === params.domain &&
+          p.scope === scope,
+      )
+      for (const set of sets) {
+        chain.push(set.id)
+        for (const [key, value] of Object.entries(set.settings)) {
+          if (locked.has(key)) continue
+          settings[key] = value
+          sources[key] = set.id
+        }
+        set.locked_keys.forEach((key) => locked.add(key))
+      }
+    }
+
+    return {
+      domain: params.domain,
+      organization_id: params.organizationId,
+      settings,
+      sources,
+      locked_keys: [...locked],
+      chain,
+    }
+  }
+
+  async listAuditRecords(params?: {
+    organizationId?: string
+    action?: AuditAction
+    actorId?: string
+    limit?: number
+  }): Promise<AuditRecord[]> {
+    let records = this.auditRecords
+    if (params?.organizationId) {
+      records = records.filter((r) => r.organization_id === params.organizationId)
+    }
+    if (params?.action) records = records.filter((r) => r.action === params.action)
+    if (params?.actorId) records = records.filter((r) => r.actor_id === params.actorId)
+    return records.slice(0, params?.limit ?? 200)
+  }
+
+  async getAuditRecord(id: string): Promise<AuditRecord | undefined> {
+    return this.auditRecords.find((r) => r.id === id)
+  }
+
+  async listIdentities(): Promise<OrgIdentity[]> {
+    return this.orgIdentities
+  }
+
+  async createIdentity(payload: {
+    subject: string
+    displayName: string
+    email?: string
+  }): Promise<OrgIdentity> {
+    const identity: OrgIdentity = {
+      id: `identity-${this.orgIdentities.length + 1}`,
+      subject: payload.subject,
+      display_name: payload.displayName,
+      email: payload.email ?? null,
+      provider: 'local',
+      provider_subject: null,
+      active: true,
+      metadata: {},
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+    }
+    this.orgIdentities.push(identity)
+    return identity
+  }
+
+  async listIdentityProviders(): Promise<IdentityProviderStatus[]> {
+    return [
+      { kind: 'local', implemented: true },
+      { kind: 'oidc', implemented: false },
+      { kind: 'ldap', implemented: false },
+      { kind: 'saml', implemented: false },
+      { kind: 'github', implemented: false },
+      { kind: 'google', implemented: false },
+      { kind: 'microsoft', implemented: false },
+    ]
+  }
+
+  private requireOrganization(id: string): Organization {
+    const organization = this.organizations.get(id)
+    if (!organization) {
+      throw new Error('Organization not found')
+    }
+    return organization
+  }
 }
+
+const MOCK_PERMISSIONS: OrgPermission[] = [
+  'Project.Read',
+  'Project.Write',
+  'Project.Delete',
+  'Asset.Publish',
+  'Workflow.Execute',
+  'Automation.Manage',
+  'Worker.Manage',
+  'Approval.Override',
+  'Plugin.Install',
+  'Studio.Configure',
+  'Graph.View',
+  'Organization.Admin',
+  'Audit.View',
+  'Policy.Manage',
+  'Member.Manage',
+]
+
+function mockOrganizationSeed(): Array<[string, Organization]> {
+  const now = new Date().toISOString()
+  const make = (
+    id: string,
+    name: string,
+    tier: Organization['license']['tier'],
+  ): [string, Organization] => [
+    id,
+    {
+      id,
+      name,
+      slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      description: `${name} workspace`,
+      tenant_id: `tenant-${id}`,
+      workspace_ids: [],
+      branding: { display_name: name, logo_uri: null, accent_color: '#22d3ee', theme: 'dark' },
+      license: {
+        tier,
+        seats: 25,
+        max_workers: 10,
+        features: ['cluster', 'automation'],
+        expires_at: null,
+      },
+      allow_shared_pool: true,
+      active: true,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    },
+  ]
+  return [make('org-atlas', 'Atlas Studio', 'company'), make('org-lab', 'Research Lab', 'lab')]
+}
+
+function mockTeamSeed(): OrgTeam[] {
+  const now = new Date().toISOString()
+  const make = (id: string, name: string, kind: TeamKind): OrgTeam => ({
+    id,
+    organization_id: 'org-atlas',
+    name,
+    kind,
+    description: '',
+    project_ids: [],
+    studio_ids: [],
+    worker_ids: [],
+    automation_rule_ids: [],
+    metadata: {},
+    created_at: now,
+    updated_at: now,
+  })
+  return [
+    make('team-eng', 'Engineering', 'engineering'),
+    make('team-creative', 'Creative', 'creative'),
+    make('team-ops', 'Operations', 'operations'),
+  ]
+}
+
+function mockRoleSeed(): OrgRole[] {
+  const now = new Date().toISOString()
+  const make = (name: string, permissions: OrgPermission[]): OrgRole => ({
+    id: `role-org-atlas-${name}`,
+    name,
+    description: `Built-in ${name} role`,
+    permissions,
+    organization_id: 'org-atlas',
+    builtin: true,
+    metadata: {},
+    created_at: now,
+    updated_at: now,
+  })
+  return [
+    make('owner', MOCK_PERMISSIONS),
+    make(
+      'administrator',
+      MOCK_PERMISSIONS.filter((p) => p !== 'Organization.Admin'),
+    ),
+    make('manager', [
+      'Project.Read',
+      'Project.Write',
+      'Asset.Publish',
+      'Graph.View',
+      'Member.Manage',
+    ]),
+    make('operator', [
+      'Project.Read',
+      'Project.Write',
+      'Workflow.Execute',
+      'Worker.Manage',
+      'Graph.View',
+    ]),
+    make('contributor', ['Project.Read', 'Project.Write', 'Workflow.Execute', 'Graph.View']),
+    make('reviewer', ['Project.Read', 'Asset.Publish', 'Graph.View']),
+    make('viewer', ['Project.Read', 'Graph.View']),
+  ]
+}
+
+function mockIdentitySeed(): OrgIdentity[] {
+  const now = new Date().toISOString()
+  return [
+    {
+      id: 'identity-operator',
+      subject: 'operator',
+      display_name: 'Operator',
+      email: null,
+      provider: 'local',
+      provider_subject: null,
+      active: true,
+      metadata: {},
+      created_at: now,
+      last_login_at: now,
+    },
+  ]
+}
+
+function mockAuditSeed(): AuditRecord[] {
+  const now = new Date().toISOString()
+  return [
+    {
+      id: 'audit-1',
+      organization_id: 'org-atlas',
+      actor_id: 'operator',
+      actor_display: 'Operator',
+      action: 'organization_changed',
+      target_type: 'organization',
+      target_id: 'org-atlas',
+      summary: "Organization 'Atlas Studio' created",
+      before: {},
+      after: {},
+      metadata: {},
+      created_at: now,
+    },
+  ]
+}
+
 
 function emptyMetrics() {
   return {

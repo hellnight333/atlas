@@ -697,6 +697,265 @@ export type AgentPlanRequest = {
   goal: string
 }
 
+export type OrgPermission =
+  | 'Project.Read'
+  | 'Project.Write'
+  | 'Project.Delete'
+  | 'Asset.Publish'
+  | 'Workflow.Execute'
+  | 'Automation.Manage'
+  | 'Worker.Manage'
+  | 'Approval.Override'
+  | 'Plugin.Install'
+  | 'Studio.Configure'
+  | 'Graph.View'
+  | 'Organization.Admin'
+  | 'Audit.View'
+  | 'Policy.Manage'
+  | 'Member.Manage'
+
+export type BuiltinRoleName =
+  | 'owner'
+  | 'administrator'
+  | 'manager'
+  | 'operator'
+  | 'contributor'
+  | 'reviewer'
+  | 'viewer'
+
+export type OrgRole = {
+  id: string
+  name: string
+  description: string
+  permissions: OrgPermission[]
+  organization_id?: string | null
+  builtin: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type TeamKind =
+  | 'engineering'
+  | 'research'
+  | 'creative'
+  | 'operations'
+  | 'management'
+  | 'custom'
+
+export type OrgTeam = {
+  id: string
+  organization_id: string
+  name: string
+  kind: TeamKind
+  description: string
+  project_ids: string[]
+  studio_ids: string[]
+  worker_ids: string[]
+  automation_rule_ids: string[]
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type IdentityProviderKind =
+  | 'local'
+  | 'oidc'
+  | 'ldap'
+  | 'saml'
+  | 'github'
+  | 'google'
+  | 'microsoft'
+
+export type OrgIdentity = {
+  id: string
+  subject: string
+  display_name: string
+  email?: string | null
+  provider: IdentityProviderKind
+  provider_subject?: string | null
+  active: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  last_login_at?: string | null
+}
+
+export type IdentityProviderStatus = {
+  kind: IdentityProviderKind
+  implemented: boolean
+}
+
+export type MembershipScopeKind = 'organization' | 'team' | 'project'
+
+export type OrgMembership = {
+  id: string
+  identity_id: string
+  organization_id: string
+  scope: MembershipScopeKind
+  scope_id?: string | null
+  role_ids: string[]
+  team_ids: string[]
+  active: boolean
+  expires_at?: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type PolicyScopeKind = 'organization' | 'workspace' | 'project' | 'object'
+
+export type PolicyDomain =
+  | 'approval'
+  | 'automation'
+  | 'workers'
+  | 'plugins'
+  | 'providers'
+  | 'storage'
+  | 'retention'
+  | 'sharing'
+  | 'publishing'
+  | 'security'
+
+export type OrgPolicySet = {
+  id: string
+  organization_id: string
+  scope: PolicyScopeKind
+  scope_id?: string | null
+  domain: PolicyDomain
+  settings: Record<string, unknown>
+  locked_keys: string[]
+  enabled: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ResolvedPolicy = {
+  domain: PolicyDomain
+  organization_id: string
+  settings: Record<string, unknown>
+  sources: Record<string, string>
+  locked_keys: string[]
+  chain: string[]
+}
+
+export type OrgBranding = {
+  display_name?: string | null
+  logo_uri?: string | null
+  accent_color?: string | null
+  theme?: string | null
+}
+
+export type LicenseTier = 'individual' | 'team' | 'company' | 'lab'
+
+export type OrgLicense = {
+  tier: LicenseTier
+  seats: number
+  max_workers: number
+  features: string[]
+  expires_at?: string | null
+}
+
+export type Organization = {
+  id: string
+  name: string
+  slug: string
+  description: string
+  tenant_id: string
+  workspace_ids: string[]
+  branding: OrgBranding
+  license: OrgLicense
+  allow_shared_pool: boolean
+  active: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type OrganizationDetail = Organization & {
+  teams: OrgTeam[]
+  members: OrgMembership[]
+  roles: OrgRole[]
+  policy_sets: OrgPolicySet[]
+}
+
+export type AuditAction =
+  | 'login'
+  | 'permission_changed'
+  | 'policy_changed'
+  | 'automation'
+  | 'approval'
+  | 'execution'
+  | 'worker_assignment'
+  | 'publishing'
+  | 'deletion'
+  | 'export'
+  | 'organization_changed'
+  | 'membership_changed'
+  | 'role_changed'
+
+export type AuditRecord = {
+  id: string
+  organization_id?: string | null
+  actor_id: string
+  actor_display: string
+  action: AuditAction
+  target_type: string
+  target_id?: string | null
+  summary: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type PermissionGrant = {
+  permission: OrgPermission
+  granted: boolean
+  role_id?: string | null
+  role_name?: string | null
+  membership_id?: string | null
+  reason: string
+}
+
+export type PermissionResolution = {
+  identity_id: string
+  organization_id: string
+  permissions: OrgPermission[]
+  grants: PermissionGrant[]
+  role_ids: string[]
+  team_ids: string[]
+}
+
+export type OrganizationCreatePayload = {
+  name: string
+  slug?: string
+  description?: string
+  actorId?: string
+}
+
+export type MemberAddPayload = {
+  identityId: string
+  roleIds?: string[]
+  teamIds?: string[]
+  scope?: MembershipScopeKind
+  scopeId?: string
+  expiresAt?: string
+  actorId?: string
+}
+
+export type PolicySetPayload = {
+  id?: string
+  organizationId: string
+  domain: PolicyDomain
+  scope?: PolicyScopeKind
+  scopeId?: string
+  settings?: Record<string, unknown>
+  lockedKeys?: string[]
+  enabled?: boolean
+  actorId?: string
+}
+
 export type WorkerStatus =
   | 'online'
   | 'offline'
@@ -1363,4 +1622,27 @@ export interface AtlasProvider {
   sweepCluster(): Promise<ClusterSweepResult>
   recoverExecution(executionId: string, reason?: string): Promise<RuntimeExecutionRecord>
   retryPlacement(executionId: string): Promise<RuntimeExecutionRecord>
+  listOrganizations(identityId?: string): Promise<Organization[]>
+  getOrganization(id: string): Promise<OrganizationDetail | undefined>
+  createOrganization(payload: OrganizationCreatePayload): Promise<Organization>
+  updateOrganization(id: string, changes: Partial<Organization>): Promise<Organization>
+  listOrganizationMembers(id: string): Promise<OrgMembership[]>
+  addOrganizationMember(id: string, payload: MemberAddPayload): Promise<OrgMembership>
+  removeOrganizationMember(organizationId: string, membershipId: string): Promise<void>
+  resolveIdentityPermissions(organizationId: string, identityId: string): Promise<PermissionResolution>
+  assignWorkerToOrganization(organizationId: string, workerId: string): Promise<void>
+  listOrgRoles(organizationId?: string): Promise<OrgRole[]>
+  createOrgRole(payload: { name: string; permissions: OrgPermission[]; organizationId?: string; description?: string }): Promise<OrgRole>
+  updateOrgRole(roleId: string, permissions: OrgPermission[]): Promise<OrgRole>
+  listOrgPermissions(): Promise<Array<{ permission: OrgPermission; name: string }>>
+  listOrgTeams(organizationId?: string): Promise<OrgTeam[]>
+  createOrgTeam(payload: { organizationId: string; name: string; kind?: TeamKind; description?: string }): Promise<OrgTeam>
+  listPolicySets(organizationId?: string, domain?: PolicyDomain): Promise<OrgPolicySet[]>
+  upsertPolicySet(payload: PolicySetPayload): Promise<OrgPolicySet>
+  resolvePolicy(params: { organizationId: string; domain: PolicyDomain; workspaceId?: string; projectId?: string; objectId?: string }): Promise<ResolvedPolicy>
+  listAuditRecords(params?: { organizationId?: string; action?: AuditAction; actorId?: string; limit?: number }): Promise<AuditRecord[]>
+  getAuditRecord(id: string): Promise<AuditRecord | undefined>
+  listIdentities(): Promise<OrgIdentity[]>
+  createIdentity(payload: { subject: string; displayName: string; email?: string }): Promise<OrgIdentity>
+  listIdentityProviders(): Promise<IdentityProviderStatus[]>
 }

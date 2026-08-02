@@ -9,6 +9,11 @@ from .approval.policies import ApprovalPolicyEngine
 from .approval.service import ApprovalService
 from .asset_system import AssetService
 from .cluster.cluster_state import ClusterStateService
+from .organization.audit import AuditService
+from .organization.identity import IdentityService
+from .organization.permissions import PermissionEngine
+from .organization.policy_resolver import PolicyResolver
+from .organization.service import OrganizationService
 from .cluster.dispatcher import Dispatcher
 from .cluster.heartbeat_service import HeartbeatService
 from .cluster.lease_manager import LeaseManager
@@ -53,6 +58,9 @@ class AtlasRuntime:
     lease_manager: LeaseManager
     dispatcher: Dispatcher
     cluster_state: ClusterStateService
+    audit_service: AuditService
+    identity_service: IdentityService
+    organization_service: OrganizationService
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
@@ -118,8 +126,20 @@ def create_runtime(
         repository=repository, event_bus=event_bus, registry=worker_registry
     )
     lease_manager = LeaseManager(repository=repository, event_bus=event_bus)
+    audit_service = AuditService(repository=repository, event_bus=event_bus)
+    identity_service = IdentityService(repository=repository, event_bus=event_bus)
+    organization_service = OrganizationService(
+        repository=repository,
+        event_bus=event_bus,
+        audit=audit_service,
+        permission_engine=PermissionEngine(),
+        policy_resolver=PolicyResolver(),
+    )
     dispatcher = Dispatcher(
-        registry=worker_registry, lease_manager=lease_manager, event_bus=event_bus
+        registry=worker_registry,
+        lease_manager=lease_manager,
+        event_bus=event_bus,
+        ownership_filter=organization_service,
     )
     cluster_state = ClusterStateService(
         repository=repository,
@@ -174,6 +194,9 @@ def create_runtime(
         lease_manager=lease_manager,
         dispatcher=dispatcher,
         cluster_state=cluster_state,
+        audit_service=audit_service,
+        identity_service=identity_service,
+        organization_service=organization_service,
         orchestrator=orchestrator,
         workflow_delegate=workflow_delegate,
         workflow_engine=workflow_engine,

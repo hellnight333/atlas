@@ -5,6 +5,7 @@ import {
   useApprovalStore,
   useAssetStore,
   useClusterStore,
+  useOrganizationStore,
   useWorkspaceIntelligenceStore,
   useWorkspaceStore,
 } from '../../../stores'
@@ -31,6 +32,13 @@ export function InspectorPanel() {
   const clusterLeases = useClusterStore((state) => state.leases)
   const clusterReservations = useClusterStore((state) => state.reservations)
   const activeWorkerDetail = useClusterStore((state) => state.activeWorker)
+
+  const activeOrganization = useOrganizationStore((state) => state.activeOrganization)
+  const orgTeams = useOrganizationStore((state) => state.teams)
+  const orgRoles = useOrganizationStore((state) => state.roles)
+  const orgPolicySets = useOrganizationStore((state) => state.policySets)
+  const orgAudit = useOrganizationStore((state) => state.auditRecords)
+  const permissionResolution = useOrganizationStore((state) => state.permissionResolution)
 
   const inspectedExecution = activeWorkerDetail?.executions[0]
   const executionWorker = clusterWorkers.find((w) => w.id === inspectedExecution?.worker_id)
@@ -113,6 +121,57 @@ export function InspectorPanel() {
             </div>
           ) : (
             <div className="text-xs text-slate-400">No approval required for this object</div>
+          )}
+        </InspectorSection>
+        <InspectorSection title="Ownership">
+          {activeOrganization ? (
+            <div className="space-y-1.5">
+              <InspectorRow label="Organization" value={activeOrganization.name} />
+              <InspectorRow label="Tenant" value={activeOrganization.tenant_id} />
+              <InspectorRow
+                label="Owner Team"
+                value={orgTeams[0]?.name ?? 'unassigned'}
+              />
+              <InspectorRow
+                label="Role"
+                value={
+                  permissionResolution?.role_ids
+                    .map((id) => orgRoles.find((r) => r.id === id)?.name ?? id)
+                    .join(', ') || 'none resolved'
+                }
+              />
+              <InspectorRow
+                label="Permission Source"
+                value={permissionResolution?.grants[0]?.reason ?? 'not resolved'}
+              />
+              <InspectorRow
+                label="Policy Source"
+                value={
+                  orgPolicySets.length > 0
+                    ? `${orgPolicySets[0].domain} @ ${orgPolicySets[0].scope}`
+                    : 'no policy set'
+                }
+              />
+              <div>
+                <div className="text-xs uppercase tracking-widest text-slate-500">
+                  Audit History
+                </div>
+                {orgAudit.length === 0 ? (
+                  <div className="mt-1 text-xs text-slate-400">No audit records</div>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {orgAudit.slice(0, 4).map((record) => (
+                      <li key={record.id} className="text-xs text-slate-400">
+                        <span className="text-slate-300">{record.action}</span> ·{' '}
+                        {record.actor_display}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">No organization selected</div>
           )}
         </InspectorSection>
         <InspectorSection title="Execution Placement">

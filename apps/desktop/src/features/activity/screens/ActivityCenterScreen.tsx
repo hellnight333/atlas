@@ -2,7 +2,12 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 
 import { ActivityCard, Panel } from '../../../components'
-import { useActivityStore, useApprovalStore, useClusterStore } from '../../../stores'
+import {
+  useActivityStore,
+  useApprovalStore,
+  useClusterStore,
+  useOrganizationStore,
+} from '../../../stores'
 
 export function ActivityCenterScreen() {
   const jobs = useActivityStore((state) => state.jobs)
@@ -14,15 +19,21 @@ export function ActivityCenterScreen() {
   const workers = useClusterStore((state) => state.workers)
   const waitingPlacement = useClusterStore((state) => state.waitingPlacement)
   const loadCluster = useClusterStore((state) => state.loadCluster)
+  const auditRecords = useOrganizationStore((state) => state.auditRecords)
+  const loadOrganizations = useOrganizationStore((state) => state.loadOrganizations)
 
   useEffect(() => {
     void loadApprovals()
     void loadWaitingExecutions()
     void loadCluster()
-  }, [loadApprovals, loadWaitingExecutions, loadCluster])
+    void loadOrganizations()
+  }, [loadApprovals, loadWaitingExecutions, loadCluster, loadOrganizations])
 
   const pending = approvals.filter((approval) => approval.state === 'pending')
   const failedWorkers = workers.filter((w) => w.status === 'offline' || w.status === 'error')
+  const governanceEvents = auditRecords.filter((r) =>
+    ['permission_changed', 'role_changed', 'policy_changed', 'worker_assignment'].includes(r.action),
+  )
 
   return (
     <section className="grid flex-1 gap-4 p-4 xl:grid-cols-[1.2fr_1fr]">
@@ -77,6 +88,21 @@ export function ActivityCenterScreen() {
               <p className="mt-1 text-xs text-amber-200/70">
                 {execution.placement_reason ?? 'No worker available'}
               </p>
+            </Link>
+          ))}
+          {governanceEvents.slice(0, 6).map((record) => (
+            <Link
+              key={record.id}
+              to="/organizations"
+              className="block rounded border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 hover:border-indigo-400"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-indigo-100">{record.summary}</span>
+                <span className="text-xs uppercase tracking-widest text-indigo-300">
+                  {record.action.replace('_', ' ')}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-indigo-200/70">by {record.actor_display}</p>
             </Link>
           ))}
           {jobs.map((job) => (

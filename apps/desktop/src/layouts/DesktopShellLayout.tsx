@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { Button, Notification } from '../components'
+import { OrganizationSwitcher } from '../features/organization/components/OrganizationSwitcher'
 import { AppSidebar } from '../features/sidebar/components/AppSidebar'
 import { AppStatusBar } from '../features/status-bar/components/AppStatusBar'
 import { ActivityCenterDrawer } from '../features/activity/components/ActivityCenterDrawer'
@@ -44,8 +45,7 @@ export function DesktopShellLayout() {
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       <header className="flex h-12 items-center justify-between border-b border-slate-800 bg-slate-950 px-4">
         <div className="flex items-center gap-3 text-sm">
-          <span className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-300">Tenant: Atlas Labs</span>
-          <span className="text-slate-300">Space: Creative Ops</span>
+          <OrganizationSwitcher />
           <span className="text-slate-500">/</span>
           <span className="text-slate-300">Project: Aurora Launch Film</span>
         </div>

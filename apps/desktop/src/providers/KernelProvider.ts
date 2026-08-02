@@ -21,6 +21,24 @@ import type {
   ChatMessage,
   ChatMessageRequest,
   ApprovalCreatePayload,
+  AuditAction,
+  AuditRecord,
+  IdentityProviderStatus,
+  MemberAddPayload,
+  OrgIdentity,
+  OrgMembership,
+  OrgPermission,
+  OrgPolicySet,
+  OrgRole,
+  OrgTeam,
+  Organization,
+  OrganizationCreatePayload,
+  OrganizationDetail,
+  PermissionResolution,
+  PolicyDomain,
+  PolicySetPayload,
+  ResolvedPolicy,
+  TeamKind,
   ClusterHealth,
   ClusterLoad,
   ClusterSnapshot,
@@ -842,6 +860,185 @@ export class KernelProvider implements AtlasProvider {
 
   async retryPlacement(executionId: string): Promise<RuntimeExecutionRecord> {
     return this.client.post(atlasEndpoints.clusterRetryPlacement(executionId), {})
+  }
+
+  async listOrganizations(identityId?: string): Promise<Organization[]> {
+    const suffix = identityId ? `?identity_id=${encodeURIComponent(identityId)}` : ''
+    return this.client.get(`${atlasEndpoints.organizations}${suffix}`)
+  }
+
+  async getOrganization(id: string): Promise<OrganizationDetail | undefined> {
+    return this.client.get(atlasEndpoints.organizationById(id))
+  }
+
+  async createOrganization(payload: OrganizationCreatePayload): Promise<Organization> {
+    return this.client.post(atlasEndpoints.organizations, {
+      name: payload.name,
+      slug: payload.slug,
+      description: payload.description ?? '',
+      actor_id: payload.actorId ?? 'system',
+    })
+  }
+
+  async updateOrganization(id: string, changes: Partial<Organization>): Promise<Organization> {
+    return this.client.put(atlasEndpoints.organizationById(id), changes)
+  }
+
+  async listOrganizationMembers(id: string): Promise<OrgMembership[]> {
+    return this.client.get(atlasEndpoints.organizationMembers(id))
+  }
+
+  async addOrganizationMember(id: string, payload: MemberAddPayload): Promise<OrgMembership> {
+    return this.client.post(atlasEndpoints.organizationMembers(id), {
+      identity_id: payload.identityId,
+      role_ids: payload.roleIds ?? [],
+      team_ids: payload.teamIds ?? [],
+      scope: payload.scope ?? 'organization',
+      scope_id: payload.scopeId,
+      expires_at: payload.expiresAt,
+      actor_id: payload.actorId ?? 'system',
+    })
+  }
+
+  async removeOrganizationMember(organizationId: string, membershipId: string): Promise<void> {
+    await this.client.delete(atlasEndpoints.organizationMember(organizationId, membershipId))
+  }
+
+  async resolveIdentityPermissions(
+    organizationId: string,
+    identityId: string,
+  ): Promise<PermissionResolution> {
+    return this.client.get(atlasEndpoints.organizationPermissions(organizationId, identityId))
+  }
+
+  async assignWorkerToOrganization(organizationId: string, workerId: string): Promise<void> {
+    await this.client.post(atlasEndpoints.organizationWorker(organizationId, workerId), {
+      organization_id: organizationId,
+    })
+  }
+
+  async listOrgRoles(organizationId?: string): Promise<OrgRole[]> {
+    const suffix = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : ''
+    return this.client.get(`${atlasEndpoints.orgRoles}${suffix}`)
+  }
+
+  async createOrgRole(payload: {
+    name: string
+    permissions: OrgPermission[]
+    organizationId?: string
+    description?: string
+  }): Promise<OrgRole> {
+    return this.client.post(atlasEndpoints.orgRoles, {
+      name: payload.name,
+      permissions: payload.permissions,
+      organization_id: payload.organizationId,
+      description: payload.description ?? '',
+    })
+  }
+
+  async updateOrgRole(roleId: string, permissions: OrgPermission[]): Promise<OrgRole> {
+    return this.client.put(atlasEndpoints.orgRoleById(roleId), { permissions })
+  }
+
+  async listOrgPermissions(): Promise<Array<{ permission: OrgPermission; name: string }>> {
+    return this.client.get(atlasEndpoints.orgPermissions)
+  }
+
+  async listOrgTeams(organizationId?: string): Promise<OrgTeam[]> {
+    const suffix = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : ''
+    return this.client.get(`${atlasEndpoints.orgTeams}${suffix}`)
+  }
+
+  async createOrgTeam(payload: {
+    organizationId: string
+    name: string
+    kind?: TeamKind
+    description?: string
+  }): Promise<OrgTeam> {
+    return this.client.post(atlasEndpoints.orgTeams, {
+      organization_id: payload.organizationId,
+      name: payload.name,
+      kind: payload.kind ?? 'custom',
+      description: payload.description ?? '',
+    })
+  }
+
+  async listPolicySets(organizationId?: string, domain?: PolicyDomain): Promise<OrgPolicySet[]> {
+    const query = new URLSearchParams()
+    if (organizationId) query.set('organization_id', organizationId)
+    if (domain) query.set('domain', domain)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.client.get(`${atlasEndpoints.policies}${suffix}`)
+  }
+
+  async upsertPolicySet(payload: PolicySetPayload): Promise<OrgPolicySet> {
+    return this.client.put(atlasEndpoints.policies, {
+      id: payload.id,
+      organization_id: payload.organizationId,
+      domain: payload.domain,
+      scope: payload.scope ?? 'organization',
+      scope_id: payload.scopeId,
+      settings: payload.settings ?? {},
+      locked_keys: payload.lockedKeys ?? [],
+      enabled: payload.enabled ?? true,
+      actor_id: payload.actorId ?? 'system',
+    })
+  }
+
+  async resolvePolicy(params: {
+    organizationId: string
+    domain: PolicyDomain
+    workspaceId?: string
+    projectId?: string
+    objectId?: string
+  }): Promise<ResolvedPolicy> {
+    const query = new URLSearchParams({
+      organization_id: params.organizationId,
+      domain: params.domain,
+    })
+    if (params.workspaceId) query.set('workspace_id', params.workspaceId)
+    if (params.projectId) query.set('project_id', params.projectId)
+    if (params.objectId) query.set('object_id', params.objectId)
+    return this.client.get(`${atlasEndpoints.policiesResolve}?${query.toString()}`)
+  }
+
+  async listAuditRecords(params?: {
+    organizationId?: string
+    action?: AuditAction
+    actorId?: string
+    limit?: number
+  }): Promise<AuditRecord[]> {
+    const query = new URLSearchParams()
+    if (params?.organizationId) query.set('organization_id', params.organizationId)
+    if (params?.action) query.set('action', params.action)
+    if (params?.actorId) query.set('actor_id', params.actorId)
+    if (params?.limit) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.client.get(`${atlasEndpoints.audit}${suffix}`)
+  }
+
+  async getAuditRecord(id: string): Promise<AuditRecord | undefined> {
+    return this.client.get(atlasEndpoints.auditById(id))
+  }
+
+  async listIdentities(): Promise<OrgIdentity[]> {
+    return this.client.get(atlasEndpoints.identities)
+  }
+
+  async createIdentity(payload: {
+    subject: string
+    displayName: string
+    email?: string
+  }): Promise<OrgIdentity> {
+    return this.client.post(atlasEndpoints.identities, {
+      subject: payload.subject,
+      display_name: payload.displayName,
+      email: payload.email,
+    })
+  }
+
+  async listIdentityProviders(): Promise<IdentityProviderStatus[]> {
+    return this.client.get(atlasEndpoints.identityProviders)
   }
 }
 

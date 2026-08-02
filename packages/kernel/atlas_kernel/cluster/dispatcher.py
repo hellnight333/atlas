@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..agents.runtime import PlacementResult
 from ..agents.schedule_models import ExecutionSchedule, ScheduleQueueEntry
@@ -16,6 +16,14 @@ from .worker_registry import WorkerRegistry
 
 if TYPE_CHECKING:
     from ..event_bus import EventBus
+
+
+class OwnershipFilter(Protocol):
+    """Implemented by the organization layer. The dispatcher knows only this
+    shape, so worker ownership can be enforced without the cluster depending on
+    organizations."""
+
+    def may_execute_on_worker(self, organization_id: str | None, worker_id: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -38,10 +46,14 @@ class Dispatcher:
         registry: WorkerRegistry,
         lease_manager: LeaseManager,
         event_bus: EventBus,
+        ownership_filter: OwnershipFilter | None = None,
     ) -> None:
         self.registry = registry
         self.lease_manager = lease_manager
         self.event_bus = event_bus
+        # Injected by the composition root so the cluster layer never imports
+        # the organization domain. Absent, every worker is eligible.
+        self.ownership_filter = ownership_filter
 
     def place(
         self,
@@ -52,12 +64,13 @@ class Dispatcher:
         """Reserves a worker slot and issues a lease, or reports why it could not."""
         capability = self._required_capability(entry)
         affinity = self._affinity(schedule, entry)
+        organization_id = self._organization_id(schedule)
 
-        candidates = self.select_candidates(capability, affinity)
+        candidates = self.select_candidates(capability, affinity, organization_id)
         if not candidates:
             return PlacementResult(
                 placed=False,
-                reason=self._unplaceable_reason(capability, affinity),
+                reason=self._unplaceable_reason(capability, affinity, organization_id),
             )
 
         chosen = candidates[0]
@@ -114,7 +127,10 @@ class Dispatcher:
             self.registry.adjust_load(worker_id, -1)
 
     def select_candidates(
-        self, capability: str, affinity: list[str] | None = None
+        self,
+        capability: str,
+        affinity: list[str] | None = None,
+        organization_id: str | None = None,
     ) -> list[WorkerCandidate]:
         affinity = affinity or []
         candidates: list[WorkerCandidate] = []
@@ -123,6 +139,8 @@ class Dispatcher:
             if worker.status not in DISPATCHABLE_WORKER_STATES:
                 continue
             if not worker.has_free_slot:
+                continue
+            if not self._owns(organization_id, worker.id):
                 continue
             if capability and not self._serves(worker, capability):
                 continue
@@ -158,14 +176,29 @@ class Dispatcher:
             parts.append(f"affinity {sorted(set(affinity) & set(worker.tags))}")
         return ", ".join(parts)
 
-    def _unplaceable_reason(self, capability: str, affinity: list[str]) -> str:
+    def _owns(self, organization_id: str | None, worker_id: str) -> bool:
+        """Cross-organization execution is forbidden unless policy allows it."""
+        if self.ownership_filter is None:
+            return True
+        return self.ownership_filter.may_execute_on_worker(organization_id, worker_id)
+
+    def _organization_id(self, schedule: ExecutionSchedule) -> str | None:
+        value = schedule.queue_metadata.get("organization_id")
+        return str(value) if isinstance(value, str) and value else None
+
+    def _unplaceable_reason(
+        self, capability: str, affinity: list[str], organization_id: str | None = None
+    ) -> str:
         workers = self.registry.list_workers()
         if not workers:
             return "no workers registered"
         healthy = [w for w in workers if w.status in DISPATCHABLE_WORKER_STATES]
         if not healthy:
             return "no worker is online"
-        capable = [w for w in healthy if not capability or self._serves(w, capability)]
+        owned = [w for w in healthy if self._owns(organization_id, w.id)]
+        if not owned:
+            return f"no worker is available to organization {organization_id}"
+        capable = [w for w in owned if not capability or self._serves(w, capability)]
         if not capable:
             return f"no online worker advertises '{capability}'"
         if affinity:

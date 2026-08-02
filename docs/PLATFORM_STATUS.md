@@ -40,6 +40,14 @@ Execution location is a scheduling decision, never a user decision. Work is crea
 worker slot is reserved, and every terminal path returns the slot. See
 `DISTRIBUTED_RUNTIME.md`.
 
+## Governance Scopes
+
+Organization -> Workspace -> Project -> Object
+
+Permissions resolve from role data, never from a role-name branch. Policies inherit downward
+with locked keys that a narrower scope cannot override. Audit is append-only, and a worker
+belongs to one organization or the shared pool. See `ENTERPRISE_GOVERNANCE.md`.
+
 ## Change Governance
 
 Breaking architectural changes require an ADR and approval before implementation.

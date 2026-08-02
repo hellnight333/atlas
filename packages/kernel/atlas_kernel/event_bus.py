@@ -57,6 +57,24 @@ from .cluster.events import (
     WorkerRegistered,
     WorkerResumed,
 )
+from .organization.events import (
+    AuditRecorded,
+    IdentityAuthenticated,
+    MemberAdded,
+    MemberRemoved,
+    MembershipChanged,
+    OrganizationArchived,
+    OrganizationCreated,
+    OrganizationUpdated,
+    PermissionsChanged,
+    PolicySetUpdated,
+    PolicyViolationDetected,
+    RoleCreated,
+    RoleUpdated,
+    TeamCreated,
+    TeamUpdated,
+    WorkerTransferred,
+)
 from .event_types import AtlasEvent
 
 
@@ -423,6 +441,22 @@ DEFAULT_EVENT_TYPES: tuple[type[AtlasEvent], ...] = (
     LeaseExpired,
     ReservationCreated,
     ReservationReleased,
+    OrganizationCreated,
+    OrganizationUpdated,
+    OrganizationArchived,
+    TeamCreated,
+    TeamUpdated,
+    MemberAdded,
+    MemberRemoved,
+    MembershipChanged,
+    RoleCreated,
+    RoleUpdated,
+    PermissionsChanged,
+    PolicySetUpdated,
+    PolicyViolationDetected,
+    WorkerTransferred,
+    AuditRecorded,
+    IdentityAuthenticated,
 )
 
 
