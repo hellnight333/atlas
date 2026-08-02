@@ -545,3 +545,135 @@ class Job(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     produced_asset_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AutomationTriggerType(StrEnum):
+    MANUAL = "manual"
+    TIMER = "timer"
+    CRON = "cron"
+    ASSET_IMPORTED = "asset_imported"
+    ASSET_UPDATED = "asset_updated"
+    ASSET_PUBLISHED = "asset_published"
+    REVIEW_APPROVED = "review_approved"
+    REVIEW_REJECTED = "review_rejected"
+    WORKFLOW_COMPLETED = "workflow_completed"
+    WORKFLOW_FAILED = "workflow_failed"
+    AGENT_COMPLETED = "agent_completed"
+    PROJECT_CREATED = "project_created"
+    PROJECT_OPENED = "project_opened"
+    RESEARCH_COMPLETED = "research_completed"
+    IMAGE_GENERATED = "image_generated"
+    VIDEO_GENERATED = "video_generated"
+
+
+class AutomationTrigger(BaseModel):
+    type: AutomationTriggerType
+    timer_seconds: int | None = None
+    cron_expression: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationCondition(BaseModel):
+    type: str
+    operator: str
+    value: Any
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationAction(BaseModel):
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationRuleCreate(BaseModel):
+    name: str
+    description: str
+    trigger: AutomationTrigger
+    conditions: list[AutomationCondition] = Field(default_factory=list)
+    actions: list[AutomationAction] = Field(default_factory=list)
+    schedule: dict[str, Any] | None = None
+    priority: int = 0
+    dry_run: bool = False
+
+
+class AutomationRule(BaseModel):
+    id: str
+    project_id: str | None = None
+    workspace_id: str | None = None
+    name: str
+    description: str
+    trigger: AutomationTrigger
+    conditions: list[AutomationCondition] = Field(default_factory=list)
+    actions: list[AutomationAction] = Field(default_factory=list)
+    schedule: dict[str, Any] | None = None
+    priority: int = 0
+    enabled: bool = True
+    dry_run: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    disabled_at: datetime | None = None
+
+
+class AutomationRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class AutomationRun(BaseModel):
+    id: str
+    rule_id: str
+    triggered_by: str
+    status: AutomationRunStatus
+    start_time: datetime
+    end_time: datetime | None = None
+    duration_ms: int | None = None
+    trigger_data: dict[str, Any] = Field(default_factory=dict)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    retries: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AutomationLogLevel(StrEnum):
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class AutomationLog(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str | None = None
+    rule_id: str
+    level: AutomationLogLevel = AutomationLogLevel.INFO
+    message: str
+    actor: str = "system"
+    context: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AutomationSchedule(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    rule_id: str
+    schedule_id: str | None = None
+    next_run: datetime | None = None
+    last_run: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AutomationState(BaseModel):
+    """Live evaluation state of a rule, derived from its runs."""
+
+    rule_id: str
+    enabled: bool = True
+    last_run_id: str | None = None
+    last_status: AutomationRunStatus | None = None
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
+    total_runs: int = 0
+    failure_count: int = 0

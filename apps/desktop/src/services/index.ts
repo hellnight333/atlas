@@ -1,6 +1,7 @@
 export * from './ActivityService'
 export * from './AgentService'
 export * from './AssetService'
+export * from './AutomationService'
 export * from './CapabilityService'
 export * from './CommandService'
 export * from './ImageService'

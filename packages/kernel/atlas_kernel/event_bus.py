@@ -245,6 +245,67 @@ class GraphSnapshotCreated(AtlasEvent):
     scope_id: str = ""
 
 
+@dataclass(frozen=True)
+class AutomationRuleCreated(AtlasEvent):
+    rule_id: str = ""
+    name: str = ""
+    project_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AutomationRuleUpdated(AtlasEvent):
+    rule_id: str = ""
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationRuleDeleted(AtlasEvent):
+    rule_id: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationRuleEnabled(AtlasEvent):
+    rule_id: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationRuleDisabled(AtlasEvent):
+    rule_id: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationTriggered(AtlasEvent):
+    rule_id: str = ""
+    run_id: str = ""
+    trigger_type: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationStarted(AtlasEvent):
+    run_id: str = ""
+    rule_id: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationCompleted(AtlasEvent):
+    run_id: str = ""
+    rule_id: str = ""
+    duration_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class AutomationFailed(AtlasEvent):
+    run_id: str = ""
+    rule_id: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class AutomationSkipped(AtlasEvent):
+    rule_id: str = ""
+    reason: str = ""
+
+
 DEFAULT_EVENT_TYPES: tuple[type[AtlasEvent], ...] = (
     RunStarted,
     RunCompleted,
@@ -300,6 +361,16 @@ DEFAULT_EVENT_TYPES: tuple[type[AtlasEvent], ...] = (
     RuntimeFailed,
     RuntimeCancelled,
     RuntimeTimedOut,
+    AutomationRuleCreated,
+    AutomationRuleUpdated,
+    AutomationRuleDeleted,
+    AutomationRuleEnabled,
+    AutomationRuleDisabled,
+    AutomationTriggered,
+    AutomationStarted,
+    AutomationCompleted,
+    AutomationFailed,
+    AutomationSkipped,
 )
 
 

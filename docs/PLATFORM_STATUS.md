@@ -18,6 +18,13 @@ The following architectural subsystems are currently part of the frozen platform
 
 Workflow -> Capability -> Recipe -> Execution Policy -> Execution Decision -> Executor -> Provider -> Model -> Asset
 
+## Automation Entry Path
+
+Trigger -> Conditions -> Planner -> Scheduler -> Runtime -> Worker
+
+Automation orchestrates existing subsystems only. It never calls a provider and never bypasses
+the Scheduler. See `AUTOMATION_ENGINE.md`.
+
 ## Change Governance
 
 Breaking architectural changes require an ADR and approval before implementation.

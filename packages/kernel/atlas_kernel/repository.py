@@ -33,6 +33,15 @@ from .agents.schedule_models import (
 )
 from .models import (
     Asset,
+    AutomationAction,
+    AutomationCondition,
+    AutomationLog,
+    AutomationLogLevel,
+    AutomationRule,
+    AutomationRun,
+    AutomationRunStatus,
+    AutomationSchedule,
+    AutomationTrigger,
     ChatConversation,
     ChatConversationCreate,
     ChatMessage,
@@ -2594,6 +2603,313 @@ class AtlasRepository:
             error=row[17],
             created_at=row[18],
             updated_at=row[19],
+        )
+
+    def create_automation_rule(self, rule: AutomationRule) -> AutomationRule:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_automation_rules
+                (id, project_id, workspace_id, name, description, trigger, conditions, actions, schedule, priority, enabled, dry_run, created_at, updated_at)
+                VALUES (:id, :project_id, :workspace_id, :name, :description, :trigger, :conditions, :actions, :schedule, :priority, :enabled, :dry_run, :created_at, :updated_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": rule.id,
+                    "project_id": rule.project_id,
+                    "workspace_id": rule.workspace_id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "trigger": json.dumps(rule.trigger.model_dump()),
+                    "conditions": json.dumps([c.model_dump() for c in rule.conditions]),
+                    "actions": json.dumps([a.model_dump() for a in rule.actions]),
+                    "schedule": json.dumps(rule.schedule) if rule.schedule else None,
+                    "priority": rule.priority,
+                    "enabled": rule.enabled,
+                    "dry_run": rule.dry_run,
+                    "created_at": rule.created_at,
+                    "updated_at": rule.updated_at,
+                },
+            )
+            session.commit()
+        return rule
+
+    def get_automation_rule(self, rule_id: str) -> AutomationRule | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, project_id, workspace_id, name, description, trigger, conditions, actions, schedule, priority, enabled, dry_run, created_at, updated_at, disabled_at
+                FROM atlas_automation_rules WHERE id = :rule_id
+                """),
+                {"rule_id": rule_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_automation_rule(row)
+
+    def list_automation_rules(
+        self, project_id: str | None = None, workspace_id: str | None = None
+    ) -> list[AutomationRule]:
+        with SessionLocal() as session:
+            query = "SELECT id, project_id, workspace_id, name, description, trigger, conditions, actions, schedule, priority, enabled, dry_run, created_at, updated_at, disabled_at FROM atlas_automation_rules WHERE 1=1"
+            params: dict[str, Any] = {}
+
+            if project_id:
+                query += " AND project_id = :project_id"
+                params["project_id"] = project_id
+
+            if workspace_id:
+                query += " AND workspace_id = :workspace_id"
+                params["workspace_id"] = workspace_id
+
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_automation_rule(row) for row in rows]
+
+    def update_automation_rule(self, rule: AutomationRule) -> AutomationRule:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_automation_rules
+                SET name = :name, description = :description, trigger = :trigger, conditions = :conditions,
+                    actions = :actions, schedule = :schedule, priority = :priority, enabled = :enabled, dry_run = :dry_run,
+                    updated_at = :updated_at, disabled_at = :disabled_at
+                WHERE id = :id
+                """),
+                {
+                    "id": rule.id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "trigger": json.dumps(rule.trigger.model_dump()),
+                    "conditions": json.dumps([c.model_dump() for c in rule.conditions]),
+                    "actions": json.dumps([a.model_dump() for a in rule.actions]),
+                    "schedule": json.dumps(rule.schedule) if rule.schedule else None,
+                    "priority": rule.priority,
+                    "enabled": rule.enabled,
+                    "dry_run": rule.dry_run,
+                    "updated_at": rule.updated_at,
+                    "disabled_at": rule.disabled_at,
+                },
+            )
+            session.commit()
+        return rule
+
+    def delete_automation_rule(self, rule_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM atlas_automation_rules WHERE id = :id"), {"id": rule_id})
+            session.commit()
+
+    def create_automation_run(self, run: AutomationRun) -> AutomationRun:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_automation_runs
+                (id, rule_id, triggered_by, status, start_time, end_time, duration_ms, trigger_data, outputs, error, retries, created_at)
+                VALUES (:id, :rule_id, :triggered_by, :status, :start_time, :end_time, :duration_ms, :trigger_data, :outputs, :error, :retries, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": run.id,
+                    "rule_id": run.rule_id,
+                    "triggered_by": run.triggered_by,
+                    "status": run.status.value,
+                    "start_time": run.start_time,
+                    "end_time": run.end_time,
+                    "duration_ms": run.duration_ms,
+                    "trigger_data": json.dumps(run.trigger_data),
+                    "outputs": json.dumps(run.outputs),
+                    "error": run.error,
+                    "retries": run.retries,
+                    "created_at": run.created_at,
+                },
+            )
+            session.commit()
+        return run
+
+    def update_automation_run(self, run: AutomationRun) -> AutomationRun:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_automation_runs
+                SET status = :status, end_time = :end_time, duration_ms = :duration_ms,
+                    outputs = :outputs, error = :error, retries = :retries
+                WHERE id = :id
+                """),
+                {
+                    "id": run.id,
+                    "status": run.status.value,
+                    "end_time": run.end_time,
+                    "duration_ms": run.duration_ms,
+                    "outputs": json.dumps(run.outputs),
+                    "error": run.error,
+                    "retries": run.retries,
+                },
+            )
+            session.commit()
+        return run
+
+    def list_automation_runs(self, rule_id: str | None = None) -> list[AutomationRun]:
+        with SessionLocal() as session:
+            query = "SELECT id, rule_id, triggered_by, status, start_time, end_time, duration_ms, trigger_data, outputs, error, retries, created_at FROM atlas_automation_runs WHERE 1=1"
+            params: dict[str, Any] = {}
+
+            if rule_id:
+                query += " AND rule_id = :rule_id"
+                params["rule_id"] = rule_id
+
+            query += " ORDER BY start_time DESC, id DESC"
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_automation_run(row) for row in rows]
+
+    def create_automation_log(self, log: AutomationLog) -> AutomationLog:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_automation_logs (id, run_id, rule_id, level, message, actor, context, created_at)
+                VALUES (:id, :run_id, :rule_id, :level, :message, :actor, :context, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": log.id,
+                    "run_id": log.run_id,
+                    "rule_id": log.rule_id,
+                    "level": log.level.value,
+                    "message": log.message,
+                    "actor": log.actor,
+                    "context": json.dumps(log.context),
+                    "created_at": log.created_at,
+                },
+            )
+            session.commit()
+        return log
+
+    def list_automation_logs(
+        self, run_id: str | None = None, rule_id: str | None = None
+    ) -> list[AutomationLog]:
+        with SessionLocal() as session:
+            query = "SELECT id, run_id, rule_id, level, message, actor, context, created_at FROM atlas_automation_logs WHERE 1=1"
+            params: dict[str, Any] = {}
+
+            if run_id:
+                query += " AND run_id = :run_id"
+                params["run_id"] = run_id
+
+            if rule_id:
+                query += " AND rule_id = :rule_id"
+                params["rule_id"] = rule_id
+
+            query += " ORDER BY created_at DESC, id DESC"
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_automation_log(row) for row in rows]
+
+    def upsert_automation_schedule(self, schedule: AutomationSchedule) -> AutomationSchedule:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_automation_schedules (id, rule_id, schedule_id, next_run, last_run, created_at, updated_at)
+                VALUES (:id, :rule_id, :schedule_id, :next_run, :last_run, :created_at, :updated_at)
+                ON CONFLICT (id) DO UPDATE SET
+                    schedule_id = :schedule_id,
+                    next_run = :next_run,
+                    last_run = :last_run,
+                    updated_at = :updated_at
+                """),
+                {
+                    "id": schedule.id,
+                    "rule_id": schedule.rule_id,
+                    "schedule_id": schedule.schedule_id,
+                    "next_run": schedule.next_run,
+                    "last_run": schedule.last_run,
+                    "created_at": schedule.created_at,
+                    "updated_at": schedule.updated_at,
+                },
+            )
+            session.commit()
+        return schedule
+
+    def get_automation_schedule_for_rule(self, rule_id: str) -> AutomationSchedule | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, rule_id, schedule_id, next_run, last_run, created_at, updated_at
+                FROM atlas_automation_schedules WHERE rule_id = :rule_id ORDER BY created_at LIMIT 1
+                """),
+                {"rule_id": rule_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return AutomationSchedule(
+            id=row[0],
+            rule_id=row[1],
+            schedule_id=row[2],
+            next_run=row[3],
+            last_run=row[4],
+            created_at=row[5],
+            updated_at=row[6],
+        )
+
+    def delete_automation_schedules_for_rule(self, rule_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM atlas_automation_schedules WHERE rule_id = :rule_id"),
+                {"rule_id": rule_id},
+            )
+            session.commit()
+
+    def _row_to_automation_rule(self, row: Any) -> AutomationRule:
+        trigger_data = row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {}
+        conditions_data = row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+        actions_data = row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+        schedule_data = row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else None
+
+        return AutomationRule(
+            id=row[0],
+            project_id=row[1],
+            workspace_id=row[2],
+            name=row[3],
+            description=row[4],
+            trigger=AutomationTrigger.model_validate(trigger_data),
+            conditions=[AutomationCondition.model_validate(c) for c in conditions_data],
+            actions=[AutomationAction.model_validate(a) for a in actions_data],
+            schedule=schedule_data,
+            priority=row[9],
+            enabled=bool(row[10]),
+            dry_run=bool(row[11]),
+            created_at=row[12],
+            updated_at=row[13],
+            disabled_at=row[14],
+        )
+
+    def _row_to_automation_run(self, row: Any) -> AutomationRun:
+        trigger_data = row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {}
+        outputs_data = row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {}
+
+        return AutomationRun(
+            id=row[0],
+            rule_id=row[1],
+            triggered_by=row[2],
+            status=AutomationRunStatus(row[3]),
+            start_time=row[4],
+            end_time=row[5],
+            duration_ms=row[6],
+            trigger_data=trigger_data,
+            outputs=outputs_data,
+            error=row[9],
+            retries=row[10],
+            created_at=row[11],
+        )
+
+    def _row_to_automation_log(self, row: Any) -> AutomationLog:
+        context_data = row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {}
+
+        return AutomationLog(
+            id=row[0],
+            run_id=row[1],
+            rule_id=row[2],
+            level=AutomationLogLevel(row[3]),
+            message=row[4],
+            actor=row[5],
+            context=context_data,
+            created_at=row[7],
         )
 
 

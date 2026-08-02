@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router-dom'
 
 import { ActivityCenterScreen } from '../features/activity/screens/ActivityCenterScreen'
 import { AssetWorkspaceScreen } from '../features/assets/screens/AssetWorkspaceScreen'
+import { AutomationStudioScreen } from '../features/automation/screens/AutomationStudioScreen'
 import { DesktopOverviewScreen } from '../features/projects/screens/DesktopOverviewScreen'
 import { HomeWorkspaceScreen } from '../features/projects/screens/HomeWorkspaceScreen'
 import { ProjectWorkspaceScreen } from '../features/projects/screens/ProjectWorkspaceScreen'
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
       { path: 'image-studio', element: <ImageStudioScreen /> },
       { path: 'review', element: <ReviewStudioScreen /> },
       { path: 'agent-studio', element: <AgentStudioScreen /> },
+      { path: 'automation', element: <AutomationStudioScreen /> },
       { path: 'mission-control', element: <HomeWorkspaceScreen /> },
       { path: 'activity-center', element: <ActivityCenterScreen /> },
     ],

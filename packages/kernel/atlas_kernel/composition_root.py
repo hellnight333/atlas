@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .agents.runtime import AgentRuntime
+from .agents.scheduler import AgentScheduler
 from .asset_system import AssetService
+from .automation_engine import AutomationEngine
 from .db import init_db
 from .event_bus import EventBus
 from .execution_policy import ExecutionPolicyEngine
@@ -35,9 +37,11 @@ class AtlasRuntime:
     executor: JobExecutor
     worker: Worker
     agent_runtime: AgentRuntime
+    agent_scheduler: AgentScheduler
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
+    automation_engine: AutomationEngine
 
 
 def create_runtime(
@@ -100,6 +104,14 @@ def create_runtime(
     )
     workflow_delegate = KernelWorkflowNodeDelegate(orchestrator=orchestrator, worker=worker)
     workflow_engine = WorkflowEngine(delegate=workflow_delegate, bus=event_bus)
+    agent_scheduler = AgentScheduler(repository=repository, event_bus=event_bus)
+    automation_engine = AutomationEngine(
+        repository=repository,
+        event_bus=event_bus,
+        scheduler=agent_scheduler,
+        runtime=agent_runtime,
+        graph_service=graph_service,
+    )
 
     return AtlasRuntime(
         event_bus=event_bus,
@@ -114,9 +126,11 @@ def create_runtime(
         executor=executor,
         worker=worker,
         agent_runtime=agent_runtime,
+        agent_scheduler=agent_scheduler,
         orchestrator=orchestrator,
         workflow_delegate=workflow_delegate,
         workflow_engine=workflow_engine,
+        automation_engine=automation_engine,
     )
 
 

@@ -417,6 +417,64 @@ def init_db() -> None:
         )
         """))
         conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_automation_rules (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            workspace_id TEXT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            trigger JSONB NOT NULL,
+            conditions JSONB NOT NULL DEFAULT '[]',
+            actions JSONB NOT NULL DEFAULT '[]',
+            schedule JSONB,
+            priority INTEGER NOT NULL DEFAULT 0,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            dry_run BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            disabled_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_automation_runs (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            triggered_by TEXT NOT NULL,
+            status TEXT NOT NULL,
+            start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+            end_time TIMESTAMP WITH TIME ZONE,
+            duration_ms INTEGER,
+            trigger_data JSONB NOT NULL DEFAULT '{}',
+            outputs JSONB NOT NULL DEFAULT '{}',
+            error TEXT,
+            retries INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_automation_logs (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            rule_id TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            actor TEXT NOT NULL DEFAULT 'system',
+            context JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_automation_schedules (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            schedule_id TEXT,
+            next_run TIMESTAMP WITH TIME ZONE,
+            last_run TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
         ALTER TABLE atlas_runs
         ADD COLUMN IF NOT EXISTS workspace_id TEXT,
         ADD COLUMN IF NOT EXISTS project_id TEXT,

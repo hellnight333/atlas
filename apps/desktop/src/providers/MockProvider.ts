@@ -23,6 +23,14 @@ import type {
   ImageGenerationResult,
   ImageVariantRequest,
   AtlasProvider,
+  AutomationConflict,
+  AutomationLog,
+  AutomationRule,
+  AutomationRuleRequest,
+  AutomationRuleUpdateRequest,
+  AutomationRun,
+  AutomationRunRequest,
+  AutomationState,
   Capability,
   ContextBundle,
   ExecutionSchedule,
@@ -103,6 +111,9 @@ export class MockProvider implements AtlasProvider {
   private agentTeams: AgentTeam[] = []
   private agentTeamMessages: Record<string, AgentMessage[]> = {}
   private knowledgeGraphs: Record<string, ProjectGraphPayload> = {}
+  private automationRules = new Map<string, AutomationRule>()
+  private automationRuns: AutomationRun[] = []
+  private automationLogs: AutomationLog[] = []
 
   async getProjects() {
     return mockProjects
@@ -1445,6 +1456,187 @@ export class MockProvider implements AtlasProvider {
       return []
     }
     return [{ type: 'node_created', node_id: nodeId, timestamp: node.created_at }]
+  }
+
+  async listAutomationRules(projectId?: string): Promise<AutomationRule[]> {
+    const rules = [...this.automationRules.values()]
+    const scoped = projectId ? rules.filter((rule) => rule.project_id === projectId) : rules
+    return scoped.sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at))
+  }
+
+  async getAutomationRule(id: string): Promise<AutomationRule | undefined> {
+    return this.automationRules.get(id)
+  }
+
+  async createAutomationRule(request: AutomationRuleRequest): Promise<AutomationRule> {
+    const now = new Date().toISOString()
+    const rule: AutomationRule = {
+      id: `automation-${this.automationRules.size + 1}`,
+      project_id: request.projectId ?? null,
+      workspace_id: request.workspaceId ?? null,
+      name: request.name,
+      description: request.description ?? '',
+      trigger: request.trigger,
+      conditions: request.conditions ?? [],
+      actions: request.actions ?? [],
+      schedule: request.schedule ?? null,
+      priority: request.priority ?? 0,
+      enabled: true,
+      dry_run: request.dryRun ?? false,
+      created_at: now,
+      updated_at: now,
+      disabled_at: null,
+    }
+    this.automationRules.set(rule.id, rule)
+    return rule
+  }
+
+  async updateAutomationRule(id: string, request: AutomationRuleUpdateRequest): Promise<AutomationRule> {
+    const existing = this.automationRules.get(id)
+    if (!existing) {
+      throw new Error('Automation rule not found')
+    }
+    const updated: AutomationRule = {
+      ...existing,
+      name: request.name ?? existing.name,
+      description: request.description ?? existing.description,
+      trigger: request.trigger ?? existing.trigger,
+      conditions: request.conditions ?? existing.conditions,
+      actions: request.actions ?? existing.actions,
+      schedule: request.schedule ?? existing.schedule,
+      priority: request.priority ?? existing.priority,
+      dry_run: request.dryRun ?? existing.dry_run,
+      updated_at: new Date().toISOString(),
+    }
+    this.automationRules.set(id, updated)
+    return updated
+  }
+
+  async deleteAutomationRule(id: string): Promise<void> {
+    this.automationRules.delete(id)
+  }
+
+  async enableAutomationRule(id: string): Promise<AutomationRule> {
+    return this.setAutomationEnabled(id, true)
+  }
+
+  async disableAutomationRule(id: string): Promise<AutomationRule> {
+    return this.setAutomationEnabled(id, false)
+  }
+
+  async runAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun> {
+    return this.recordAutomationRun(id, request, false)
+  }
+
+  async dryRunAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun> {
+    return this.recordAutomationRun(id, request, true)
+  }
+
+  async getAutomationHistory(id: string): Promise<AutomationRun[]> {
+    return this.listAutomationRuns(id)
+  }
+
+  async getAutomationState(id: string): Promise<AutomationState> {
+    const rule = this.automationRules.get(id)
+    const runs = await this.listAutomationRuns(id)
+    const latest = runs[0]
+    return {
+      rule_id: id,
+      enabled: rule?.enabled ?? false,
+      last_run_id: latest?.id ?? null,
+      last_status: latest?.status ?? null,
+      last_run_at: latest?.start_time ?? null,
+      next_run_at: null,
+      total_runs: runs.length,
+      failure_count: runs.filter((run) => run.status === 'failed').length,
+    }
+  }
+
+  async listAutomationRuns(ruleId?: string): Promise<AutomationRun[]> {
+    const runs = ruleId
+      ? this.automationRuns.filter((run) => run.rule_id === ruleId)
+      : [...this.automationRuns]
+    return runs.sort((a, b) => b.start_time.localeCompare(a.start_time))
+  }
+
+  async listAutomationLogs(params?: { runId?: string; ruleId?: string }): Promise<AutomationLog[]> {
+    return this.automationLogs.filter(
+      (log) =>
+        (!params?.runId || log.run_id === params.runId) &&
+        (!params?.ruleId || log.rule_id === params.ruleId),
+    )
+  }
+
+  async listAutomationConflicts(projectId?: string): Promise<AutomationConflict[]> {
+    const rules = (await this.listAutomationRules(projectId)).filter((rule) => rule.enabled)
+    const buckets = new Map<string, string[]>()
+    for (const rule of rules) {
+      const key = `${rule.trigger.type}|${rule.priority}`
+      buckets.set(key, [...(buckets.get(key) ?? []), rule.id])
+    }
+    return [...buckets.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([key, ids]) => ({
+        trigger: key.split('|')[0],
+        priority: Number(key.split('|')[1]),
+        rule_ids: ids,
+      }))
+  }
+
+  private setAutomationEnabled(id: string, enabled: boolean): AutomationRule {
+    const existing = this.automationRules.get(id)
+    if (!existing) {
+      throw new Error('Automation rule not found')
+    }
+    const now = new Date().toISOString()
+    const updated: AutomationRule = {
+      ...existing,
+      enabled,
+      disabled_at: enabled ? null : now,
+      updated_at: now,
+    }
+    this.automationRules.set(id, updated)
+    return updated
+  }
+
+  private recordAutomationRun(
+    id: string,
+    request: AutomationRunRequest | undefined,
+    dryRun: boolean,
+  ): AutomationRun {
+    const rule = this.automationRules.get(id)
+    if (!rule) {
+      throw new Error('Automation rule not found')
+    }
+    const start = new Date().toISOString()
+    const run: AutomationRun = {
+      id: `automation-run-${this.automationRuns.length + 1}`,
+      rule_id: id,
+      triggered_by: rule.trigger.type,
+      status: rule.enabled ? 'completed' : 'skipped',
+      start_time: start,
+      end_time: start,
+      duration_ms: 12,
+      trigger_data: request?.triggerData ?? {},
+      outputs: rule.enabled
+        ? { dry_run: dryRun, state_actions: rule.actions.map((action) => ({ type: action.type, applied: !dryRun })) }
+        : { skip_reason: 'rule disabled' },
+      error: null,
+      retries: 0,
+      created_at: start,
+    }
+    this.automationRuns.push(run)
+    this.automationLogs.push({
+      id: `automation-log-${this.automationLogs.length + 1}`,
+      run_id: run.id,
+      rule_id: id,
+      level: 'info',
+      message: dryRun ? '[dry-run] evaluated rule' : 'evaluated rule',
+      actor: request?.actor ?? 'system',
+      context: {},
+      created_at: start,
+    })
+    return run
   }
 }
 

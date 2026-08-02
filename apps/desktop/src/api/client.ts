@@ -27,6 +27,18 @@ export class AtlasApiClient {
     return (await response.json()) as T
   }
 
+  async put<T>(path: string, body?: unknown): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'PUT',
+      body: JSON.stringify(body ?? {}),
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) {
+      throw this.createNetworkPlaceholder(await safeErrorPayload(response))
+    }
+    return (await response.json()) as T
+  }
+
   async patch<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: 'PATCH',

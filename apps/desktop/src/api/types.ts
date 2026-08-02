@@ -150,6 +150,131 @@ export type ReviewComment = {
   created_at: string
 }
 
+export type AutomationTriggerType =
+  | 'manual'
+  | 'timer'
+  | 'cron'
+  | 'asset_imported'
+  | 'asset_updated'
+  | 'asset_published'
+  | 'review_approved'
+  | 'review_rejected'
+  | 'workflow_completed'
+  | 'workflow_failed'
+  | 'agent_completed'
+  | 'project_created'
+  | 'project_opened'
+  | 'research_completed'
+  | 'image_generated'
+  | 'video_generated'
+
+export type AutomationTrigger = {
+  type: AutomationTriggerType
+  timer_seconds?: number | null
+  cron_expression?: string | null
+  metadata: Record<string, unknown>
+}
+
+export type AutomationCondition = {
+  type: string
+  operator: string
+  value: unknown
+  metadata: Record<string, unknown>
+}
+
+export type AutomationAction = {
+  type: string
+  payload: Record<string, unknown>
+  metadata: Record<string, unknown>
+}
+
+export type AutomationRule = {
+  id: string
+  project_id?: string | null
+  workspace_id?: string | null
+  name: string
+  description: string
+  trigger: AutomationTrigger
+  conditions: AutomationCondition[]
+  actions: AutomationAction[]
+  schedule?: Record<string, unknown> | null
+  priority: number
+  enabled: boolean
+  dry_run: boolean
+  created_at: string
+  updated_at: string
+  disabled_at?: string | null
+}
+
+export type AutomationRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export type AutomationRun = {
+  id: string
+  rule_id: string
+  triggered_by: string
+  status: AutomationRunStatus
+  start_time: string
+  end_time?: string | null
+  duration_ms?: number | null
+  trigger_data: Record<string, unknown>
+  outputs: Record<string, unknown>
+  error?: string | null
+  retries: number
+  created_at: string
+}
+
+export type AutomationLog = {
+  id: string
+  run_id?: string | null
+  rule_id: string
+  level: 'debug' | 'info' | 'warning' | 'error'
+  message: string
+  actor: string
+  context: Record<string, unknown>
+  created_at: string
+}
+
+export type AutomationState = {
+  rule_id: string
+  enabled: boolean
+  last_run_id?: string | null
+  last_status?: AutomationRunStatus | null
+  last_run_at?: string | null
+  next_run_at?: string | null
+  total_runs: number
+  failure_count: number
+}
+
+export type AutomationConflict = {
+  trigger: string
+  priority: number
+  rule_ids: string[]
+}
+
+export type AutomationRuleRequest = {
+  name: string
+  description?: string
+  trigger: AutomationTrigger
+  conditions?: AutomationCondition[]
+  actions?: AutomationAction[]
+  projectId?: string
+  workspaceId?: string
+  schedule?: Record<string, unknown> | null
+  priority?: number
+  dryRun?: boolean
+  actor?: string
+}
+
+export type AutomationRuleUpdateRequest = Partial<
+  Pick<AutomationRuleRequest, 'name' | 'description' | 'trigger' | 'conditions' | 'actions' | 'schedule' | 'priority' | 'dryRun' | 'actor'>
+>
+
+export type AutomationRunRequest = {
+  triggerData?: Record<string, unknown>
+  agentId?: string
+  actor?: string
+}
+
 export type ReviewHistoryEvent = {
   id: string
   review_id: string
@@ -909,4 +1034,18 @@ export interface AtlasProvider {
   getGraphContext(projectId: string): Promise<ContextBundle>
   getGraphLineage(assetId: string): Promise<KnowledgeGraph>
   getGraphHistory(nodeId: string): Promise<Array<Record<string, unknown>>>
+  listAutomationRules(projectId?: string): Promise<AutomationRule[]>
+  getAutomationRule(id: string): Promise<AutomationRule | undefined>
+  createAutomationRule(request: AutomationRuleRequest): Promise<AutomationRule>
+  updateAutomationRule(id: string, request: AutomationRuleUpdateRequest): Promise<AutomationRule>
+  deleteAutomationRule(id: string): Promise<void>
+  enableAutomationRule(id: string): Promise<AutomationRule>
+  disableAutomationRule(id: string): Promise<AutomationRule>
+  runAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun>
+  dryRunAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun>
+  getAutomationHistory(id: string): Promise<AutomationRun[]>
+  getAutomationState(id: string): Promise<AutomationState>
+  listAutomationRuns(ruleId?: string): Promise<AutomationRun[]>
+  listAutomationLogs(params?: { runId?: string; ruleId?: string }): Promise<AutomationLog[]>
+  listAutomationConflicts(projectId?: string): Promise<AutomationConflict[]>
 }

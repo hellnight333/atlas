@@ -21,6 +21,14 @@ import type {
   ChatMessage,
   ChatMessageRequest,
   AtlasProvider,
+  AutomationConflict,
+  AutomationLog,
+  AutomationRule,
+  AutomationRuleRequest,
+  AutomationRuleUpdateRequest,
+  AutomationRun,
+  AutomationRunRequest,
+  AutomationState,
   Capability,
   ContextBundle,
   KnowledgeGraph,
@@ -567,6 +575,98 @@ export class KernelProvider implements AtlasProvider {
     async getGraphHistory(nodeId: string): Promise<Array<Record<string, unknown>>> {
       return this.client.get(atlasEndpoints.graphHistory(nodeId))
     }
+
+  async listAutomationRules(projectId?: string): Promise<AutomationRule[]> {
+    const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    return this.client.get(`${atlasEndpoints.automation}${suffix}`)
+  }
+
+  async getAutomationRule(id: string): Promise<AutomationRule | undefined> {
+    return this.client.get(atlasEndpoints.automationById(id))
+  }
+
+  async createAutomationRule(request: AutomationRuleRequest): Promise<AutomationRule> {
+    return this.client.post(atlasEndpoints.automation, {
+      name: request.name,
+      description: request.description ?? '',
+      trigger: request.trigger,
+      conditions: request.conditions ?? [],
+      actions: request.actions ?? [],
+      project_id: request.projectId,
+      workspace_id: request.workspaceId,
+      schedule: request.schedule,
+      priority: request.priority ?? 0,
+      dry_run: request.dryRun ?? false,
+      actor: request.actor ?? 'system',
+    })
+  }
+
+  async updateAutomationRule(id: string, request: AutomationRuleUpdateRequest): Promise<AutomationRule> {
+    const body: Record<string, unknown> = { actor: request.actor ?? 'system' }
+    if (request.name !== undefined) body.name = request.name
+    if (request.description !== undefined) body.description = request.description
+    if (request.trigger !== undefined) body.trigger = request.trigger
+    if (request.conditions !== undefined) body.conditions = request.conditions
+    if (request.actions !== undefined) body.actions = request.actions
+    if (request.schedule !== undefined) body.schedule = request.schedule
+    if (request.priority !== undefined) body.priority = request.priority
+    if (request.dryRun !== undefined) body.dry_run = request.dryRun
+    return this.client.put(atlasEndpoints.automationById(id), body)
+  }
+
+  async deleteAutomationRule(id: string): Promise<void> {
+    await this.client.delete(atlasEndpoints.automationById(id))
+  }
+
+  async enableAutomationRule(id: string): Promise<AutomationRule> {
+    return this.client.post(atlasEndpoints.automationEnable(id), {})
+  }
+
+  async disableAutomationRule(id: string): Promise<AutomationRule> {
+    return this.client.post(atlasEndpoints.automationDisable(id), {})
+  }
+
+  async runAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun> {
+    return this.client.post(atlasEndpoints.automationRun(id), {
+      trigger_data: request?.triggerData ?? {},
+      agent_id: request?.agentId,
+      actor: request?.actor ?? 'system',
+    })
+  }
+
+  async dryRunAutomationRule(id: string, request?: AutomationRunRequest): Promise<AutomationRun> {
+    return this.client.post(atlasEndpoints.automationDryRun(id), {
+      trigger_data: request?.triggerData ?? {},
+      agent_id: request?.agentId,
+      actor: request?.actor ?? 'system',
+    })
+  }
+
+  async getAutomationHistory(id: string): Promise<AutomationRun[]> {
+    return this.client.get(atlasEndpoints.automationHistory(id))
+  }
+
+  async getAutomationState(id: string): Promise<AutomationState> {
+    return this.client.get(atlasEndpoints.automationState(id))
+  }
+
+  async listAutomationRuns(ruleId?: string): Promise<AutomationRun[]> {
+    const suffix = ruleId ? `?rule_id=${encodeURIComponent(ruleId)}` : ''
+    return this.client.get(`${atlasEndpoints.automationRuns}${suffix}`)
+  }
+
+  async listAutomationLogs(params?: { runId?: string; ruleId?: string }): Promise<AutomationLog[]> {
+    const query = new URLSearchParams()
+    if (params?.runId) query.set('run_id', params.runId)
+    if (params?.ruleId) query.set('rule_id', params.ruleId)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.client.get(`${atlasEndpoints.automationLogs}${suffix}`)
+  }
+
+  async listAutomationConflicts(projectId?: string): Promise<AutomationConflict[]> {
+    const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    return this.client.get(`${atlasEndpoints.automationConflicts}${suffix}`)
+  }
 }
 
 export const kernelProvider = new KernelProvider(new AtlasApiClient())

@@ -21,6 +21,9 @@ from .composition_root import create_runtime
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
     AssetCreate,
+    AutomationAction,
+    AutomationCondition,
+    AutomationTrigger,
     ChatConversation,
     ChatMessage,
     ChatConversationCreate,
@@ -67,6 +70,7 @@ asset_service = runtime.asset_service
 event_bus = runtime.event_bus
 execution_policy = runtime.execution_policy
 graph_service = runtime.graph_service
+automation_engine = runtime.automation_engine
 agent_foundation = AgentFoundation(repository=repository, event_bus=event_bus, worker=runtime.worker)
 
 
@@ -129,6 +133,38 @@ class SchedulerCreateRequest(BaseModel):
     priority: SchedulerPriority = SchedulerPriority.NORMAL
     available_executors: list[str] = Field(default_factory=list)
     execution_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class AutomationRuleRequest(BaseModel):
+    name: str
+    description: str = ""
+    trigger: AutomationTrigger
+    conditions: list[AutomationCondition] = Field(default_factory=list)
+    actions: list[AutomationAction] = Field(default_factory=list)
+    project_id: str | None = None
+    workspace_id: str | None = None
+    schedule: dict[str, object] | None = None
+    priority: int = 0
+    dry_run: bool = False
+    actor: str = "system"
+
+
+class AutomationRuleUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    trigger: AutomationTrigger | None = None
+    conditions: list[AutomationCondition] | None = None
+    actions: list[AutomationAction] | None = None
+    schedule: dict[str, object] | None = None
+    priority: int | None = None
+    dry_run: bool | None = None
+    actor: str = "system"
+
+
+class AutomationRunRequest(BaseModel):
+    trigger_data: dict[str, object] = Field(default_factory=dict)
+    agent_id: str | None = None
+    actor: str = "system"
 
 
 class AgentAssignmentRequest(BaseModel):
@@ -2691,6 +2727,145 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.get("/automation")
+def list_automation_rules(
+    project_id: str | None = None, workspace_id: str | None = None
+) -> list[dict[str, object]]:
+    rules = automation_engine.list_rules(project_id=project_id, workspace_id=workspace_id)
+    return [rule.model_dump(mode="json") for rule in rules]
+
+
+@app.post("/automation")
+def create_automation_rule(request: AutomationRuleRequest) -> dict[str, object]:
+    try:
+        rule = automation_engine.create_rule(
+            name=request.name,
+            description=request.description,
+            trigger=request.trigger,
+            conditions=request.conditions,
+            actions=request.actions,
+            project_id=request.project_id,
+            workspace_id=request.workspace_id,
+            schedule=request.schedule,
+            priority=request.priority,
+            dry_run=request.dry_run,
+            actor=request.actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return rule.model_dump(mode="json")
+
+
+@app.get("/automation/runs")
+def list_automation_runs(rule_id: str | None = None) -> list[dict[str, object]]:
+    return [run.model_dump(mode="json") for run in automation_engine.list_runs(rule_id=rule_id)]
+
+
+@app.get("/automation/logs")
+def list_automation_logs(
+    run_id: str | None = None, rule_id: str | None = None
+) -> list[dict[str, object]]:
+    logs = automation_engine.list_logs(run_id=run_id, rule_id=rule_id)
+    return [log.model_dump(mode="json") for log in logs]
+
+
+@app.get("/automation/conflicts")
+def list_automation_conflicts(
+    project_id: str | None = None, workspace_id: str | None = None
+) -> list[dict[str, object]]:
+    return automation_engine.detect_conflicts(project_id=project_id, workspace_id=workspace_id)
+
+
+@app.get("/automation/{rule_id}")
+def get_automation_rule(rule_id: str) -> dict[str, object]:
+    rule = automation_engine.get_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    return rule.model_dump(mode="json")
+
+
+@app.put("/automation/{rule_id}")
+def update_automation_rule(rule_id: str, request: AutomationRuleUpdateRequest) -> dict[str, object]:
+    changes = request.model_dump(exclude_unset=True, exclude={"actor"})
+    try:
+        rule = automation_engine.update_rule(rule_id, changes, actor=request.actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return rule.model_dump(mode="json")
+
+
+@app.delete("/automation/{rule_id}")
+def delete_automation_rule(rule_id: str, actor: str = "system") -> dict[str, object]:
+    try:
+        automation_engine.delete_rule(rule_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"rule_id": rule_id, "deleted": True}
+
+
+@app.post("/automation/{rule_id}/enable")
+def enable_automation_rule(rule_id: str, actor: str = "system") -> dict[str, object]:
+    try:
+        rule = automation_engine.enable_rule(rule_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return rule.model_dump(mode="json")
+
+
+@app.post("/automation/{rule_id}/disable")
+def disable_automation_rule(rule_id: str, actor: str = "system") -> dict[str, object]:
+    try:
+        rule = automation_engine.disable_rule(rule_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return rule.model_dump(mode="json")
+
+
+@app.post("/automation/{rule_id}/run")
+def run_automation_rule(rule_id: str, request: AutomationRunRequest) -> dict[str, object]:
+    try:
+        run = automation_engine.run_rule(
+            rule_id,
+            trigger_data=request.trigger_data,
+            agent_id=request.agent_id,
+            actor=request.actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return run.model_dump(mode="json")
+
+
+@app.post("/automation/{rule_id}/dry-run")
+def dry_run_automation_rule(rule_id: str, request: AutomationRunRequest) -> dict[str, object]:
+    try:
+        run = automation_engine.run_rule(
+            rule_id,
+            trigger_data=request.trigger_data,
+            agent_id=request.agent_id,
+            actor=request.actor,
+            dry_run=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return run.model_dump(mode="json")
+
+
+@app.get("/automation/{rule_id}/history")
+def get_automation_history(rule_id: str) -> list[dict[str, object]]:
+    if automation_engine.get_rule(rule_id) is None:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    return [run.model_dump(mode="json") for run in automation_engine.list_runs(rule_id=rule_id)]
+
+
+@app.get("/automation/{rule_id}/state")
+def get_automation_state(rule_id: str) -> dict[str, object]:
+    try:
+        state = automation_engine.get_state(rule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return state.model_dump(mode="json")
 
 
 def _to_workflow_definition(request: WorkflowDefinitionRequest) -> WorkflowDefinition:

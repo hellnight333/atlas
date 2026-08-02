@@ -1,6 +1,7 @@
 export * from './activityStore'
 export * from './agentStore'
 export * from './assetStore'
+export * from './automationStore'
 export * from './chatStore'
 export * from './commandPaletteStore'
 export * from './imageStore'
