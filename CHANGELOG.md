@@ -47,6 +47,42 @@ The first release intended for people other than the author.
 - Kernel version `0.1.0` → `0.12.0a1`; desktop `0.0.0` → `0.12.0-alpha.1`.
   The two were previously inconsistent and neither matched the release tags.
 
+### Packaging
+
+- **Desktop installers**, built with Tauri 2 — chosen over Electron because it
+  uses the system webview rather than bundling a browser. Windows
+  (NSIS installer + portable zip), macOS (`.app` + `.dmg`), Linux
+  (AppImage + tar.gz).
+- **PostgreSQL 16.14 is bundled.** Installing Atlas installs nothing else: the
+  shell runs `initdb` on first launch, starts the server on a free loopback
+  port, and the kernel creates its own database. No system PostgreSQL is
+  touched and none is required.
+- **The kernel ships as a standalone binary** (PyInstaller), so no Python is
+  needed on the machine.
+- `infra/packaging/` — reproducible scripts for the icon set, the PostgreSQL
+  download (pinned and checksummed), the DMG, and SHA-256 manifests.
+- **Release workflow** (`.github/workflows/release.yml`) with a four-platform
+  native matrix. Tauri cannot cross-compile, so each target needs its own
+  runner. Release notes are extracted from this changelog.
+- **Rust CI job** — `cargo fmt --check` and `cargo clippy -D warnings`.
+
+### Fixed during packaging
+
+- **Atlas would start only once.** After a force-quit or crash the shell's
+  shutdown handler never ran, leaving PostgreSQL holding `postmaster.pid`.
+  Every later launch died with "lock file postmaster.pid already exists" and
+  Atlas never started again until the user killed the process by hand. The
+  shell now reclaims its own data directory and any kernel it recorded.
+- **A packaged Atlas reported itself degraded.** PyInstaller omits
+  distribution metadata, so `importlib.metadata` could not see FastAPI,
+  SQLAlchemy, uvicorn or httpx even though they were imported and serving.
+  `/health/report` therefore declared every dependency missing on a fresh
+  install.
+- **Quitting Atlas left it running.** macOS does not always emit
+  `ExitRequested`, so the kernel and database survived the window closing.
+- **Killing the kernel left half of it alive** — PyInstaller runs the real
+  interpreter as a child process, so only the bootloader was being stopped.
+
 ### Known limitations
 
 Stated plainly rather than discovered later:
@@ -57,6 +93,13 @@ Stated plainly rather than discovered later:
   the published SHA-256 checksum.
 - **The test suite cannot be run twice concurrently** against one database.
 - Provider credentials live in local configuration, not an OS keychain.
+- **Installers are large** — roughly 140 MB compressed, mostly PostgreSQL.
+  `libicudata` alone is 55 MB and cannot be removed; PostgreSQL 16 links ICU
+  for collation and will not start without it.
+- **The macOS DMG has no styled window background.** Tauri's DMG bundler
+  drives Finder over AppleScript, which needs an interactive GUI session and
+  fails on a CI runner. Atlas builds the image with `hdiutil` instead:
+  functionally identical, no background art.
 
 ## [0.11.0] — Production Hardening — 2026-08-03
 

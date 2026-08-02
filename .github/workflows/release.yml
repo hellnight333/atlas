@@ -1,0 +1,273 @@
+name: Release
+
+# Installers are built here, not on a developer machine. Tauri cannot
+# cross-compile, so each platform needs its own native runner.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build artifacts but do not publish a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (Apple Silicon)
+            target: aarch64-apple-darwin
+            pg: darwin-arm64
+            bundles: app
+          - os: macos-13
+            label: macOS (Intel)
+            target: x86_64-apple-darwin
+            pg: darwin-amd64
+            bundles: app
+          # 22.04 deliberately: AppImages built against a newer glibc refuse to
+          # start on older distributions, and the reverse is not true.
+          - os: ubuntu-22.04
+            label: Linux (x86_64)
+            target: x86_64-unknown-linux-gnu
+            pg: linux-amd64
+            bundles: appimage
+          - os: windows-latest
+            label: Windows (x86_64)
+            target: x86_64-pc-windows-msvc
+            pg: windows-amd64
+            bundles: nsis
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pyinstaller
+
+      - name: Build the kernel binary
+        run: |
+          python -m PyInstaller infra/packaging/atlas-kernel.spec \
+            --distpath infra/packaging/dist \
+            --workpath infra/packaging/build \
+            --noconfirm --log-level WARN
+        shell: bash
+
+      - name: Stage the kernel as a Tauri sidecar
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp infra/packaging/dist/atlas-kernel.exe \
+               "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}.exe"
+          else
+            cp infra/packaging/dist/atlas-kernel \
+               "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}"
+            chmod +x "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}"
+          fi
+        shell: bash
+
+      - name: Fetch the bundled PostgreSQL
+        run: python infra/packaging/fetch_postgres.py --platform ${{ matrix.pg }}
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build the application
+        working-directory: apps/desktop
+        env:
+          ATLAS_BUILD_COMMIT: ${{ github.sha }}
+          # Signing is intentionally absent for the alpha. See the block below
+          # and docs/PACKAGING.md before adding certificates.
+          APPLE_SIGNING_IDENTITY: ""
+          TAURI_SIGNING_PRIVATE_KEY: ""
+        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # ----------------------------------------------------------------------
+      # SIGNING — deliberately not configured for the Public Alpha.
+      #
+      # Alpha builds are unsigned. macOS Gatekeeper and Windows SmartScreen
+      # will warn, which is why every release publishes SHA-256 checksums.
+      #
+      # To sign later, add these repository secrets and the steps described in
+      # docs/PACKAGING.md. No placeholder certificate is invented here, because
+      # a fake identity fails at bundle time in a way that looks like a build
+      # bug rather than a missing credential.
+      #
+      #   macOS   APPLE_CERTIFICATE            base64 .p12 (Developer ID Application)
+      #           APPLE_CERTIFICATE_PASSWORD   .p12 password
+      #           APPLE_SIGNING_IDENTITY       "Developer ID Application: NAME (TEAMID)"
+      #           APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   for notarisation
+      #
+      #   Windows WINDOWS_CERTIFICATE          base64 .pfx (code signing)
+      #           WINDOWS_CERTIFICATE_PASSWORD .pfx password
+      #           and set bundle.windows.certificateThumbprint in tauri.conf.json
+      # ----------------------------------------------------------------------
+
+      - name: Collect artifacts
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="dist-release"
+          mkdir -p "$out"
+          bundle="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          version="${GITHUB_REF_NAME#v}"
+          [ "$version" = "$GITHUB_REF_NAME" ] && version="dev-${GITHUB_SHA::7}"
+
+          # Installers, as produced by the Tauri bundler.
+          find "$bundle" -type f \( -name "*.AppImage" -o -name "*-setup.exe" \) \
+            -exec cp {} "$out/" \;
+
+          # Portable forms. M012 asks for a zip on Windows and a tar.gz on
+          # Linux so Atlas can be run without an installer at all.
+          case "${{ runner.os }}" in
+            macOS)
+              app=$(find "$bundle/macos" -maxdepth 1 -name "*.app" | head -1)
+              [ -n "$app" ] && ditto -c -k --keepParent "$app" \
+                "$out/Atlas_${version}_${{ matrix.target }}.app.zip"
+              # Built with hdiutil rather than Tauri's bundler: that one drives
+              # Finder over AppleScript to style the window, which needs an
+              # interactive GUI session and fails with "AppleEvent timed out"
+              # on a runner. The image this produces is functionally identical,
+              # only without the background art.
+              python3 infra/packaging/make_dmg.py "$app" \
+                --output "$out" --name "Atlas_${version}_${{ matrix.target }}"
+              ;;
+            Windows)
+              exe_dir="apps/desktop/src-tauri/target/${{ matrix.target }}/release"
+              portable="$out/portable"
+              mkdir -p "$portable/Atlas"
+              cp "$exe_dir/atlas-desktop.exe" "$portable/Atlas/Atlas.exe"
+              cp -r "$exe_dir/resources" "$portable/Atlas/" 2>/dev/null || true
+              cp "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}.exe" \
+                 "$portable/Atlas/atlas-kernel.exe"
+              cp LICENSE NOTICE "$portable/Atlas/"
+              (cd "$portable" && 7z a -tzip "../Atlas_${version}_windows-x86_64_portable.zip" Atlas >/dev/null)
+              rm -rf "$portable"
+              ;;
+            Linux)
+              exe_dir="apps/desktop/src-tauri/target/${{ matrix.target }}/release"
+              staging="$out/staging/Atlas"
+              mkdir -p "$staging"
+              cp "$exe_dir/atlas-desktop" "$staging/atlas"
+              cp -r "$exe_dir/resources" "$staging/" 2>/dev/null || true
+              cp "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}" \
+                 "$staging/atlas-kernel"
+              cp LICENSE NOTICE "$staging/"
+              tar -czf "$out/Atlas_${version}_linux-x86_64.tar.gz" -C "$out/staging" Atlas
+              rm -rf "$out/staging"
+              ;;
+          esac
+
+          echo "--- collected ---"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-${{ matrix.target }}
+          path: dist-release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          python3 infra/packaging/checksums.py generate artifacts
+          python3 infra/packaging/checksums.py verify artifacts
+
+      - name: Extract release notes for this version
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Pull just this version's section out of the changelog.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No changelog section for $version; using a pointer instead."
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)." > release-notes.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Verifying your download"
+            echo ""
+            echo "These builds are **unsigned**. macOS Gatekeeper and Windows SmartScreen will warn you."
+            echo "Check the SHA-256 of your download against \`SHA256SUMS.txt\` before running it:"
+            echo ""
+            echo '```bash'
+            echo "shasum -a 256 <file>     # macOS / Linux"
+            echo "certutil -hashfile <file> SHA256   # Windows"
+            echo '```'
+            echo ""
+            echo "Atlas bundles its own PostgreSQL. You do not need to install a database."
+          } >> release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          body_path: release-notes.md
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          fail_on_unmatched_files: true

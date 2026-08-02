@@ -1,0 +1,32 @@
+[package]
+name = "atlas-desktop"
+version = "0.12.0-alpha.1"
+description = "Atlas — a personal AI Operating System"
+authors = ["Ayoub Soleimani"]
+license = "BUSL-1.1"
+repository = "https://github.com/hellnight333/atlas"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Used by `tauri dev` to enable devtools in a release build.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# Alpha installers are downloaded over consumer connections, so size matters
+# more than the last few percent of runtime speed.
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

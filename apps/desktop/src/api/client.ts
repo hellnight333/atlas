@@ -1,10 +1,22 @@
+import { getRuntimeBaseUrl } from './runtime'
 import type { ApiError } from './types'
 
 export class AtlasApiClient {
-  private readonly baseUrl: string
+  private readonly explicitBaseUrl: string | undefined
 
-  constructor(baseUrl = import.meta.env.VITE_ATLAS_API_BASE_URL ?? '') {
-    this.baseUrl = baseUrl
+  constructor(baseUrl?: string) {
+    this.explicitBaseUrl = baseUrl
+  }
+
+  /**
+   * Resolved per request, not once at construction.
+   *
+   * A packaged Atlas does not know its own port until the kernel has started,
+   * and clients are constructed before that happens. Reading the value lazily
+   * is what lets the same client work in both dev and a packaged build.
+   */
+  private get baseUrl(): string {
+    return this.explicitBaseUrl ?? getRuntimeBaseUrl() ?? import.meta.env.VITE_ATLAS_API_BASE_URL ?? ''
   }
 
   async get<T>(path: string): Promise<T> {

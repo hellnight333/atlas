@@ -106,3 +106,41 @@ jobs:
           name: atlas-desktop-web
           path: apps/desktop/dist
           retention-days: 14
+
+  desktop-shell:
+    name: Desktop shell (Rust)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      # The web bundle must exist before tauri-build runs, and the sidecar and
+      # PostgreSQL do not: this job checks the shell compiles, it does not
+      # produce an installer. release.yml does that.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      - working-directory: apps/desktop/src-tauri
+        run: cargo fmt --check
+
+      - working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings

@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Atlas needs to run its bundled kernel sidecar and open external links.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-execute",
+    "opener:allow-open-url",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [{ "name": "binaries/atlas-kernel", "sidecar": true }]
+    }
+  ]
+}
