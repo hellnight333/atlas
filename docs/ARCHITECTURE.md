@@ -37,6 +37,11 @@ only when its parents complete; outputs flow along edges as inputs.
 Phase 2.** Retrofitting `depends_on` after six studios enqueue flat jobs is brutal — an
 LLM that authors DAGs can be added at any time.
 
+Atlas now includes a dedicated Workflow Engine that executes declarative DAG definitions,
+builds immutable execution plans, validates cycles, and schedules independent branches in
+parallel while delegating node execution through kernel, executor, and provider layers.
+See `docs/WORKFLOW_ENGINE.md`.
+
 ### Execution State Machine
 Status is an explicit machine with transitions enforced by the kernel, never a free-text
 column:
@@ -78,15 +83,54 @@ with a name, JSON schema, handler and permission scope. The agent loop's tool li
 generated from it — adding an action makes it available to the agent, the API, the CLI
 and the UI simultaneously. Studios register actions at import time.
 
+### Capability Layer
+The Capability Layer is the semantic boundary between workflow intent and execution
+implementation.
+
+Workflow nodes declare WHAT is needed via a capability and requirement metadata.
+They do not declare provider, model, API, executor, or GPU.
+
+```
+Workflow -> Capability -> Recipe -> Execution Policy -> Executor -> Provider -> Model
+```
+
+The capability registry is provider-agnostic and stores:
+
+- capability metadata and version
+- recipes per capability
+- compatible provider lookup
+- compatible executor lookup
+
+Selection is delegated to policy and executor/provider layers. The capability layer does
+not execute jobs and does not embed model logic.
+
+See `docs/CAPABILITY_LAYER.md`.
+
+### Execution Policy Engine
+The Execution Policy Engine is a pure decision service.
+
+It consumes capability intent, optional recipe selection, capability requirements, registry
+inventory, and runtime context, and produces one immutable `ExecutionDecision`.
+
+```
+Workflow -> Capability -> Recipe -> Execution Policy -> Execution Decision -> Executor -> Provider -> Model
+```
+
+It does not execute jobs, schedule jobs, or communicate with providers directly.
+Its responsibility is deterministic selection and machine-readable explanation.
+
+See `docs/EXECUTION_POLICY.md`.
+
 ### Job Queue & Scheduler
 Postgres-backed (`SELECT … FOR UPDATE SKIP LOCKED`). A `Job` carries:
 
 ```
-kind · payload · capability_req{vram_gb, model_family, modality}
-priority · status · attempts · worker_id · lease_expires_at
+action · payload · capability_req
+execution_decision_id · priority · status · attempts · worker_id · lease_expires_at
 ```
 
-The scheduler matches `capability_req` against registered workers and assigns work under
+Execution Policy produces the `execution_decision_id`; execution location is handled by the
+Executor layer, not providers. See `docs/EXECUTOR_LAYER.md`.
 the routing policy. Leases expire so a dead worker's job returns to the queue.
 No Redis, no Celery — revisit only under measured load.
 
@@ -127,13 +171,45 @@ lands here with full lineage: `parent_asset_id`, the recipe and version that pro
 the exact resolved parameters, and the operator's verdict. "Make another like the third
 one" resolves by DB lookup, not by re-describing.
 
+Atlas now treats assets as first-class, versioned domain objects with project/workflow
+context, storage metadata, tags, and lineage references. See `docs/ASSET_SYSTEM.md`.
+
 ### Event Bus
 Typed topics with declared schemas; subscribers register by decorator. Studios communicate
 through events, never by importing each other. This is what keeps them replaceable.
 
+Implementation details and event contract are documented in `docs/EVENT_BUS.md`.
+
+### Composition Root and dependency graph
+Runtime wiring now happens in one place: `packages/kernel/atlas_kernel/composition_root.py`.
+
+Rules:
+
+- Core subsystems are constructor-injected and do not instantiate one another directly.
+- Defaults are allowed only in the composition root.
+- A single shared `EventBus` instance is passed to orchestrator, worker, executor,
+  asset service, and workflow engine.
+- API and worker entrypoints bootstrap through `create_runtime()`.
+
+This removes hidden local defaults, prevents event-bus fragmentation, and makes runtime
+topology explicit and testable. See `docs/COMPOSITION_ROOT.md`.
+
 ### Memory
 Postgres + pgvector. Three tiers: **brand** (tone, palette, do/don't), **project**,
 **asset**. Injected into the agent loop as context, not stuffed into prompts by hand.
+
+## Core domain entities
+
+Atlas now models the control plane with explicit core domain entities:
+
+- `Workspace`: a top-level organization boundary that owns projects and namespaces assets.
+- `Project`: a scoped collection of work inside a workspace, useful for campaigns and iterative design.
+- `Workflow`: a reusable execution template with a studio, default action, and capability requirements.
+- `Run`: an execution instance of a workflow or a studio request, owning steps, jobs, and results.
+- `Job`: a schedulable unit of work with routing metadata and provider execution state.
+- `Asset`: the content produced by a completed job, stored with lineage and metadata.
+
+These concepts are implemented in the kernel with new tables and optional run metadata to preserve the current execution surface while making the domain explicit.
 
 ## Compute topology
 

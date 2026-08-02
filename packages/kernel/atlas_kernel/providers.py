@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -21,7 +21,11 @@ class LocalFluxProvider(ProviderAdapter):
         time.sleep(0.75)
         if action == "image.generate":
             prompt = payload.get("prompt", "Atlas generated image")
-            return {"result": "image_generated", "prompt": prompt, "uri": f"https://example.com/generated/{hash(prompt) % 10000}"}
+            return {
+                "result": "image_generated",
+                "prompt": prompt,
+                "uri": f"https://example.com/generated/{hash(prompt) % 10000}",
+            }
         return {"result": "ok", "action": action, "payload": payload}
 
 
@@ -32,7 +36,11 @@ class LocalTextProvider(ProviderAdapter):
         time.sleep(0.4)
         prompt = payload.get("prompt", "Atlas generated text")
         if action == "text.generate":
-            return {"result": "text_generated", "prompt": prompt, "text": f"Generated response for: {prompt}"}
+            return {
+                "result": "text_generated",
+                "prompt": prompt,
+                "text": f"Generated response for: {prompt}",
+            }
         if action == "code.generate":
             return {
                 "result": "code_generated",
@@ -45,11 +53,7 @@ class LocalTextProvider(ProviderAdapter):
 
 @dataclass
 class ProviderManager:
-    adapters: dict[str, ProviderAdapter] = None
-
-    def __post_init__(self) -> None:
-        if self.adapters is None:
-            self.adapters = {}
+    adapters: dict[str, ProviderAdapter] = field(default_factory=dict)
 
     def register_adapter(self, name: str, adapter: ProviderAdapter) -> None:
         self.adapters[name] = adapter

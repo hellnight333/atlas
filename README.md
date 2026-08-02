@@ -13,6 +13,9 @@ only when they are a clear win.
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | Master context, principles, scope discipline |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, kernel components, compute topology, worker protocol |
+| [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | Local setup, commands, and engineering guardrails |
+| [docs/CI.md](docs/CI.md) | CI pipeline and failure policy |
+| [docs/TESTING.md](docs/TESTING.md) | Test suites, contract checks, and coverage |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases and their exit criteria |
 | [docs/LESSONS_FROM_NAML.md](docs/LESSONS_FROM_NAML.md) | Production bugs already paid for once — read before writing provider or deploy code |
 | [docs/decisions/](docs/decisions/) | Architecture Decision Records |
@@ -39,3 +42,12 @@ infra/               compose, Tailscale, MinIO, migrations
 
 **Phase 0 — Kernel + vertical slice.** See [docs/ROADMAP.md](docs/ROADMAP.md) for the
 exit criterion and the GitHub milestone for open work.
+
+## Engineering
+
+Local quality commands:
+
+- `python -m ruff check packages/kernel workers`
+- `python -m black --check packages/kernel workers`
+- `python -m mypy packages/kernel/atlas_kernel`
+- `python -m pytest packages/kernel/tests`

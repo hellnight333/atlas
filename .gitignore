@@ -8,6 +8,10 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# Coverage artifacts
+.coverage
+coverage.xml
+
 # Node
 node_modules/
 .next/

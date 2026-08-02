@@ -2,44 +2,27 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 import time
 
-from packages.kernel.atlas_kernel.db import init_db
-from packages.kernel.atlas_kernel.models import ProviderSpec
-from packages.kernel.atlas_kernel.providers import LocalFluxProvider, LocalTextProvider, ProviderManager
-from packages.kernel.atlas_kernel.registry import Registry
-from packages.kernel.atlas_kernel.router import ProviderRouter
-from packages.kernel.atlas_kernel.repository import AtlasRepository
-from packages.kernel.atlas_kernel.worker import Worker
-
+from packages.kernel.atlas_kernel.composition_root import create_runtime
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("atlas-gpu-worker")
 
 
-def build_router_and_providers() -> tuple[ProviderRouter, ProviderManager]:
-    registry = Registry()
-    registry.register_provider(ProviderSpec(name=LocalFluxProvider.name, kind="image", is_local=True, vram_gb=24))
-    registry.register_provider(ProviderSpec(name=LocalTextProvider.name, kind="llm", is_local=True, vram_gb=0))
-
-    provider_manager = ProviderManager()
-    provider_manager.register_adapter(LocalFluxProvider.name, LocalFluxProvider())
-    provider_manager.register_adapter(LocalTextProvider.name, LocalTextProvider())
-
-    return ProviderRouter(registry), provider_manager
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Atlas GPU worker process")
     parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds")
-    parser.add_argument("--stop-after", type=int, default=0, help="Stop after this many polling iterations (0 means run forever)")
+    parser.add_argument(
+        "--stop-after",
+        type=int,
+        default=0,
+        help="Stop after this many polling iterations (0 means run forever)",
+    )
     args = parser.parse_args()
 
-    init_db()
-    repository = AtlasRepository()
-    router, provider_manager = build_router_and_providers()
-    worker = Worker(repository=repository, router=router, provider_manager=provider_manager)
+    runtime = create_runtime()
+    worker = runtime.worker
 
     logger.info("Starting Atlas GPU worker")
     iteration = 0

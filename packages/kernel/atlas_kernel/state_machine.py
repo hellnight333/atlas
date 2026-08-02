@@ -28,7 +28,12 @@ class ExecutionStateMachine:
         job = self.jobs[job_id]
         allowed = {
             JobStatus.QUEUED: {JobStatus.RUNNING, JobStatus.CANCELLED},
-            JobStatus.RUNNING: {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.PAUSED},
+            JobStatus.RUNNING: {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+                JobStatus.PAUSED,
+            },
             JobStatus.PAUSED: {JobStatus.RUNNING, JobStatus.CANCELLED},
             JobStatus.FAILED: {JobStatus.RUNNING},
             JobStatus.COMPLETED: set(),

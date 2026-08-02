@@ -1,25 +1,930 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import text
 
 from .db import SessionLocal, init_db
-from .models import Job, JobStatus, Run, Step, StepStatus
+from .agents.models import (
+    Agent,
+    AgentAssignment,
+    AgentAssignmentStatus,
+    AgentConversation,
+    AgentMailbox,
+    AgentMemoryReference,
+    AgentMessage,
+    AgentMessageType,
+    AgentPermission,
+    AgentRole,
+    AgentStatus,
+    AgentTeam,
+    AgentTeamStatus,
+)
+from .agents.schedule_models import (
+    ExecutionSchedule,
+    ResumeToken,
+    RuntimeExecutionRecord,
+    RuntimeExecutionStatus,
+    RuntimeRetryPolicy,
+    ScheduleQueueEntry,
+    SchedulerPriority,
+)
+from .models import (
+    Asset,
+    ChatConversation,
+    ChatConversationCreate,
+    ChatMessage,
+    ChatMessageCreate,
+    ContextBundle,
+    ExecutionDecision,
+    GraphSnapshot,
+    Job,
+    JobStatus,
+    KnowledgeEdge,
+    KnowledgeGraph,
+    KnowledgeNode,
+    RelationshipType,
+    Project,
+    ResearchGraph,
+    ResearchSession,
+    ReviewComment,
+    ReviewHistoryEvent,
+    ReviewItem,
+    ReviewSession,
+    Run,
+    Step,
+    Workflow,
+    Workspace,
+    normalize_capability_request,
+)
 
 
 class AtlasRepository:
     def __init__(self) -> None:
         init_db()
 
+    def create_workspace(self, workspace: Workspace) -> Workspace:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_workspaces (id, name, description, created_at)
+                VALUES (:id, :name, :description, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": workspace.id,
+                    "name": workspace.name,
+                    "description": workspace.description,
+                    "created_at": workspace.created_at,
+                },
+            )
+            session.commit()
+        return workspace
+
+    def create_project(self, project: Project) -> Project:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_projects (id, workspace_id, name, description, created_at)
+                VALUES (:id, :workspace_id, :name, :description, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": project.id,
+                    "workspace_id": project.workspace_id,
+                    "name": project.name,
+                    "description": project.description,
+                    "created_at": project.created_at,
+                },
+            )
+            session.commit()
+        return project
+
+    def get_project(self, project_id: str) -> Project | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, workspace_id, name, description, created_at FROM atlas_projects WHERE id = :project_id"
+                ),
+                {"project_id": project_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return Project(
+            id=row[0],
+            workspace_id=row[1],
+            name=row[2],
+            description=row[3],
+            created_at=row[4],
+        )
+
+    def list_projects(self, workspace_id: str | None = None) -> list[Project]:
+        with SessionLocal() as session:
+            if workspace_id is None:
+                rows = session.execute(
+                    text(
+                        "SELECT id, workspace_id, name, description, created_at FROM atlas_projects ORDER BY created_at DESC"
+                    )
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text(
+                        "SELECT id, workspace_id, name, description, created_at FROM atlas_projects WHERE workspace_id = :workspace_id ORDER BY created_at DESC"
+                    ),
+                    {"workspace_id": workspace_id},
+                ).fetchall()
+        return [
+            Project(
+                id=row[0],
+                workspace_id=row[1],
+                name=row[2],
+                description=row[3],
+                created_at=row[4],
+            )
+            for row in rows
+        ]
+
+    def create_chat_conversation(self, conversation: ChatConversation) -> ChatConversation:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_chat_conversations (
+                    id, project_id, title, pinned, prompt_version, response_version,
+                    provider_name, execution_time_ms, tokens, workflow_id,
+                    parent_conversation_id, prompt_asset_id, response_asset_id,
+                    metadata, created_at, updated_at, deleted_at
+                )
+                VALUES (
+                    :id, :project_id, :title, :pinned, :prompt_version, :response_version,
+                    :provider_name, :execution_time_ms, :tokens, :workflow_id,
+                    :parent_conversation_id, :prompt_asset_id, :response_asset_id,
+                    :metadata, :created_at, :updated_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": conversation.id,
+                    "project_id": conversation.project_id,
+                    "title": conversation.title,
+                    "pinned": conversation.pinned,
+                    "prompt_version": conversation.prompt_version,
+                    "response_version": conversation.response_version,
+                    "provider_name": conversation.provider_name,
+                    "execution_time_ms": conversation.execution_time_ms,
+                    "tokens": conversation.tokens,
+                    "workflow_id": conversation.workflow_id,
+                    "parent_conversation_id": conversation.parent_conversation_id,
+                    "prompt_asset_id": conversation.prompt_asset_id,
+                    "response_asset_id": conversation.response_asset_id,
+                    "metadata": json.dumps(conversation.metadata),
+                    "created_at": conversation.created_at,
+                    "updated_at": conversation.updated_at,
+                },
+            )
+            session.commit()
+        return conversation
+
+    def update_chat_conversation(self, conversation: ChatConversation) -> ChatConversation:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_chat_conversations
+                SET title = :title,
+                    pinned = :pinned,
+                    prompt_version = :prompt_version,
+                    response_version = :response_version,
+                    provider_name = :provider_name,
+                    execution_time_ms = :execution_time_ms,
+                    tokens = :tokens,
+                    workflow_id = :workflow_id,
+                    parent_conversation_id = :parent_conversation_id,
+                    prompt_asset_id = :prompt_asset_id,
+                    response_asset_id = :response_asset_id,
+                    metadata = :metadata,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": conversation.id,
+                    "title": conversation.title,
+                    "pinned": conversation.pinned,
+                    "prompt_version": conversation.prompt_version,
+                    "response_version": conversation.response_version,
+                    "provider_name": conversation.provider_name,
+                    "execution_time_ms": conversation.execution_time_ms,
+                    "tokens": conversation.tokens,
+                    "workflow_id": conversation.workflow_id,
+                    "parent_conversation_id": conversation.parent_conversation_id,
+                    "prompt_asset_id": conversation.prompt_asset_id,
+                    "response_asset_id": conversation.response_asset_id,
+                    "metadata": json.dumps(conversation.metadata),
+                    "updated_at": conversation.updated_at,
+                },
+            )
+            session.commit()
+        return conversation
+
+    def get_chat_conversation(self, conversation_id: str) -> ChatConversation | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, project_id, title, pinned, prompt_version, response_version,
+                       provider_name, execution_time_ms, tokens, workflow_id,
+                       parent_conversation_id, prompt_asset_id, response_asset_id,
+                       metadata, created_at, updated_at
+                FROM atlas_chat_conversations
+                WHERE id = :conversation_id AND deleted_at IS NULL
+                """),
+                {"conversation_id": conversation_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return ChatConversation(
+            id=row[0],
+            project_id=row[1],
+            title=row[2],
+            pinned=row[3],
+            prompt_version=row[4],
+            response_version=row[5],
+            provider_name=row[6],
+            execution_time_ms=row[7],
+            tokens=row[8],
+            workflow_id=row[9],
+            parent_conversation_id=row[10],
+            prompt_asset_id=row[11],
+            response_asset_id=row[12],
+            metadata=(
+                row[13] if isinstance(row[13], dict) else json.loads(row[13]) if row[13] else {}
+            ),
+            created_at=row[14],
+            updated_at=row[15],
+        )
+
+    def list_chat_conversations(self, project_id: str | None = None) -> list[ChatConversation]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, pinned, prompt_version, response_version,
+                           provider_name, execution_time_ms, tokens, workflow_id,
+                           parent_conversation_id, prompt_asset_id, response_asset_id,
+                           metadata, created_at, updated_at
+                    FROM atlas_chat_conversations
+                    WHERE deleted_at IS NULL
+                    ORDER BY pinned DESC, updated_at DESC
+                    """)
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, pinned, prompt_version, response_version,
+                           provider_name, execution_time_ms, tokens, workflow_id,
+                           parent_conversation_id, prompt_asset_id, response_asset_id,
+                           metadata, created_at, updated_at
+                    FROM atlas_chat_conversations
+                    WHERE project_id = :project_id AND deleted_at IS NULL
+                    ORDER BY pinned DESC, updated_at DESC
+                    """),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            ChatConversation(
+                id=row[0],
+                project_id=row[1],
+                title=row[2],
+                pinned=row[3],
+                prompt_version=row[4],
+                response_version=row[5],
+                provider_name=row[6],
+                execution_time_ms=row[7],
+                tokens=row[8],
+                workflow_id=row[9],
+                parent_conversation_id=row[10],
+                prompt_asset_id=row[11],
+                response_asset_id=row[12],
+                metadata=(
+                    row[13] if isinstance(row[13], dict) else json.loads(row[13]) if row[13] else {}
+                ),
+                created_at=row[14],
+                updated_at=row[15],
+            )
+            for row in rows
+        ]
+
+    def delete_chat_conversation(self, conversation_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("UPDATE atlas_chat_conversations SET deleted_at = now() WHERE id = :conversation_id"),
+                {"conversation_id": conversation_id},
+            )
+            session.execute(
+                text("UPDATE atlas_chat_messages SET deleted_at = now() WHERE conversation_id = :conversation_id"),
+                {"conversation_id": conversation_id},
+            )
+            session.commit()
+
+    def create_research_session(self, session_record: ResearchSession) -> ResearchSession:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_research_sessions (
+                    id, project_id, title, question, status, conversation_id,
+                    collection_asset_id, report_asset_id, metadata, created_at, updated_at, deleted_at
+                )
+                VALUES (
+                    :id, :project_id, :title, :question, :status, :conversation_id,
+                    :collection_asset_id, :report_asset_id, :metadata, :created_at, :updated_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": session_record.id,
+                    "project_id": session_record.project_id,
+                    "title": session_record.title,
+                    "question": session_record.question,
+                    "status": session_record.status,
+                    "conversation_id": session_record.conversation_id,
+                    "collection_asset_id": session_record.collection_asset_id,
+                    "report_asset_id": session_record.report_asset_id,
+                    "metadata": json.dumps(session_record.metadata),
+                    "created_at": session_record.created_at,
+                    "updated_at": session_record.updated_at,
+                },
+            )
+            session.commit()
+        return session_record
+
+    def update_research_session(self, session_record: ResearchSession) -> ResearchSession:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_research_sessions
+                SET title = :title,
+                    question = :question,
+                    status = :status,
+                    conversation_id = :conversation_id,
+                    collection_asset_id = :collection_asset_id,
+                    report_asset_id = :report_asset_id,
+                    metadata = :metadata,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": session_record.id,
+                    "title": session_record.title,
+                    "question": session_record.question,
+                    "status": session_record.status,
+                    "conversation_id": session_record.conversation_id,
+                    "collection_asset_id": session_record.collection_asset_id,
+                    "report_asset_id": session_record.report_asset_id,
+                    "metadata": json.dumps(session_record.metadata),
+                    "updated_at": session_record.updated_at,
+                },
+            )
+            session.commit()
+        return session_record
+
+    def get_research_session(self, session_id: str) -> ResearchSession | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, project_id, title, question, status, conversation_id,
+                       collection_asset_id, report_asset_id, metadata, created_at, updated_at
+                FROM atlas_research_sessions
+                WHERE id = :session_id AND deleted_at IS NULL
+                """),
+                {"session_id": session_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return ResearchSession(
+            id=row[0],
+            project_id=row[1],
+            title=row[2],
+            question=row[3],
+            status=row[4],
+            conversation_id=row[5],
+            collection_asset_id=row[6],
+            report_asset_id=row[7],
+            metadata=row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {},
+            created_at=row[9],
+            updated_at=row[10],
+        )
+
+    def list_research_sessions(self, project_id: str | None = None) -> list[ResearchSession]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, question, status, conversation_id,
+                           collection_asset_id, report_asset_id, metadata, created_at, updated_at
+                    FROM atlas_research_sessions
+                    WHERE deleted_at IS NULL
+                    ORDER BY updated_at DESC
+                    """)
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, question, status, conversation_id,
+                           collection_asset_id, report_asset_id, metadata, created_at, updated_at
+                    FROM atlas_research_sessions
+                    WHERE project_id = :project_id AND deleted_at IS NULL
+                    ORDER BY updated_at DESC
+                    """),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            ResearchSession(
+                id=row[0],
+                project_id=row[1],
+                title=row[2],
+                question=row[3],
+                status=row[4],
+                conversation_id=row[5],
+                collection_asset_id=row[6],
+                report_asset_id=row[7],
+                metadata=row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {},
+                created_at=row[9],
+                updated_at=row[10],
+            )
+            for row in rows
+        ]
+
+    def save_research_graph(self, graph: ResearchGraph) -> ResearchGraph:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_research_graphs (project_id, nodes, edges, updated_at)
+                VALUES (:project_id, :nodes, :edges, :updated_at)
+                ON CONFLICT (project_id)
+                DO UPDATE SET nodes = :nodes, edges = :edges, updated_at = :updated_at
+                """),
+                {
+                    "project_id": graph.project_id,
+                    "nodes": json.dumps(graph.nodes),
+                    "edges": json.dumps(graph.edges),
+                    "updated_at": graph.updated_at,
+                },
+            )
+            session.commit()
+        return graph
+
+    def get_research_graph(self, project_id: str) -> ResearchGraph:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("SELECT project_id, nodes, edges, updated_at FROM atlas_research_graphs WHERE project_id = :project_id"),
+                {"project_id": project_id},
+            ).fetchone()
+        if row is None:
+            return ResearchGraph(project_id=project_id)
+        return ResearchGraph(
+            project_id=row[0],
+            nodes=row[1] if isinstance(row[1], list) else json.loads(row[1]) if row[1] else [],
+            edges=row[2] if isinstance(row[2], list) else json.loads(row[2]) if row[2] else [],
+            updated_at=row[3],
+        )
+
+    def create_review_session(self, review: ReviewSession) -> ReviewSession:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_review_sessions (
+                    id, project_id, title, status, asset_id, published_asset_id,
+                    workflow_id, metadata, created_at, updated_at, deleted_at
+                )
+                VALUES (
+                    :id, :project_id, :title, :status, :asset_id, :published_asset_id,
+                    :workflow_id, :metadata, :created_at, :updated_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": review.id,
+                    "project_id": review.project_id,
+                    "title": review.title,
+                    "status": review.status,
+                    "asset_id": review.asset_id,
+                    "published_asset_id": review.published_asset_id,
+                    "workflow_id": review.workflow_id,
+                    "metadata": json.dumps(review.metadata),
+                    "created_at": review.created_at,
+                    "updated_at": review.updated_at,
+                },
+            )
+            session.commit()
+        return review
+
+    def update_review_session(self, review: ReviewSession) -> ReviewSession:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_review_sessions
+                SET title = :title,
+                    status = :status,
+                    asset_id = :asset_id,
+                    published_asset_id = :published_asset_id,
+                    workflow_id = :workflow_id,
+                    metadata = :metadata,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": review.id,
+                    "title": review.title,
+                    "status": review.status,
+                    "asset_id": review.asset_id,
+                    "published_asset_id": review.published_asset_id,
+                    "workflow_id": review.workflow_id,
+                    "metadata": json.dumps(review.metadata),
+                    "updated_at": review.updated_at,
+                },
+            )
+            session.commit()
+        return review
+
+    def get_review_session(self, review_id: str) -> ReviewSession | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, project_id, title, status, asset_id, published_asset_id,
+                       workflow_id, metadata, created_at, updated_at
+                FROM atlas_review_sessions
+                WHERE id = :review_id AND deleted_at IS NULL
+                """),
+                {"review_id": review_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return ReviewSession(
+            id=row[0],
+            project_id=row[1],
+            title=row[2],
+            status=row[3],
+            asset_id=row[4],
+            published_asset_id=row[5],
+            workflow_id=row[6],
+            metadata=row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {},
+            created_at=row[8],
+            updated_at=row[9],
+        )
+
+    def list_review_sessions(self, project_id: str | None = None) -> list[ReviewSession]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, status, asset_id, published_asset_id,
+                           workflow_id, metadata, created_at, updated_at
+                    FROM atlas_review_sessions
+                    WHERE deleted_at IS NULL
+                    ORDER BY updated_at DESC
+                    """)
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("""
+                    SELECT id, project_id, title, status, asset_id, published_asset_id,
+                           workflow_id, metadata, created_at, updated_at
+                    FROM atlas_review_sessions
+                    WHERE project_id = :project_id AND deleted_at IS NULL
+                    ORDER BY updated_at DESC
+                    """),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            ReviewSession(
+                id=row[0],
+                project_id=row[1],
+                title=row[2],
+                status=row[3],
+                asset_id=row[4],
+                published_asset_id=row[5],
+                workflow_id=row[6],
+                metadata=row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {},
+                created_at=row[8],
+                updated_at=row[9],
+            )
+            for row in rows
+        ]
+
+    def upsert_review_item(self, item: ReviewItem) -> ReviewItem:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_review_items (
+                    id, review_id, asset_id, decision, comment, metadata,
+                    created_at, updated_at, deleted_at
+                )
+                VALUES (
+                    :id, :review_id, :asset_id, :decision, :comment, :metadata,
+                    :created_at, :updated_at, NULL
+                )
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    decision = EXCLUDED.decision,
+                    comment = EXCLUDED.comment,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = EXCLUDED.updated_at,
+                    deleted_at = NULL
+                """),
+                {
+                    "id": item.id,
+                    "review_id": item.review_id,
+                    "asset_id": item.asset_id,
+                    "decision": item.decision,
+                    "comment": item.comment,
+                    "metadata": json.dumps(item.metadata),
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                },
+            )
+            session.commit()
+        return item
+
+    def list_review_items(self, review_id: str) -> list[ReviewItem]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, review_id, asset_id, decision, comment, metadata, created_at, updated_at
+                FROM atlas_review_items
+                WHERE review_id = :review_id AND deleted_at IS NULL
+                ORDER BY created_at ASC
+                """),
+                {"review_id": review_id},
+            ).fetchall()
+        return [
+            ReviewItem(
+                id=row[0],
+                review_id=row[1],
+                asset_id=row[2],
+                decision=row[3],
+                comment=row[4],
+                metadata=row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {},
+                created_at=row[6],
+                updated_at=row[7],
+            )
+            for row in rows
+        ]
+
+    def create_review_comment(self, comment: ReviewComment) -> ReviewComment:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_review_comments (
+                    id, review_id, content, metadata, created_at, deleted_at
+                )
+                VALUES (
+                    :id, :review_id, :content, :metadata, :created_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": comment.id,
+                    "review_id": comment.review_id,
+                    "content": comment.content,
+                    "metadata": json.dumps(comment.metadata),
+                    "created_at": comment.created_at,
+                },
+            )
+            session.commit()
+        return comment
+
+    def list_review_comments(self, review_id: str) -> list[ReviewComment]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, review_id, content, metadata, created_at
+                FROM atlas_review_comments
+                WHERE review_id = :review_id AND deleted_at IS NULL
+                ORDER BY created_at ASC
+                """),
+                {"review_id": review_id},
+            ).fetchall()
+        return [
+            ReviewComment(
+                id=row[0],
+                review_id=row[1],
+                content=row[2],
+                metadata=row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {},
+                created_at=row[4],
+            )
+            for row in rows
+        ]
+
+    def create_review_history_event(self, event: ReviewHistoryEvent) -> ReviewHistoryEvent:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_review_history (
+                    id, review_id, event_type, actor, comment, from_status, to_status,
+                    asset_id, published_asset_id, metadata, created_at
+                )
+                VALUES (
+                    :id, :review_id, :event_type, :actor, :comment, :from_status, :to_status,
+                    :asset_id, :published_asset_id, :metadata, :created_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": event.id,
+                    "review_id": event.review_id,
+                    "event_type": event.event_type,
+                    "actor": event.actor,
+                    "comment": event.comment,
+                    "from_status": event.from_status,
+                    "to_status": event.to_status,
+                    "asset_id": event.asset_id,
+                    "published_asset_id": event.published_asset_id,
+                    "metadata": json.dumps(event.metadata),
+                    "created_at": event.created_at,
+                },
+            )
+            session.commit()
+        return event
+
+    def list_review_history(self, review_id: str) -> list[ReviewHistoryEvent]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, review_id, event_type, actor, comment, from_status, to_status,
+                       asset_id, published_asset_id, metadata, created_at
+                FROM atlas_review_history
+                WHERE review_id = :review_id
+                ORDER BY created_at ASC
+                """),
+                {"review_id": review_id},
+            ).fetchall()
+        return [
+            ReviewHistoryEvent(
+                id=row[0],
+                review_id=row[1],
+                event_type=row[2],
+                actor=row[3],
+                comment=row[4],
+                from_status=row[5],
+                to_status=row[6],
+                asset_id=row[7],
+                published_asset_id=row[8],
+                metadata=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
+                created_at=row[10],
+            )
+            for row in rows
+        ]
+
+    def create_chat_message(self, message: ChatMessage) -> ChatMessage:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_chat_messages (
+                    id, conversation_id, version, role, content, asset_id,
+                    prompt_asset_id, response_asset_id, provider_name,
+                    execution_time_ms, tokens, metadata, created_at, deleted_at
+                )
+                VALUES (
+                    :id, :conversation_id, :version, :role, :content, :asset_id,
+                    :prompt_asset_id, :response_asset_id, :provider_name,
+                    :execution_time_ms, :tokens, :metadata, :created_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": message.id,
+                    "conversation_id": message.conversation_id,
+                    "version": message.version,
+                    "role": message.role,
+                    "content": message.content,
+                    "asset_id": message.asset_id,
+                    "prompt_asset_id": message.prompt_asset_id,
+                    "response_asset_id": message.response_asset_id,
+                    "provider_name": message.provider_name,
+                    "execution_time_ms": message.execution_time_ms,
+                    "tokens": message.tokens,
+                    "metadata": json.dumps(message.metadata),
+                    "created_at": message.created_at,
+                },
+            )
+            session.commit()
+        return message
+
+    def list_chat_messages(self, conversation_id: str) -> list[ChatMessage]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, conversation_id, version, role, content, asset_id,
+                       prompt_asset_id, response_asset_id, provider_name,
+                       execution_time_ms, tokens, metadata, created_at
+                FROM atlas_chat_messages
+                WHERE conversation_id = :conversation_id AND deleted_at IS NULL
+                ORDER BY version ASC, created_at ASC
+                """),
+                {"conversation_id": conversation_id},
+            ).fetchall()
+        return [
+            ChatMessage(
+                id=row[0],
+                conversation_id=row[1],
+                version=row[2],
+                role=row[3],
+                content=row[4],
+                asset_id=row[5],
+                prompt_asset_id=row[6],
+                response_asset_id=row[7],
+                provider_name=row[8],
+                execution_time_ms=row[9],
+                tokens=row[10],
+                metadata=(
+                    row[11] if isinstance(row[11], dict) else json.loads(row[11]) if row[11] else {}
+                ),
+                created_at=row[12],
+            )
+            for row in rows
+        ]
+
+    def create_workflow(self, workflow: Workflow) -> Workflow:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_workflows (id, project_id, name, description, studio, default_action, capability_req, created_at)
+                VALUES (:id, :project_id, :name, :description, :studio, :default_action, :capability_req, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": workflow.id,
+                    "project_id": workflow.project_id,
+                    "name": workflow.name,
+                    "description": workflow.description,
+                    "studio": workflow.studio,
+                    "default_action": workflow.default_action,
+                    "capability_req": json.dumps(workflow.capability_req.model_dump()),
+                    "created_at": workflow.created_at,
+                },
+            )
+            session.commit()
+        return workflow
+
+    def get_workflow(self, workflow_id: str) -> Workflow | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, project_id, name, description, studio, default_action, capability_req, created_at FROM atlas_workflows WHERE id = :workflow_id"
+                ),
+                {"workflow_id": workflow_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return Workflow(
+            id=row[0],
+            project_id=row[1],
+            name=row[2],
+            description=row[3],
+            studio=row[4],
+            default_action=row[5],
+            capability_req=normalize_capability_request(
+                row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {}
+            ),
+            created_at=row[7],
+        )
+
+    def list_workflows(self, project_id: str | None = None) -> list[Workflow]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text(
+                        "SELECT id, project_id, name, description, studio, default_action, capability_req, created_at FROM atlas_workflows ORDER BY created_at DESC"
+                    )
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text(
+                        "SELECT id, project_id, name, description, studio, default_action, capability_req, created_at FROM atlas_workflows WHERE project_id = :project_id ORDER BY created_at DESC"
+                    ),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            Workflow(
+                id=row[0],
+                project_id=row[1],
+                name=row[2],
+                description=row[3],
+                studio=row[4],
+                default_action=row[5],
+                capability_req=normalize_capability_request(
+                    row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {}
+                ),
+                created_at=row[7],
+            )
+            for row in rows
+        ]
+
     def create_run(self, run: Run) -> Run:
         with SessionLocal() as session:
             session.execute(
                 text("""
-                INSERT INTO atlas_runs (id, title, description, studio, status, created_at)
-                VALUES (:id, :title, :description, :studio, :status, :created_at)
+                INSERT INTO atlas_runs (id, title, description, studio, workspace_id, project_id, workflow_id, produced_asset_ids, status, created_at)
+                VALUES (:id, :title, :description, :studio, :workspace_id, :project_id, :workflow_id, :produced_asset_ids, :status, :created_at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
@@ -27,6 +932,10 @@ class AtlasRepository:
                     "title": run.title,
                     "description": run.description,
                     "studio": run.studio,
+                    "workspace_id": run.workspace_id,
+                    "project_id": run.project_id,
+                    "workflow_id": run.workflow_id,
+                    "produced_asset_ids": json.dumps(run.produced_asset_ids),
                     "status": run.status.value,
                     "created_at": run.created_at,
                 },
@@ -59,8 +968,8 @@ class AtlasRepository:
         with SessionLocal() as session:
             session.execute(
                 text("""
-                INSERT INTO atlas_jobs (id, run_id, action, payload, status, attempts, priority, capability_req, provider_name, output, created_at)
-                VALUES (:id, :run_id, :action, :payload, :status, :attempts, :priority, :capability_req, :provider_name, :output, :created_at)
+                INSERT INTO atlas_jobs (id, run_id, action, payload, status, attempts, priority, capability_req, execution_decision_id, provider_name, output, produced_asset_ids, created_at)
+                VALUES (:id, :run_id, :action, :payload, :status, :attempts, :priority, :capability_req, :execution_decision_id, :provider_name, :output, :produced_asset_ids, :created_at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
@@ -71,62 +980,1490 @@ class AtlasRepository:
                     "status": job.status.value,
                     "attempts": job.attempts,
                     "priority": job.priority,
-                    "capability_req": json.dumps(job.capability_req),
+                    "capability_req": json.dumps(job.capability_req.model_dump()),
+                    "execution_decision_id": job.execution_decision_id,
                     "provider_name": job.provider_name,
                     "output": json.dumps(job.output),
+                    "produced_asset_ids": json.dumps(job.produced_asset_ids),
                     "created_at": job.created_at,
                 },
             )
             session.commit()
         return job
 
+    def create_asset(self, asset: Asset) -> Asset:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_assets (
+                    id,
+                    project_id,
+                    workflow_id,
+                    run_id,
+                    job_id,
+                    parent_asset_id,
+                    version,
+                    type,
+                    uri,
+                    mime_type,
+                    file_size,
+                    content_hash,
+                    metadata,
+                    tags,
+                    source_asset_ids,
+                    thumbnail_uri,
+                    preview_uri,
+                    search_index,
+                    vector_index,
+                    embeddings,
+                    ocr_text,
+                    transcript,
+                    ai_summary,
+                    created_at,
+                    updated_at,
+                    deleted_at
+                )
+                VALUES (
+                    :id,
+                    :project_id,
+                    :workflow_id,
+                    :run_id,
+                    :job_id,
+                    :parent_asset_id,
+                    :version,
+                    :type,
+                    :uri,
+                    :mime_type,
+                    :file_size,
+                    :content_hash,
+                    :metadata,
+                    :tags,
+                    :source_asset_ids,
+                    :thumbnail_uri,
+                    :preview_uri,
+                    :search_index,
+                    :vector_index,
+                    :embeddings,
+                    :ocr_text,
+                    :transcript,
+                    :ai_summary,
+                    :created_at,
+                    :updated_at,
+                    NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": asset.id,
+                    "project_id": asset.project_id,
+                    "workflow_id": asset.workflow_id,
+                    "run_id": asset.run_id,
+                    "job_id": asset.job_id,
+                    "parent_asset_id": asset.parent_asset_id,
+                    "version": asset.version,
+                    "type": asset.type,
+                    "uri": asset.uri,
+                    "mime_type": asset.mime_type,
+                    "file_size": asset.file_size,
+                    "content_hash": asset.content_hash,
+                    "metadata": json.dumps(asset.metadata),
+                    "tags": json.dumps(asset.tags),
+                    "source_asset_ids": json.dumps(asset.source_asset_ids),
+                    "thumbnail_uri": asset.thumbnail_uri,
+                    "preview_uri": asset.preview_uri,
+                    "search_index": json.dumps(asset.search_index),
+                    "vector_index": json.dumps(asset.vector_index),
+                    "embeddings": json.dumps(asset.embeddings),
+                    "ocr_text": asset.ocr_text,
+                    "transcript": asset.transcript,
+                    "ai_summary": asset.ai_summary,
+                    "created_at": asset.created_at,
+                    "updated_at": asset.updated_at,
+                },
+            )
+            session.commit()
+        return asset
+
+    def create_execution_decision(self, decision: ExecutionDecision) -> ExecutionDecision:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_execution_decisions (
+                    decision_id, capability_id, recipe_id, executor_id, provider_id,
+                    model_id, reason, confidence, timestamp
+                )
+                VALUES (
+                    :decision_id, :capability_id, :recipe_id, :executor_id, :provider_id,
+                    :model_id, :reason, :confidence, :timestamp
+                )
+                ON CONFLICT (decision_id) DO NOTHING
+                """),
+                {
+                    "decision_id": decision.decision_id,
+                    "capability_id": decision.capability_id,
+                    "recipe_id": decision.recipe_id,
+                    "executor_id": decision.executor_id,
+                    "provider_id": decision.provider_id,
+                    "model_id": decision.model_id,
+                    "reason": json.dumps(decision.reason),
+                    "confidence": decision.confidence,
+                    "timestamp": decision.timestamp,
+                },
+            )
+            session.commit()
+        return decision
+
+    def create_agent(self, agent: Agent) -> Agent:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agents (
+                    id, name, description, role, workspace_id, project_id,
+                    capabilities, status, memory_id, permission_set,
+                    created_at, updated_at, deleted_at
+                )
+                VALUES (
+                    :id, :name, :description, :role, :workspace_id, :project_id,
+                    :capabilities, :status, :memory_id, :permission_set,
+                    :created_at, :updated_at, NULL
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "description": agent.description,
+                    "role": agent.role,
+                    "workspace_id": agent.workspace_id,
+                    "project_id": agent.project_id,
+                    "capabilities": json.dumps(agent.capabilities),
+                    "status": agent.status.value,
+                    "memory_id": agent.memory_id,
+                    "permission_set": json.dumps([permission.value for permission in agent.permission_set]),
+                    "created_at": agent.created_at,
+                    "updated_at": agent.updated_at,
+                },
+            )
+            session.commit()
+        return agent
+
+    def update_agent(self, agent: Agent) -> Agent:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_agents
+                SET name = :name,
+                    description = :description,
+                    role = :role,
+                    workspace_id = :workspace_id,
+                    project_id = :project_id,
+                    capabilities = :capabilities,
+                    status = :status,
+                    memory_id = :memory_id,
+                    permission_set = :permission_set,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "description": agent.description,
+                    "role": agent.role,
+                    "workspace_id": agent.workspace_id,
+                    "project_id": agent.project_id,
+                    "capabilities": json.dumps(agent.capabilities),
+                    "status": agent.status.value,
+                    "memory_id": agent.memory_id,
+                    "permission_set": json.dumps([permission.value for permission in agent.permission_set]),
+                    "updated_at": agent.updated_at,
+                },
+            )
+            session.commit()
+        return agent
+
+    def get_agent(self, agent_id: str) -> Agent | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, name, description, role, workspace_id, project_id,
+                       capabilities, status, memory_id, permission_set,
+                       created_at, updated_at
+                FROM atlas_agents
+                WHERE id = :agent_id AND deleted_at IS NULL
+                """),
+                {"agent_id": agent_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return Agent(
+            id=row[0],
+            name=row[1],
+            description=row[2],
+            role=row[3],
+            workspace_id=row[4],
+            project_id=row[5],
+            capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
+            status=AgentStatus(row[7]),
+            memory_id=row[8],
+            permission_set=[
+                AgentPermission(value)
+                for value in (row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else [])
+            ],
+            created_at=row[10],
+            updated_at=row[11],
+        )
+
+    def list_agents(self, project_id: str | None = None) -> list[Agent]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("""
+                    SELECT id, name, description, role, workspace_id, project_id,
+                           capabilities, status, memory_id, permission_set,
+                           created_at, updated_at
+                    FROM atlas_agents
+                    WHERE deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    """)
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("""
+                    SELECT id, name, description, role, workspace_id, project_id,
+                           capabilities, status, memory_id, permission_set,
+                           created_at, updated_at
+                    FROM atlas_agents
+                    WHERE project_id = :project_id AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    """),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            Agent(
+                id=row[0],
+                name=row[1],
+                description=row[2],
+                role=row[3],
+                workspace_id=row[4],
+                project_id=row[5],
+                capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
+                status=AgentStatus(row[7]),
+                memory_id=row[8],
+                permission_set=[
+                    AgentPermission(value)
+                    for value in (row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else [])
+                ],
+                created_at=row[10],
+                updated_at=row[11],
+            )
+            for row in rows
+        ]
+
+    def delete_agent(self, agent_id: str) -> bool:
+        with SessionLocal() as session:
+            result = session.execute(
+                text("UPDATE atlas_agents SET deleted_at = now() WHERE id = :agent_id AND deleted_at IS NULL"),
+                {"agent_id": agent_id},
+            )
+            session.commit()
+            return bool(result.rowcount and result.rowcount > 0)
+
+    def create_agent_memory_reference(self, reference: AgentMemoryReference) -> AgentMemoryReference:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_memory_references (
+                    id, memory_id, agent_id, kind, asset_id, created_at
+                )
+                VALUES (
+                    :id, :memory_id, :agent_id, :kind, :asset_id, :created_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": reference.id,
+                    "memory_id": reference.memory_id,
+                    "agent_id": reference.agent_id,
+                    "kind": reference.kind,
+                    "asset_id": reference.asset_id,
+                    "created_at": reference.created_at,
+                },
+            )
+            session.commit()
+        return reference
+
+    def create_agent_team(self, team: AgentTeam) -> AgentTeam:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_teams (
+                    id, name, project_id, workspace_id, status, conversation_ids, created_at, updated_at
+                ) VALUES (
+                    :id, :name, :project_id, :workspace_id, :status, :conversation_ids, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": team.id,
+                    "name": team.name,
+                    "project_id": team.project_id,
+                    "workspace_id": team.workspace_id,
+                    "status": team.status.value,
+                    "conversation_ids": json.dumps(team.conversation_ids),
+                    "created_at": team.created_at,
+                    "updated_at": team.updated_at,
+                },
+            )
+            session.commit()
+        return team
+
+    def update_agent_team(self, team: AgentTeam) -> AgentTeam:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_agent_teams
+                SET name = :name,
+                    project_id = :project_id,
+                    workspace_id = :workspace_id,
+                    status = :status,
+                    conversation_ids = :conversation_ids,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": team.id,
+                    "name": team.name,
+                    "project_id": team.project_id,
+                    "workspace_id": team.workspace_id,
+                    "status": team.status.value,
+                    "conversation_ids": json.dumps(team.conversation_ids),
+                    "updated_at": team.updated_at,
+                },
+            )
+            session.commit()
+        return team
+
+    def get_agent_team(self, team_id: str) -> AgentTeam | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT id, name, project_id, workspace_id, status, conversation_ids, created_at, updated_at
+                FROM atlas_agent_teams
+                WHERE id = :team_id
+                """),
+                {"team_id": team_id},
+            ).fetchone()
+        if row is None:
+            return None
+        assignments = self.list_agent_assignments(team_id)
+        return AgentTeam(
+            id=row[0],
+            name=row[1],
+            project_id=row[2],
+            workspace_id=row[3],
+            status=AgentTeamStatus(row[4]),
+            assignments=assignments,
+            conversation_ids=row[5] if isinstance(row[5], list) else json.loads(row[5]) if row[5] else [],
+            created_at=row[6],
+            updated_at=row[7],
+        )
+
+    def create_agent_assignment(self, assignment: AgentAssignment) -> AgentAssignment:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_assignments (
+                    id, team_id, agent_id, role, title, status, capabilities, allowed_actions,
+                    permissions, resource_limits, action, payload, dependencies, mailbox_id,
+                    schedule_id, runtime_execution_id, result_asset_id, error, created_at, updated_at
+                ) VALUES (
+                    :id, :team_id, :agent_id, :role, :title, :status, :capabilities, :allowed_actions,
+                    :permissions, :resource_limits, :action, :payload, :dependencies, :mailbox_id,
+                    :schedule_id, :runtime_execution_id, :result_asset_id, :error, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": assignment.id,
+                    "team_id": assignment.team_id,
+                    "agent_id": assignment.agent_id,
+                    "role": assignment.role.value,
+                    "title": assignment.title,
+                    "status": assignment.status.value,
+                    "capabilities": json.dumps(assignment.capabilities),
+                    "allowed_actions": json.dumps(assignment.allowed_actions),
+                    "permissions": json.dumps([permission.value for permission in assignment.permissions]),
+                    "resource_limits": json.dumps(assignment.resource_limits),
+                    "action": assignment.action,
+                    "payload": json.dumps(assignment.payload, default=_json_value),
+                    "dependencies": json.dumps(assignment.dependencies),
+                    "mailbox_id": assignment.mailbox_id,
+                    "schedule_id": assignment.schedule_id,
+                    "runtime_execution_id": assignment.runtime_execution_id,
+                    "result_asset_id": assignment.result_asset_id,
+                    "error": assignment.error,
+                    "created_at": assignment.created_at,
+                    "updated_at": assignment.updated_at,
+                },
+            )
+            session.commit()
+        return assignment
+
+    def update_agent_assignment(self, assignment: AgentAssignment) -> AgentAssignment:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_agent_assignments
+                SET status = :status,
+                    capabilities = :capabilities,
+                    allowed_actions = :allowed_actions,
+                    permissions = :permissions,
+                    resource_limits = :resource_limits,
+                    action = :action,
+                    payload = :payload,
+                    dependencies = :dependencies,
+                    mailbox_id = :mailbox_id,
+                    schedule_id = :schedule_id,
+                    runtime_execution_id = :runtime_execution_id,
+                    result_asset_id = :result_asset_id,
+                    error = :error,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": assignment.id,
+                    "status": assignment.status.value,
+                    "capabilities": json.dumps(assignment.capabilities),
+                    "allowed_actions": json.dumps(assignment.allowed_actions),
+                    "permissions": json.dumps([permission.value for permission in assignment.permissions]),
+                    "resource_limits": json.dumps(assignment.resource_limits),
+                    "action": assignment.action,
+                    "payload": json.dumps(assignment.payload, default=_json_value),
+                    "dependencies": json.dumps(assignment.dependencies),
+                    "mailbox_id": assignment.mailbox_id,
+                    "schedule_id": assignment.schedule_id,
+                    "runtime_execution_id": assignment.runtime_execution_id,
+                    "result_asset_id": assignment.result_asset_id,
+                    "error": assignment.error,
+                    "updated_at": assignment.updated_at,
+                },
+            )
+            session.commit()
+        return assignment
+
+    def list_agent_assignments(self, team_id: str) -> list[AgentAssignment]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, team_id, agent_id, role, title, status, capabilities, allowed_actions,
+                       permissions, resource_limits, action, payload, dependencies, mailbox_id,
+                       schedule_id, runtime_execution_id, result_asset_id, error, created_at, updated_at
+                FROM atlas_agent_assignments
+                WHERE team_id = :team_id
+                ORDER BY created_at ASC
+                """),
+                {"team_id": team_id},
+            ).fetchall()
+        return [self._row_to_agent_assignment(row) for row in rows]
+
+    def get_agent_mailbox(self, agent_id: str) -> AgentMailbox:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT agent_id, pending_messages, history
+                FROM atlas_agent_mailboxes
+                WHERE agent_id = :agent_id
+                """),
+                {"agent_id": agent_id},
+            ).fetchone()
+        if row is None:
+            mailbox = AgentMailbox(agent_id=agent_id)
+            return self.update_agent_mailbox(mailbox)
+        return AgentMailbox(
+            agent_id=row[0],
+            pending_messages=[AgentMessage.model_validate(item) for item in (row[1] if isinstance(row[1], list) else json.loads(row[1]) if row[1] else [])],
+            history=[AgentMessage.model_validate(item) for item in (row[2] if isinstance(row[2], list) else json.loads(row[2]) if row[2] else [])],
+        )
+
+    def update_agent_mailbox(self, mailbox: AgentMailbox) -> AgentMailbox:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_mailboxes (agent_id, pending_messages, history)
+                VALUES (:agent_id, :pending_messages, :history)
+                ON CONFLICT (agent_id)
+                DO UPDATE SET pending_messages = :pending_messages, history = :history
+                """),
+                {
+                    "agent_id": mailbox.agent_id,
+                    "pending_messages": json.dumps([message.model_dump(mode="json") for message in mailbox.pending_messages]),
+                    "history": json.dumps([message.model_dump(mode="json") for message in mailbox.history]),
+                },
+            )
+            session.commit()
+        return mailbox
+
+    def create_agent_message(self, team_id: str, message: AgentMessage) -> AgentMessage:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_messages (id, team_id, sender, receiver, timestamp, type, payload, correlation_id, reply_to)
+                VALUES (:id, :team_id, :sender, :receiver, :timestamp, :type, :payload, :correlation_id, :reply_to)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": message.id,
+                    "team_id": team_id,
+                    "sender": message.sender,
+                    "receiver": message.receiver,
+                    "timestamp": message.timestamp,
+                    "type": message.type.value,
+                    "payload": json.dumps(message.payload, default=_json_value),
+                    "correlation_id": message.correlation_id,
+                    "reply_to": message.reply_to,
+                },
+            )
+            session.commit()
+        return message
+
+    def list_agent_messages(self, team_id: str) -> list[AgentMessage]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, sender, receiver, timestamp, type, payload, correlation_id, reply_to
+                FROM atlas_agent_messages
+                WHERE team_id = :team_id
+                ORDER BY timestamp ASC, id ASC
+                """),
+                {"team_id": team_id},
+            ).fetchall()
+        return [
+            AgentMessage(
+                id=row[0],
+                sender=row[1],
+                receiver=row[2],
+                timestamp=row[3],
+                type=AgentMessageType(row[4]),
+                payload=row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {},
+                correlation_id=row[6],
+                reply_to=row[7],
+            )
+            for row in rows
+        ]
+
+    def create_agent_conversation(self, conversation: AgentConversation) -> AgentConversation:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_agent_conversations (id, team_id, participant_ids, message_ids, created_at)
+                VALUES (:id, :team_id, :participant_ids, :message_ids, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": conversation.id,
+                    "team_id": conversation.team_id,
+                    "participant_ids": json.dumps(conversation.participant_ids),
+                    "message_ids": json.dumps(conversation.message_ids),
+                    "created_at": conversation.created_at,
+                },
+            )
+            session.commit()
+        return conversation
+
+    def create_graph_node(self, node: KnowledgeNode) -> KnowledgeNode:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_graph_nodes (id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at)
+                VALUES (:id, :node_type, :label, :project_id, :workspace_id, :source_id, :metadata, :archived, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": node.id,
+                    "node_type": node.node_type,
+                    "label": node.label,
+                    "project_id": node.project_id,
+                    "workspace_id": node.workspace_id,
+                    "source_id": node.source_id,
+                    "metadata": json.dumps(node.metadata, default=_json_value),
+                    "archived": node.archived,
+                    "created_at": node.created_at,
+                },
+            )
+            session.commit()
+        return node
+
+    def archive_graph_node(self, node_id: str) -> bool:
+        with SessionLocal() as session:
+            result = session.execute(
+                text("UPDATE atlas_graph_nodes SET archived = TRUE WHERE id = :node_id"),
+                {"node_id": node_id},
+            )
+            session.commit()
+        return bool(result.rowcount and result.rowcount > 0)
+
+    def create_graph_edge(self, edge: KnowledgeEdge) -> KnowledgeEdge:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_graph_edges (id, relationship, from_node, to_node, metadata, created_at)
+                VALUES (:id, :relationship, :from_node, :to_node, :metadata, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": edge.id,
+                    "relationship": edge.relationship.value,
+                    "from_node": edge.from_node,
+                    "to_node": edge.to_node,
+                    "metadata": json.dumps(edge.metadata, default=_json_value),
+                    "created_at": edge.created_at,
+                },
+            )
+            session.commit()
+        return edge
+
+    def list_graph_nodes(self, project_id: str | None = None) -> list[KnowledgeNode]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes ORDER BY created_at ASC")
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE project_id = :project_id ORDER BY created_at ASC"),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [
+            KnowledgeNode(
+                id=row[0],
+                node_type=row[1],
+                label=row[2],
+                project_id=row[3],
+                workspace_id=row[4],
+                source_id=row[5],
+                metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {},
+                archived=bool(row[7]),
+                created_at=row[8],
+            )
+            for row in rows
+        ]
+
+    def get_graph_node(self, node_id: str) -> KnowledgeNode | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE id = :node_id"),
+                {"node_id": node_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return KnowledgeNode(
+            id=row[0],
+            node_type=row[1],
+            label=row[2],
+            project_id=row[3],
+            workspace_id=row[4],
+            source_id=row[5],
+            metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {},
+            archived=bool(row[7]),
+            created_at=row[8],
+        )
+
+    def list_graph_edges(self) -> list[KnowledgeEdge]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("SELECT id, relationship, from_node, to_node, metadata, created_at FROM atlas_graph_edges ORDER BY created_at ASC")
+            ).fetchall()
+        return [
+            KnowledgeEdge(
+                id=row[0],
+                relationship=RelationshipType(row[1]),
+                from_node=row[2],
+                to_node=row[3],
+                metadata=row[4] if isinstance(row[4], dict) else json.loads(row[4]) if row[4] else {},
+                created_at=row[5],
+            )
+            for row in rows
+        ]
+
+    def create_graph_snapshot(self, snapshot: GraphSnapshot) -> GraphSnapshot:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_graph_snapshots (id, scope_type, scope_id, node_ids, edge_ids, created_at)
+                VALUES (:id, :scope_type, :scope_id, :node_ids, :edge_ids, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": snapshot.id,
+                    "scope_type": snapshot.scope_type,
+                    "scope_id": snapshot.scope_id,
+                    "node_ids": json.dumps(snapshot.node_ids),
+                    "edge_ids": json.dumps(snapshot.edge_ids),
+                    "created_at": snapshot.created_at,
+                },
+            )
+            session.commit()
+        return snapshot
+
+    def create_schedule(self, schedule: ExecutionSchedule) -> ExecutionSchedule:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_schedules (
+                    schedule_id, plan_id, agent_id, created_at, priority,
+                    estimated_finish_time, queue_entries, blocked_entries,
+                    parallel_groups, resume_tokens, queue_metadata, updated_at
+                )
+                VALUES (
+                    :schedule_id, :plan_id, :agent_id, :created_at, :priority,
+                    :estimated_finish_time, :queue_entries, :blocked_entries,
+                    :parallel_groups, :resume_tokens, :queue_metadata, :updated_at
+                )
+                ON CONFLICT (schedule_id) DO NOTHING
+                """),
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "plan_id": schedule.plan_id,
+                    "agent_id": schedule.agent_id,
+                    "created_at": schedule.created_at,
+                    "priority": schedule.priority.value,
+                    "estimated_finish_time": schedule.estimated_finish_time,
+                    "queue_entries": json.dumps([entry.model_dump(mode="json") for entry in schedule.queue_entries]),
+                    "blocked_entries": json.dumps(schedule.blocked_entries),
+                    "parallel_groups": json.dumps(schedule.parallel_groups),
+                    "resume_tokens": json.dumps([token.model_dump(mode="json") for token in schedule.resume_tokens]),
+                    "queue_metadata": json.dumps(schedule.queue_metadata, default=_json_value),
+                    "updated_at": schedule.created_at,
+                },
+            )
+            session.commit()
+        return schedule
+
+    def get_schedule(self, schedule_id: str) -> ExecutionSchedule | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT schedule_id, plan_id, agent_id, created_at, priority,
+                           estimated_finish_time, queue_entries, blocked_entries,
+                           parallel_groups, resume_tokens, queue_metadata
+                    FROM atlas_schedules
+                    WHERE schedule_id = :schedule_id
+                    """
+                ),
+                {"schedule_id": schedule_id},
+            ).fetchone()
+        if row is None:
+            return None
+        queue_entries_raw = row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+        blocked_entries_raw = row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+        parallel_groups_raw = row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else []
+        resume_tokens_raw = row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else []
+        metadata_raw = row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+        return ExecutionSchedule(
+            schedule_id=row[0],
+            plan_id=row[1],
+            agent_id=row[2],
+            created_at=row[3],
+            priority=SchedulerPriority(row[4]),
+            estimated_finish_time=row[5],
+            queue_entries=[ScheduleQueueEntry.model_validate(item) for item in queue_entries_raw],
+            blocked_entries=[str(item) for item in blocked_entries_raw],
+            parallel_groups=[[str(node) for node in group] for group in parallel_groups_raw],
+            resume_tokens=[ResumeToken.model_validate(item) for item in resume_tokens_raw],
+            queue_metadata=metadata_raw,
+        )
+
+    def list_schedules(self, agent_id: str | None = None) -> list[ExecutionSchedule]:
+        with SessionLocal() as session:
+            if agent_id is None:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT schedule_id
+                        FROM atlas_schedules
+                        ORDER BY created_at DESC
+                        """
+                    )
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT schedule_id
+                        FROM atlas_schedules
+                        WHERE agent_id = :agent_id
+                        ORDER BY created_at DESC
+                        """
+                    ),
+                    {"agent_id": agent_id},
+                ).fetchall()
+        result: list[ExecutionSchedule] = []
+        for row in rows:
+            schedule = self.get_schedule(row[0])
+            if schedule is not None:
+                result.append(schedule)
+        return result
+
+    def update_schedule(self, schedule: ExecutionSchedule) -> ExecutionSchedule:
+        with SessionLocal() as session:
+            session.execute(
+                text(
+                    """
+                    UPDATE atlas_schedules
+                    SET priority = :priority,
+                        estimated_finish_time = :estimated_finish_time,
+                        queue_entries = :queue_entries,
+                        blocked_entries = :blocked_entries,
+                        parallel_groups = :parallel_groups,
+                        resume_tokens = :resume_tokens,
+                        queue_metadata = :queue_metadata,
+                        updated_at = now()
+                    WHERE schedule_id = :schedule_id
+                    """
+                ),
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "priority": schedule.priority.value,
+                    "estimated_finish_time": schedule.estimated_finish_time,
+                    "queue_entries": json.dumps([entry.model_dump(mode="json") for entry in schedule.queue_entries]),
+                    "blocked_entries": json.dumps(schedule.blocked_entries),
+                    "parallel_groups": json.dumps(schedule.parallel_groups),
+                    "resume_tokens": json.dumps([token.model_dump(mode="json") for token in schedule.resume_tokens]),
+                    "queue_metadata": json.dumps(schedule.queue_metadata, default=_json_value),
+                },
+            )
+            session.commit()
+        return schedule
+
+    def create_runtime_execution(self, execution: RuntimeExecutionRecord) -> RuntimeExecutionRecord:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_runtime_executions (
+                    execution_id, schedule_id, entry_id, agent_id, plan_id, action,
+                    payload, status, attempts, retry_policy, created_at, updated_at,
+                    started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
+                    error, provider_name, run_id, job_id, asset_id, output,
+                    cancellation_requested, timeline
+                )
+                VALUES (
+                    :execution_id, :schedule_id, :entry_id, :agent_id, :plan_id, :action,
+                    :payload, :status, :attempts, :retry_policy, :created_at, :updated_at,
+                    :started_at, :heartbeat_at, :deadline_at, :completed_at, :timeout_reason,
+                    :error, :provider_name, :run_id, :job_id, :asset_id, :output,
+                    :cancellation_requested, :timeline
+                )
+                ON CONFLICT (execution_id) DO NOTHING
+                """),
+                {
+                    "execution_id": execution.execution_id,
+                    "schedule_id": execution.schedule_id,
+                    "entry_id": execution.entry_id,
+                    "agent_id": execution.agent_id,
+                    "plan_id": execution.plan_id,
+                    "action": execution.action,
+                    "payload": json.dumps(execution.payload, default=_json_value),
+                    "status": execution.status.value,
+                    "attempts": execution.attempts,
+                    "retry_policy": json.dumps(execution.retry_policy.model_dump(mode="json")),
+                    "created_at": execution.created_at,
+                    "updated_at": execution.updated_at,
+                    "started_at": execution.started_at,
+                    "heartbeat_at": execution.heartbeat_at,
+                    "deadline_at": execution.deadline_at,
+                    "completed_at": execution.completed_at,
+                    "timeout_reason": execution.timeout_reason,
+                    "error": execution.error,
+                    "provider_name": execution.provider_name,
+                    "run_id": execution.run_id,
+                    "job_id": execution.job_id,
+                    "asset_id": execution.asset_id,
+                    "output": json.dumps(execution.output, default=_json_value),
+                    "cancellation_requested": execution.cancellation_requested,
+                    "timeline": json.dumps(execution.timeline, default=_json_value),
+                },
+            )
+            session.commit()
+        return execution
+
+    def update_runtime_execution(self, execution: RuntimeExecutionRecord) -> RuntimeExecutionRecord:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_runtime_executions
+                SET status = :status,
+                    attempts = :attempts,
+                    retry_policy = :retry_policy,
+                    updated_at = :updated_at,
+                    started_at = :started_at,
+                    heartbeat_at = :heartbeat_at,
+                    deadline_at = :deadline_at,
+                    completed_at = :completed_at,
+                    timeout_reason = :timeout_reason,
+                    error = :error,
+                    provider_name = :provider_name,
+                    run_id = :run_id,
+                    job_id = :job_id,
+                    asset_id = :asset_id,
+                    output = :output,
+                    cancellation_requested = :cancellation_requested,
+                    timeline = :timeline
+                WHERE execution_id = :execution_id
+                """),
+                {
+                    "execution_id": execution.execution_id,
+                    "status": execution.status.value,
+                    "attempts": execution.attempts,
+                    "retry_policy": json.dumps(execution.retry_policy.model_dump(mode="json")),
+                    "updated_at": execution.updated_at,
+                    "started_at": execution.started_at,
+                    "heartbeat_at": execution.heartbeat_at,
+                    "deadline_at": execution.deadline_at,
+                    "completed_at": execution.completed_at,
+                    "timeout_reason": execution.timeout_reason,
+                    "error": execution.error,
+                    "provider_name": execution.provider_name,
+                    "run_id": execution.run_id,
+                    "job_id": execution.job_id,
+                    "asset_id": execution.asset_id,
+                    "output": json.dumps(execution.output, default=_json_value),
+                    "cancellation_requested": execution.cancellation_requested,
+                    "timeline": json.dumps(execution.timeline, default=_json_value),
+                },
+            )
+            session.commit()
+        return execution
+
+    def get_runtime_execution(self, execution_id: str) -> RuntimeExecutionRecord | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
+                       payload, status, attempts, retry_policy, created_at, updated_at,
+                       started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
+                       error, provider_name, run_id, job_id, asset_id, output,
+                       cancellation_requested, timeline
+                FROM atlas_runtime_executions
+                WHERE execution_id = :execution_id
+                """),
+                {"execution_id": execution_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_runtime_execution(row)
+
+    def list_runtime_executions(self) -> list[RuntimeExecutionRecord]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
+                       payload, status, attempts, retry_policy, created_at, updated_at,
+                       started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
+                       error, provider_name, run_id, job_id, asset_id, output,
+                       cancellation_requested, timeline
+                FROM atlas_runtime_executions
+                ORDER BY created_at DESC
+                """)
+            ).fetchall()
+        return [self._row_to_runtime_execution(row) for row in rows]
+
+    def list_running_runtime_executions(self) -> list[RuntimeExecutionRecord]:
+        active = {
+            RuntimeExecutionStatus.PENDING.value,
+            RuntimeExecutionStatus.QUEUED.value,
+            RuntimeExecutionStatus.PREPARING.value,
+            RuntimeExecutionStatus.RUNNING.value,
+        }
+        return [item for item in self.list_runtime_executions() if item.status.value in active]
+
+    def list_runtime_history(self) -> list[RuntimeExecutionRecord]:
+        terminal = {
+            RuntimeExecutionStatus.COMPLETED.value,
+            RuntimeExecutionStatus.FAILED.value,
+            RuntimeExecutionStatus.CANCELLED.value,
+            RuntimeExecutionStatus.TIMED_OUT.value,
+        }
+        return [item for item in self.list_runtime_executions() if item.status.value in terminal]
+
+    def list_agent_memory_references(self, agent_id: str) -> list[AgentMemoryReference]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, memory_id, agent_id, kind, asset_id, created_at
+                FROM atlas_agent_memory_references
+                WHERE agent_id = :agent_id
+                ORDER BY created_at DESC
+                """),
+                {"agent_id": agent_id},
+            ).fetchall()
+        return [
+            AgentMemoryReference(
+                id=row[0],
+                memory_id=row[1],
+                agent_id=row[2],
+                kind=row[3],
+                asset_id=row[4],
+                created_at=row[5],
+            )
+            for row in rows
+        ]
+
+    def get_execution_decision(self, decision_id: str) -> ExecutionDecision | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT decision_id, capability_id, recipe_id, executor_id, provider_id,
+                       model_id, reason, confidence, timestamp
+                FROM atlas_execution_decisions
+                WHERE decision_id = :decision_id
+                """),
+                {"decision_id": decision_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return ExecutionDecision(
+            decision_id=row[0],
+            capability_id=row[1],
+            recipe_id=row[2],
+            executor_id=row[3],
+            provider_id=row[4],
+            model_id=row[5],
+            reason=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {},
+            confidence=row[7],
+            timestamp=row[8],
+        )
+
+    def get_asset(self, asset_id: str) -> Asset | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT
+                    id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                    type, uri, mime_type, file_size, content_hash, metadata, tags,
+                    source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                    vector_index, embeddings, ocr_text, transcript, ai_summary,
+                    created_at, updated_at
+                FROM atlas_assets
+                WHERE id = :asset_id AND deleted_at IS NULL
+                """),
+                {"asset_id": asset_id},
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_asset(row)
+
+    def list_assets(self, project_id: str | None = None) -> list[Asset]:
+        with SessionLocal() as session:
+            if project_id is None:
+                rows = session.execute(
+                    text("""
+                    SELECT
+                        id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                        type, uri, mime_type, file_size, content_hash, metadata, tags,
+                        source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                        vector_index, embeddings, ocr_text, transcript, ai_summary,
+                        created_at, updated_at
+                    FROM atlas_assets
+                    WHERE deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    """),
+                ).fetchall()
+            else:
+                rows = session.execute(
+                    text("""
+                    SELECT
+                        id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                        type, uri, mime_type, file_size, content_hash, metadata, tags,
+                        source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                        vector_index, embeddings, ocr_text, transcript, ai_summary,
+                        created_at, updated_at
+                    FROM atlas_assets
+                    WHERE project_id = :project_id AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    """),
+                    {"project_id": project_id},
+                ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def list_child_assets(self, parent_asset_id: str) -> list[Asset]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT
+                    id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                    type, uri, mime_type, file_size, content_hash, metadata, tags,
+                    source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                    vector_index, embeddings, ocr_text, transcript, ai_summary,
+                    created_at, updated_at
+                FROM atlas_assets
+                WHERE parent_asset_id = :parent_asset_id AND deleted_at IS NULL
+                ORDER BY created_at ASC
+                """),
+                {"parent_asset_id": parent_asset_id},
+            ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def list_derived_assets(self, source_asset_id: str) -> list[Asset]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT
+                    id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                    type, uri, mime_type, file_size, content_hash, metadata, tags,
+                    source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                    vector_index, embeddings, ocr_text, transcript, ai_summary,
+                    created_at, updated_at
+                FROM atlas_assets
+                WHERE deleted_at IS NULL AND source_asset_ids @> :source_filter::jsonb
+                ORDER BY created_at ASC
+                """),
+                {"source_filter": json.dumps([source_asset_id])},
+            ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def list_assets_by_run(self, run_id: str) -> list[Asset]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT
+                    id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                    type, uri, mime_type, file_size, content_hash, metadata, tags,
+                    source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                    vector_index, embeddings, ocr_text, transcript, ai_summary,
+                    created_at, updated_at
+                FROM atlas_assets
+                WHERE run_id = :run_id AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                """),
+                {"run_id": run_id},
+            ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def list_assets_by_job(self, job_id: str) -> list[Asset]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT
+                    id, project_id, workflow_id, run_id, job_id, parent_asset_id, version,
+                    type, uri, mime_type, file_size, content_hash, metadata, tags,
+                    source_asset_ids, thumbnail_uri, preview_uri, search_index,
+                    vector_index, embeddings, ocr_text, transcript, ai_summary,
+                    created_at, updated_at
+                FROM atlas_assets
+                WHERE job_id = :job_id AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                """),
+                {"job_id": job_id},
+            ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def update_asset(self, asset: Asset) -> Asset:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_assets
+                SET
+                    project_id = :project_id,
+                    workflow_id = :workflow_id,
+                    run_id = :run_id,
+                    job_id = :job_id,
+                    parent_asset_id = :parent_asset_id,
+                    version = :version,
+                    type = :type,
+                    uri = :uri,
+                    mime_type = :mime_type,
+                    file_size = :file_size,
+                    content_hash = :content_hash,
+                    metadata = :metadata,
+                    tags = :tags,
+                    source_asset_ids = :source_asset_ids,
+                    thumbnail_uri = :thumbnail_uri,
+                    preview_uri = :preview_uri,
+                    search_index = :search_index,
+                    vector_index = :vector_index,
+                    embeddings = :embeddings,
+                    ocr_text = :ocr_text,
+                    transcript = :transcript,
+                    ai_summary = :ai_summary,
+                    updated_at = :updated_at
+                WHERE id = :id
+                """),
+                {
+                    "id": asset.id,
+                    "project_id": asset.project_id,
+                    "workflow_id": asset.workflow_id,
+                    "run_id": asset.run_id,
+                    "job_id": asset.job_id,
+                    "parent_asset_id": asset.parent_asset_id,
+                    "version": asset.version,
+                    "type": asset.type,
+                    "uri": asset.uri,
+                    "mime_type": asset.mime_type,
+                    "file_size": asset.file_size,
+                    "content_hash": asset.content_hash,
+                    "metadata": json.dumps(asset.metadata),
+                    "tags": json.dumps(asset.tags),
+                    "source_asset_ids": json.dumps(asset.source_asset_ids),
+                    "thumbnail_uri": asset.thumbnail_uri,
+                    "preview_uri": asset.preview_uri,
+                    "search_index": json.dumps(asset.search_index),
+                    "vector_index": json.dumps(asset.vector_index),
+                    "embeddings": json.dumps(asset.embeddings),
+                    "ocr_text": asset.ocr_text,
+                    "transcript": asset.transcript,
+                    "ai_summary": asset.ai_summary,
+                    "updated_at": asset.updated_at,
+                },
+            )
+            session.commit()
+        return asset
+
+    def delete_asset(self, asset_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("UPDATE atlas_assets SET deleted_at = now() WHERE id = :asset_id"),
+                {"asset_id": asset_id},
+            )
+            session.commit()
+
     def list_runs(self) -> list[Run]:
         with SessionLocal() as session:
-            rows = session.execute(text("SELECT id, title, description, studio, status, created_at FROM atlas_runs ORDER BY created_at DESC")).fetchall()
-        return [Run(id=row[0], title=row[1], description=row[2], studio=row[3], status=JobStatus(row[4]), created_at=row[5]) for row in rows]
+            rows = session.execute(
+                text(
+                    "SELECT id, title, description, studio, workspace_id, project_id, workflow_id, produced_asset_ids, status, created_at FROM atlas_runs ORDER BY created_at DESC"
+                )
+            ).fetchall()
+        return [
+            Run(
+                id=row[0],
+                title=row[1],
+                description=row[2],
+                studio=row[3],
+                workspace_id=row[4],
+                project_id=row[5],
+                workflow_id=row[6],
+                produced_asset_ids=(
+                    row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+                ),
+                status=JobStatus(row[8]),
+                created_at=row[9],
+            )
+            for row in rows
+        ]
 
     def get_run(self, run_id: str) -> Run | None:
         with SessionLocal() as session:
-            row = session.execute(text("SELECT id, title, description, studio, status, created_at FROM atlas_runs WHERE id = :run_id"), {"run_id": run_id}).fetchone()
+            row = session.execute(
+                text(
+                    "SELECT id, title, description, studio, workspace_id, project_id, workflow_id, produced_asset_ids, status, created_at FROM atlas_runs WHERE id = :run_id"
+                ),
+                {"run_id": run_id},
+            ).fetchone()
         if row is None:
             return None
-        return Run(id=row[0], title=row[1], description=row[2], studio=row[3], status=JobStatus(row[4]), created_at=row[5])
+        return Run(
+            id=row[0],
+            title=row[1],
+            description=row[2],
+            studio=row[3],
+            workspace_id=row[4],
+            project_id=row[5],
+            workflow_id=row[6],
+            produced_asset_ids=(
+                row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+            ),
+            status=JobStatus(row[8]),
+            created_at=row[9],
+        )
 
     def list_jobs(self) -> list[Job]:
         with SessionLocal() as session:
-            rows = session.execute(text("SELECT id, run_id, action, payload, status, attempts, priority, capability_req, provider_name, output, created_at FROM atlas_jobs ORDER BY created_at DESC")).fetchall()
-        return [Job(
-            id=row[0],
-            run_id=row[1],
-            action=row[2],
-            payload=row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {},
-            status=JobStatus(row[4]),
-            attempts=row[5],
-            priority=row[6],
-            capability_req=row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {},
-            provider_name=row[8],
-            output=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
-            created_at=row[10],
-        ) for row in rows]
+            rows = session.execute(
+                text(
+                    "SELECT id, run_id, action, payload, status, attempts, priority, capability_req, execution_decision_id, provider_name, output, produced_asset_ids, created_at FROM atlas_jobs ORDER BY created_at DESC"
+                )
+            ).fetchall()
+        return [
+            Job(
+                id=row[0],
+                run_id=row[1],
+                action=row[2],
+                payload=(
+                    row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {}
+                ),
+                status=JobStatus(row[4]),
+                attempts=row[5],
+                priority=row[6],
+                capability_req=normalize_capability_request(
+                    row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {}
+                ),
+                execution_decision_id=row[8],
+                provider_name=row[9],
+                output=(
+                    row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+                ),
+                produced_asset_ids=(
+                    row[11] if isinstance(row[11], list) else json.loads(row[11]) if row[11] else []
+                ),
+                created_at=row[12],
+            )
+            for row in rows
+        ]
 
     def list_jobs_by_run(self, run_id: str) -> list[Job]:
         with SessionLocal() as session:
-            rows = session.execute(text("SELECT id, run_id, action, payload, status, attempts, priority, capability_req, provider_name, output, created_at FROM atlas_jobs WHERE run_id = :run_id ORDER BY created_at DESC"), {"run_id": run_id}).fetchall()
-        return [Job(
-            id=row[0],
-            run_id=row[1],
-            action=row[2],
-            payload=row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {},
-            status=JobStatus(row[4]),
-            attempts=row[5],
-            priority=row[6],
-            capability_req=row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {},
-            provider_name=row[8],
-            output=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
-            created_at=row[10],
-        ) for row in rows]
+            rows = session.execute(
+                text(
+                    "SELECT id, run_id, action, payload, status, attempts, priority, capability_req, execution_decision_id, provider_name, output, produced_asset_ids, created_at FROM atlas_jobs WHERE run_id = :run_id ORDER BY created_at DESC"
+                ),
+                {"run_id": run_id},
+            ).fetchall()
+        return [
+            Job(
+                id=row[0],
+                run_id=row[1],
+                action=row[2],
+                payload=(
+                    row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {}
+                ),
+                status=JobStatus(row[4]),
+                attempts=row[5],
+                priority=row[6],
+                capability_req=normalize_capability_request(
+                    row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {}
+                ),
+                execution_decision_id=row[8],
+                provider_name=row[9],
+                output=(
+                    row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+                ),
+                produced_asset_ids=(
+                    row[11] if isinstance(row[11], list) else json.loads(row[11]) if row[11] else []
+                ),
+                created_at=row[12],
+            )
+            for row in rows
+        ]
 
-    def update_job_status(self, job_id: str, status: JobStatus, provider_name: str | None = None, output: dict[str, Any] | None = None) -> None:
+    def list_runs_by_project(self, project_id: str) -> list[Run]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    "SELECT id, title, description, studio, workspace_id, project_id, workflow_id, produced_asset_ids, status, created_at FROM atlas_runs WHERE project_id = :project_id ORDER BY created_at DESC"
+                ),
+                {"project_id": project_id},
+            ).fetchall()
+        return [
+            Run(
+                id=row[0],
+                title=row[1],
+                description=row[2],
+                studio=row[3],
+                workspace_id=row[4],
+                project_id=row[5],
+                workflow_id=row[6],
+                produced_asset_ids=(
+                    row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+                ),
+                status=JobStatus(row[8]),
+                created_at=row[9],
+            )
+            for row in rows
+        ]
+
+    def list_jobs_by_project(self, project_id: str) -> list[Job]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT j.id, j.run_id, j.action, j.payload, j.status, j.attempts, j.priority,
+                           j.capability_req, j.execution_decision_id, j.provider_name, j.output,
+                           j.produced_asset_ids, j.created_at
+                    FROM atlas_jobs j
+                    JOIN atlas_runs r ON r.id = j.run_id
+                    WHERE r.project_id = :project_id
+                    ORDER BY j.created_at DESC
+                    """
+                ),
+                {"project_id": project_id},
+            ).fetchall()
+        return [
+            Job(
+                id=row[0],
+                run_id=row[1],
+                action=row[2],
+                payload=(
+                    row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {}
+                ),
+                status=JobStatus(row[4]),
+                attempts=row[5],
+                priority=row[6],
+                capability_req=normalize_capability_request(
+                    row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {}
+                ),
+                execution_decision_id=row[8],
+                provider_name=row[9],
+                output=(
+                    row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+                ),
+                produced_asset_ids=(
+                    row[11] if isinstance(row[11], list) else json.loads(row[11]) if row[11] else []
+                ),
+                created_at=row[12],
+            )
+            for row in rows
+        ]
+
+    def add_asset_to_job(self, job_id: str, asset_id: str) -> None:
+        with SessionLocal() as session:
+            current = session.execute(
+                text("SELECT produced_asset_ids FROM atlas_jobs WHERE id = :job_id"),
+                {"job_id": job_id},
+            ).fetchone()
+            current_ids = (
+                current[0]
+                if current and isinstance(current[0], list)
+                else json.loads(current[0]) if current and current[0] else []
+            )
+            if asset_id not in current_ids:
+                current_ids.append(asset_id)
+                session.execute(
+                    text(
+                        "UPDATE atlas_jobs SET produced_asset_ids = :asset_ids WHERE id = :job_id"
+                    ),
+                    {"asset_ids": json.dumps(current_ids), "job_id": job_id},
+                )
+                session.commit()
+
+    def add_asset_to_run(self, run_id: str, asset_id: str) -> None:
+        with SessionLocal() as session:
+            current = session.execute(
+                text("SELECT produced_asset_ids FROM atlas_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).fetchone()
+            current_ids = (
+                current[0]
+                if current and isinstance(current[0], list)
+                else json.loads(current[0]) if current and current[0] else []
+            )
+            if asset_id not in current_ids:
+                current_ids.append(asset_id)
+                session.execute(
+                    text(
+                        "UPDATE atlas_runs SET produced_asset_ids = :asset_ids WHERE id = :run_id"
+                    ),
+                    {"asset_ids": json.dumps(current_ids), "run_id": run_id},
+                )
+                session.commit()
+
+    def update_job_status(
+        self,
+        job_id: str,
+        status: JobStatus,
+        provider_name: str | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> None:
         with SessionLocal() as session:
             query = "UPDATE atlas_jobs SET status = :status"
             params = {"status": status.value, "job_id": job_id}
@@ -140,7 +2477,127 @@ class AtlasRepository:
             session.execute(text(query), params)
             session.commit()
 
+    def assign_execution_decision(self, job_id: str, decision: ExecutionDecision) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_jobs
+                SET execution_decision_id = :decision_id,
+                    provider_name = :provider_id
+                WHERE id = :job_id
+                """),
+                {
+                    "decision_id": decision.decision_id,
+                    "provider_id": decision.provider_id,
+                    "job_id": job_id,
+                },
+            )
+            session.commit()
+
     def update_run_status(self, run_id: str, status: JobStatus) -> None:
         with SessionLocal() as session:
-            session.execute(text("UPDATE atlas_runs SET status = :status WHERE id = :run_id"), {"status": status.value, "run_id": run_id})
+            session.execute(
+                text("UPDATE atlas_runs SET status = :status WHERE id = :run_id"),
+                {"status": status.value, "run_id": run_id},
+            )
             session.commit()
+
+    def _row_to_asset(self, row: Any) -> Asset:
+        return Asset(
+            id=row[0],
+            project_id=row[1] or "project-unassigned",
+            workflow_id=row[2],
+            run_id=row[3],
+            job_id=row[4],
+            parent_asset_id=row[5],
+            version=row[6] or 1,
+            type=row[7],
+            uri=row[8],
+            mime_type=row[9],
+            file_size=row[10],
+            content_hash=row[11],
+            metadata=(
+                row[12] if isinstance(row[12], dict) else json.loads(row[12]) if row[12] else {}
+            ),
+            tags=row[13] if isinstance(row[13], list) else json.loads(row[13]) if row[13] else [],
+            source_asset_ids=(
+                row[14] if isinstance(row[14], list) else json.loads(row[14]) if row[14] else []
+            ),
+            thumbnail_uri=row[15],
+            preview_uri=row[16],
+            search_index=(
+                row[17] if isinstance(row[17], dict) else json.loads(row[17]) if row[17] else None
+            ),
+            vector_index=(
+                row[18] if isinstance(row[18], dict) else json.loads(row[18]) if row[18] else None
+            ),
+            embeddings=(
+                row[19] if isinstance(row[19], list) else json.loads(row[19]) if row[19] else None
+            ),
+            ocr_text=row[20],
+            transcript=row[21],
+            ai_summary=row[22],
+            created_at=row[23],
+            updated_at=row[24] or row[23],
+        )
+
+    def _row_to_runtime_execution(self, row: Any) -> RuntimeExecutionRecord:
+        return RuntimeExecutionRecord(
+            execution_id=row[0],
+            schedule_id=row[1],
+            entry_id=row[2],
+            agent_id=row[3],
+            plan_id=row[4],
+            action=row[5],
+            payload=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {},
+            status=RuntimeExecutionStatus(row[7]),
+            attempts=row[8],
+            retry_policy=RuntimeRetryPolicy.model_validate(
+                row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {}
+            ),
+            created_at=row[10],
+            updated_at=row[11],
+            started_at=row[12],
+            heartbeat_at=row[13],
+            deadline_at=row[14],
+            completed_at=row[15],
+            timeout_reason=row[16],
+            error=row[17],
+            provider_name=row[18],
+            run_id=row[19],
+            job_id=row[20],
+            asset_id=row[21],
+            output=row[22] if isinstance(row[22], dict) else json.loads(row[22]) if row[22] else {},
+            cancellation_requested=bool(row[23]),
+            timeline=row[24] if isinstance(row[24], list) else json.loads(row[24]) if row[24] else [],
+        )
+
+    def _row_to_agent_assignment(self, row: Any) -> AgentAssignment:
+        return AgentAssignment(
+            id=row[0],
+            team_id=row[1],
+            agent_id=row[2],
+            role=AgentRole(row[3]),
+            title=row[4],
+            status=AgentAssignmentStatus(row[5]),
+            capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
+            allowed_actions=row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else [],
+            permissions=[AgentPermission(value) for value in (row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else [])],
+            resource_limits=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
+            action=row[10],
+            payload=row[11] if isinstance(row[11], dict) else json.loads(row[11]) if row[11] else {},
+            dependencies=row[12] if isinstance(row[12], list) else json.loads(row[12]) if row[12] else [],
+            mailbox_id=row[13],
+            schedule_id=row[14],
+            runtime_execution_id=row[15],
+            result_asset_id=row[16],
+            error=row[17],
+            created_at=row[18],
+            updated_at=row[19],
+        )
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
