@@ -29,6 +29,20 @@ from .agents.events import (
     RuntimeTimedOut,
     TeamCompleted,
 )
+from .approval.events import (
+    ApprovalApproved,
+    ApprovalCancelled,
+    ApprovalCreated,
+    ApprovalEscalated,
+    ApprovalExpired,
+    ApprovalRejected,
+    ApprovalViewed,
+    ExecutionApproved,
+    ExecutionExpired,
+    ExecutionRejected,
+    ExecutionRequested,
+    ExecutionWaitingApproval,
+)
 from .event_types import AtlasEvent
 
 
@@ -371,6 +385,18 @@ DEFAULT_EVENT_TYPES: tuple[type[AtlasEvent], ...] = (
     AutomationCompleted,
     AutomationFailed,
     AutomationSkipped,
+    ApprovalCreated,
+    ApprovalViewed,
+    ApprovalApproved,
+    ApprovalRejected,
+    ApprovalExpired,
+    ApprovalCancelled,
+    ApprovalEscalated,
+    ExecutionRequested,
+    ExecutionWaitingApproval,
+    ExecutionApproved,
+    ExecutionRejected,
+    ExecutionExpired,
 )
 
 

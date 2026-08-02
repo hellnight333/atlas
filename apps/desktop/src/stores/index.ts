@@ -1,5 +1,6 @@
 export * from './activityStore'
 export * from './agentStore'
+export * from './approvalStore'
 export * from './assetStore'
 export * from './automationStore'
 export * from './chatStore'

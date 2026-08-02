@@ -4,6 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 from uuid import uuid4
 
 from ..models import CapabilityRequest, Job, JobStatus, Run
@@ -40,14 +41,35 @@ class RuntimeCancellationToken:
         self.reason = reason
 
 
+@dataclass(frozen=True)
+class ApprovalVerdict:
+    """What an approval gate tells the runtime to do with one entry."""
+
+    allowed: bool
+    approval_id: str | None = None
+    reason: str = ""
+    rejected: bool = False
+    expired: bool = False
+
+
+class ApprovalGate(Protocol):
+    """Implemented by the approval layer. The runtime knows only this shape, so
+    the approval domain stays outside the runtime's dependencies."""
+
+    def check(
+        self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution_id: str
+    ) -> ApprovalVerdict: ...
+
+
 class AgentRuntime:
-    def __init__(self, repository: AtlasRepository | None = None, event_bus: object | None = None, worker: Worker | None = None, max_gpu_jobs: int = 1, max_cpu_jobs: int = 4, max_provider_jobs: int = 4) -> None:
+    def __init__(self, repository: AtlasRepository | None = None, event_bus: object | None = None, worker: Worker | None = None, max_gpu_jobs: int = 1, max_cpu_jobs: int = 4, max_provider_jobs: int = 4, approval_gate: ApprovalGate | None = None) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self.worker = worker
         self.max_gpu_jobs = max_gpu_jobs
         self.max_cpu_jobs = max_cpu_jobs
         self.max_provider_jobs = max_provider_jobs
+        self.approval_gate = approval_gate
 
     @staticmethod
     def transition(agent: Agent, next_status: AgentStatus) -> Agent:
@@ -98,20 +120,38 @@ class AgentRuntime:
         retry_policy: RuntimeRetryPolicy,
         timeout_seconds: float,
         heartbeat_interval_seconds: float,
+        execution: RuntimeExecutionRecord | None = None,
     ) -> RuntimeExecutionRecord:
-        execution = RuntimeExecutionRecord(
-            schedule_id=schedule.schedule_id,
-            entry_id=entry.id,
-            agent_id=schedule.agent_id,
-            plan_id=schedule.plan_id,
-            action=entry.plan_step.action,
-            payload=dict(entry.plan_step.payload),
-            status=RuntimeExecutionStatus.QUEUED,
-            retry_policy=retry_policy,
-        )
-        execution.timeline.append({"status": execution.status.value, "timestamp": execution.created_at.isoformat()})
-        self.repository.create_runtime_execution(execution)
+        if execution is None:
+            execution = RuntimeExecutionRecord(
+                schedule_id=schedule.schedule_id,
+                entry_id=entry.id,
+                agent_id=schedule.agent_id,
+                plan_id=schedule.plan_id,
+                action=entry.plan_step.action,
+                payload=dict(entry.plan_step.payload),
+                status=RuntimeExecutionStatus.QUEUED,
+                retry_policy=retry_policy,
+            )
+            execution.timeline.append({"status": execution.status.value, "timestamp": execution.created_at.isoformat()})
+            self.repository.create_runtime_execution(execution)
+        else:
+            # Resuming a paused execution: keep the same record so the approval
+            # that gated it still points at a live execution.
+            execution.status = RuntimeExecutionStatus.QUEUED
+            execution.retry_policy = retry_policy
+            execution.attempts = 0
+            execution.error = None
+            execution.updated_at = datetime.now(UTC)
+            execution.timeline.append({"status": execution.status.value, "timestamp": execution.updated_at.isoformat(), "resumed": True})
+            self.repository.update_runtime_execution(execution)
         self.event_bus.publish(RuntimeStarted(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id))
+
+        # Approval gate. Nothing below this point may run without a verdict:
+        # no job is created, no provider is reached, no state is mutated.
+        gated = self._apply_approval_gate(schedule, entry, execution)
+        if gated is not None:
+            return gated
 
         token = RuntimeCancellationToken()
         if entry.status == QueueEntryStatus.CANCELLED:
@@ -199,6 +239,101 @@ class AgentRuntime:
             return self._mark_failed(schedule, entry, execution, execution.error or "execution failed")
 
         return self._mark_failed(schedule, entry, execution, execution.error or "execution failed")
+
+    def _apply_approval_gate(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+    ) -> RuntimeExecutionRecord | None:
+        """Returns a terminal/paused execution when the gate withholds consent,
+        or None when execution may proceed."""
+        if self.approval_gate is None:
+            return None
+
+        verdict = self.approval_gate.check(schedule, entry, execution.execution_id)
+        if verdict.allowed:
+            if verdict.approval_id:
+                execution.approval_id = verdict.approval_id
+                self.repository.update_runtime_execution(execution)
+            return None
+
+        now = datetime.now(UTC)
+        execution.approval_id = verdict.approval_id
+        execution.updated_at = now
+
+        if verdict.rejected or verdict.expired:
+            execution.status = RuntimeExecutionStatus.APPROVAL_REJECTED
+            execution.completed_at = now
+            execution.error = verdict.reason or (
+                "approval expired" if verdict.expired else "approval rejected"
+            )
+            entry.status = QueueEntryStatus.CANCELLED
+            entry.completed_time = now
+        else:
+            execution.status = RuntimeExecutionStatus.WAITING_APPROVAL
+            entry.status = QueueEntryStatus.WAITING_APPROVAL
+
+        execution.timeline.append(
+            {
+                "status": execution.status.value,
+                "timestamp": now.isoformat(),
+                "approval_id": verdict.approval_id,
+                "reason": verdict.reason,
+            }
+        )
+        self.repository.update_runtime_execution(execution)
+        self.repository.update_schedule(schedule)
+        return execution
+
+    def resume_after_approval(
+        self,
+        execution_id: str,
+        *,
+        retry_policy: RuntimeRetryPolicy | None = None,
+        timeout_seconds: float = 30.0,
+        heartbeat_interval_seconds: float = 0.05,
+    ) -> RuntimeExecutionRecord:
+        """Re-runs an execution that was paused awaiting approval. The gate is
+        consulted again, so a still-pending approval simply pauses once more."""
+        if self.repository is None or self.event_bus is None or self.worker is None:
+            raise ValueError("Runtime is not configured for execution")
+
+        execution = self.repository.get_runtime_execution(execution_id)
+        if execution is None:
+            raise ValueError("Runtime execution not found")
+        if execution.status is not RuntimeExecutionStatus.WAITING_APPROVAL:
+            raise ValueError(
+                f"Execution {execution_id} is {execution.status.value}, not waiting for approval"
+            )
+
+        schedule = self.repository.get_schedule(execution.schedule_id)
+        if schedule is None:
+            raise ValueError("Schedule not found")
+        entry = next((e for e in schedule.queue_entries if e.id == execution.entry_id), None)
+        if entry is None:
+            raise ValueError("Queue entry not found")
+
+        entry.status = QueueEntryStatus.READY
+        self.repository.update_schedule(schedule)
+
+        return self.execute_entry(
+            schedule,
+            entry,
+            retry_policy=retry_policy or execution.retry_policy,
+            timeout_seconds=timeout_seconds,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            execution=execution,
+        )
+
+    def list_waiting_approval(self) -> list[RuntimeExecutionRecord]:
+        if self.repository is None:
+            return []
+        return [
+            execution
+            for execution in self.repository.list_runtime_executions()
+            if execution.status is RuntimeExecutionStatus.WAITING_APPROVAL
+        ]
 
     def list_runtime_executions(self) -> list[RuntimeExecutionRecord]:
         if self.repository is None:

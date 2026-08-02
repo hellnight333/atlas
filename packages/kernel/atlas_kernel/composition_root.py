@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from .agents.runtime import AgentRuntime
 from .agents.scheduler import AgentScheduler
+from .approval.gate import RuntimeApprovalGate
+from .approval.policies import ApprovalPolicyEngine
+from .approval.service import ApprovalService
 from .asset_system import AssetService
 from .automation_engine import AutomationEngine
 from .db import init_db
@@ -38,6 +41,8 @@ class AtlasRuntime:
     worker: Worker
     agent_runtime: AgentRuntime
     agent_scheduler: AgentScheduler
+    approval_service: ApprovalService
+    approval_gate: RuntimeApprovalGate
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
@@ -92,10 +97,17 @@ def create_runtime(
         execution_policy=execution_policy,
         executor=executor,
     )
+    approval_service = ApprovalService(
+        repository=repository,
+        event_bus=event_bus,
+        policy_engine=ApprovalPolicyEngine(),
+    )
+    approval_gate = RuntimeApprovalGate(service=approval_service, event_bus=event_bus)
     agent_runtime = AgentRuntime(
         repository=repository,
         event_bus=event_bus,
         worker=worker,
+        approval_gate=approval_gate,
     )
     orchestrator = Orchestrator(
         state_machine=state_machine,
@@ -127,6 +139,8 @@ def create_runtime(
         worker=worker,
         agent_runtime=agent_runtime,
         agent_scheduler=agent_scheduler,
+        approval_service=approval_service,
+        approval_gate=approval_gate,
         orchestrator=orchestrator,
         workflow_delegate=workflow_delegate,
         workflow_engine=workflow_engine,

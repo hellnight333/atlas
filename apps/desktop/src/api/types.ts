@@ -150,6 +150,124 @@ export type ReviewComment = {
   created_at: string
 }
 
+export type ApprovalScope =
+  | 'external_api'
+  | 'filesystem_write'
+  | 'network'
+  | 'provider_cost'
+  | 'project_publish'
+  | 'delete'
+  | 'plugin_action'
+  | 'enterprise'
+
+export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired'
+
+export type ApprovalDecisionKind = 'approve' | 'reject' | 'request_changes'
+
+export type ApprovalDecisionRecord = {
+  id: string
+  decision: ApprovalDecisionKind
+  actor: string
+  comment?: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type ApprovalRequest = {
+  id: string
+  title: string
+  state: ApprovalState
+  action: string
+  scopes: ApprovalScope[]
+  estimated_cost: number
+  reason: string
+  policy_id?: string | null
+  policy_name?: string | null
+  required_approvers: string[]
+  approvals_required: number
+  decisions: ApprovalDecisionRecord[]
+  viewed_by: string[]
+  priority: number
+  project_id?: string | null
+  workspace_id?: string | null
+  agent_id?: string | null
+  execution_id?: string | null
+  schedule_id?: string | null
+  entry_id?: string | null
+  run_id?: string | null
+  job_id?: string | null
+  asset_id?: string | null
+  payload: Record<string, unknown>
+  metadata: Record<string, unknown>
+  requested_by: string
+  created_at: string
+  updated_at: string
+  expires_at?: string | null
+  decided_at?: string | null
+}
+
+export type ApprovalHistoryEvent = {
+  id: string
+  approval_id: string
+  event_type: string
+  actor: string
+  comment?: string | null
+  from_state?: ApprovalState | null
+  to_state?: ApprovalState | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type ApprovalPolicyMode = 'always' | 'never' | 'scoped'
+
+export type ApprovalPolicyCondition = {
+  field: string
+  operator: string
+  value: unknown
+}
+
+export type ApprovalPolicy = {
+  id: string
+  name: string
+  description: string
+  mode: ApprovalPolicyMode
+  scopes: ApprovalScope[]
+  cost_threshold?: number | null
+  conditions: ApprovalPolicyCondition[]
+  required_approvers: string[]
+  approvals_required: number
+  expires_after_seconds?: number | null
+  project_id?: string | null
+  workspace_id?: string | null
+  priority: number
+  enabled: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ApprovalCreatePayload = {
+  title: string
+  action?: string
+  scopes?: ApprovalScope[]
+  estimatedCost?: number
+  projectId?: string
+  workspaceId?: string
+  agentId?: string
+  executionId?: string
+  scheduleId?: string
+  entryId?: string
+  priority?: number
+  payload?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  requestedBy?: string
+}
+
+export type ApprovalDecisionPayload = {
+  actor: string
+  comment?: string
+}
+
 export type AutomationTriggerType =
   | 'manual'
   | 'timer'
@@ -585,6 +703,7 @@ export type QueueEntryStatus =
   | 'queued'
   | 'ready'
   | 'blocked'
+  | 'waiting_approval'
   | 'preparing'
   | 'running'
   | 'paused'
@@ -645,6 +764,8 @@ export type QueueUpdateResult = {
 export type RuntimeExecutionStatus =
   | 'pending'
   | 'queued'
+  | 'waiting_approval'
+  | 'approval_rejected'
   | 'preparing'
   | 'running'
   | 'completed'
@@ -1048,4 +1169,18 @@ export interface AtlasProvider {
   listAutomationRuns(ruleId?: string): Promise<AutomationRun[]>
   listAutomationLogs(params?: { runId?: string; ruleId?: string }): Promise<AutomationLog[]>
   listAutomationConflicts(projectId?: string): Promise<AutomationConflict[]>
+  listApprovals(params?: { pendingOnly?: boolean; projectId?: string }): Promise<ApprovalRequest[]>
+  getApproval(id: string): Promise<ApprovalRequest | undefined>
+  createApproval(payload: ApprovalCreatePayload): Promise<ApprovalRequest>
+  approveApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest>
+  rejectApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest>
+  requestChangesApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest>
+  cancelApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest>
+  viewApproval(id: string, actor: string): Promise<ApprovalRequest>
+  escalateApproval(id: string, actor: string, escalatedTo: string): Promise<ApprovalRequest>
+  resumeApprovedExecution(id: string): Promise<RuntimeExecutionRecord>
+  getApprovalHistory(approvalId?: string): Promise<ApprovalHistoryEvent[]>
+  listApprovalPolicies(projectId?: string): Promise<ApprovalPolicy[]>
+  upsertApprovalPolicy(policy: Partial<ApprovalPolicy> & { name: string }): Promise<ApprovalPolicy>
+  listExecutionsWaitingApproval(): Promise<RuntimeExecutionRecord[]>
 }

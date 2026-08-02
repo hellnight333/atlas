@@ -17,6 +17,15 @@ from .agents.models import (
 from .agents.plan_models import ExecutionPlan
 from .agents.schedule_models import SchedulerPriority
 from .agents.service import AgentFoundation
+from .approval.models import (
+    ApprovalCondition,
+    ApprovalContext,
+    ApprovalPolicy,
+    ApprovalPolicyMode,
+    ApprovalScope,
+    ApprovalState,
+)
+from .approval.service import ApprovalError, SelfApprovalError
 from .composition_root import create_runtime
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
@@ -71,7 +80,14 @@ event_bus = runtime.event_bus
 execution_policy = runtime.execution_policy
 graph_service = runtime.graph_service
 automation_engine = runtime.automation_engine
-agent_foundation = AgentFoundation(repository=repository, event_bus=event_bus, worker=runtime.worker)
+approval_service = runtime.approval_service
+agent_runtime = runtime.agent_runtime
+agent_foundation = AgentFoundation(
+    repository=repository,
+    event_bus=event_bus,
+    worker=runtime.worker,
+    approval_gate=runtime.approval_gate,
+)
 
 
 class RunRequest(BaseModel):
@@ -133,6 +149,58 @@ class SchedulerCreateRequest(BaseModel):
     priority: SchedulerPriority = SchedulerPriority.NORMAL
     available_executors: list[str] = Field(default_factory=list)
     execution_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class ApprovalCreateRequest(BaseModel):
+    title: str
+    action: str = ""
+    scopes: list[ApprovalScope] = Field(default_factory=list)
+    estimated_cost: float = 0.0
+    project_id: str | None = None
+    workspace_id: str | None = None
+    agent_id: str | None = None
+    execution_id: str | None = None
+    schedule_id: str | None = None
+    entry_id: str | None = None
+    run_id: str | None = None
+    job_id: str | None = None
+    asset_id: str | None = None
+    priority: int = 0
+    payload: dict[str, object] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    requested_by: str = "system"
+
+
+class ApprovalDecisionRequest(BaseModel):
+    actor: str
+    comment: str | None = None
+
+
+class ApprovalEscalateRequest(BaseModel):
+    actor: str
+    escalated_to: str
+
+
+class ApprovalViewRequest(BaseModel):
+    actor: str
+
+
+class ApprovalPolicyRequest(BaseModel):
+    id: str | None = None
+    name: str
+    description: str = ""
+    mode: ApprovalPolicyMode = ApprovalPolicyMode.SCOPED
+    scopes: list[ApprovalScope] = Field(default_factory=list)
+    cost_threshold: float | None = None
+    conditions: list[ApprovalCondition] = Field(default_factory=list)
+    required_approvers: list[str] = Field(default_factory=list)
+    approvals_required: int = 1
+    expires_after_seconds: int | None = None
+    project_id: str | None = None
+    workspace_id: str | None = None
+    priority: int = 0
+    enabled: bool = True
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class AutomationRuleRequest(BaseModel):
@@ -2727,6 +2795,170 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.post("/approvals")
+def create_approval(request: ApprovalCreateRequest) -> dict[str, object]:
+    context = ApprovalContext(
+        action=request.action,
+        scopes=list(request.scopes),
+        estimated_cost=request.estimated_cost,
+        project_id=request.project_id,
+        workspace_id=request.workspace_id,
+        agent_id=request.agent_id,
+        execution_id=request.execution_id,
+        schedule_id=request.schedule_id,
+        entry_id=request.entry_id,
+        requested_by=request.requested_by,
+        payload=dict(request.payload),
+    )
+    approval = approval_service.create_request(
+        title=request.title,
+        context=context,
+        priority=request.priority,
+        run_id=request.run_id,
+        job_id=request.job_id,
+        asset_id=request.asset_id,
+        metadata=dict(request.metadata),
+    )
+    return approval.model_dump(mode="json")
+
+
+@app.get("/approvals")
+def list_approvals(
+    state: ApprovalState | None = None,
+    project_id: str | None = None,
+    workspace_id: str | None = None,
+    pending_only: bool = False,
+) -> list[dict[str, object]]:
+    if pending_only:
+        approvals = approval_service.list_pending(
+            project_id=project_id, workspace_id=workspace_id
+        )
+    else:
+        approvals = approval_service.list_requests(
+            state=state, project_id=project_id, workspace_id=workspace_id
+        )
+    return [approval.model_dump(mode="json") for approval in approvals]
+
+
+@app.get("/approvals/history")
+def list_approval_history(approval_id: str | None = None) -> list[dict[str, object]]:
+    events = approval_service.list_history(approval_id=approval_id)
+    return [event.model_dump(mode="json") for event in events]
+
+
+@app.get("/approvals/waiting-executions")
+def list_executions_waiting_approval() -> list[dict[str, object]]:
+    return [
+        execution.model_dump(mode="json")
+        for execution in agent_runtime.list_waiting_approval()
+    ]
+
+
+@app.get("/approvals/{approval_id}")
+def get_approval(approval_id: str) -> dict[str, object]:
+    approval = approval_service.get(approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    return approval.model_dump(mode="json")
+
+
+@app.post("/approvals/{approval_id}/approve")
+def approve_approval(approval_id: str, request: ApprovalDecisionRequest) -> dict[str, object]:
+    return _decide(approval_service.approve, approval_id, request)
+
+
+@app.post("/approvals/{approval_id}/reject")
+def reject_approval(approval_id: str, request: ApprovalDecisionRequest) -> dict[str, object]:
+    return _decide(approval_service.reject, approval_id, request)
+
+
+@app.post("/approvals/{approval_id}/request-changes")
+def request_changes_approval(
+    approval_id: str, request: ApprovalDecisionRequest
+) -> dict[str, object]:
+    return _decide(approval_service.request_changes, approval_id, request)
+
+
+@app.post("/approvals/{approval_id}/cancel")
+def cancel_approval(approval_id: str, request: ApprovalDecisionRequest) -> dict[str, object]:
+    return _decide(approval_service.cancel, approval_id, request)
+
+
+@app.post("/approvals/{approval_id}/view")
+def view_approval(approval_id: str, request: ApprovalViewRequest) -> dict[str, object]:
+    try:
+        approval = approval_service.mark_viewed(approval_id, request.actor)
+    except ApprovalError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return approval.model_dump(mode="json")
+
+
+@app.post("/approvals/{approval_id}/escalate")
+def escalate_approval(approval_id: str, request: ApprovalEscalateRequest) -> dict[str, object]:
+    try:
+        approval = approval_service.escalate(approval_id, request.actor, request.escalated_to)
+    except ApprovalError as exc:
+        raise HTTPException(status_code=_approval_status(exc), detail=str(exc)) from exc
+    return approval.model_dump(mode="json")
+
+
+@app.post("/approvals/{approval_id}/resume-execution")
+def resume_execution_after_approval(approval_id: str) -> dict[str, object]:
+    approval = approval_service.get(approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    if approval.state is not ApprovalState.APPROVED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Approval is {approval.state.value}; execution may not resume",
+        )
+    if not approval.execution_id:
+        raise HTTPException(status_code=409, detail="Approval has no linked execution")
+    try:
+        execution = agent_runtime.resume_after_approval(approval.execution_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return execution.model_dump(mode="json")
+
+
+@app.get("/approval-policies")
+def list_approval_policies(
+    project_id: str | None = None, workspace_id: str | None = None
+) -> list[dict[str, object]]:
+    policies = approval_service.list_policies(
+        project_id=project_id, workspace_id=workspace_id
+    )
+    return [policy.model_dump(mode="json") for policy in policies]
+
+
+@app.put("/approval-policies")
+def upsert_approval_policy(request: ApprovalPolicyRequest) -> dict[str, object]:
+    payload = request.model_dump(exclude_none=True)
+    payload.pop("id", None)
+    policy = ApprovalPolicy(**payload) if request.id is None else ApprovalPolicy(
+        id=request.id, **payload
+    )
+    return approval_service.upsert_policy(policy).model_dump(mode="json")
+
+
+def _decide(
+    operation: object, approval_id: str, request: ApprovalDecisionRequest
+) -> dict[str, object]:
+    try:
+        approval = operation(approval_id, request.actor, request.comment)  # type: ignore[operator]
+    except ApprovalError as exc:
+        raise HTTPException(status_code=_approval_status(exc), detail=str(exc)) from exc
+    return approval.model_dump(mode="json")
+
+
+def _approval_status(exc: ApprovalError) -> int:
+    if isinstance(exc, SelfApprovalError):
+        return 403
+    if "not found" in str(exc):
+        return 404
+    return 409
 
 
 @app.get("/automation")

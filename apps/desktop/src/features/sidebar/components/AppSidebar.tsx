@@ -13,6 +13,7 @@ const items = [
   { label: 'Review', to: '/review' },
   { label: 'Agent Studio', to: '/agent-studio' },
   { label: 'Automation Studio', to: '/automation' },
+  { label: 'Approval Center', to: '/approvals' },
   { label: 'Mission Control', to: '/mission-control' },
   { label: 'Activity Center', to: '/activity-center' },
 ]

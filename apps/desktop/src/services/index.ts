@@ -1,5 +1,6 @@
 export * from './ActivityService'
 export * from './AgentService'
+export * from './ApprovalService'
 export * from './AssetService'
 export * from './AutomationService'
 export * from './CapabilityService'

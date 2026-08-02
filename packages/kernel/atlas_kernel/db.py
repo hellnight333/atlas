@@ -475,6 +475,78 @@ def init_db() -> None:
         )
         """))
         conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_approval_requests (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            state TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT '',
+            scopes JSONB NOT NULL DEFAULT '[]',
+            estimated_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            policy_id TEXT,
+            policy_name TEXT,
+            required_approvers JSONB NOT NULL DEFAULT '[]',
+            approvals_required INTEGER NOT NULL DEFAULT 1,
+            decisions JSONB NOT NULL DEFAULT '[]',
+            viewed_by JSONB NOT NULL DEFAULT '[]',
+            priority INTEGER NOT NULL DEFAULT 0,
+            project_id TEXT,
+            workspace_id TEXT,
+            agent_id TEXT,
+            execution_id TEXT,
+            schedule_id TEXT,
+            entry_id TEXT,
+            run_id TEXT,
+            job_id TEXT,
+            asset_id TEXT,
+            payload JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            requested_by TEXT NOT NULL DEFAULT 'system',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            decided_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_approval_history (
+            id TEXT PRIMARY KEY,
+            approval_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            actor TEXT NOT NULL DEFAULT 'system',
+            comment TEXT,
+            from_state TEXT,
+            to_state TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_approval_policies (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL,
+            scopes JSONB NOT NULL DEFAULT '[]',
+            cost_threshold DOUBLE PRECISION,
+            conditions JSONB NOT NULL DEFAULT '[]',
+            required_approvers JSONB NOT NULL DEFAULT '[]',
+            approvals_required INTEGER NOT NULL DEFAULT 1,
+            expires_after_seconds INTEGER,
+            project_id TEXT,
+            workspace_id TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        ALTER TABLE atlas_runtime_executions
+        ADD COLUMN IF NOT EXISTS approval_id TEXT
+        """))
+        conn.execute(text("""
         ALTER TABLE atlas_runs
         ADD COLUMN IF NOT EXISTS workspace_id TEXT,
         ADD COLUMN IF NOT EXISTS project_id TEXT,

@@ -22,6 +22,12 @@ import type {
   ImageGenerateRequest,
   ImageGenerationResult,
   ImageVariantRequest,
+  ApprovalCreatePayload,
+  ApprovalDecisionPayload,
+  ApprovalHistoryEvent,
+  ApprovalPolicy,
+  ApprovalRequest,
+  ApprovalState,
   AtlasProvider,
   AutomationConflict,
   AutomationLog,
@@ -111,6 +117,9 @@ export class MockProvider implements AtlasProvider {
   private agentTeams: AgentTeam[] = []
   private agentTeamMessages: Record<string, AgentMessage[]> = {}
   private knowledgeGraphs: Record<string, ProjectGraphPayload> = {}
+  private approvals = new Map<string, ApprovalRequest>()
+  private approvalHistory: ApprovalHistoryEvent[] = []
+  private approvalPolicies = new Map<string, ApprovalPolicy>()
   private automationRules = new Map<string, AutomationRule>()
   private automationRuns: AutomationRun[] = []
   private automationLogs: AutomationLog[] = []
@@ -1637,6 +1646,208 @@ export class MockProvider implements AtlasProvider {
       created_at: start,
     })
     return run
+  }
+
+  async listApprovals(params?: { pendingOnly?: boolean; projectId?: string }): Promise<ApprovalRequest[]> {
+    let approvals = [...this.approvals.values()]
+    if (params?.pendingOnly) approvals = approvals.filter((a) => a.state === 'pending')
+    if (params?.projectId) approvals = approvals.filter((a) => a.project_id === params.projectId)
+    return approvals.sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at))
+  }
+
+  async getApproval(id: string): Promise<ApprovalRequest | undefined> {
+    return this.approvals.get(id)
+  }
+
+  async createApproval(payload: ApprovalCreatePayload): Promise<ApprovalRequest> {
+    const now = new Date().toISOString()
+    const approval: ApprovalRequest = {
+      id: `approval-${this.approvals.size + 1}`,
+      title: payload.title,
+      state: 'pending',
+      action: payload.action ?? '',
+      scopes: payload.scopes ?? [],
+      estimated_cost: payload.estimatedCost ?? 0,
+      reason: 'Mock policy requires approval',
+      policy_id: null,
+      policy_name: 'mock-policy',
+      required_approvers: [],
+      approvals_required: 1,
+      decisions: [],
+      viewed_by: [],
+      priority: payload.priority ?? 0,
+      project_id: payload.projectId ?? null,
+      workspace_id: payload.workspaceId ?? null,
+      agent_id: payload.agentId ?? null,
+      execution_id: payload.executionId ?? null,
+      schedule_id: payload.scheduleId ?? null,
+      entry_id: payload.entryId ?? null,
+      run_id: null,
+      job_id: null,
+      asset_id: null,
+      payload: payload.payload ?? {},
+      metadata: payload.metadata ?? {},
+      requested_by: payload.requestedBy ?? 'system',
+      created_at: now,
+      updated_at: now,
+      expires_at: null,
+      decided_at: null,
+    }
+    this.approvals.set(approval.id, approval)
+    this.recordApprovalHistory(approval.id, 'created', approval.requested_by, null, 'pending')
+    return approval
+  }
+
+  async approveApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.decideApproval(id, payload, 'approve', 'approved')
+  }
+
+  async rejectApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.decideApproval(id, payload, 'reject', 'rejected')
+  }
+
+  async requestChangesApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.decideApproval(id, payload, 'request_changes', 'pending')
+  }
+
+  async cancelApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.decideApproval(id, payload, 'reject', 'cancelled')
+  }
+
+  async viewApproval(id: string, actor: string): Promise<ApprovalRequest> {
+    const approval = this.requireApproval(id)
+    if (!approval.viewed_by.includes(actor)) {
+      approval.viewed_by = [...approval.viewed_by, actor]
+      approval.updated_at = new Date().toISOString()
+      this.approvals.set(id, approval)
+      this.recordApprovalHistory(id, 'viewed', actor, null, null)
+    }
+    return approval
+  }
+
+  async escalateApproval(id: string, actor: string, escalatedTo: string): Promise<ApprovalRequest> {
+    const approval = this.requireApproval(id)
+    if (!approval.required_approvers.includes(escalatedTo)) {
+      approval.required_approvers = [...approval.required_approvers, escalatedTo]
+    }
+    approval.updated_at = new Date().toISOString()
+    this.approvals.set(id, approval)
+    this.recordApprovalHistory(id, 'escalated', actor, null, null)
+    return approval
+  }
+
+  async resumeApprovedExecution(id: string): Promise<RuntimeExecutionRecord> {
+    const approval = this.requireApproval(id)
+    const execution = this.runtimeExecutions.find((e) => e.execution_id === approval.execution_id)
+    if (!execution) {
+      throw new Error('Approval has no linked execution')
+    }
+    return execution
+  }
+
+  async getApprovalHistory(approvalId?: string): Promise<ApprovalHistoryEvent[]> {
+    const events = approvalId
+      ? this.approvalHistory.filter((e) => e.approval_id === approvalId)
+      : [...this.approvalHistory]
+    return events.sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }
+
+  async listApprovalPolicies(projectId?: string): Promise<ApprovalPolicy[]> {
+    const policies = [...this.approvalPolicies.values()]
+    return projectId ? policies.filter((p) => !p.project_id || p.project_id === projectId) : policies
+  }
+
+  async upsertApprovalPolicy(policy: Partial<ApprovalPolicy> & { name: string }): Promise<ApprovalPolicy> {
+    const now = new Date().toISOString()
+    const id = policy.id ?? `approval-policy-${this.approvalPolicies.size + 1}`
+    const stored: ApprovalPolicy = {
+      id,
+      name: policy.name,
+      description: policy.description ?? '',
+      mode: policy.mode ?? 'scoped',
+      scopes: policy.scopes ?? [],
+      cost_threshold: policy.cost_threshold ?? null,
+      conditions: policy.conditions ?? [],
+      required_approvers: policy.required_approvers ?? [],
+      approvals_required: policy.approvals_required ?? 1,
+      expires_after_seconds: policy.expires_after_seconds ?? null,
+      project_id: policy.project_id ?? null,
+      workspace_id: policy.workspace_id ?? null,
+      priority: policy.priority ?? 0,
+      enabled: policy.enabled ?? true,
+      metadata: policy.metadata ?? {},
+      created_at: this.approvalPolicies.get(id)?.created_at ?? now,
+      updated_at: now,
+    }
+    this.approvalPolicies.set(id, stored)
+    return stored
+  }
+
+  async listExecutionsWaitingApproval(): Promise<RuntimeExecutionRecord[]> {
+    return this.runtimeExecutions.filter((e) => e.status === 'waiting_approval')
+  }
+
+  private requireApproval(id: string): ApprovalRequest {
+    const approval = this.approvals.get(id)
+    if (!approval) {
+      throw new Error('Approval request not found')
+    }
+    return approval
+  }
+
+  private decideApproval(
+    id: string,
+    payload: ApprovalDecisionPayload,
+    decision: 'approve' | 'reject' | 'request_changes',
+    nextState: ApprovalState,
+  ): ApprovalRequest {
+    const approval = this.requireApproval(id)
+    if (approval.state !== 'pending') {
+      throw new Error(`Approval is already ${approval.state}`)
+    }
+    if (payload.actor === approval.requested_by) {
+      throw new Error('Requester may not decide their own approval')
+    }
+    const now = new Date().toISOString()
+    approval.decisions = [
+      ...approval.decisions,
+      {
+        id: `decision-${approval.decisions.length + 1}`,
+        decision,
+        actor: payload.actor,
+        comment: payload.comment ?? null,
+        metadata: {},
+        created_at: now,
+      },
+    ]
+    approval.state = nextState
+    approval.updated_at = now
+    if (nextState !== 'pending') {
+      approval.decided_at = now
+    }
+    this.approvals.set(id, approval)
+    this.recordApprovalHistory(id, decision, payload.actor, 'pending', nextState)
+    return approval
+  }
+
+  private recordApprovalHistory(
+    approvalId: string,
+    eventType: string,
+    actor: string,
+    fromState: ApprovalState | null,
+    toState: ApprovalState | null,
+  ): void {
+    this.approvalHistory.push({
+      id: `approval-history-${this.approvalHistory.length + 1}`,
+      approval_id: approvalId,
+      event_type: eventType,
+      actor,
+      comment: null,
+      from_state: fromState,
+      to_state: toState,
+      metadata: {},
+      created_at: new Date().toISOString(),
+    })
   }
 }
 

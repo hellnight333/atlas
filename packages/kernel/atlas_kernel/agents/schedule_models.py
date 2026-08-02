@@ -22,6 +22,7 @@ class QueueEntryStatus(StrEnum):
     QUEUED = "queued"
     READY = "ready"
     BLOCKED = "blocked"
+    WAITING_APPROVAL = "waiting_approval"
     PREPARING = "preparing"
     RUNNING = "running"
     PAUSED = "paused"
@@ -87,6 +88,8 @@ class QueueUpdateResult(BaseModel):
 class RuntimeExecutionStatus(StrEnum):
     PENDING = "pending"
     QUEUED = "queued"
+    WAITING_APPROVAL = "waiting_approval"
+    APPROVAL_REJECTED = "approval_rejected"
     PREPARING = "preparing"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -124,6 +127,7 @@ class RuntimeExecutionRecord(BaseModel):
     run_id: str | None = None
     job_id: str | None = None
     asset_id: str | None = None
+    approval_id: str | None = None
     output: dict[str, Any] = Field(default_factory=dict)
     cancellation_requested: bool = False
     timeline: list[dict[str, Any]] = Field(default_factory=list)

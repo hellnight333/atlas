@@ -25,6 +25,13 @@ Trigger -> Conditions -> Planner -> Scheduler -> Runtime -> Worker
 Automation orchestrates existing subsystems only. It never calls a provider and never bypasses
 the Scheduler. See `AUTOMATION_ENGINE.md`.
 
+## Governance Gate
+
+Runtime execution requested -> Approval gate -> (WAITING_APPROVAL | proceed)
+
+Nothing in Atlas is autonomous. When a declarative policy matches, the runtime pauses before a
+job exists and waits for a human decision. See `APPROVAL_SYSTEM.md`.
+
 ## Change Governance
 
 Breaking architectural changes require an ADR and approval before implementation.

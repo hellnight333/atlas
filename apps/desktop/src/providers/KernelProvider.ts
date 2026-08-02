@@ -20,6 +20,11 @@ import type {
   ChatConversationUpdateRequest,
   ChatMessage,
   ChatMessageRequest,
+  ApprovalCreatePayload,
+  ApprovalDecisionPayload,
+  ApprovalHistoryEvent,
+  ApprovalPolicy,
+  ApprovalRequest,
   AtlasProvider,
   AutomationConflict,
   AutomationLog,
@@ -666,6 +671,83 @@ export class KernelProvider implements AtlasProvider {
   async listAutomationConflicts(projectId?: string): Promise<AutomationConflict[]> {
     const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
     return this.client.get(`${atlasEndpoints.automationConflicts}${suffix}`)
+  }
+
+  async listApprovals(params?: { pendingOnly?: boolean; projectId?: string }): Promise<ApprovalRequest[]> {
+    const query = new URLSearchParams()
+    if (params?.pendingOnly) query.set('pending_only', 'true')
+    if (params?.projectId) query.set('project_id', params.projectId)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.client.get(`${atlasEndpoints.approvals}${suffix}`)
+  }
+
+  async getApproval(id: string): Promise<ApprovalRequest | undefined> {
+    return this.client.get(atlasEndpoints.approvalById(id))
+  }
+
+  async createApproval(payload: ApprovalCreatePayload): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvals, {
+      title: payload.title,
+      action: payload.action ?? '',
+      scopes: payload.scopes ?? [],
+      estimated_cost: payload.estimatedCost ?? 0,
+      project_id: payload.projectId,
+      workspace_id: payload.workspaceId,
+      agent_id: payload.agentId,
+      execution_id: payload.executionId,
+      schedule_id: payload.scheduleId,
+      entry_id: payload.entryId,
+      priority: payload.priority ?? 0,
+      payload: payload.payload ?? {},
+      metadata: payload.metadata ?? {},
+      requested_by: payload.requestedBy ?? 'system',
+    })
+  }
+
+  async approveApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalApprove(id), payload)
+  }
+
+  async rejectApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalReject(id), payload)
+  }
+
+  async requestChangesApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalRequestChanges(id), payload)
+  }
+
+  async cancelApproval(id: string, payload: ApprovalDecisionPayload): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalCancel(id), payload)
+  }
+
+  async viewApproval(id: string, actor: string): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalView(id), { actor })
+  }
+
+  async escalateApproval(id: string, actor: string, escalatedTo: string): Promise<ApprovalRequest> {
+    return this.client.post(atlasEndpoints.approvalEscalate(id), { actor, escalated_to: escalatedTo })
+  }
+
+  async resumeApprovedExecution(id: string): Promise<RuntimeExecutionRecord> {
+    return this.client.post(atlasEndpoints.approvalResumeExecution(id), {})
+  }
+
+  async getApprovalHistory(approvalId?: string): Promise<ApprovalHistoryEvent[]> {
+    const suffix = approvalId ? `?approval_id=${encodeURIComponent(approvalId)}` : ''
+    return this.client.get(`${atlasEndpoints.approvalHistory}${suffix}`)
+  }
+
+  async listApprovalPolicies(projectId?: string): Promise<ApprovalPolicy[]> {
+    const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+    return this.client.get(`${atlasEndpoints.approvalPolicies}${suffix}`)
+  }
+
+  async upsertApprovalPolicy(policy: Partial<ApprovalPolicy> & { name: string }): Promise<ApprovalPolicy> {
+    return this.client.put(atlasEndpoints.approvalPolicies, policy)
+  }
+
+  async listExecutionsWaitingApproval(): Promise<RuntimeExecutionRecord[]> {
+    return this.client.get(atlasEndpoints.approvalWaitingExecutions)
   }
 }
 

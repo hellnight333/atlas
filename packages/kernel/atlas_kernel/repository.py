@@ -22,6 +22,16 @@ from .agents.models import (
     AgentTeam,
     AgentTeamStatus,
 )
+from .approval.models import (
+    ApprovalCondition,
+    ApprovalDecision,
+    ApprovalHistoryEvent,
+    ApprovalPolicy,
+    ApprovalPolicyMode,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
 from .agents.schedule_models import (
     ExecutionSchedule,
     ResumeToken,
@@ -1853,14 +1863,14 @@ class AtlasRepository:
                     execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                     payload, status, attempts, retry_policy, created_at, updated_at,
                     started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                    error, provider_name, run_id, job_id, asset_id, output,
+                    error, provider_name, run_id, job_id, asset_id, approval_id, output,
                     cancellation_requested, timeline
                 )
                 VALUES (
                     :execution_id, :schedule_id, :entry_id, :agent_id, :plan_id, :action,
                     :payload, :status, :attempts, :retry_policy, :created_at, :updated_at,
                     :started_at, :heartbeat_at, :deadline_at, :completed_at, :timeout_reason,
-                    :error, :provider_name, :run_id, :job_id, :asset_id, :output,
+                    :error, :provider_name, :run_id, :job_id, :asset_id, :approval_id, :output,
                     :cancellation_requested, :timeline
                 )
                 ON CONFLICT (execution_id) DO NOTHING
@@ -1888,6 +1898,7 @@ class AtlasRepository:
                     "run_id": execution.run_id,
                     "job_id": execution.job_id,
                     "asset_id": execution.asset_id,
+                    "approval_id": execution.approval_id,
                     "output": json.dumps(execution.output, default=_json_value),
                     "cancellation_requested": execution.cancellation_requested,
                     "timeline": json.dumps(execution.timeline, default=_json_value),
@@ -1915,6 +1926,7 @@ class AtlasRepository:
                     run_id = :run_id,
                     job_id = :job_id,
                     asset_id = :asset_id,
+                    approval_id = :approval_id,
                     output = :output,
                     cancellation_requested = :cancellation_requested,
                     timeline = :timeline
@@ -1936,6 +1948,7 @@ class AtlasRepository:
                     "run_id": execution.run_id,
                     "job_id": execution.job_id,
                     "asset_id": execution.asset_id,
+                    "approval_id": execution.approval_id,
                     "output": json.dumps(execution.output, default=_json_value),
                     "cancellation_requested": execution.cancellation_requested,
                     "timeline": json.dumps(execution.timeline, default=_json_value),
@@ -1951,7 +1964,7 @@ class AtlasRepository:
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                       error, provider_name, run_id, job_id, asset_id, output,
+                       error, provider_name, run_id, job_id, asset_id, approval_id, output,
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 WHERE execution_id = :execution_id
@@ -1969,7 +1982,7 @@ class AtlasRepository:
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
-                       error, provider_name, run_id, job_id, asset_id, output,
+                       error, provider_name, run_id, job_id, asset_id, approval_id, output,
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 ORDER BY created_at DESC
@@ -2576,9 +2589,10 @@ class AtlasRepository:
             run_id=row[19],
             job_id=row[20],
             asset_id=row[21],
-            output=row[22] if isinstance(row[22], dict) else json.loads(row[22]) if row[22] else {},
-            cancellation_requested=bool(row[23]),
-            timeline=row[24] if isinstance(row[24], list) else json.loads(row[24]) if row[24] else [],
+            approval_id=row[22],
+            output=row[23] if isinstance(row[23], dict) else json.loads(row[23]) if row[23] else {},
+            cancellation_requested=bool(row[24]),
+            timeline=row[25] if isinstance(row[25], list) else json.loads(row[25]) if row[25] else [],
         )
 
     def _row_to_agent_assignment(self, row: Any) -> AgentAssignment:
@@ -2911,6 +2925,326 @@ class AtlasRepository:
             context=context_data,
             created_at=row[7],
         )
+
+
+    # ------------------------------------------------------------------
+    # Approvals (Milestone 008). History is append-only: there is deliberately
+    # no update or delete method for atlas_approval_history.
+    # ------------------------------------------------------------------
+
+    def create_approval_request(self, request: ApprovalRequest) -> ApprovalRequest:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_approval_requests (
+                    id, title, state, action, scopes, estimated_cost, reason, policy_id,
+                    policy_name, required_approvers, approvals_required, decisions, viewed_by,
+                    priority, project_id, workspace_id, agent_id, execution_id, schedule_id,
+                    entry_id, run_id, job_id, asset_id, payload, metadata, requested_by,
+                    created_at, updated_at, expires_at, decided_at
+                )
+                VALUES (
+                    :id, :title, :state, :action, :scopes, :estimated_cost, :reason, :policy_id,
+                    :policy_name, :required_approvers, :approvals_required, :decisions, :viewed_by,
+                    :priority, :project_id, :workspace_id, :agent_id, :execution_id, :schedule_id,
+                    :entry_id, :run_id, :job_id, :asset_id, :payload, :metadata, :requested_by,
+                    :created_at, :updated_at, :expires_at, :decided_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """),
+                self._approval_request_params(request),
+            )
+            session.commit()
+        return request
+
+    def update_approval_request(self, request: ApprovalRequest) -> ApprovalRequest:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                UPDATE atlas_approval_requests
+                SET state = :state,
+                    decisions = :decisions,
+                    viewed_by = :viewed_by,
+                    required_approvers = :required_approvers,
+                    approvals_required = :approvals_required,
+                    updated_at = :updated_at,
+                    expires_at = :expires_at,
+                    decided_at = :decided_at,
+                    metadata = :metadata
+                WHERE id = :id
+                """),
+                self._approval_request_params(request),
+            )
+            session.commit()
+        return request
+
+    def get_approval_request(self, approval_id: str) -> ApprovalRequest | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(f"SELECT {_APPROVAL_REQUEST_COLUMNS} FROM atlas_approval_requests WHERE id = :id"),
+                {"id": approval_id},
+            ).fetchone()
+        return self._row_to_approval_request(row) if row else None
+
+    def list_approval_requests(
+        self,
+        state: ApprovalState | None = None,
+        project_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[ApprovalRequest]:
+        query = f"SELECT {_APPROVAL_REQUEST_COLUMNS} FROM atlas_approval_requests WHERE 1=1"
+        params: dict[str, Any] = {}
+        if state is not None:
+            query += " AND state = :state"
+            params["state"] = state.value
+        if project_id is not None:
+            query += " AND project_id = :project_id"
+            params["project_id"] = project_id
+        if workspace_id is not None:
+            query += " AND workspace_id = :workspace_id"
+            params["workspace_id"] = workspace_id
+        query += " ORDER BY priority DESC, created_at ASC, id ASC"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [self._row_to_approval_request(row) for row in rows]
+
+    def create_approval_history_event(self, event: ApprovalHistoryEvent) -> ApprovalHistoryEvent:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_approval_history
+                (id, approval_id, event_type, actor, comment, from_state, to_state, metadata, created_at)
+                VALUES (:id, :approval_id, :event_type, :actor, :comment, :from_state, :to_state, :metadata, :created_at)
+                ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": event.id,
+                    "approval_id": event.approval_id,
+                    "event_type": event.event_type,
+                    "actor": event.actor,
+                    "comment": event.comment,
+                    "from_state": event.from_state.value if event.from_state else None,
+                    "to_state": event.to_state.value if event.to_state else None,
+                    "metadata": json.dumps(event.metadata, default=_json_value),
+                    "created_at": event.created_at,
+                },
+            )
+            session.commit()
+        return event
+
+    def list_approval_history(self, approval_id: str | None = None) -> list[ApprovalHistoryEvent]:
+        query = (
+            "SELECT id, approval_id, event_type, actor, comment, from_state, to_state, metadata, created_at "
+            "FROM atlas_approval_history WHERE 1=1"
+        )
+        params: dict[str, Any] = {}
+        if approval_id is not None:
+            query += " AND approval_id = :approval_id"
+            params["approval_id"] = approval_id
+        query += " ORDER BY created_at DESC, id DESC"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).fetchall()
+        return [
+            ApprovalHistoryEvent(
+                id=row[0],
+                approval_id=row[1],
+                event_type=row[2],
+                actor=row[3],
+                comment=row[4],
+                from_state=ApprovalState(row[5]) if row[5] else None,
+                to_state=ApprovalState(row[6]) if row[6] else None,
+                metadata=_as_dict(row[7]),
+                created_at=row[8],
+            )
+            for row in rows
+        ]
+
+    def upsert_approval_policy(self, policy: ApprovalPolicy) -> ApprovalPolicy:
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_approval_policies (
+                    id, name, description, mode, scopes, cost_threshold, conditions,
+                    required_approvers, approvals_required, expires_after_seconds,
+                    project_id, workspace_id, priority, enabled, metadata, created_at, updated_at
+                )
+                VALUES (
+                    :id, :name, :description, :mode, :scopes, :cost_threshold, :conditions,
+                    :required_approvers, :approvals_required, :expires_after_seconds,
+                    :project_id, :workspace_id, :priority, :enabled, :metadata, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = :name,
+                    description = :description,
+                    mode = :mode,
+                    scopes = :scopes,
+                    cost_threshold = :cost_threshold,
+                    conditions = :conditions,
+                    required_approvers = :required_approvers,
+                    approvals_required = :approvals_required,
+                    expires_after_seconds = :expires_after_seconds,
+                    project_id = :project_id,
+                    workspace_id = :workspace_id,
+                    priority = :priority,
+                    enabled = :enabled,
+                    metadata = :metadata,
+                    updated_at = :updated_at
+                """),
+                {
+                    "id": policy.id,
+                    "name": policy.name,
+                    "description": policy.description,
+                    "mode": policy.mode.value,
+                    "scopes": json.dumps([s.value for s in policy.scopes]),
+                    "cost_threshold": policy.cost_threshold,
+                    "conditions": json.dumps([c.model_dump(mode="json") for c in policy.conditions]),
+                    "required_approvers": json.dumps(policy.required_approvers),
+                    "approvals_required": policy.approvals_required,
+                    "expires_after_seconds": policy.expires_after_seconds,
+                    "project_id": policy.project_id,
+                    "workspace_id": policy.workspace_id,
+                    "priority": policy.priority,
+                    "enabled": policy.enabled,
+                    "metadata": json.dumps(policy.metadata, default=_json_value),
+                    "created_at": policy.created_at,
+                    "updated_at": policy.updated_at,
+                },
+            )
+            session.commit()
+        return policy
+
+    def list_approval_policies(self) -> list[ApprovalPolicy]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, name, description, mode, scopes, cost_threshold, conditions,
+                       required_approvers, approvals_required, expires_after_seconds,
+                       project_id, workspace_id, priority, enabled, metadata, created_at, updated_at
+                FROM atlas_approval_policies
+                ORDER BY priority DESC, created_at ASC, id ASC
+                """)
+            ).fetchall()
+        return [
+            ApprovalPolicy(
+                id=row[0],
+                name=row[1],
+                description=row[2],
+                mode=ApprovalPolicyMode(row[3]),
+                scopes=[ApprovalScope(s) for s in _as_list(row[4])],
+                cost_threshold=row[5],
+                conditions=[ApprovalCondition.model_validate(c) for c in _as_list(row[6])],
+                required_approvers=[str(a) for a in _as_list(row[7])],
+                approvals_required=row[8],
+                expires_after_seconds=row[9],
+                project_id=row[10],
+                workspace_id=row[11],
+                priority=row[12],
+                enabled=bool(row[13]),
+                metadata=_as_dict(row[14]),
+                created_at=row[15],
+                updated_at=row[16],
+            )
+            for row in rows
+        ]
+
+    def delete_approval_policy(self, policy_id: str) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM atlas_approval_policies WHERE id = :id"), {"id": policy_id}
+            )
+            session.commit()
+
+    def _approval_request_params(self, request: ApprovalRequest) -> dict[str, Any]:
+        return {
+            "id": request.id,
+            "title": request.title,
+            "state": request.state.value,
+            "action": request.action,
+            "scopes": json.dumps([s.value for s in request.scopes]),
+            "estimated_cost": request.estimated_cost,
+            "reason": request.reason,
+            "policy_id": request.policy_id,
+            "policy_name": request.policy_name,
+            "required_approvers": json.dumps(request.required_approvers),
+            "approvals_required": request.approvals_required,
+            "decisions": json.dumps([d.model_dump(mode="json") for d in request.decisions]),
+            "viewed_by": json.dumps(request.viewed_by),
+            "priority": request.priority,
+            "project_id": request.project_id,
+            "workspace_id": request.workspace_id,
+            "agent_id": request.agent_id,
+            "execution_id": request.execution_id,
+            "schedule_id": request.schedule_id,
+            "entry_id": request.entry_id,
+            "run_id": request.run_id,
+            "job_id": request.job_id,
+            "asset_id": request.asset_id,
+            "payload": json.dumps(request.payload, default=_json_value),
+            "metadata": json.dumps(request.metadata, default=_json_value),
+            "requested_by": request.requested_by,
+            "created_at": request.created_at,
+            "updated_at": request.updated_at,
+            "expires_at": request.expires_at,
+            "decided_at": request.decided_at,
+        }
+
+    def _row_to_approval_request(self, row: Any) -> ApprovalRequest:
+        return ApprovalRequest(
+            id=row[0],
+            title=row[1],
+            state=ApprovalState(row[2]),
+            action=row[3],
+            scopes=[ApprovalScope(s) for s in _as_list(row[4])],
+            estimated_cost=row[5],
+            reason=row[6],
+            policy_id=row[7],
+            policy_name=row[8],
+            required_approvers=[str(a) for a in _as_list(row[9])],
+            approvals_required=row[10],
+            decisions=[ApprovalDecision.model_validate(d) for d in _as_list(row[11])],
+            viewed_by=[str(v) for v in _as_list(row[12])],
+            priority=row[13],
+            project_id=row[14],
+            workspace_id=row[15],
+            agent_id=row[16],
+            execution_id=row[17],
+            schedule_id=row[18],
+            entry_id=row[19],
+            run_id=row[20],
+            job_id=row[21],
+            asset_id=row[22],
+            payload=_as_dict(row[23]),
+            metadata=_as_dict(row[24]),
+            requested_by=row[25],
+            created_at=row[26],
+            updated_at=row[27],
+            expires_at=row[28],
+            decided_at=row[29],
+        )
+
+
+_APPROVAL_REQUEST_COLUMNS = (
+    "id, title, state, action, scopes, estimated_cost, reason, policy_id, policy_name, "
+    "required_approvers, approvals_required, decisions, viewed_by, priority, project_id, "
+    "workspace_id, agent_id, execution_id, schedule_id, entry_id, run_id, job_id, asset_id, "
+    "payload, metadata, requested_by, created_at, updated_at, expires_at, decided_at"
+)
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value:
+        return json.loads(value)
+    return []
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value:
+        return json.loads(value)
+    return {}
 
 
 def _json_value(value: Any) -> Any:
