@@ -23,6 +23,24 @@ class LogLevel(StrEnum):
     ERROR = "error"
 
 
+class TelemetryMode(StrEnum):
+    """What the operator has consented to collect. Ordered least to most.
+
+    Defined here rather than in ``telemetry`` because ``config`` sits at the
+    bottom of the import graph: ``logging_setup`` imports it, and ``telemetry``
+    imports ``logging_setup``.
+    """
+
+    DISABLED = "disabled"
+    """Nothing is collected. The default."""
+
+    CRASH_ONLY = "crash_only"
+    """Anonymous crash reports. No usage events."""
+
+    DIAGNOSTICS = "diagnostics"
+    """Crash reports plus anonymous version and environment reporting."""
+
+
 class AtlasConfig(BaseModel):
     """Declarative runtime configuration.
 
@@ -51,6 +69,15 @@ class AtlasConfig(BaseModel):
 
     schema_validation_on_startup: bool = True
     integrity_check_on_startup: bool = False
+
+    #: Telemetry is off unless the operator turns it on. No profile enables
+    #: it -- not even production -- because consent belongs to a person, not
+    #: to a deployment environment.
+    telemetry_mode: TelemetryMode = TelemetryMode.DISABLED
+
+    #: An online update check is a network call, so it is opt-in too. Atlas
+    #: never checks for updates on its own.
+    update_check_enabled: bool = False
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -116,6 +143,8 @@ _ENV_BINDINGS: dict[str, tuple[str, str]] = {
     "ATLAS_BACKUP_DIR": ("backup_dir", "path"),
     "ATLAS_SCHEMA_VALIDATION": ("schema_validation_on_startup", "bool"),
     "ATLAS_INTEGRITY_CHECK": ("integrity_check_on_startup", "bool"),
+    "ATLAS_TELEMETRY": ("telemetry_mode", "telemetry_mode"),
+    "ATLAS_UPDATE_CHECK": ("update_check_enabled", "bool"),
 }
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -145,6 +174,8 @@ def _parse(raw: str, kind: str, env_name: str) -> Any:
             return Profile(raw.strip().lower())
         if kind == "log_level":
             return LogLevel(raw.strip().lower())
+        if kind == "telemetry_mode":
+            return TelemetryMode(raw.strip().lower())
         return raw
     except ConfigError:
         raise

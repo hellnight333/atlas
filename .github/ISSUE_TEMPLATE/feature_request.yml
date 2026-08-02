@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest a capability Atlas should have.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: Atlas has deliberate scope limits. Several things are
+        **out of scope on purpose**, not merely unbuilt — a marketplace,
+        billing, a cloud/SaaS offering, mobile apps, and autonomous agents
+        that act without approval. [`CLAUDE.md`](../blob/main/CLAUDE.md)
+        explains why.
+
+        Requests in those areas will be closed with a pointer here, so it is
+        worth a look first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        Describe the problem, not the solution. "I want a button that does X"
+        tells us less than "every time I do Y, I have to do Z manually."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Atlas to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: Workarounds tell us how much this hurts and how urgent it is.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Atlas?
+      options:
+        - Studios (Image, Video, Audio, Coding, Business, Research)
+        - Automation
+        - Approvals and governance
+        - Cluster and workers
+        - Knowledge graph
+        - Desktop shell and UI
+        - Providers and models
+        - Packaging, install, updates
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I have read the scope limits above and this is not a marketplace, billing, SaaS, mobile, or autonomous-agent request.
+          required: true

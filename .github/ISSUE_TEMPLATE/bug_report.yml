@@ -1,0 +1,95 @@
+name: Bug report
+description: Something in Atlas behaves incorrectly.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Atlas is in **public alpha** — rough edges are
+        expected, and a clear report is genuinely the most useful thing you
+        can send.
+
+        If this is a **security** issue, stop and read
+        [SECURITY.md](../blob/main/.github/SECURITY.md) instead. Do not file
+        it here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what did Atlas do instead of what you expected?
+      placeholder: |
+        I clicked Run on a workflow in Image Studio. The execution stayed at
+        "waiting_placement" forever instead of running.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. If you cannot reproduce it reliably, say so — an intermittent bug is still worth reporting.
+      placeholder: |
+        1. Fresh install, first run
+        2. Create a project
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics export
+      description: |
+        Run `curl localhost:8000/diagnostics` or use **Diagnostics → Export**
+        and paste the result. It contains no credentials and no database URL —
+        it is safe to share. This one field usually saves several rounds of
+        questions.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: Atlas version
+      description: Shown in Diagnostics, or `curl localhost:8000/version`.
+      placeholder: "0.12.0-alpha.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Atlas?
+      options:
+        - Installer / app bundle
+        - Portable archive
+        - From source
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Redact anything private. Logs can contain project and file names.
+      render: shell

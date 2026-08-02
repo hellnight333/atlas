@@ -37,6 +37,8 @@ from .repository import AtlasRepository
 from .router import ProviderRouter
 from .state_machine import ExecutionStateMachine
 from .storage import LocalFileStorageBackend
+from .telemetry import FileSink, TelemetryConsent, TelemetryService
+from .updates import GitHubReleaseFeed, StaticFeed, UpdateService
 from .worker import Worker
 from .workflow_engine import KernelWorkflowNodeDelegate, WorkflowEngine
 
@@ -70,6 +72,8 @@ class AtlasRuntime:
     diagnostics: DiagnosticsService
     backup_service: BackupService
     recovery_service: RecoveryService
+    telemetry: TelemetryService
+    update_service: UpdateService
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
@@ -203,6 +207,22 @@ def create_runtime(
         registry=worker_registry,
     )
 
+    # Telemetry consent comes from configuration, which defaults to disabled.
+    # The sink is always the real one: every record_* method returns early
+    # unless consent covers it, so nothing can be written while telemetry is
+    # off. Handing a disabled service a NullSink instead would mean that
+    # opting in at runtime silently did nothing until the next restart.
+    telemetry = TelemetryService(
+        consent=TelemetryConsent(mode=config.telemetry_mode),
+        sink=FileSink(config.data_dir / "telemetry.jsonl"),
+        profile=str(config.profile),
+    )
+    # The feed stays offline unless the operator opted in, so constructing the
+    # runtime never makes a network call.
+    update_service = UpdateService(
+        feed=GitHubReleaseFeed() if config.update_check_enabled else StaticFeed()
+    )
+
     return AtlasRuntime(
         event_bus=event_bus,
         registry=registry,
@@ -235,6 +255,8 @@ def create_runtime(
         diagnostics=diagnostics,
         backup_service=backup_service,
         recovery_service=recovery_service,
+        telemetry=telemetry,
+        update_service=update_service,
     )
 
 

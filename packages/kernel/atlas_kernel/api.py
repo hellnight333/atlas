@@ -37,7 +37,7 @@ from .cluster.models import (
 )
 from .cluster.worker_registry import WorkerRegistryError
 from .composition_root import create_runtime
-from .config import describe_profiles
+from .config import TelemetryMode, describe_profiles
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
     AssetCreate,
@@ -77,6 +77,7 @@ from .organization.models import (
 from .organization.service import (
     OrganizationError,
 )
+from .version import LICENSE_CHANGE_DATE, LICENSE_CHANGE_TO, LICENSE_ID, version_report
 from .workflow_engine import (
     Condition,
     FailureStrategy,
@@ -118,6 +119,8 @@ organization_service = runtime.organization_service
 identity_service = runtime.identity_service
 audit_service = runtime.audit_service
 diagnostics = runtime.diagnostics
+telemetry = runtime.telemetry
+update_service = runtime.update_service
 backup_service = runtime.backup_service
 recovery_service = runtime.recovery_service
 config = runtime.config
@@ -3078,6 +3081,54 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.get("/version")
+def get_version() -> dict[str, object]:
+    return version_report()
+
+
+@app.get("/license")
+def get_license() -> dict[str, object]:
+    """What this build is licensed under, for the About screen."""
+    return {
+        "license": LICENSE_ID,
+        "name": "Business Source License 1.1",
+        "source_available": True,
+        "osi_approved": False,
+        "change_date": LICENSE_CHANGE_DATE.isoformat(),
+        "change_license": LICENSE_CHANGE_TO,
+        "summary": (
+            "Source-available. Personal use, internal company use, research and "
+            "education are permitted, including commercially. Offering Atlas to "
+            "third parties as a hosted or embedded service is not. On the change "
+            "date this version becomes Apache-2.0."
+        ),
+        "full_text": "LICENSE",
+        "third_party": "NOTICE",
+    }
+
+
+@app.get("/telemetry")
+def get_telemetry() -> dict[str, object]:
+    return telemetry.report()
+
+
+class TelemetryConsentRequest(BaseModel):
+    mode: TelemetryMode
+
+
+@app.put("/telemetry/consent")
+def set_telemetry_consent(request: TelemetryConsentRequest) -> dict[str, object]:
+    """Record a telemetry decision. This is the only way to enable it."""
+    telemetry.set_consent(request.mode)
+    return telemetry.report()
+
+
+@app.post("/updates/check")
+def check_for_updates() -> dict[str, object]:
+    """Look for a newer release. Never downloads or installs anything."""
+    return update_service.check().to_dict()
 
 
 @app.get("/health/report")

@@ -51,3 +51,28 @@ Local quality commands:
 - `python -m black --check packages/kernel workers`
 - `python -m mypy packages/kernel/atlas_kernel`
 - `python -m pytest packages/kernel/tests`
+
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) ·
+Security: [.github/SECURITY.md](.github/SECURITY.md) ·
+Changes: [CHANGELOG.md](CHANGELOG.md)
+
+## Privacy
+
+Atlas collects nothing by default. Telemetry is opt-in and off, the update
+check is opt-in and off, and there is no Atlas-operated server for either to
+talk to. See [docs/PRIVACY.md](docs/PRIVACY.md).
+
+## License
+
+Atlas is **source-available** under the
+[Business Source License 1.1](LICENSE) — not an OSI open-source license.
+
+Permitted, including commercially: personal use, use inside your own company,
+research, education, and consulting work for a client. Not permitted: offering
+Atlas to third parties as a hosted, managed or embedded service.
+
+On **2030-08-03** this version converts to Apache-2.0 automatically.
+
+Third-party components keep their own licenses — see [NOTICE](NOTICE), which
+covers the two that need care: `psycopg` (LGPL-3.0) and `certifi` (MPL-2.0),
+plus the bundled PostgreSQL.
