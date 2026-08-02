@@ -4,6 +4,7 @@ import { ActivityCenterScreen } from '../features/activity/screens/ActivityCente
 import { ApprovalCenterScreen } from '../features/approval/screens/ApprovalCenterScreen'
 import { ClusterStudioScreen } from '../features/cluster/screens/ClusterStudioScreen'
 import { OrganizationStudioScreen } from '../features/organization/screens/OrganizationStudioScreen'
+import { DiagnosticsStudioScreen } from '../features/diagnostics/screens/DiagnosticsStudioScreen'
 import { AssetWorkspaceScreen } from '../features/assets/screens/AssetWorkspaceScreen'
 import { AutomationStudioScreen } from '../features/automation/screens/AutomationStudioScreen'
 import { DesktopOverviewScreen } from '../features/projects/screens/DesktopOverviewScreen'
@@ -38,6 +39,7 @@ export const router = createBrowserRouter([
       { path: 'approvals', element: <ApprovalCenterScreen /> },
       { path: 'cluster', element: <ClusterStudioScreen /> },
       { path: 'organizations', element: <OrganizationStudioScreen /> },
+      { path: 'diagnostics', element: <DiagnosticsStudioScreen /> },
       { path: 'mission-control', element: <HomeWorkspaceScreen /> },
       { path: 'activity-center', element: <ActivityCenterScreen /> },
     ],

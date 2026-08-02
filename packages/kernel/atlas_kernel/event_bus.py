@@ -57,6 +57,7 @@ from .cluster.events import (
     WorkerRegistered,
     WorkerResumed,
 )
+from .event_types import AtlasEvent
 from .organization.events import (
     AuditRecorded,
     IdentityAuthenticated,
@@ -75,7 +76,6 @@ from .organization.events import (
     TeamUpdated,
     WorkerTransferred,
 )
-from .event_types import AtlasEvent
 
 
 @dataclass(frozen=True)

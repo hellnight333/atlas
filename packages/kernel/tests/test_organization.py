@@ -301,9 +301,7 @@ def test_custom_role_resolves_identically_to_builtin() -> None:
         permissions=[Permission.ASSET_PUBLISH, Permission.PROJECT_READ],
         organization_id=organization.id,
     )
-    orgs.add_member(
-        organization_id=organization.id, identity_id=identity.id, role_ids=[custom.id]
-    )
+    orgs.add_member(organization_id=organization.id, identity_id=identity.id, role_ids=[custom.id])
 
     resolution = orgs.resolve_permissions(identity.id, organization.id)
     assert resolution.allows(Permission.ASSET_PUBLISH)
@@ -317,9 +315,7 @@ def test_roles_do_not_leak_across_organizations() -> None:
     foreign_role = orgs.create_role(
         name="Foreign", permissions=[Permission.ORGANIZATION_ADMIN], organization_id=second.id
     )
-    orgs.add_member(
-        organization_id=first.id, identity_id=identity.id, role_ids=[foreign_role.id]
-    )
+    orgs.add_member(organization_id=first.id, identity_id=identity.id, role_ids=[foreign_role.id])
 
     resolution = orgs.resolve_permissions(identity.id, first.id)
     assert not resolution.allows(Permission.ORGANIZATION_ADMIN)
@@ -339,17 +335,13 @@ def test_custom_role_update_changes_resolution() -> None:
     custom = orgs.create_role(
         name="Grower", permissions=[Permission.PROJECT_READ], organization_id=organization.id
     )
-    orgs.add_member(
-        organization_id=organization.id, identity_id=identity.id, role_ids=[custom.id]
-    )
+    orgs.add_member(organization_id=organization.id, identity_id=identity.id, role_ids=[custom.id])
     assert not orgs.resolve_permissions(identity.id, organization.id).allows(
         Permission.PROJECT_WRITE
     )
 
     orgs.update_role(custom.id, [Permission.PROJECT_READ, Permission.PROJECT_WRITE])
-    assert orgs.resolve_permissions(identity.id, organization.id).allows(
-        Permission.PROJECT_WRITE
-    )
+    assert orgs.resolve_permissions(identity.id, organization.id).allows(Permission.PROJECT_WRITE)
 
 
 def test_require_permission_raises_when_denied() -> None:
@@ -523,9 +515,7 @@ def test_policy_resolution_records_its_source() -> None:
             settings={"days": 30},
         )
     )
-    resolved = orgs.resolve_policy(
-        domain=PolicyDomain.RETENTION, organization_id=organization.id
-    )
+    resolved = orgs.resolve_policy(domain=PolicyDomain.RETENTION, organization_id=organization.id)
     assert resolved.sources["days"] == org_policy.id
     assert org_policy.id in resolved.chain
 
@@ -586,9 +576,7 @@ def test_disabled_policy_set_is_ignored() -> None:
             enabled=False,
         )
     )
-    resolved = orgs.resolve_policy(
-        domain=PolicyDomain.SHARING, organization_id=organization.id
-    )
+    resolved = orgs.resolve_policy(domain=PolicyDomain.SHARING, organization_id=organization.id)
     assert resolved.settings == {}
 
 
@@ -603,9 +591,7 @@ def test_policies_do_not_leak_across_organizations() -> None:
             settings={"allow_cloud": True},
         )
     )
-    resolved = orgs.resolve_policy(
-        domain=PolicyDomain.PROVIDERS, organization_id=first.id
-    )
+    resolved = orgs.resolve_policy(domain=PolicyDomain.PROVIDERS, organization_id=first.id)
     assert resolved.settings == {}
 
 
@@ -793,8 +779,7 @@ def test_dispatcher_skips_workers_owned_by_another_organization() -> None:
     orgs.assign_worker(worker_id, owner.id)
 
     owner_candidates = {
-        c.worker.id
-        for c in runtime.dispatcher.select_candidates("image", organization_id=owner.id)
+        c.worker.id for c in runtime.dispatcher.select_candidates("image", organization_id=owner.id)
     }
     intruder_candidates = {
         c.worker.id
@@ -837,9 +822,7 @@ def test_api_organization_lifecycle() -> None:
     body = fetched.json()
     assert "teams" in body and "members" in body and "roles" in body
 
-    updated = client.put(
-        f"/organizations/{organization_id}", json={"description": "via api"}
-    )
+    updated = client.put(f"/organizations/{organization_id}", json={"description": "via api"})
     assert updated.json()["description"] == "via api"
 
 

@@ -260,7 +260,7 @@ class ResearchSession(BaseModel):
     project_id: str
     title: str
     question: str
-    status: str = 'active'
+    status: str = "active"
     conversation_id: str | None = None
     collection_asset_id: str | None = None
     report_asset_id: str | None = None

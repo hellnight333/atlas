@@ -52,6 +52,16 @@ belongs to one organization or the shared pool. See `ENTERPRISE_GOVERNANCE.md`.
 
 Breaking architectural changes require an ADR and approval before implementation.
 
+## Production Readiness (Milestone 011)
+
+All four CI gates pass: ruff, black, mypy (zero errors), and pytest with the
+90% coverage gate. Hardening subsystems added: configuration profiles,
+structured logging, diagnostics, backup/restore, and crash recovery. 38
+database indexes with startup schema validation and integrity checks.
+
+Native installers are **not** built — see `DEPLOYMENT.md` for why and what a
+future milestone must add.
+
 ## Engineering Controls
 
 The platform now expects:

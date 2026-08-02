@@ -27,7 +27,9 @@ KERNEL_ROOT = Path(__file__).resolve().parents[1] / "atlas_kernel"
 
 
 def _create_project() -> str:
-    workspace = client.post("/workspaces", json={"name": "automation-ws", "description": "automation"})
+    workspace = client.post(
+        "/workspaces", json={"name": "automation-ws", "description": "automation"}
+    )
     assert workspace.status_code == 200
     project = client.post(
         "/projects",
@@ -123,14 +125,18 @@ def test_rules_are_ordered_by_priority_descending() -> None:
     low = client.post("/automation", json=_rule_payload(project_id=project_id, priority=1)).json()
     high = client.post("/automation", json=_rule_payload(project_id=project_id, priority=99)).json()
 
-    ordered = [item["id"] for item in client.get("/automation", params={"project_id": project_id}).json()]
+    ordered = [
+        item["id"] for item in client.get("/automation", params={"project_id": project_id}).json()
+    ]
     assert ordered.index(high["id"]) < ordered.index(low["id"])
 
 
 def test_conflict_detection_flags_same_trigger_and_priority() -> None:
     project_id = _create_project()
     first = client.post("/automation", json=_rule_payload(project_id=project_id, priority=5)).json()
-    second = client.post("/automation", json=_rule_payload(project_id=project_id, priority=5)).json()
+    second = client.post(
+        "/automation", json=_rule_payload(project_id=project_id, priority=5)
+    ).json()
 
     conflicts = client.get("/automation/conflicts", params={"project_id": project_id})
     assert conflicts.status_code == 200
@@ -150,7 +156,9 @@ def test_trigger_evaluation_per_type() -> None:
     assert automation_engine.evaluate_trigger(manual) is True
 
     timer_no_interval = automation_engine.create_rule(
-        name="timer-empty", description="", trigger=AutomationTrigger(type=AutomationTriggerType.TIMER)
+        name="timer-empty",
+        description="",
+        trigger=AutomationTrigger(type=AutomationTriggerType.TIMER),
     )
     assert automation_engine.evaluate_trigger(timer_no_interval) is False
 
@@ -845,7 +853,9 @@ def test_graph_lineage_links_run_to_rule() -> None:
 
     assert graph_service.get_node(run.id) is not None
     edges = graph_service.outgoing_edges(run.id)
-    assert any(edge.to_node == rule.id and edge.relationship.value == "executed_by" for edge in edges)
+    assert any(
+        edge.to_node == rule.id and edge.relationship.value == "executed_by" for edge in edges
+    )
 
 
 def test_handle_event_dispatches_only_matching_enabled_rules() -> None:
@@ -915,4 +925,6 @@ def test_automation_engine_is_constructed_only_in_composition_root() -> None:
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "AutomationEngine"
             ):
-                raise AssertionError(f"{path.name} constructs AutomationEngine outside composition root")
+                raise AssertionError(
+                    f"{path.name} constructs AutomationEngine outside composition root"
+                )

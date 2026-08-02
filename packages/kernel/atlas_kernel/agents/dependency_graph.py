@@ -82,7 +82,11 @@ class DependencyGraph:
                 for neighbor in sorted(self._outgoing[node]):
                     incoming[neighbor] -= 1
             for node in sorted(self._nodes):
-                if incoming[node] == 0 and node not in {n for group in groups for n in group} and node not in nxt:
+                if (
+                    incoming[node] == 0
+                    and node not in {n for group in groups for n in group}
+                    and node not in nxt
+                ):
                     nxt.append(node)
             current = nxt
 

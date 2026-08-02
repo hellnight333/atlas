@@ -146,7 +146,9 @@ def test_worker_registers_with_full_profile() -> None:
             hostname="office-a6000",
             display_name="Office-A6000",
             platform="Ubuntu 24.04",
-            resources=WorkerResources(cpu_cores=32, ram_gb=128, gpu="A6000", vram_gb=48, storage_gb=4000),
+            resources=WorkerResources(
+                cpu_cores=32, ram_gb=128, gpu="A6000", vram_gb=48, storage_gb=4000
+            ),
             capabilities=["image", "video", "training"],
             max_concurrency=2,
             version="1.0.0",
@@ -166,9 +168,7 @@ def test_worker_registers_with_full_profile() -> None:
 
 def test_registration_is_idempotent_per_hostname() -> None:
     _reset_cluster()
-    first = registry.register(
-        WorkerRegistration(hostname="home-lab", capabilities=["image"])
-    )
+    first = registry.register(WorkerRegistration(hostname="home-lab", capabilities=["image"]))
     second = registry.register(
         WorkerRegistration(hostname="home-lab", capabilities=["image", "video"])
     )
@@ -401,7 +401,10 @@ def test_expired_lease_is_reclaimed() -> None:
         worker_id=worker_id, schedule_id="s", entry_id="e", capability="image"
     )
     lease = leases.acquire(
-        reservation_id=reservation.id, worker_id=worker_id, execution_id=f"exec-x-{uuid4().hex[:8]}", lease_seconds=1
+        reservation_id=reservation.id,
+        worker_id=worker_id,
+        execution_id=f"exec-x-{uuid4().hex[:8]}",
+        lease_seconds=1,
     )
 
     stored = repository.get_lease(lease.id)
@@ -812,4 +815,6 @@ def test_cluster_services_constructed_only_in_composition_root() -> None:
                 and isinstance(node.func, ast.Name)
                 and node.func.id in constructed
             ):
-                raise AssertionError(f"{path.name} constructs {node.func.id} outside composition root")
+                raise AssertionError(
+                    f"{path.name} constructs {node.func.id} outside composition root"
+                )

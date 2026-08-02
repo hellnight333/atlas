@@ -4,7 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from ..cluster.events import ExecutionRecovered
@@ -22,6 +22,10 @@ from .events import (
     RuntimeTimedOut,
 )
 from .models import ALLOWED_STATUS_TRANSITIONS, Agent, AgentStatus
+
+if TYPE_CHECKING:
+    from ..event_bus import EventBus
+
 from .schedule_models import (
     ExecutionSchedule,
     QueueEntryStatus,
@@ -93,7 +97,17 @@ class ApprovalGate(Protocol):
 
 
 class AgentRuntime:
-    def __init__(self, repository: AtlasRepository | None = None, event_bus: object | None = None, worker: Worker | None = None, max_gpu_jobs: int = 1, max_cpu_jobs: int = 4, max_provider_jobs: int = 4, approval_gate: ApprovalGate | None = None, placement_gate: PlacementGate | None = None) -> None:
+    def __init__(
+        self,
+        repository: AtlasRepository | None = None,
+        event_bus: EventBus | None = None,
+        worker: Worker | None = None,
+        max_gpu_jobs: int = 1,
+        max_cpu_jobs: int = 4,
+        max_provider_jobs: int = 4,
+        approval_gate: ApprovalGate | None = None,
+        placement_gate: PlacementGate | None = None,
+    ) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self.worker = worker
@@ -102,6 +116,25 @@ class AgentRuntime:
         self.max_provider_jobs = max_provider_jobs
         self.approval_gate = approval_gate
         self.placement_gate = placement_gate
+
+    @property
+    def _repo(self) -> AtlasRepository:
+        """Execution requires persistence; callers already raise without it."""
+        if self.repository is None:
+            raise ValueError("Runtime is not configured for execution")
+        return self.repository
+
+    @property
+    def _bus(self) -> EventBus:
+        if self.event_bus is None:
+            raise ValueError("Runtime is not configured for execution")
+        return self.event_bus
+
+    @property
+    def _worker(self) -> Worker:
+        if self.worker is None:
+            raise ValueError("Runtime is not configured for execution")
+        return self.worker
 
     @staticmethod
     def transition(agent: Agent, next_status: AgentStatus) -> Agent:
@@ -125,7 +158,7 @@ class AgentRuntime:
         if self.repository is None or self.event_bus is None or self.worker is None:
             raise ValueError("Runtime is not configured for execution")
 
-        schedule = self.repository.get_schedule(schedule_id)
+        schedule = self._repo.get_schedule(schedule_id)
         if schedule is None:
             raise ValueError("Schedule not found")
 
@@ -165,8 +198,10 @@ class AgentRuntime:
                 status=RuntimeExecutionStatus.QUEUED,
                 retry_policy=retry_policy,
             )
-            execution.timeline.append({"status": execution.status.value, "timestamp": execution.created_at.isoformat()})
-            self.repository.create_runtime_execution(execution)
+            execution.timeline.append(
+                {"status": execution.status.value, "timestamp": execution.created_at.isoformat()}
+            )
+            self._repo.create_runtime_execution(execution)
         else:
             # Resuming a paused execution: keep the same record so the approval
             # that gated it still points at a live execution.
@@ -175,9 +210,21 @@ class AgentRuntime:
             execution.attempts = 0
             execution.error = None
             execution.updated_at = datetime.now(UTC)
-            execution.timeline.append({"status": execution.status.value, "timestamp": execution.updated_at.isoformat(), "resumed": True})
-            self.repository.update_runtime_execution(execution)
-        self.event_bus.publish(RuntimeStarted(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id))
+            execution.timeline.append(
+                {
+                    "status": execution.status.value,
+                    "timestamp": execution.updated_at.isoformat(),
+                    "resumed": True,
+                }
+            )
+            self._repo.update_runtime_execution(execution)
+        self._bus.publish(
+            RuntimeStarted(
+                execution_id=execution.execution_id,
+                schedule_id=execution.schedule_id,
+                entry_id=execution.entry_id,
+            )
+        )
 
         # Approval gate. Nothing below this point may run without a verdict:
         # no job is created, no provider is reached, no state is mutated.
@@ -202,17 +249,37 @@ class AgentRuntime:
                 return self._mark_cancelled(schedule, entry, execution, token.reason or "cancelled")
 
             now = datetime.now(UTC)
+            if timeout_seconds <= 0:
+                # Never start work there is no time to finish. Without this the
+                # outcome races the provider: a fast job can complete before the
+                # deadline is ever checked, making a zero budget non-deterministic.
+                return self._mark_timed_out(
+                    schedule, entry, execution, "deadline exceeded before execution started"
+                )
+
             execution.status = RuntimeExecutionStatus.PREPARING
             execution.started_at = execution.started_at or now
             execution.heartbeat_at = now
             execution.deadline_at = now + timedelta(seconds=timeout_seconds)
             execution.updated_at = now
-            execution.timeline.append({"status": execution.status.value, "timestamp": now.isoformat(), "attempt": execution.attempts})
-            self.repository.update_runtime_execution(execution)
+            execution.timeline.append(
+                {
+                    "status": execution.status.value,
+                    "timestamp": now.isoformat(),
+                    "attempt": execution.attempts,
+                }
+            )
+            self._repo.update_runtime_execution(execution)
             entry.status = QueueEntryStatus.PREPARING
             entry.started_time = now
-            self.repository.update_schedule(schedule)
-            self.event_bus.publish(RuntimePreparing(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id))
+            self._repo.update_schedule(schedule)
+            self._bus.publish(
+                RuntimePreparing(
+                    execution_id=execution.execution_id,
+                    schedule_id=execution.schedule_id,
+                    entry_id=execution.entry_id,
+                )
+            )
 
             job = self._create_job(schedule, entry)
             execution.run_id = job.run_id
@@ -220,14 +287,26 @@ class AgentRuntime:
 
             execution.status = RuntimeExecutionStatus.RUNNING
             execution.updated_at = datetime.now(UTC)
-            execution.timeline.append({"status": execution.status.value, "timestamp": execution.updated_at.isoformat(), "attempt": execution.attempts})
-            self.repository.update_runtime_execution(execution)
+            execution.timeline.append(
+                {
+                    "status": execution.status.value,
+                    "timestamp": execution.updated_at.isoformat(),
+                    "attempt": execution.attempts,
+                }
+            )
+            self._repo.update_runtime_execution(execution)
             entry.status = QueueEntryStatus.RUNNING
-            self.repository.update_schedule(schedule)
-            self.event_bus.publish(RuntimeRunning(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id))
+            self._repo.update_schedule(schedule)
+            self._bus.publish(
+                RuntimeRunning(
+                    execution_id=execution.execution_id,
+                    schedule_id=execution.schedule_id,
+                    entry_id=execution.entry_id,
+                )
+            )
 
             pool = ThreadPoolExecutor(max_workers=1)
-            future = pool.submit(self.worker.execute, job, token)
+            future = pool.submit(self._worker.execute, job, token)
             timed_out = False
             result: dict[str, object] | None = None
             try:
@@ -238,8 +317,8 @@ class AgentRuntime:
                     now = datetime.now(UTC)
                     execution.heartbeat_at = now
                     execution.updated_at = now
-                    self.repository.update_runtime_execution(execution)
-                    self.event_bus.publish(
+                    self._repo.update_runtime_execution(execution)
+                    self._bus.publish(
                         RuntimeProgress(
                             execution_id=execution.execution_id,
                             schedule_id=execution.schedule_id,
@@ -259,10 +338,16 @@ class AgentRuntime:
                 return self._mark_timed_out(schedule, entry, execution, "deadline exceeded")
 
             assert result is not None
-            execution.provider_name = result.get("provider") if isinstance(result.get("provider"), str) else None
-            execution.output = result.get("output") if isinstance(result.get("output"), dict) else {}
-            execution.asset_id = result.get("asset_id") if isinstance(result.get("asset_id"), str) else None
-            execution.error = result.get("error") if isinstance(result.get("error"), str) else None
+            # Bind before narrowing: calling result.get() twice defeats
+            # isinstance narrowing because the two calls are unrelated to mypy.
+            provider = result.get("provider")
+            output = result.get("output")
+            asset_id = result.get("asset_id")
+            error = result.get("error")
+            execution.provider_name = provider if isinstance(provider, str) else None
+            execution.output = output if isinstance(output, dict) else {}
+            execution.asset_id = asset_id if isinstance(asset_id, str) else None
+            execution.error = error if isinstance(error, str) else None
 
             if token.cancelled or result.get("status") == JobStatus.CANCELLED.value:
                 return self._mark_cancelled(schedule, entry, execution, token.reason or "cancelled")
@@ -270,11 +355,16 @@ class AgentRuntime:
             if result.get("status") == JobStatus.COMPLETED.value:
                 return self._mark_completed(schedule, entry, execution)
 
-            if self._is_transient_failure(execution.error) and execution.attempts < retry_policy.max_attempts:
+            if (
+                self._is_transient_failure(execution.error)
+                and execution.attempts < retry_policy.max_attempts
+            ):
                 time.sleep(delay)
                 delay = delay * retry_policy.backoff if delay > 0 else 0.0
                 continue
-            return self._mark_failed(schedule, entry, execution, execution.error or "execution failed")
+            return self._mark_failed(
+                schedule, entry, execution, execution.error or "execution failed"
+            )
 
         return self._mark_failed(schedule, entry, execution, execution.error or "execution failed")
 
@@ -293,7 +383,7 @@ class AgentRuntime:
         if verdict.allowed:
             if verdict.approval_id:
                 execution.approval_id = verdict.approval_id
-                self.repository.update_runtime_execution(execution)
+                self._repo.update_runtime_execution(execution)
             return None
 
         now = datetime.now(UTC)
@@ -320,8 +410,8 @@ class AgentRuntime:
                 "reason": verdict.reason,
             }
         )
-        self.repository.update_runtime_execution(execution)
-        self.repository.update_schedule(schedule)
+        self._repo.update_runtime_execution(execution)
+        self._repo.update_schedule(schedule)
         return execution
 
     def _apply_placement_gate(
@@ -352,7 +442,7 @@ class AgentRuntime:
                     "lease_id": result.lease_id,
                 }
             )
-            self.repository.update_runtime_execution(execution)
+            self._repo.update_runtime_execution(execution)
             return None
 
         execution.status = RuntimeExecutionStatus.WAITING_PLACEMENT
@@ -365,9 +455,9 @@ class AgentRuntime:
                 "reason": result.reason,
             }
         )
-        self.repository.update_runtime_execution(execution)
+        self._repo.update_runtime_execution(execution)
         entry.status = QueueEntryStatus.WAITING_PLACEMENT
-        self.repository.update_schedule(schedule)
+        self._repo.update_schedule(schedule)
         return execution
 
     def _release_placement(
@@ -399,7 +489,7 @@ class AgentRuntime:
         if self.repository is None or self.event_bus is None or self.worker is None:
             raise ValueError("Runtime is not configured for execution")
 
-        execution = self.repository.get_runtime_execution(execution_id)
+        execution = self._repo.get_runtime_execution(execution_id)
         if execution is None:
             raise ValueError("Runtime execution not found")
         if execution.status is not RuntimeExecutionStatus.WAITING_PLACEMENT:
@@ -407,7 +497,7 @@ class AgentRuntime:
                 f"Execution {execution_id} is {execution.status.value}, not waiting for placement"
             )
 
-        schedule = self.repository.get_schedule(execution.schedule_id)
+        schedule = self._repo.get_schedule(execution.schedule_id)
         if schedule is None:
             raise ValueError("Schedule not found")
         entry = next((e for e in schedule.queue_entries if e.id == execution.entry_id), None)
@@ -415,7 +505,7 @@ class AgentRuntime:
             raise ValueError("Queue entry not found")
 
         entry.status = QueueEntryStatus.READY
-        self.repository.update_schedule(schedule)
+        self._repo.update_schedule(schedule)
         return self.execute_entry(
             schedule,
             entry,
@@ -437,7 +527,7 @@ class AgentRuntime:
         if self.repository is None:
             raise ValueError("Runtime is not configured for execution")
 
-        execution = self.repository.get_runtime_execution(execution_id)
+        execution = self._repo.get_runtime_execution(execution_id)
         if execution is None:
             raise ValueError("Runtime execution not found")
 
@@ -458,9 +548,9 @@ class AgentRuntime:
                 "previous_worker_id": previous_worker,
             }
         )
-        self.repository.update_runtime_execution(execution)
+        self._repo.update_runtime_execution(execution)
 
-        schedule = self.repository.get_schedule(execution.schedule_id)
+        schedule = self._repo.get_schedule(execution.schedule_id)
         if schedule is not None:
             for entry in schedule.queue_entries:
                 if entry.id == execution.entry_id:
@@ -468,10 +558,10 @@ class AgentRuntime:
                     entry.retry_count += 1
                     entry.started_time = None
                     break
-            self.repository.update_schedule(schedule)
+            self._repo.update_schedule(schedule)
 
         if self.event_bus is not None:
-            self.event_bus.publish(
+            self._bus.publish(
                 ExecutionRecovered(
                     execution_id=execution_id,
                     worker_id=previous_worker or "",
@@ -485,7 +575,7 @@ class AgentRuntime:
             return []
         return [
             execution
-            for execution in self.repository.list_runtime_executions()
+            for execution in self._repo.list_runtime_executions()
             if execution.status is RuntimeExecutionStatus.WAITING_PLACEMENT
         ]
 
@@ -502,7 +592,7 @@ class AgentRuntime:
         if self.repository is None or self.event_bus is None or self.worker is None:
             raise ValueError("Runtime is not configured for execution")
 
-        execution = self.repository.get_runtime_execution(execution_id)
+        execution = self._repo.get_runtime_execution(execution_id)
         if execution is None:
             raise ValueError("Runtime execution not found")
         if execution.status is not RuntimeExecutionStatus.WAITING_APPROVAL:
@@ -510,7 +600,7 @@ class AgentRuntime:
                 f"Execution {execution_id} is {execution.status.value}, not waiting for approval"
             )
 
-        schedule = self.repository.get_schedule(execution.schedule_id)
+        schedule = self._repo.get_schedule(execution.schedule_id)
         if schedule is None:
             raise ValueError("Schedule not found")
         entry = next((e for e in schedule.queue_entries if e.id == execution.entry_id), None)
@@ -518,7 +608,7 @@ class AgentRuntime:
             raise ValueError("Queue entry not found")
 
         entry.status = QueueEntryStatus.READY
-        self.repository.update_schedule(schedule)
+        self._repo.update_schedule(schedule)
 
         return self.execute_entry(
             schedule,
@@ -534,59 +624,70 @@ class AgentRuntime:
             return []
         return [
             execution
-            for execution in self.repository.list_runtime_executions()
+            for execution in self._repo.list_runtime_executions()
             if execution.status is RuntimeExecutionStatus.WAITING_APPROVAL
         ]
 
     def list_runtime_executions(self) -> list[RuntimeExecutionRecord]:
         if self.repository is None:
             return []
-        return self.repository.list_runtime_executions()
+        return self._repo.list_runtime_executions()
 
     def list_running(self) -> list[RuntimeExecutionRecord]:
         if self.repository is None:
             return []
-        return self.repository.list_running_runtime_executions()
+        return self._repo.list_running_runtime_executions()
 
     def list_history(self) -> list[RuntimeExecutionRecord]:
         if self.repository is None:
             return []
-        return self.repository.list_runtime_history()
+        return self._repo.list_runtime_history()
 
     def get_runtime_execution(self, execution_id: str) -> RuntimeExecutionRecord | None:
         if self.repository is None:
             return None
-        return self.repository.get_runtime_execution(execution_id)
+        return self._repo.get_runtime_execution(execution_id)
 
     def cancel_execution(self, execution_id: str) -> RuntimeExecutionRecord:
         if self.repository is None:
             raise ValueError("Runtime is not configured for execution")
-        execution = self.repository.get_runtime_execution(execution_id)
+        execution = self._repo.get_runtime_execution(execution_id)
         if execution is None:
             raise ValueError("Runtime execution not found")
         execution.cancellation_requested = True
         execution.updated_at = datetime.now(UTC)
-        if execution.status in {RuntimeExecutionStatus.PENDING, RuntimeExecutionStatus.QUEUED, RuntimeExecutionStatus.PREPARING}:
+        if execution.status in {
+            RuntimeExecutionStatus.PENDING,
+            RuntimeExecutionStatus.QUEUED,
+            RuntimeExecutionStatus.PREPARING,
+        }:
             self._release_placement(execution, reason="cancelled", expired=False)
             execution.status = RuntimeExecutionStatus.CANCELLED
             execution.completed_at = execution.updated_at
-        self.repository.update_runtime_execution(execution)
+        self._repo.update_runtime_execution(execution)
         return execution
 
-    def retry_execution(self, execution_id: str, timeout_seconds: float = 30.0, heartbeat_interval_seconds: float = 0.05) -> RuntimeExecutionRecord:
+    def retry_execution(
+        self,
+        execution_id: str,
+        timeout_seconds: float = 30.0,
+        heartbeat_interval_seconds: float = 0.05,
+    ) -> RuntimeExecutionRecord:
         if self.repository is None:
             raise ValueError("Runtime is not configured for execution")
-        existing = self.repository.get_runtime_execution(execution_id)
+        existing = self._repo.get_runtime_execution(execution_id)
         if existing is None:
             raise ValueError("Runtime execution not found")
-        schedule = self.repository.get_schedule(existing.schedule_id)
+        schedule = self._repo.get_schedule(existing.schedule_id)
         if schedule is None:
             raise ValueError("Schedule not found")
-        entry = next((item for item in schedule.queue_entries if item.id == existing.entry_id), None)
+        entry = next(
+            (item for item in schedule.queue_entries if item.id == existing.entry_id), None
+        )
         if entry is None:
             raise ValueError("Schedule entry not found")
         entry.status = QueueEntryStatus.READY
-        self.repository.update_schedule(schedule)
+        self._repo.update_schedule(schedule)
         return self.execute_entry(
             schedule,
             entry,
@@ -606,7 +707,7 @@ class AgentRuntime:
             status=JobStatus.QUEUED,
             created_at=now,
         )
-        self.repository.create_run(run)
+        self._repo.create_run(run)
         job = Job(
             id=f"job-{uuid4().hex[:8]}",
             run_id=run.id,
@@ -621,7 +722,7 @@ class AgentRuntime:
             ),
             created_at=now,
         )
-        self.repository.create_job(job)
+        self._repo.create_job(job)
         return job
 
     def _capability_id_for_entry(self, entry: ScheduleQueueEntry) -> str:
@@ -649,40 +750,73 @@ class AgentRuntime:
         return "text"
 
     def _project_id_for_schedule(self, schedule: ExecutionSchedule) -> str | None:
-        agent = self.repository.get_agent(schedule.agent_id) if self.repository is not None else None
+        agent = self._repo.get_agent(schedule.agent_id) if self.repository is not None else None
         return agent.project_id if agent is not None else None
 
-    def _mark_completed(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord) -> RuntimeExecutionRecord:
+    def _mark_completed(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+    ) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
         self._release_placement(execution, reason="completed", expired=False)
         execution.status = RuntimeExecutionStatus.COMPLETED
         execution.completed_at = now
         execution.updated_at = now
         execution.timeline.append({"status": execution.status.value, "timestamp": now.isoformat()})
-        self.repository.update_runtime_execution(execution)
+        self._repo.update_runtime_execution(execution)
         entry.status = QueueEntryStatus.COMPLETED
         entry.completed_time = now
         self._unblock_ready_entries(schedule)
-        self.repository.update_schedule(schedule)
-        self.event_bus.publish(RuntimeCompleted(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id, asset_id=execution.asset_id))
+        self._repo.update_schedule(schedule)
+        self._bus.publish(
+            RuntimeCompleted(
+                execution_id=execution.execution_id,
+                schedule_id=execution.schedule_id,
+                entry_id=execution.entry_id,
+                asset_id=execution.asset_id,
+            )
+        )
         return execution
 
-    def _mark_failed(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
+    def _mark_failed(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+        reason: str,
+    ) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
         self._release_placement(execution, reason="failed", expired=False)
         execution.status = RuntimeExecutionStatus.FAILED
         execution.error = reason
         execution.completed_at = now
         execution.updated_at = now
-        execution.timeline.append({"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason})
-        self.repository.update_runtime_execution(execution)
+        execution.timeline.append(
+            {"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason}
+        )
+        self._repo.update_runtime_execution(execution)
         entry.status = QueueEntryStatus.FAILED
         entry.completed_time = now
-        self.repository.update_schedule(schedule)
-        self.event_bus.publish(RuntimeFailed(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id, reason=reason))
+        self._repo.update_schedule(schedule)
+        self._bus.publish(
+            RuntimeFailed(
+                execution_id=execution.execution_id,
+                schedule_id=execution.schedule_id,
+                entry_id=execution.entry_id,
+                reason=reason,
+            )
+        )
         return execution
 
-    def _mark_cancelled(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
+    def _mark_cancelled(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+        reason: str,
+    ) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
         self._release_placement(execution, reason="cancelled", expired=False)
         execution.status = RuntimeExecutionStatus.CANCELLED
@@ -690,27 +824,50 @@ class AgentRuntime:
         execution.cancellation_requested = True
         execution.completed_at = now
         execution.updated_at = now
-        execution.timeline.append({"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason})
-        self.repository.update_runtime_execution(execution)
+        execution.timeline.append(
+            {"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason}
+        )
+        self._repo.update_runtime_execution(execution)
         entry.status = QueueEntryStatus.CANCELLED
         entry.completed_time = now
-        self.repository.update_schedule(schedule)
-        self.event_bus.publish(RuntimeCancelled(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id))
+        self._repo.update_schedule(schedule)
+        self._bus.publish(
+            RuntimeCancelled(
+                execution_id=execution.execution_id,
+                schedule_id=execution.schedule_id,
+                entry_id=execution.entry_id,
+            )
+        )
         return execution
 
-    def _mark_timed_out(self, schedule: ExecutionSchedule, entry: ScheduleQueueEntry, execution: RuntimeExecutionRecord, reason: str) -> RuntimeExecutionRecord:
+    def _mark_timed_out(
+        self,
+        schedule: ExecutionSchedule,
+        entry: ScheduleQueueEntry,
+        execution: RuntimeExecutionRecord,
+        reason: str,
+    ) -> RuntimeExecutionRecord:
         now = datetime.now(UTC)
         self._release_placement(execution, reason="timed out", expired=True)
         execution.status = RuntimeExecutionStatus.TIMED_OUT
         execution.timeout_reason = reason
         execution.completed_at = now
         execution.updated_at = now
-        execution.timeline.append({"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason})
-        self.repository.update_runtime_execution(execution)
+        execution.timeline.append(
+            {"status": execution.status.value, "timestamp": now.isoformat(), "reason": reason}
+        )
+        self._repo.update_runtime_execution(execution)
         entry.status = QueueEntryStatus.TIMED_OUT
         entry.completed_time = now
-        self.repository.update_schedule(schedule)
-        self.event_bus.publish(RuntimeTimedOut(execution_id=execution.execution_id, schedule_id=execution.schedule_id, entry_id=execution.entry_id, reason=reason))
+        self._repo.update_schedule(schedule)
+        self._bus.publish(
+            RuntimeTimedOut(
+                execution_id=execution.execution_id,
+                schedule_id=execution.schedule_id,
+                entry_id=execution.entry_id,
+                reason=reason,
+            )
+        )
         return execution
 
     def _unblock_ready_entries(self, schedule: ExecutionSchedule) -> None:
@@ -733,4 +890,7 @@ class AgentRuntime:
         if not reason:
             return False
         normalized = reason.lower()
-        return any(token in normalized for token in ["transient", "timeout", "temporary", "unavailable", "network", "retry"])
+        return any(
+            token in normalized
+            for token in ["transient", "timeout", "temporary", "unavailable", "network", "retry"]
+        )

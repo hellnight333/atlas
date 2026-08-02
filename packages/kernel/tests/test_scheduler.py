@@ -4,12 +4,13 @@ from fastapi.testclient import TestClient
 
 from atlas_kernel.api import app, repository
 
-
 client = TestClient(app)
 
 
 def _create_project() -> str:
-    workspace = client.post("/workspaces", json={"name": "scheduler-ws", "description": "scheduler"})
+    workspace = client.post(
+        "/workspaces", json={"name": "scheduler-ws", "description": "scheduler"}
+    )
     assert workspace.status_code == 200
     project = client.post(
         "/projects",

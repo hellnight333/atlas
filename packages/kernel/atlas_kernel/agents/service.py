@@ -5,32 +5,31 @@ from uuid import uuid4
 
 from ..event_bus import EventBus
 from ..repository import AtlasRepository
+from ..worker import Worker
+from .context_builder import PlannerContextBuilder
 from .events import (
-    AgentCreated,
-    AgentDeleted,
-    AgentStateChanged,
-    AgentUpdated,
     AgentAssigned,
     AgentCompleted,
+    AgentCreated,
+    AgentDeleted,
     AgentFailed,
     AgentMessageReceived,
     AgentMessageSent,
     AgentStarted,
+    AgentStateChanged,
+    AgentUpdated,
     AgentWaiting,
     MemoryAttached,
     PermissionUpdated,
     TeamCompleted,
 )
-from .context_builder import PlannerContextBuilder
 from .memory import AgentMemoryManager
 from .models import (
     Agent,
     AgentAssignment,
     AgentAssignmentStatus,
     AgentCapabilitySet,
-    AgentConversation,
     AgentCreate,
-    AgentMailbox,
     AgentMemoryReference,
     AgentMessage,
     AgentMessageType,
@@ -41,16 +40,28 @@ from .models import (
     AgentTeamStatus,
     AgentUpdate,
 )
-from .schedule_models import ExecutionSchedule, QueueUpdateResult, SchedulerPriority, SchedulerRequest
-from .scheduler import AgentScheduler
-from .planner import AgentPlanner
-from .plan_models import ExecutionPlan, PlanStep
 from .permissions import AgentPermissionSet
-from .runtime import AgentRuntime
+from .plan_models import ExecutionPlan, PlanStep
+from .planner import AgentPlanner
+from .runtime import AgentRuntime, ApprovalGate, PlacementGate
+from .schedule_models import (
+    ExecutionSchedule,
+    QueueUpdateResult,
+    SchedulerPriority,
+    SchedulerRequest,
+)
+from .scheduler import AgentScheduler
 
 
 class AgentFoundation:
-    def __init__(self, repository: AtlasRepository, event_bus: EventBus, worker: object | None = None, approval_gate: object | None = None, placement_gate: object | None = None) -> None:
+    def __init__(
+        self,
+        repository: AtlasRepository,
+        event_bus: EventBus,
+        worker: Worker | None = None,
+        approval_gate: ApprovalGate | None = None,
+        placement_gate: PlacementGate | None = None,
+    ) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self._context_builder = PlannerContextBuilder(repository)
@@ -58,7 +69,13 @@ class AgentFoundation:
         self._scheduler = AgentScheduler(repository=repository, event_bus=event_bus)
         # The gate must reach this runtime too: every execution path has to be
         # gated, not just the one the composition root hands out.
-        self._runtime = AgentRuntime(repository=repository, event_bus=event_bus, worker=worker, approval_gate=approval_gate, placement_gate=placement_gate)
+        self._runtime = AgentRuntime(
+            repository=repository,
+            event_bus=event_bus,
+            worker=worker,
+            approval_gate=approval_gate,
+            placement_gate=placement_gate,
+        )
 
     def create_agent(self, request: AgentCreate) -> Agent:
         memory_id = request.memory_id or f"agent-memory-{uuid4().hex[:12]}"
@@ -167,7 +184,9 @@ class AgentFoundation:
             return []
         return agent.permission_set
 
-    def generate_plan(self, agent_id: str, goal: str, workspace_intelligence: dict[str, object]) -> ExecutionPlan:
+    def generate_plan(
+        self, agent_id: str, goal: str, workspace_intelligence: dict[str, object]
+    ) -> ExecutionPlan:
         agent = self.repository.get_agent(agent_id)
         if agent is None:
             raise ValueError("Agent not found")
@@ -199,8 +218,17 @@ class AgentFoundation:
         if agent is None:
             raise ValueError("Agent not found")
 
-        current_jobs = [job.model_dump(mode="json") for job in self.repository.list_jobs_by_project(agent.project_id)] if agent.project_id else [job.model_dump(mode="json") for job in self.repository.list_jobs()]
-        running_workflows = [wf.model_dump(mode="json") for wf in self.repository.list_workflows(agent.project_id)]
+        current_jobs = (
+            [
+                job.model_dump(mode="json")
+                for job in self.repository.list_jobs_by_project(agent.project_id)
+            ]
+            if agent.project_id
+            else [job.model_dump(mode="json") for job in self.repository.list_jobs()]
+        )
+        running_workflows = [
+            wf.model_dump(mode="json") for wf in self.repository.list_workflows(agent.project_id)
+        ]
 
         request = SchedulerRequest(
             plan_id=plan.plan_id,
@@ -238,10 +266,16 @@ class AgentFoundation:
         return self._scheduler.retry_entry(schedule_id, entry_id)
 
     def start_runtime_for_schedule(self, schedule_id: str) -> list[dict[str, object]]:
-        return [execution.model_dump(mode="json") for execution in self._runtime.start_schedule(schedule_id)]
+        return [
+            execution.model_dump(mode="json")
+            for execution in self._runtime.start_schedule(schedule_id)
+        ]
 
     def list_runtime(self) -> list[dict[str, object]]:
-        return [execution.model_dump(mode="json") for execution in self._runtime.list_runtime_executions()]
+        return [
+            execution.model_dump(mode="json")
+            for execution in self._runtime.list_runtime_executions()
+        ]
 
     def list_runtime_running(self) -> list[dict[str, object]]:
         return [execution.model_dump(mode="json") for execution in self._runtime.list_running()]
@@ -267,7 +301,12 @@ class AgentFoundation:
         workspace_id: str | None,
         assignments: list[dict[str, object]],
     ) -> AgentTeam:
-        team = AgentTeam(name=name, project_id=project_id, workspace_id=workspace_id, status=AgentTeamStatus.PENDING)
+        team = AgentTeam(
+            name=name,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            status=AgentTeamStatus.PENDING,
+        )
         self.repository.create_agent_team(team)
 
         for payload in assignments:
@@ -288,8 +327,8 @@ class AgentFoundation:
                 permissions=list(capability_set.permissions),
                 resource_limits=dict(capability_set.resource_limits),
                 action=str(payload["action"]),
-                payload=dict(payload.get("payload") or {}),
-                dependencies=[str(item) for item in payload.get("dependencies") or []],
+                payload=_as_mapping(payload.get("payload")),
+                dependencies=[str(item) for item in _as_sequence(payload.get("dependencies"))],
                 mailbox_id=mailbox.agent_id,
             )
             self.repository.create_agent_assignment(assignment)
@@ -307,7 +346,9 @@ class AgentFoundation:
                 correlation_id=team.id,
             )
             self._enqueue_message(team.id, agent_id, message)
-            self.event_bus.publish(AgentAssigned(team_id=team.id, assignment_id=assignment.id, agent_id=agent_id))
+            self.event_bus.publish(
+                AgentAssigned(team_id=team.id, assignment_id=assignment.id, agent_id=agent_id)
+            )
 
         created = self.repository.get_agent_team(team.id)
         assert created is not None
@@ -323,10 +364,18 @@ class AgentFoundation:
         team = self.repository.get_agent_team(team_id)
         if team is None:
             raise ValueError("Team not found")
-        waiting = [item.id for item in team.assignments if item.status == AgentAssignmentStatus.WAITING]
-        completed = [item.id for item in team.assignments if item.status == AgentAssignmentStatus.COMPLETED]
-        running = [item.id for item in team.assignments if item.status == AgentAssignmentStatus.RUNNING]
-        failed = [item.id for item in team.assignments if item.status == AgentAssignmentStatus.FAILED]
+        waiting = [
+            item.id for item in team.assignments if item.status == AgentAssignmentStatus.WAITING
+        ]
+        completed = [
+            item.id for item in team.assignments if item.status == AgentAssignmentStatus.COMPLETED
+        ]
+        running = [
+            item.id for item in team.assignments if item.status == AgentAssignmentStatus.RUNNING
+        ]
+        failed = [
+            item.id for item in team.assignments if item.status == AgentAssignmentStatus.FAILED
+        ]
         return {
             "team_id": team.id,
             "status": team.status.value,
@@ -342,13 +391,28 @@ class AgentFoundation:
             raise ValueError("Team not found")
         updated_assignments: list[AgentAssignment] = []
         for assignment in team.assignments:
-            if assignment.status not in {AgentAssignmentStatus.COMPLETED, AgentAssignmentStatus.FAILED, AgentAssignmentStatus.CANCELLED}:
-                assignment = assignment.model_copy(update={"status": AgentAssignmentStatus.CANCELLED, "updated_at": datetime.now(UTC)})
+            if assignment.status not in {
+                AgentAssignmentStatus.COMPLETED,
+                AgentAssignmentStatus.FAILED,
+                AgentAssignmentStatus.CANCELLED,
+            }:
+                assignment = assignment.model_copy(
+                    update={
+                        "status": AgentAssignmentStatus.CANCELLED,
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
                 self.repository.update_agent_assignment(assignment)
                 if assignment.runtime_execution_id:
                     self._runtime.cancel_execution(assignment.runtime_execution_id)
             updated_assignments.append(assignment)
-        team = team.model_copy(update={"status": AgentTeamStatus.CANCELLED, "assignments": updated_assignments, "updated_at": datetime.now(UTC)})
+        team = team.model_copy(
+            update={
+                "status": AgentTeamStatus.CANCELLED,
+                "assignments": updated_assignments,
+                "updated_at": datetime.now(UTC),
+            }
+        )
         self.repository.update_agent_team(team)
         return team
 
@@ -372,32 +436,63 @@ class AgentFoundation:
                 continue
 
             if not self._dependencies_completed(team.assignments, assignment.dependencies):
-                waiting_assignment = assignment.model_copy(update={"status": AgentAssignmentStatus.WAITING, "updated_at": datetime.now(UTC)})
+                waiting_assignment = assignment.model_copy(
+                    update={
+                        "status": AgentAssignmentStatus.WAITING,
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
                 self.repository.update_agent_assignment(waiting_assignment)
                 updated_assignments.append(waiting_assignment)
-                self.event_bus.publish(AgentWaiting(team_id=team.id, assignment_id=waiting_assignment.id, agent_id=waiting_assignment.agent_id))
+                self.event_bus.publish(
+                    AgentWaiting(
+                        team_id=team.id,
+                        assignment_id=waiting_assignment.id,
+                        agent_id=waiting_assignment.agent_id,
+                    )
+                )
                 all_completed = False
                 continue
 
-            started_assignment = assignment.model_copy(update={"status": AgentAssignmentStatus.RUNNING, "updated_at": datetime.now(UTC)})
+            started_assignment = assignment.model_copy(
+                update={"status": AgentAssignmentStatus.RUNNING, "updated_at": datetime.now(UTC)}
+            )
             self.repository.update_agent_assignment(started_assignment)
-            self.event_bus.publish(AgentStarted(team_id=team.id, assignment_id=started_assignment.id, agent_id=started_assignment.agent_id))
+            self.event_bus.publish(
+                AgentStarted(
+                    team_id=team.id,
+                    assignment_id=started_assignment.id,
+                    agent_id=started_assignment.agent_id,
+                )
+            )
 
             schedule = self._create_assignment_schedule(started_assignment)
             executions = self._runtime.start_schedule(schedule.schedule_id)
             execution = executions[0] if executions else None
-            update_payload: dict[str, object] = {"schedule_id": schedule.schedule_id, "updated_at": datetime.now(UTC)}
+            update_payload: dict[str, object] = {
+                "schedule_id": schedule.schedule_id,
+                "updated_at": datetime.now(UTC),
+            }
             if execution is not None:
                 update_payload["runtime_execution_id"] = execution.execution_id
                 if execution.status.value == "completed":
                     update_payload["status"] = AgentAssignmentStatus.COMPLETED
                     update_payload["result_asset_id"] = execution.asset_id
-                    self.event_bus.publish(AgentCompleted(team_id=team.id, assignment_id=started_assignment.id, agent_id=started_assignment.agent_id))
+                    self.event_bus.publish(
+                        AgentCompleted(
+                            team_id=team.id,
+                            assignment_id=started_assignment.id,
+                            agent_id=started_assignment.agent_id,
+                        )
+                    )
                     completion_message = AgentMessage(
                         sender=started_assignment.agent_id,
                         receiver="coordinator",
                         type=AgentMessageType.COMPLETION,
-                        payload={"assignment_id": started_assignment.id, "asset_id": execution.asset_id},
+                        payload={
+                            "assignment_id": started_assignment.id,
+                            "asset_id": execution.asset_id,
+                        },
                         correlation_id=team.id,
                     )
                     self._record_team_message(team.id, completion_message)
@@ -405,12 +500,22 @@ class AgentFoundation:
                     update_payload["status"] = AgentAssignmentStatus.FAILED
                     update_payload["error"] = execution.error or execution.timeout_reason
                     any_failed = True
-                    self.event_bus.publish(AgentFailed(team_id=team.id, assignment_id=started_assignment.id, agent_id=started_assignment.agent_id, reason=str(update_payload.get("error") or "execution failed")))
+                    self.event_bus.publish(
+                        AgentFailed(
+                            team_id=team.id,
+                            assignment_id=started_assignment.id,
+                            agent_id=started_assignment.agent_id,
+                            reason=str(update_payload.get("error") or "execution failed"),
+                        )
+                    )
                     failure_message = AgentMessage(
                         sender=started_assignment.agent_id,
                         receiver="coordinator",
                         type=AgentMessageType.FAILURE,
-                        payload={"assignment_id": started_assignment.id, "reason": update_payload.get("error")},
+                        payload={
+                            "assignment_id": started_assignment.id,
+                            "reason": update_payload.get("error"),
+                        },
                         correlation_id=team.id,
                     )
                     self._record_team_message(team.id, failure_message)
@@ -436,20 +541,74 @@ class AgentFoundation:
         elif any_running:
             team_status = AgentTeamStatus.RUNNING
 
-        updated_team = team.model_copy(update={"assignments": updated_assignments, "status": team_status, "updated_at": datetime.now(UTC)})
+        updated_team = team.model_copy(
+            update={
+                "assignments": updated_assignments,
+                "status": team_status,
+                "updated_at": datetime.now(UTC),
+            }
+        )
         self.repository.update_agent_team(updated_team)
         return updated_team
 
     def _capability_set_for_role(self, role: AgentRole) -> AgentCapabilitySet:
         mapping: dict[AgentRole, AgentCapabilitySet] = {
-            AgentRole.RESEARCH: AgentCapabilitySet(role=role, capabilities=["research"], allowed_actions=["text.generate"], permissions=[AgentPermission.READ_ASSETS], resource_limits={"max_cpu_jobs": 1}),
-            AgentRole.PLANNER: AgentCapabilitySet(role=role, capabilities=["workflow"], allowed_actions=["text.generate"], permissions=[AgentPermission.READ_ASSETS], resource_limits={"max_cpu_jobs": 1}),
-            AgentRole.WRITER: AgentCapabilitySet(role=role, capabilities=["text"], allowed_actions=["text.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS], resource_limits={"max_cpu_jobs": 1}),
-            AgentRole.REVIEWER: AgentCapabilitySet(role=role, capabilities=["review"], allowed_actions=["text.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.REVIEW_ASSETS], resource_limits={"max_cpu_jobs": 1}),
-            AgentRole.IMAGE: AgentCapabilitySet(role=role, capabilities=["image"], allowed_actions=["image.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS], resource_limits={"max_gpu_jobs": 1}),
-            AgentRole.VIDEO: AgentCapabilitySet(role=role, capabilities=["video"], allowed_actions=["image.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS], resource_limits={"max_gpu_jobs": 1}),
-            AgentRole.DEVELOPER: AgentCapabilitySet(role=role, capabilities=["code"], allowed_actions=["code.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS], resource_limits={"max_cpu_jobs": 1}),
-            AgentRole.OPERATOR: AgentCapabilitySet(role=role, capabilities=["workflow"], allowed_actions=["text.generate"], permissions=[AgentPermission.READ_ASSETS, AgentPermission.MANAGE_AGENTS], resource_limits={"max_cpu_jobs": 1}),
+            AgentRole.RESEARCH: AgentCapabilitySet(
+                role=role,
+                capabilities=["research"],
+                allowed_actions=["text.generate"],
+                permissions=[AgentPermission.READ_ASSETS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
+            AgentRole.PLANNER: AgentCapabilitySet(
+                role=role,
+                capabilities=["workflow"],
+                allowed_actions=["text.generate"],
+                permissions=[AgentPermission.READ_ASSETS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
+            AgentRole.WRITER: AgentCapabilitySet(
+                role=role,
+                capabilities=["text"],
+                allowed_actions=["text.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
+            AgentRole.REVIEWER: AgentCapabilitySet(
+                role=role,
+                capabilities=["review"],
+                allowed_actions=["text.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.REVIEW_ASSETS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
+            AgentRole.IMAGE: AgentCapabilitySet(
+                role=role,
+                capabilities=["image"],
+                allowed_actions=["image.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS],
+                resource_limits={"max_gpu_jobs": 1},
+            ),
+            AgentRole.VIDEO: AgentCapabilitySet(
+                role=role,
+                capabilities=["video"],
+                allowed_actions=["image.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS],
+                resource_limits={"max_gpu_jobs": 1},
+            ),
+            AgentRole.DEVELOPER: AgentCapabilitySet(
+                role=role,
+                capabilities=["code"],
+                allowed_actions=["code.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.WRITE_ASSETS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
+            AgentRole.OPERATOR: AgentCapabilitySet(
+                role=role,
+                capabilities=["workflow"],
+                allowed_actions=["text.generate"],
+                permissions=[AgentPermission.READ_ASSETS, AgentPermission.MANAGE_AGENTS],
+                resource_limits={"max_cpu_jobs": 1},
+            ),
         }
         return mapping[role]
 
@@ -459,18 +618,44 @@ class AgentFoundation:
         mailbox.history.append(message)
         self.repository.update_agent_mailbox(mailbox)
         self.repository.create_agent_message(team_id, message)
-        self.event_bus.publish(AgentMessageSent(team_id=team_id, message_id=message.id, sender=message.sender, receiver=message.receiver))
-        self.event_bus.publish(AgentMessageReceived(team_id=team_id, message_id=message.id, sender=message.sender, receiver=message.receiver))
+        self.event_bus.publish(
+            AgentMessageSent(
+                team_id=team_id,
+                message_id=message.id,
+                sender=message.sender,
+                receiver=message.receiver,
+            )
+        )
+        self.event_bus.publish(
+            AgentMessageReceived(
+                team_id=team_id,
+                message_id=message.id,
+                sender=message.sender,
+                receiver=message.receiver,
+            )
+        )
 
     def _record_team_message(self, team_id: str, message: AgentMessage) -> None:
         self.repository.create_agent_message(team_id, message)
-        self.event_bus.publish(AgentMessageSent(team_id=team_id, message_id=message.id, sender=message.sender, receiver=message.receiver))
+        self.event_bus.publish(
+            AgentMessageSent(
+                team_id=team_id,
+                message_id=message.id,
+                sender=message.sender,
+                receiver=message.receiver,
+            )
+        )
 
-    def _dependencies_completed(self, assignments: list[AgentAssignment], dependency_ids: list[str]) -> bool:
+    def _dependencies_completed(
+        self, assignments: list[AgentAssignment], dependency_ids: list[str]
+    ) -> bool:
         if not dependency_ids:
             return True
         status_by_id = {assignment.id: assignment.status for assignment in assignments}
-        return all(status_by_id.get(dependency_id) == AgentAssignmentStatus.COMPLETED for dependency_id in dependency_ids)
+        return all(
+            status_by_id.get(dependency_id) == AgentAssignmentStatus.COMPLETED
+            for dependency_id in dependency_ids
+        )
 
     def _create_assignment_schedule(self, assignment: AgentAssignment) -> ExecutionSchedule:
         plan = ExecutionPlan(
@@ -481,7 +666,11 @@ class AgentFoundation:
             steps=[
                 PlanStep(
                     description=assignment.title,
-                    capability=assignment.capabilities[0] if assignment.capabilities else assignment.role.value,
+                    capability=(
+                        assignment.capabilities[0]
+                        if assignment.capabilities
+                        else assignment.role.value
+                    ),
                     action=assignment.action,
                     payload=assignment.payload,
                     expected_output=f"{assignment.role.value}-output",
@@ -505,3 +694,12 @@ class AgentFoundation:
             available_executors=["local"],
             execution_policy={},
         )
+
+
+def _as_mapping(value: object) -> dict[str, object]:
+    """Assignment payloads arrive untyped from the API boundary."""
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_sequence(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []

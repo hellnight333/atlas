@@ -40,13 +40,14 @@ class ApprovalPolicyEngine:
 
             matched = self._matched_scopes(policy, context)
             over_threshold = (
-                policy.cost_threshold is not None
-                and context.estimated_cost > policy.cost_threshold
+                policy.cost_threshold is not None and context.estimated_cost > policy.cost_threshold
             )
 
             if matched:
                 names = ", ".join(scope.value for scope in matched)
-                return self._required(policy, context, f"Action requires approval for: {names}", matched)
+                return self._required(
+                    policy, context, f"Action requires approval for: {names}", matched
+                )
 
             if over_threshold:
                 return self._required(

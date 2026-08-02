@@ -60,9 +60,7 @@ class UnimplementedAuthenticationProvider(AuthenticationProvider):
         self.kind = kind
 
     def authenticate(self, credentials: dict[str, Any]) -> str:
-        raise IdentityError(
-            f"{self.kind.value} authentication is not implemented in this build"
-        )
+        raise IdentityError(f"{self.kind.value} authentication is not implemented in this build")
 
     def describe(self) -> dict[str, Any]:
         return {"kind": self.kind.value, "implemented": False}

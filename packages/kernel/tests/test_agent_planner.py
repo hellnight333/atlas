@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 from atlas_kernel.api import app, repository
 
-
 client = TestClient(app)
 
 

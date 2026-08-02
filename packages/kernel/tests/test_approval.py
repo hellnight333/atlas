@@ -255,9 +255,7 @@ def test_terminal_requests_cannot_be_decided_again() -> None:
 def test_requester_may_not_approve_their_own_request() -> None:
     _clear_policies()
     _policy(name="always", mode=ApprovalPolicyMode.ALWAYS)
-    request = approval_service.create_request(
-        title="Self", context=_context(requested_by="ayoub")
-    )
+    request = approval_service.create_request(title="Self", context=_context(requested_by="ayoub"))
 
     with pytest.raises(SelfApprovalError):
         approval_service.approve(request.id, actor="ayoub")
@@ -516,9 +514,7 @@ def test_api_resume_execution_completes_the_paused_work() -> None:
     schedule_id, _ = _schedule_with_scopes(agent_id, ["delete"])
     paused = client.post(f"/runtime/schedule/{schedule_id}/start").json()[0]
 
-    client.post(
-        f"/approvals/{paused['approval_id']}/approve", json={"actor": "ayoub"}
-    )
+    client.post(f"/approvals/{paused['approval_id']}/approve", json={"actor": "ayoub"})
     resumed = client.post(f"/approvals/{paused['approval_id']}/resume-execution")
 
     assert resumed.status_code == 200
@@ -613,9 +609,7 @@ def test_api_approval_round_trip() -> None:
     approval_id = created.json()["id"]
 
     assert client.get(f"/approvals/{approval_id}").status_code == 200
-    assert client.post(
-        f"/approvals/{approval_id}/view", json={"actor": "ayoub"}
-    ).status_code == 200
+    assert client.post(f"/approvals/{approval_id}/view", json={"actor": "ayoub"}).status_code == 200
 
     approved = client.post(
         f"/approvals/{approval_id}/approve", json={"actor": "ayoub", "comment": "ok"}
@@ -629,12 +623,8 @@ def test_api_approval_round_trip() -> None:
 
 
 def test_api_self_approval_is_forbidden() -> None:
-    created = client.post(
-        "/approvals", json={"title": "Self", "requested_by": "ayoub"}
-    ).json()
-    response = client.post(
-        f"/approvals/{created['id']}/approve", json={"actor": "ayoub"}
-    )
+    created = client.post("/approvals", json={"title": "Self", "requested_by": "ayoub"}).json()
+    response = client.post(f"/approvals/{created['id']}/approve", json={"actor": "ayoub"})
     assert response.status_code == 403
 
 

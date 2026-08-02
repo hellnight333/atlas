@@ -6,7 +6,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from .db import SessionLocal, init_db
 from .agents.models import (
     Agent,
     AgentAssignment,
@@ -21,6 +20,70 @@ from .agents.models import (
     AgentStatus,
     AgentTeam,
     AgentTeamStatus,
+)
+from .agents.schedule_models import (
+    ExecutionSchedule,
+    ResumeToken,
+    RuntimeExecutionRecord,
+    RuntimeExecutionStatus,
+    RuntimeRetryPolicy,
+    ScheduleQueueEntry,
+    SchedulerPriority,
+)
+from .approval.models import (
+    ApprovalCondition,
+    ApprovalDecision,
+    ApprovalHistoryEvent,
+    ApprovalPolicy,
+    ApprovalPolicyMode,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
+from .cluster.models import (
+    ExecutionLease,
+    ExecutionReservation,
+    LeaseState,
+    ReservationState,
+    WorkerHeartbeat,
+    WorkerMetrics,
+    WorkerNode,
+    WorkerResources,
+    WorkerState,
+)
+from .db import SessionLocal, init_db
+from .models import (
+    Asset,
+    AutomationAction,
+    AutomationCondition,
+    AutomationLog,
+    AutomationLogLevel,
+    AutomationRule,
+    AutomationRun,
+    AutomationRunStatus,
+    AutomationSchedule,
+    AutomationTrigger,
+    ChatConversation,
+    ChatMessage,
+    ExecutionDecision,
+    GraphSnapshot,
+    Job,
+    JobStatus,
+    KnowledgeEdge,
+    KnowledgeNode,
+    Project,
+    RelationshipType,
+    ResearchGraph,
+    ResearchSession,
+    ReviewComment,
+    ReviewHistoryEvent,
+    ReviewItem,
+    ReviewSession,
+    Run,
+    Step,
+    Workflow,
+    Workspace,
+    normalize_capability_request,
 )
 from .organization.models import (
     AuditAction,
@@ -39,73 +102,6 @@ from .organization.models import (
     Role,
     Team,
     TeamKind,
-)
-from .cluster.models import (
-    ExecutionLease,
-    ExecutionReservation,
-    LeaseState,
-    ReservationState,
-    WorkerNode,
-    WorkerHeartbeat,
-    WorkerMetrics,
-    WorkerResources,
-    WorkerState,
-)
-from .approval.models import (
-    ApprovalCondition,
-    ApprovalDecision,
-    ApprovalHistoryEvent,
-    ApprovalPolicy,
-    ApprovalPolicyMode,
-    ApprovalRequest,
-    ApprovalScope,
-    ApprovalState,
-)
-from .agents.schedule_models import (
-    ExecutionSchedule,
-    ResumeToken,
-    RuntimeExecutionRecord,
-    RuntimeExecutionStatus,
-    RuntimeRetryPolicy,
-    ScheduleQueueEntry,
-    SchedulerPriority,
-)
-from .models import (
-    Asset,
-    AutomationAction,
-    AutomationCondition,
-    AutomationLog,
-    AutomationLogLevel,
-    AutomationRule,
-    AutomationRun,
-    AutomationRunStatus,
-    AutomationSchedule,
-    AutomationTrigger,
-    ChatConversation,
-    ChatConversationCreate,
-    ChatMessage,
-    ChatMessageCreate,
-    ContextBundle,
-    ExecutionDecision,
-    GraphSnapshot,
-    Job,
-    JobStatus,
-    KnowledgeEdge,
-    KnowledgeGraph,
-    KnowledgeNode,
-    RelationshipType,
-    Project,
-    ResearchGraph,
-    ResearchSession,
-    ReviewComment,
-    ReviewHistoryEvent,
-    ReviewItem,
-    ReviewSession,
-    Run,
-    Step,
-    Workflow,
-    Workspace,
-    normalize_capability_request,
 )
 
 
@@ -313,8 +309,7 @@ class AtlasRepository:
     def list_chat_conversations(self, project_id: str | None = None) -> list[ChatConversation]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(
-                    text("""
+                rows = session.execute(text("""
                     SELECT id, project_id, title, pinned, prompt_version, response_version,
                            provider_name, execution_time_ms, tokens, workflow_id,
                            parent_conversation_id, prompt_asset_id, response_asset_id,
@@ -322,8 +317,7 @@ class AtlasRepository:
                     FROM atlas_chat_conversations
                     WHERE deleted_at IS NULL
                     ORDER BY pinned DESC, updated_at DESC
-                    """)
-                ).fetchall()
+                    """)).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -364,11 +358,15 @@ class AtlasRepository:
     def delete_chat_conversation(self, conversation_id: str) -> None:
         with SessionLocal() as session:
             session.execute(
-                text("UPDATE atlas_chat_conversations SET deleted_at = now() WHERE id = :conversation_id"),
+                text(
+                    "UPDATE atlas_chat_conversations SET deleted_at = now() WHERE id = :conversation_id"
+                ),
                 {"conversation_id": conversation_id},
             )
             session.execute(
-                text("UPDATE atlas_chat_messages SET deleted_at = now() WHERE conversation_id = :conversation_id"),
+                text(
+                    "UPDATE atlas_chat_messages SET deleted_at = now() WHERE conversation_id = :conversation_id"
+                ),
                 {"conversation_id": conversation_id},
             )
             session.commit()
@@ -464,15 +462,13 @@ class AtlasRepository:
     def list_research_sessions(self, project_id: str | None = None) -> list[ResearchSession]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(
-                    text("""
+                rows = session.execute(text("""
                     SELECT id, project_id, title, question, status, conversation_id,
                            collection_asset_id, report_asset_id, metadata, created_at, updated_at
                     FROM atlas_research_sessions
                     WHERE deleted_at IS NULL
                     ORDER BY updated_at DESC
-                    """)
-                ).fetchall()
+                    """)).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -494,7 +490,9 @@ class AtlasRepository:
                 conversation_id=row[5],
                 collection_asset_id=row[6],
                 report_asset_id=row[7],
-                metadata=row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {},
+                metadata=(
+                    row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {}
+                ),
                 created_at=row[9],
                 updated_at=row[10],
             )
@@ -523,7 +521,9 @@ class AtlasRepository:
     def get_research_graph(self, project_id: str) -> ResearchGraph:
         with SessionLocal() as session:
             row = session.execute(
-                text("SELECT project_id, nodes, edges, updated_at FROM atlas_research_graphs WHERE project_id = :project_id"),
+                text(
+                    "SELECT project_id, nodes, edges, updated_at FROM atlas_research_graphs WHERE project_id = :project_id"
+                ),
                 {"project_id": project_id},
             ).fetchone()
         if row is None:
@@ -622,15 +622,13 @@ class AtlasRepository:
     def list_review_sessions(self, project_id: str | None = None) -> list[ReviewSession]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(
-                    text("""
+                rows = session.execute(text("""
                     SELECT id, project_id, title, status, asset_id, published_asset_id,
                            workflow_id, metadata, created_at, updated_at
                     FROM atlas_review_sessions
                     WHERE deleted_at IS NULL
                     ORDER BY updated_at DESC
-                    """)
-                ).fetchall()
+                    """)).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -651,7 +649,9 @@ class AtlasRepository:
                 asset_id=row[4],
                 published_asset_id=row[5],
                 workflow_id=row[6],
-                metadata=row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {},
+                metadata=(
+                    row[7] if isinstance(row[7], dict) else json.loads(row[7]) if row[7] else {}
+                ),
                 created_at=row[8],
                 updated_at=row[9],
             )
@@ -710,7 +710,9 @@ class AtlasRepository:
                 asset_id=row[2],
                 decision=row[3],
                 comment=row[4],
-                metadata=row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {},
+                metadata=(
+                    row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {}
+                ),
                 created_at=row[6],
                 updated_at=row[7],
             )
@@ -756,7 +758,9 @@ class AtlasRepository:
                 id=row[0],
                 review_id=row[1],
                 content=row[2],
-                metadata=row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {},
+                metadata=(
+                    row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {}
+                ),
                 created_at=row[4],
             )
             for row in rows
@@ -816,7 +820,9 @@ class AtlasRepository:
                 to_status=row[6],
                 asset_id=row[7],
                 published_asset_id=row[8],
-                metadata=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
+                metadata=(
+                    row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {}
+                ),
                 created_at=row[10],
             )
             for row in rows
@@ -1187,7 +1193,9 @@ class AtlasRepository:
                     "capabilities": json.dumps(agent.capabilities),
                     "status": agent.status.value,
                     "memory_id": agent.memory_id,
-                    "permission_set": json.dumps([permission.value for permission in agent.permission_set]),
+                    "permission_set": json.dumps(
+                        [permission.value for permission in agent.permission_set]
+                    ),
                     "created_at": agent.created_at,
                     "updated_at": agent.updated_at,
                 },
@@ -1222,7 +1230,9 @@ class AtlasRepository:
                     "capabilities": json.dumps(agent.capabilities),
                     "status": agent.status.value,
                     "memory_id": agent.memory_id,
-                    "permission_set": json.dumps([permission.value for permission in agent.permission_set]),
+                    "permission_set": json.dumps(
+                        [permission.value for permission in agent.permission_set]
+                    ),
                     "updated_at": agent.updated_at,
                 },
             )
@@ -1250,12 +1260,16 @@ class AtlasRepository:
             role=row[3],
             workspace_id=row[4],
             project_id=row[5],
-            capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
+            capabilities=(
+                row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+            ),
             status=AgentStatus(row[7]),
             memory_id=row[8],
             permission_set=[
                 AgentPermission(value)
-                for value in (row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else [])
+                for value in (
+                    row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else []
+                )
             ],
             created_at=row[10],
             updated_at=row[11],
@@ -1264,16 +1278,14 @@ class AtlasRepository:
     def list_agents(self, project_id: str | None = None) -> list[Agent]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(
-                    text("""
+                rows = session.execute(text("""
                     SELECT id, name, description, role, workspace_id, project_id,
                            capabilities, status, memory_id, permission_set,
                            created_at, updated_at
                     FROM atlas_agents
                     WHERE deleted_at IS NULL
                     ORDER BY created_at DESC
-                    """)
-                ).fetchall()
+                    """)).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -1294,12 +1306,16 @@ class AtlasRepository:
                 role=row[3],
                 workspace_id=row[4],
                 project_id=row[5],
-                capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
+                capabilities=(
+                    row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+                ),
                 status=AgentStatus(row[7]),
                 memory_id=row[8],
                 permission_set=[
                     AgentPermission(value)
-                    for value in (row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else [])
+                    for value in (
+                        row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else []
+                    )
                 ],
                 created_at=row[10],
                 updated_at=row[11],
@@ -1310,13 +1326,17 @@ class AtlasRepository:
     def delete_agent(self, agent_id: str) -> bool:
         with SessionLocal() as session:
             result = session.execute(
-                text("UPDATE atlas_agents SET deleted_at = now() WHERE id = :agent_id AND deleted_at IS NULL"),
+                text(
+                    "UPDATE atlas_agents SET deleted_at = now() WHERE id = :agent_id AND deleted_at IS NULL"
+                ),
                 {"agent_id": agent_id},
             )
             session.commit()
-            return bool(result.rowcount and result.rowcount > 0)
+            return bool(getattr(result, "rowcount", 0) > 0)
 
-    def create_agent_memory_reference(self, reference: AgentMemoryReference) -> AgentMemoryReference:
+    def create_agent_memory_reference(
+        self, reference: AgentMemoryReference
+    ) -> AgentMemoryReference:
         with SessionLocal() as session:
             session.execute(
                 text("""
@@ -1411,7 +1431,9 @@ class AtlasRepository:
             workspace_id=row[3],
             status=AgentTeamStatus(row[4]),
             assignments=assignments,
-            conversation_ids=row[5] if isinstance(row[5], list) else json.loads(row[5]) if row[5] else [],
+            conversation_ids=(
+                row[5] if isinstance(row[5], list) else json.loads(row[5]) if row[5] else []
+            ),
             created_at=row[6],
             updated_at=row[7],
         )
@@ -1440,7 +1462,9 @@ class AtlasRepository:
                     "status": assignment.status.value,
                     "capabilities": json.dumps(assignment.capabilities),
                     "allowed_actions": json.dumps(assignment.allowed_actions),
-                    "permissions": json.dumps([permission.value for permission in assignment.permissions]),
+                    "permissions": json.dumps(
+                        [permission.value for permission in assignment.permissions]
+                    ),
                     "resource_limits": json.dumps(assignment.resource_limits),
                     "action": assignment.action,
                     "payload": json.dumps(assignment.payload, default=_json_value),
@@ -1483,7 +1507,9 @@ class AtlasRepository:
                     "status": assignment.status.value,
                     "capabilities": json.dumps(assignment.capabilities),
                     "allowed_actions": json.dumps(assignment.allowed_actions),
-                    "permissions": json.dumps([permission.value for permission in assignment.permissions]),
+                    "permissions": json.dumps(
+                        [permission.value for permission in assignment.permissions]
+                    ),
                     "resource_limits": json.dumps(assignment.resource_limits),
                     "action": assignment.action,
                     "payload": json.dumps(assignment.payload, default=_json_value),
@@ -1529,8 +1555,18 @@ class AtlasRepository:
             return self.update_agent_mailbox(mailbox)
         return AgentMailbox(
             agent_id=row[0],
-            pending_messages=[AgentMessage.model_validate(item) for item in (row[1] if isinstance(row[1], list) else json.loads(row[1]) if row[1] else [])],
-            history=[AgentMessage.model_validate(item) for item in (row[2] if isinstance(row[2], list) else json.loads(row[2]) if row[2] else [])],
+            pending_messages=[
+                AgentMessage.model_validate(item)
+                for item in (
+                    row[1] if isinstance(row[1], list) else json.loads(row[1]) if row[1] else []
+                )
+            ],
+            history=[
+                AgentMessage.model_validate(item)
+                for item in (
+                    row[2] if isinstance(row[2], list) else json.loads(row[2]) if row[2] else []
+                )
+            ],
         )
 
     def update_agent_mailbox(self, mailbox: AgentMailbox) -> AgentMailbox:
@@ -1544,8 +1580,12 @@ class AtlasRepository:
                 """),
                 {
                     "agent_id": mailbox.agent_id,
-                    "pending_messages": json.dumps([message.model_dump(mode="json") for message in mailbox.pending_messages]),
-                    "history": json.dumps([message.model_dump(mode="json") for message in mailbox.history]),
+                    "pending_messages": json.dumps(
+                        [message.model_dump(mode="json") for message in mailbox.pending_messages]
+                    ),
+                    "history": json.dumps(
+                        [message.model_dump(mode="json") for message in mailbox.history]
+                    ),
                 },
             )
             session.commit()
@@ -1592,7 +1632,9 @@ class AtlasRepository:
                 receiver=row[2],
                 timestamp=row[3],
                 type=AgentMessageType(row[4]),
-                payload=row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {},
+                payload=(
+                    row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {}
+                ),
                 correlation_id=row[6],
                 reply_to=row[7],
             )
@@ -1648,7 +1690,7 @@ class AtlasRepository:
                 {"node_id": node_id},
             )
             session.commit()
-        return bool(result.rowcount and result.rowcount > 0)
+        return bool(getattr(result, "rowcount", 0) > 0)
 
     def create_graph_edge(self, edge: KnowledgeEdge) -> KnowledgeEdge:
         with SessionLocal() as session:
@@ -1674,11 +1716,15 @@ class AtlasRepository:
         with SessionLocal() as session:
             if project_id is None:
                 rows = session.execute(
-                    text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes ORDER BY created_at ASC")
+                    text(
+                        "SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes ORDER BY created_at ASC"
+                    )
                 ).fetchall()
             else:
                 rows = session.execute(
-                    text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE project_id = :project_id ORDER BY created_at ASC"),
+                    text(
+                        "SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE project_id = :project_id ORDER BY created_at ASC"
+                    ),
                     {"project_id": project_id},
                 ).fetchall()
         return [
@@ -1689,7 +1735,9 @@ class AtlasRepository:
                 project_id=row[3],
                 workspace_id=row[4],
                 source_id=row[5],
-                metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {},
+                metadata=(
+                    row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {}
+                ),
                 archived=bool(row[7]),
                 created_at=row[8],
             )
@@ -1699,7 +1747,9 @@ class AtlasRepository:
     def get_graph_node(self, node_id: str) -> KnowledgeNode | None:
         with SessionLocal() as session:
             row = session.execute(
-                text("SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE id = :node_id"),
+                text(
+                    "SELECT id, node_type, label, project_id, workspace_id, source_id, metadata, archived, created_at FROM atlas_graph_nodes WHERE id = :node_id"
+                ),
                 {"node_id": node_id},
             ).fetchone()
         if row is None:
@@ -1719,7 +1769,9 @@ class AtlasRepository:
     def list_graph_edges(self) -> list[KnowledgeEdge]:
         with SessionLocal() as session:
             rows = session.execute(
-                text("SELECT id, relationship, from_node, to_node, metadata, created_at FROM atlas_graph_edges ORDER BY created_at ASC")
+                text(
+                    "SELECT id, relationship, from_node, to_node, metadata, created_at FROM atlas_graph_edges ORDER BY created_at ASC"
+                )
             ).fetchall()
         return [
             KnowledgeEdge(
@@ -1727,7 +1779,9 @@ class AtlasRepository:
                 relationship=RelationshipType(row[1]),
                 from_node=row[2],
                 to_node=row[3],
-                metadata=row[4] if isinstance(row[4], dict) else json.loads(row[4]) if row[4] else {},
+                metadata=(
+                    row[4] if isinstance(row[4], dict) else json.loads(row[4]) if row[4] else {}
+                ),
                 created_at=row[5],
             )
             for row in rows
@@ -1776,10 +1830,14 @@ class AtlasRepository:
                     "created_at": schedule.created_at,
                     "priority": schedule.priority.value,
                     "estimated_finish_time": schedule.estimated_finish_time,
-                    "queue_entries": json.dumps([entry.model_dump(mode="json") for entry in schedule.queue_entries]),
+                    "queue_entries": json.dumps(
+                        [entry.model_dump(mode="json") for entry in schedule.queue_entries]
+                    ),
                     "blocked_entries": json.dumps(schedule.blocked_entries),
                     "parallel_groups": json.dumps(schedule.parallel_groups),
-                    "resume_tokens": json.dumps([token.model_dump(mode="json") for token in schedule.resume_tokens]),
+                    "resume_tokens": json.dumps(
+                        [token.model_dump(mode="json") for token in schedule.resume_tokens]
+                    ),
                     "queue_metadata": json.dumps(schedule.queue_metadata, default=_json_value),
                     "updated_at": schedule.created_at,
                 },
@@ -1790,24 +1848,32 @@ class AtlasRepository:
     def get_schedule(self, schedule_id: str) -> ExecutionSchedule | None:
         with SessionLocal() as session:
             row = session.execute(
-                text(
-                    """
+                text("""
                     SELECT schedule_id, plan_id, agent_id, created_at, priority,
                            estimated_finish_time, queue_entries, blocked_entries,
                            parallel_groups, resume_tokens, queue_metadata
                     FROM atlas_schedules
                     WHERE schedule_id = :schedule_id
-                    """
-                ),
+                    """),
                 {"schedule_id": schedule_id},
             ).fetchone()
         if row is None:
             return None
-        queue_entries_raw = row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
-        blocked_entries_raw = row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
-        parallel_groups_raw = row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else []
-        resume_tokens_raw = row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else []
-        metadata_raw = row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+        queue_entries_raw = (
+            row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+        )
+        blocked_entries_raw = (
+            row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+        )
+        parallel_groups_raw = (
+            row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else []
+        )
+        resume_tokens_raw = (
+            row[9] if isinstance(row[9], list) else json.loads(row[9]) if row[9] else []
+        )
+        metadata_raw = (
+            row[10] if isinstance(row[10], dict) else json.loads(row[10]) if row[10] else {}
+        )
         return ExecutionSchedule(
             schedule_id=row[0],
             plan_id=row[1],
@@ -1825,25 +1891,19 @@ class AtlasRepository:
     def list_schedules(self, agent_id: str | None = None) -> list[ExecutionSchedule]:
         with SessionLocal() as session:
             if agent_id is None:
-                rows = session.execute(
-                    text(
-                        """
+                rows = session.execute(text("""
                         SELECT schedule_id
                         FROM atlas_schedules
                         ORDER BY created_at DESC
-                        """
-                    )
-                ).fetchall()
+                        """)).fetchall()
             else:
                 rows = session.execute(
-                    text(
-                        """
+                    text("""
                         SELECT schedule_id
                         FROM atlas_schedules
                         WHERE agent_id = :agent_id
                         ORDER BY created_at DESC
-                        """
-                    ),
+                        """),
                     {"agent_id": agent_id},
                 ).fetchall()
         result: list[ExecutionSchedule] = []
@@ -1856,8 +1916,7 @@ class AtlasRepository:
     def update_schedule(self, schedule: ExecutionSchedule) -> ExecutionSchedule:
         with SessionLocal() as session:
             session.execute(
-                text(
-                    """
+                text("""
                     UPDATE atlas_schedules
                     SET priority = :priority,
                         estimated_finish_time = :estimated_finish_time,
@@ -1868,16 +1927,19 @@ class AtlasRepository:
                         queue_metadata = :queue_metadata,
                         updated_at = now()
                     WHERE schedule_id = :schedule_id
-                    """
-                ),
+                    """),
                 {
                     "schedule_id": schedule.schedule_id,
                     "priority": schedule.priority.value,
                     "estimated_finish_time": schedule.estimated_finish_time,
-                    "queue_entries": json.dumps([entry.model_dump(mode="json") for entry in schedule.queue_entries]),
+                    "queue_entries": json.dumps(
+                        [entry.model_dump(mode="json") for entry in schedule.queue_entries]
+                    ),
                     "blocked_entries": json.dumps(schedule.blocked_entries),
                     "parallel_groups": json.dumps(schedule.parallel_groups),
-                    "resume_tokens": json.dumps([token.model_dump(mode="json") for token in schedule.resume_tokens]),
+                    "resume_tokens": json.dumps(
+                        [token.model_dump(mode="json") for token in schedule.resume_tokens]
+                    ),
                     "queue_metadata": json.dumps(schedule.queue_metadata, default=_json_value),
                 },
             )
@@ -2021,8 +2083,7 @@ class AtlasRepository:
 
     def list_runtime_executions(self) -> list[RuntimeExecutionRecord]:
         with SessionLocal() as session:
-            rows = session.execute(
-                text("""
+            rows = session.execute(text("""
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
@@ -2031,8 +2092,7 @@ class AtlasRepository:
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 ORDER BY created_at DESC
-                """)
-            ).fetchall()
+                """)).fetchall()
         return [self._row_to_runtime_execution(row) for row in rows]
 
     def list_running_runtime_executions(self) -> list[RuntimeExecutionRecord]:
@@ -2442,8 +2502,7 @@ class AtlasRepository:
     def list_jobs_by_project(self, project_id: str) -> list[Job]:
         with SessionLocal() as session:
             rows = session.execute(
-                text(
-                    """
+                text("""
                     SELECT j.id, j.run_id, j.action, j.payload, j.status, j.attempts, j.priority,
                            j.capability_req, j.execution_decision_id, j.provider_name, j.output,
                            j.produced_asset_ids, j.created_at
@@ -2451,8 +2510,7 @@ class AtlasRepository:
                     JOIN atlas_runs r ON r.id = j.run_id
                     WHERE r.project_id = :project_id
                     ORDER BY j.created_at DESC
-                    """
-                ),
+                    """),
                 {"project_id": project_id},
             ).fetchall()
         return [
@@ -2641,7 +2699,9 @@ class AtlasRepository:
             placement_reason=row[26],
             output=row[27] if isinstance(row[27], dict) else json.loads(row[27]) if row[27] else {},
             cancellation_requested=bool(row[28]),
-            timeline=row[29] if isinstance(row[29], list) else json.loads(row[29]) if row[29] else [],
+            timeline=(
+                row[29] if isinstance(row[29], list) else json.loads(row[29]) if row[29] else []
+            ),
         )
 
     def _row_to_agent_assignment(self, row: Any) -> AgentAssignment:
@@ -2652,13 +2712,28 @@ class AtlasRepository:
             role=AgentRole(row[3]),
             title=row[4],
             status=AgentAssignmentStatus(row[5]),
-            capabilities=row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else [],
-            allowed_actions=row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else [],
-            permissions=[AgentPermission(value) for value in (row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else [])],
-            resource_limits=row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {},
+            capabilities=(
+                row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+            ),
+            allowed_actions=(
+                row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
+            ),
+            permissions=[
+                AgentPermission(value)
+                for value in (
+                    row[8] if isinstance(row[8], list) else json.loads(row[8]) if row[8] else []
+                )
+            ],
+            resource_limits=(
+                row[9] if isinstance(row[9], dict) else json.loads(row[9]) if row[9] else {}
+            ),
             action=row[10],
-            payload=row[11] if isinstance(row[11], dict) else json.loads(row[11]) if row[11] else {},
-            dependencies=row[12] if isinstance(row[12], list) else json.loads(row[12]) if row[12] else [],
+            payload=(
+                row[11] if isinstance(row[11], dict) else json.loads(row[11]) if row[11] else {}
+            ),
+            dependencies=(
+                row[12] if isinstance(row[12], list) else json.loads(row[12]) if row[12] else []
+            ),
             mailbox_id=row[13],
             schedule_id=row[14],
             runtime_execution_id=row[15],
@@ -2758,7 +2833,9 @@ class AtlasRepository:
 
     def delete_automation_rule(self, rule_id: str) -> None:
         with SessionLocal() as session:
-            session.execute(text("DELETE FROM atlas_automation_rules WHERE id = :id"), {"id": rule_id})
+            session.execute(
+                text("DELETE FROM atlas_automation_rules WHERE id = :id"), {"id": rule_id}
+            )
             session.commit()
 
     def create_automation_run(self, run: AutomationRun) -> AutomationRun:
@@ -2920,9 +2997,13 @@ class AtlasRepository:
 
     def _row_to_automation_rule(self, row: Any) -> AutomationRule:
         trigger_data = row[5] if isinstance(row[5], dict) else json.loads(row[5]) if row[5] else {}
-        conditions_data = row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+        conditions_data = (
+            row[6] if isinstance(row[6], list) else json.loads(row[6]) if row[6] else []
+        )
         actions_data = row[7] if isinstance(row[7], list) else json.loads(row[7]) if row[7] else []
-        schedule_data = row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else None
+        schedule_data = (
+            row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else None
+        )
 
         return AutomationRule(
             id=row[0],
@@ -2974,7 +3055,6 @@ class AtlasRepository:
             context=context_data,
             created_at=row[7],
         )
-
 
     # ------------------------------------------------------------------
     # Organization (Milestone 010). Audit records are append-only: there is
@@ -3905,7 +3985,9 @@ class AtlasRepository:
     def get_approval_request(self, approval_id: str) -> ApprovalRequest | None:
         with SessionLocal() as session:
             row = session.execute(
-                text(f"SELECT {_APPROVAL_REQUEST_COLUMNS} FROM atlas_approval_requests WHERE id = :id"),
+                text(
+                    f"SELECT {_APPROVAL_REQUEST_COLUMNS} FROM atlas_approval_requests WHERE id = :id"
+                ),
                 {"id": approval_id},
             ).fetchone()
         return self._row_to_approval_request(row) if row else None
@@ -4021,7 +4103,9 @@ class AtlasRepository:
                     "mode": policy.mode.value,
                     "scopes": json.dumps([s.value for s in policy.scopes]),
                     "cost_threshold": policy.cost_threshold,
-                    "conditions": json.dumps([c.model_dump(mode="json") for c in policy.conditions]),
+                    "conditions": json.dumps(
+                        [c.model_dump(mode="json") for c in policy.conditions]
+                    ),
                     "required_approvers": json.dumps(policy.required_approvers),
                     "approvals_required": policy.approvals_required,
                     "expires_after_seconds": policy.expires_after_seconds,
@@ -4039,15 +4123,13 @@ class AtlasRepository:
 
     def list_approval_policies(self) -> list[ApprovalPolicy]:
         with SessionLocal() as session:
-            rows = session.execute(
-                text("""
+            rows = session.execute(text("""
                 SELECT id, name, description, mode, scopes, cost_threshold, conditions,
                        required_approvers, approvals_required, expires_after_seconds,
                        project_id, workspace_id, priority, enabled, metadata, created_at, updated_at
                 FROM atlas_approval_policies
                 ORDER BY priority DESC, created_at ASC, id ASC
-                """)
-            ).fetchall()
+                """)).fetchall()
         return [
             ApprovalPolicy(
                 id=row[0],

@@ -8,25 +8,30 @@ from .approval.gate import RuntimeApprovalGate
 from .approval.policies import ApprovalPolicyEngine
 from .approval.service import ApprovalService
 from .asset_system import AssetService
+from .automation_engine import AutomationEngine
+from .backup import BackupService
 from .cluster.cluster_state import ClusterStateService
+from .cluster.dispatcher import Dispatcher
+from .cluster.heartbeat_service import HeartbeatService
+from .cluster.lease_manager import LeaseManager
+from .cluster.worker_registry import WorkerRegistry
+from .config import AtlasConfig, load_config
+from .db import init_db
+from .diagnostics import DiagnosticsService
+from .event_bus import EventBus
+from .execution_policy import ExecutionPolicyEngine
+from .executor import ExecutionLocationExecutor, JobExecutor, LocalExecutor
+from .graph_service import GraphService
+from .logging_setup import configure_logging
+from .models import ActionSpec, CapabilitySpec, ExecutorSpec, ModelSpec, ProviderSpec, RecipeSpec
+from .orchestrator import Orchestrator
 from .organization.audit import AuditService
 from .organization.identity import IdentityService
 from .organization.permissions import PermissionEngine
 from .organization.policy_resolver import PolicyResolver
 from .organization.service import OrganizationService
-from .cluster.dispatcher import Dispatcher
-from .cluster.heartbeat_service import HeartbeatService
-from .cluster.lease_manager import LeaseManager
-from .cluster.worker_registry import WorkerRegistry
-from .automation_engine import AutomationEngine
-from .db import init_db
-from .event_bus import EventBus
-from .execution_policy import ExecutionPolicyEngine
-from .executor import ExecutionLocationExecutor, JobExecutor, LocalExecutor
-from .graph_service import GraphService
-from .models import ActionSpec, CapabilitySpec, ExecutorSpec, ModelSpec, ProviderSpec, RecipeSpec
-from .orchestrator import Orchestrator
 from .providers import LocalFluxProvider, LocalTextProvider, ProviderManager
+from .recovery import RecoveryService
 from .registry import Registry
 from .repository import AtlasRepository
 from .router import ProviderRouter
@@ -61,6 +66,10 @@ class AtlasRuntime:
     audit_service: AuditService
     identity_service: IdentityService
     organization_service: OrganizationService
+    config: AtlasConfig
+    diagnostics: DiagnosticsService
+    backup_service: BackupService
+    recovery_service: RecoveryService
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
     workflow_engine: WorkflowEngine
@@ -74,7 +83,10 @@ def create_runtime(
     repository: AtlasRepository | None = None,
     state_machine: ExecutionStateMachine | None = None,
     location_executor: ExecutionLocationExecutor | None = None,
+    config: AtlasConfig | None = None,
 ) -> AtlasRuntime:
+    config = config or load_config()
+    configure_logging(config)
     init_db()
 
     event_bus = event_bus or EventBus()
@@ -141,6 +153,8 @@ def create_runtime(
         event_bus=event_bus,
         ownership_filter=organization_service,
     )
+    heartbeat_service.timeout_seconds = config.heartbeat_timeout_seconds
+    lease_manager.lease_seconds = config.lease_seconds
     cluster_state = ClusterStateService(
         repository=repository,
         registry=worker_registry,
@@ -173,6 +187,22 @@ def create_runtime(
         graph_service=graph_service,
     )
 
+    diagnostics = DiagnosticsService(
+        config=config,
+        repository=repository,
+        registry=registry,
+        provider_manager=provider_registry,
+        cluster_state=cluster_state,
+    )
+    backup_service = BackupService(repository=repository, config=config)
+    recovery_service = RecoveryService(
+        repository=repository,
+        runtime=agent_runtime,
+        lease_manager=lease_manager,
+        heartbeats=heartbeat_service,
+        registry=worker_registry,
+    )
+
     return AtlasRuntime(
         event_bus=event_bus,
         registry=registry,
@@ -201,6 +231,10 @@ def create_runtime(
         workflow_delegate=workflow_delegate,
         workflow_engine=workflow_engine,
         automation_engine=automation_engine,
+        config=config,
+        diagnostics=diagnostics,
+        backup_service=backup_service,
+        recovery_service=recovery_service,
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv(
@@ -807,3 +808,125 @@ def init_db() -> None:
         ALTER TABLE atlas_review_history
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
         """))
+        _create_indexes(conn)
+
+
+#: Every index covers a lookup the kernel performs on a hot path. Names are
+#: explicit so a DBA can audit them, and IF NOT EXISTS keeps startup idempotent.
+INDEX_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
+    ("idx_assets_project", "atlas_assets", "project_id"),
+    ("idx_assets_run", "atlas_assets", "run_id"),
+    ("idx_assets_job", "atlas_assets", "job_id"),
+    ("idx_assets_parent", "atlas_assets", "parent_asset_id"),
+    ("idx_jobs_run", "atlas_jobs", "run_id"),
+    ("idx_jobs_status", "atlas_jobs", "status"),
+    ("idx_runs_project", "atlas_runs", "project_id"),
+    ("idx_steps_run", "atlas_steps", "run_id"),
+    ("idx_chat_messages_conversation", "atlas_chat_messages", "conversation_id"),
+    ("idx_chat_conversations_project", "atlas_chat_conversations", "project_id"),
+    ("idx_research_sessions_project", "atlas_research_sessions", "project_id"),
+    ("idx_review_items_review", "atlas_review_items", "review_id"),
+    ("idx_review_history_review", "atlas_review_history", "review_id"),
+    ("idx_graph_nodes_project", "atlas_graph_nodes", "project_id"),
+    ("idx_graph_edges_from", "atlas_graph_edges", "from_node"),
+    ("idx_graph_edges_to", "atlas_graph_edges", "to_node"),
+    ("idx_agents_project", "atlas_agents", "project_id"),
+    ("idx_schedules_agent", "atlas_schedules", "agent_id"),
+    ("idx_runtime_executions_schedule", "atlas_runtime_executions", "schedule_id"),
+    ("idx_runtime_executions_status", "atlas_runtime_executions", "status"),
+    ("idx_runtime_executions_worker", "atlas_runtime_executions", "worker_id"),
+    ("idx_automation_runs_rule", "atlas_automation_runs", "rule_id"),
+    ("idx_automation_logs_run", "atlas_automation_logs", "run_id"),
+    ("idx_automation_rules_project", "atlas_automation_rules", "project_id"),
+    ("idx_approval_requests_state", "atlas_approval_requests", "state"),
+    ("idx_approval_requests_execution", "atlas_approval_requests", "execution_id"),
+    ("idx_approval_history_approval", "atlas_approval_history", "approval_id"),
+    ("idx_workers_status", "atlas_workers", "status"),
+    ("idx_worker_heartbeats_worker", "atlas_worker_heartbeats", "worker_id"),
+    ("idx_reservations_worker", "atlas_reservations", "worker_id"),
+    ("idx_leases_worker", "atlas_leases", "worker_id"),
+    ("idx_leases_state", "atlas_leases", "state"),
+    ("idx_memberships_organization", "atlas_memberships", "organization_id"),
+    ("idx_memberships_identity", "atlas_memberships", "identity_id"),
+    ("idx_policy_sets_organization", "atlas_policy_sets", "organization_id"),
+    ("idx_audit_organization", "atlas_audit_records", "organization_id"),
+    ("idx_audit_created", "atlas_audit_records", "created_at"),
+    ("idx_teams_organization", "atlas_teams", "organization_id"),
+)
+
+
+def _create_indexes(conn: Connection) -> None:
+    for name, table, column in INDEX_DEFINITIONS:
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({column})"))
+
+
+def list_expected_tables() -> list[str]:
+    """Tables init_db is responsible for creating."""
+    return sorted({table for _, table, _ in INDEX_DEFINITIONS})
+
+
+def verify_schema() -> dict[str, object]:
+    """Startup validation. Reports rather than raises, so a degraded database is
+    visible in diagnostics instead of preventing the process from booting."""
+    expected_tables = list_expected_tables()
+    expected_indexes = [name for name, _, _ in INDEX_DEFINITIONS]
+
+    with engine.connect() as conn:
+        present_tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
+            )
+        }
+        present_indexes = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")
+            )
+        }
+
+    missing_tables = [t for t in expected_tables if t not in present_tables]
+    missing_indexes = [i for i in expected_indexes if i not in present_indexes]
+    return {
+        "healthy": not missing_tables and not missing_indexes,
+        "tables_expected": len(expected_tables),
+        "tables_present": len(expected_tables) - len(missing_tables),
+        "missing_tables": missing_tables,
+        "indexes_expected": len(expected_indexes),
+        "indexes_present": len(expected_indexes) - len(missing_indexes),
+        "missing_indexes": missing_indexes,
+    }
+
+
+def check_integrity() -> dict[str, object]:
+    """Referential spot-checks over the joins the kernel actually relies on.
+    Reports orphans; it never deletes anything."""
+    checks: list[tuple[str, str]] = [
+        (
+            "jobs_without_run",
+            "SELECT COUNT(*) FROM atlas_jobs j "
+            "LEFT JOIN atlas_runs r ON j.run_id = r.id WHERE r.id IS NULL",
+        ),
+        (
+            "leases_without_reservation",
+            "SELECT COUNT(*) FROM atlas_leases l "
+            "LEFT JOIN atlas_reservations res ON l.reservation_id = res.id WHERE res.id IS NULL",
+        ),
+        (
+            "memberships_without_organization",
+            "SELECT COUNT(*) FROM atlas_memberships m "
+            "LEFT JOIN atlas_organizations o ON m.organization_id = o.id WHERE o.id IS NULL",
+        ),
+        (
+            "automation_runs_without_rule",
+            "SELECT COUNT(*) FROM atlas_automation_runs ar "
+            "LEFT JOIN atlas_automation_rules r ON ar.rule_id = r.id WHERE r.id IS NULL",
+        ),
+    ]
+
+    findings: dict[str, int] = {}
+    with engine.connect() as conn:
+        for name, sql in checks:
+            findings[name] = int(conn.execute(text(sql)).scalar() or 0)
+
+    return {"healthy": all(count == 0 for count in findings.values()), "orphans": findings}

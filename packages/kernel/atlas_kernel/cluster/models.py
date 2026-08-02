@@ -199,4 +199,3 @@ class ClusterSnapshot(BaseModel):
     load: ClusterLoad = Field(default_factory=ClusterLoad)
     workers: list[WorkerNode] = Field(default_factory=list)
     captured_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-

@@ -22,7 +22,11 @@ class PlannerContextBuilder:
         capabilities: list[str],
         workspace_intelligence: dict[str, Any],
     ) -> PlannerContext:
-        assets = self.repository.list_assets(project_id=project_id) if project_id else self.repository.list_assets()[:50]
+        assets = (
+            self.repository.list_assets(project_id=project_id)
+            if project_id
+            else self.repository.list_assets()[:50]
+        )
         chats = self.repository.list_chat_conversations(project_id) if project_id else []
         research = self.repository.list_research_sessions(project_id) if project_id else []
         reviews = self.repository.list_review_sessions(project_id) if project_id else []
@@ -34,7 +38,9 @@ class PlannerContextBuilder:
                 for job in self.repository.list_jobs_by_project(project_id)
                 if job.status.value in {"queued", "running", "blocked"}
             ]
-            recent_runs = [run.model_dump() for run in self.repository.list_runs_by_project(project_id)[:10]]
+            recent_runs = [
+                run.model_dump() for run in self.repository.list_runs_by_project(project_id)[:10]
+            ]
             knowledge_graph = self.repository.get_research_graph(project_id).model_dump()
         else:
             running_jobs = [

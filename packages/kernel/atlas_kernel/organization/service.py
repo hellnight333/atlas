@@ -148,9 +148,7 @@ class OrganizationService:
     ) -> Organization:
         organization = self._require_organization(organization_id)
         before = organization.model_dump(mode="json")
-        updated = organization.model_copy(
-            update={**changes, "updated_at": datetime.now(UTC)}
-        )
+        updated = organization.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         self.repository.upsert_organization(updated)
         self.event_bus.publish(OrganizationUpdated(organization_id=organization_id))
         self.audit.record(
@@ -165,12 +163,8 @@ class OrganizationService:
         )
         return updated
 
-    def archive_organization(
-        self, organization_id: str, actor_id: str = "system"
-    ) -> Organization:
-        updated = self.update_organization(
-            organization_id, {"active": False}, actor_id=actor_id
-        )
+    def archive_organization(self, organization_id: str, actor_id: str = "system") -> Organization:
+        updated = self.update_organization(organization_id, {"active": False}, actor_id=actor_id)
         self.event_bus.publish(OrganizationArchived(organization_id=organization_id))
         return updated
 
@@ -260,8 +254,7 @@ class OrganizationService:
 
     def list_permissions(self) -> list[dict[str, str]]:
         return [
-            {"permission": permission.value, "name": permission.name}
-            for permission in Permission
+            {"permission": permission.value, "name": permission.name} for permission in Permission
         ]
 
     # ------------------------------------------------------------------
@@ -278,9 +271,7 @@ class OrganizationService:
         actor_id: str = "system",
     ) -> Team:
         self._require_organization(organization_id)
-        team = Team(
-            organization_id=organization_id, name=name, kind=kind, description=description
-        )
+        team = Team(organization_id=organization_id, name=name, kind=kind, description=description)
         self.repository.upsert_team(team)
         self.event_bus.publish(
             TeamCreated(team_id=team.id, organization_id=organization_id, name=name)
@@ -295,15 +286,11 @@ class OrganizationService:
         )
         return team
 
-    def update_team(
-        self, team_id: str, changes: dict[str, Any], actor_id: str = "system"
-    ) -> Team:
+    def update_team(self, team_id: str, changes: dict[str, Any], actor_id: str = "system") -> Team:
         team = self._require_team(team_id)
         updated = team.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         self.repository.upsert_team(updated)
-        self.event_bus.publish(
-            TeamUpdated(team_id=team_id, organization_id=team.organization_id)
-        )
+        self.event_bus.publish(TeamUpdated(team_id=team_id, organization_id=team.organization_id))
         return updated
 
     def list_teams(self, organization_id: str | None = None) -> list[Team]:
@@ -359,9 +346,7 @@ class OrganizationService:
     ) -> Membership:
         membership = self._require_membership(membership_id)
         before = membership.model_dump(mode="json")
-        updated = membership.model_copy(
-            update={**changes, "updated_at": datetime.now(UTC)}
-        )
+        updated = membership.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         self.repository.upsert_membership(updated)
         self.event_bus.publish(
             MembershipChanged(
@@ -462,9 +447,7 @@ class OrganizationService:
     # Policies
     # ------------------------------------------------------------------
 
-    def upsert_policy_set(
-        self, policy_set: PolicySet, actor_id: str = "system"
-    ) -> PolicySet:
+    def upsert_policy_set(self, policy_set: PolicySet, actor_id: str = "system") -> PolicySet:
         existing = self.repository.get_policy_set(policy_set.id)
         stored = policy_set.model_copy(update={"updated_at": datetime.now(UTC)})
         self.repository.upsert_policy_set(stored)
@@ -491,9 +474,7 @@ class OrganizationService:
     def list_policy_sets(
         self, organization_id: str | None = None, domain: PolicyDomain | None = None
     ) -> list[PolicySet]:
-        return self.repository.list_policy_sets(
-            organization_id=organization_id, domain=domain
-        )
+        return self.repository.list_policy_sets(organization_id=organization_id, domain=domain)
 
     def resolve_policy(
         self,

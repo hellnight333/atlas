@@ -5,9 +5,36 @@ on:
     branches: [main, master]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  quality:
+  kernel:
+    name: Kernel quality
     runs-on: ubuntu-latest
+
+    # The kernel test suite talks to a real Postgres. Without this service the
+    # pytest step cannot pass at all, however healthy the code is.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ATLAS_DATABASE_URL: postgresql+psycopg://atlas:atlas@localhost:5432/atlas
+      ATLAS_PROFILE: staging
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,6 +43,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -31,11 +59,50 @@ jobs:
       - name: Mypy
         run: python -m mypy packages/kernel/atlas_kernel
 
+      # The 90% coverage gate lives in pyproject; this step fails on regression.
       - name: Pytest with coverage
         run: python -m pytest packages/kernel/tests
 
       - name: Upload coverage XML
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: coverage.xml
+
+  desktop:
+    name: Desktop build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript compile
+        run: npx tsc -b --force
+
+      - name: Production build
+        run: npm run build
+
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-desktop-web
+          path: apps/desktop/dist
+          retention-days: 14

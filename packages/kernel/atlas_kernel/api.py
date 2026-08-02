@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agents.models import (
@@ -27,6 +27,7 @@ from .approval.models import (
     ApprovalState,
 )
 from .approval.service import ApprovalError, SelfApprovalError
+from .backup import BackupArchive, BackupError, BackupScope
 from .cluster.models import (
     HeartbeatReport,
     WorkerMetrics,
@@ -35,7 +36,32 @@ from .cluster.models import (
     WorkerState,
 )
 from .cluster.worker_registry import WorkerRegistryError
-from .organization.identity import IdentityError
+from .composition_root import create_runtime
+from .config import describe_profiles
+from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
+from .models import (
+    AssetCreate,
+    AutomationAction,
+    AutomationCondition,
+    AutomationTrigger,
+    CapabilityRequest,
+    CapabilitySpec,
+    ChatConversation,
+    ChatMessage,
+    ProjectCreate,
+    RecipeSpec,
+    ResearchSearchResult,
+    ResearchSession,
+    ReviewComment,
+    ReviewHistoryEvent,
+    ReviewItem,
+    ReviewSession,
+    RunCreate,
+    RuntimeContext,
+    WorkflowCreate,
+    WorkspaceCreate,
+    normalize_capability_request,
+)
 from .organization.models import (
     AuditAction,
     Branding,
@@ -49,37 +75,7 @@ from .organization.models import (
     TeamKind,
 )
 from .organization.service import (
-    CrossOrganizationError,
     OrganizationError,
-    PermissionDeniedError,
-)
-from .composition_root import create_runtime
-from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
-from .models import (
-    AssetCreate,
-    AutomationAction,
-    AutomationCondition,
-    AutomationTrigger,
-    ChatConversation,
-    ChatMessage,
-    ChatConversationCreate,
-    ChatMessageCreate,
-    CapabilityRequest,
-    CapabilitySpec,
-    ProjectCreate,
-    ResearchGraph,
-    ResearchSearchResult,
-    ResearchSession,
-    ReviewComment,
-    ReviewHistoryEvent,
-    ReviewItem,
-    ReviewSession,
-    RecipeSpec,
-    RunCreate,
-    RuntimeContext,
-    WorkflowCreate,
-    WorkspaceCreate,
-    normalize_capability_request,
 )
 from .workflow_engine import (
     Condition,
@@ -92,7 +88,12 @@ from .workflow_engine import (
 app = FastAPI(title="Atlas Kernel")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:4174", "http://localhost:4174", "http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=[
+        "http://127.0.0.1:4174",
+        "http://localhost:4174",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -116,6 +117,10 @@ cluster_state = runtime.cluster_state
 organization_service = runtime.organization_service
 identity_service = runtime.identity_service
 audit_service = runtime.audit_service
+diagnostics = runtime.diagnostics
+backup_service = runtime.backup_service
+recovery_service = runtime.recovery_service
+config = runtime.config
 agent_runtime = runtime.agent_runtime
 agent_foundation = AgentFoundation(
     repository=repository,
@@ -185,6 +190,20 @@ class SchedulerCreateRequest(BaseModel):
     priority: SchedulerPriority = SchedulerPriority.NORMAL
     available_executors: list[str] = Field(default_factory=list)
     execution_policy: dict[str, object] = Field(default_factory=dict)
+
+
+class BackupExportRequest(BaseModel):
+    scope: BackupScope
+    scope_id: str | None = None
+
+
+class BackupRestoreRequest(BaseModel):
+    archive: dict[str, object]
+    dry_run: bool = False
+
+
+class RecoverySweepRequest(BaseModel):
+    dry_run: bool = False
 
 
 class OrganizationCreateRequest(BaseModel):
@@ -539,19 +558,19 @@ class ResearchSessionRequest(BaseModel):
 class ResearchSearchRequest(BaseModel):
     session_id: str
     query: str
-    provider: str = 'mock-search'
+    provider: str = "mock-search"
 
 
 class ResearchSummarizeRequest(BaseModel):
     session_id: str
     source_asset_ids: list[str] = Field(default_factory=list)
-    prompt: str = ''
+    prompt: str = ""
 
 
 class ResearchReportRequest(BaseModel):
     session_id: str
-    format: str = 'markdown'
-    prompt: str = ''
+    format: str = "markdown"
+    prompt: str = ""
 
 
 class ReviewRequest(BaseModel):
@@ -564,7 +583,7 @@ class ReviewRequest(BaseModel):
 
 class ReviewDecisionRequest(BaseModel):
     asset_id: str
-    comment: str = ''
+    comment: str = ""
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -581,18 +600,18 @@ class ReviewPublishRequest(BaseModel):
 class ImageGenerateRequest(BaseModel):
     project_id: str
     prompt: str
-    negative_prompt: str = ''
+    negative_prompt: str = ""
     styles: list[str] = Field(default_factory=list)
     template: str | None = None
     variables: dict[str, object] = Field(default_factory=dict)
     seed: int | None = None
     steps: int = 30
     cfg: float = 7.0
-    resolution: str = '1024x1024'
-    sampler: str = 'euler'
-    provider: str = 'local-flux'
-    workflow: str = 'image.generate'
-    model: str = 'flux-dev'
+    resolution: str = "1024x1024"
+    sampler: str = "euler"
+    provider: str = "local-flux"
+    workflow: str = "image.generate"
+    model: str = "flux-dev"
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -687,19 +706,11 @@ def get_agent(agent_id: str) -> dict[str, object]:
 
 @app.patch("/agents/{agent_id}")
 def patch_agent(agent_id: str, request: AgentPatchRequest) -> dict[str, object]:
+    # Only forward the fields the client actually sent. Constructing AgentUpdate
+    # with every field made exclude_unset a no-op downstream, so a partial PATCH
+    # wrote None over name, role, status and capabilities.
     agent = agent_foundation.update_agent(
-        agent_id,
-        AgentUpdate(
-            name=request.name,
-            description=request.description,
-            role=request.role,
-            workspace_id=request.workspace_id,
-            project_id=request.project_id,
-            capabilities=request.capabilities,
-            status=request.status,
-            memory_id=request.memory_id,
-            permission_set=request.permission_set,
-        ),
+        agent_id, AgentUpdate(**request.model_dump(exclude_unset=True))
     )
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -753,7 +764,9 @@ def create_agent_plan(agent_id: str, request: AgentPlanRequest) -> dict[str, obj
     workspace_intelligence: dict[str, object] = {}
     if agent.project_id:
         try:
-            workspace_intelligence = _workspace_context(agent.project_id).get("workspace_context", {})
+            workspace_intelligence = _as_dict(
+                _workspace_context(agent.project_id).get("workspace_context")
+            )
         except HTTPException:
             workspace_intelligence = {}
 
@@ -780,7 +793,9 @@ def create_schedule(request: SchedulerCreateRequest) -> dict[str, object]:
     workspace_intelligence: dict[str, object] = {}
     if agent.project_id:
         try:
-            workspace_intelligence = _workspace_context(agent.project_id).get("workspace_context", {})
+            workspace_intelligence = _as_dict(
+                _workspace_context(agent.project_id).get("workspace_context")
+            )
         except HTTPException:
             workspace_intelligence = {}
 
@@ -933,7 +948,9 @@ def get_agent_team_messages(team_id: str) -> list[dict[str, object]]:
     team = agent_foundation.get_team(team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
-    return [message.model_dump(mode="json") for message in agent_foundation.list_team_messages(team_id)]
+    return [
+        message.model_dump(mode="json") for message in agent_foundation.list_team_messages(team_id)
+    ]
 
 
 @app.post("/agents/team/{team_id}/cancel")
@@ -1060,7 +1077,10 @@ def get_research_session(session_id: str) -> dict[str, object]:
 
 @app.get("/research/session")
 def list_research_sessions(project_id: str | None = None) -> list[dict[str, object]]:
-    return [session_record.model_dump() for session_record in repository.list_research_sessions(project_id)]
+    return [
+        session_record.model_dump()
+        for session_record in repository.list_research_sessions(project_id)
+    ]
 
 
 @app.post("/research/search")
@@ -1096,7 +1116,9 @@ def research_search(request: ResearchSearchRequest) -> dict[str, object]:
                         "kind": "source",
                         "title": result.title,
                         "provider": result.provider,
-                        "retrieved_at": __import__('datetime').datetime.now(__import__('datetime').UTC).isoformat(),
+                        "retrieved_at": __import__("datetime")
+                        .datetime.now(__import__("datetime").UTC)
+                        .isoformat(),
                         "author": result.author,
                         "language": result.language,
                         "content_type": result.content_type,
@@ -1163,7 +1185,10 @@ def research_summarize(request: ResearchSummarizeRequest) -> dict[str, object]:
         capability_req={"capability_id": "cap-reasoning", "requirements": {"required_vram_gb": 0}},
     )
     result = runtime.worker.execute_job(job)
-    summary_asset = repository.get_asset(result.get("asset_id")) if result.get("asset_id") else None
+    result_asset_id = result.get("asset_id")
+    summary_asset = (
+        repository.get_asset(result_asset_id) if isinstance(result_asset_id, str) else None
+    )
     if summary_asset is None:
         summary_asset = asset_service.create_asset_from_request(
             AssetCreate(
@@ -1176,7 +1201,8 @@ def research_summarize(request: ResearchSummarizeRequest) -> dict[str, object]:
                 metadata={
                     "kind": "finding",
                     "session_id": request.session_id,
-                    "content": result.get("output", {}).get("text") or f"Generated response for: {request.prompt or session_record.question}",
+                    "content": result.get("output", {}).get("text")
+                    or f"Generated response for: {request.prompt or session_record.question}",
                     "provider": result.get("provider") or "local-text",
                     "citations": request.source_asset_ids,
                 },
@@ -1202,13 +1228,19 @@ def research_summarize(request: ResearchSummarizeRequest) -> dict[str, object]:
                 "source_asset_ids": request.source_asset_ids,
             },
         )
+    if summary_asset is None:
+        # update_asset returns None when the asset disappeared between the read
+        # and the write. Surface that as a 404 instead of crashing below.
+        raise HTTPException(status_code=404, detail="Research summary asset not found")
     graph = repository.get_research_graph(session_record.project_id)
-    graph.nodes.append({
-        "id": summary_asset.id,
-        "type": "Finding",
-        "label": summary_asset.metadata.get("content") or summary_asset.id,
-        "asset_id": summary_asset.id,
-    })
+    graph.nodes.append(
+        {
+            "id": summary_asset.id,
+            "type": "Finding",
+            "label": summary_asset.metadata.get("content") or summary_asset.id,
+            "asset_id": summary_asset.id,
+        }
+    )
     graph.edges.extend(
         [
             {
@@ -1234,7 +1266,11 @@ def research_report(request: ResearchReportRequest) -> dict[str, object]:
     session_record = repository.get_research_session(request.session_id)
     if session_record is None:
         raise HTTPException(status_code=404, detail="Research session not found")
-    findings = [asset for asset in repository.list_assets(project_id=session_record.project_id) if (asset.metadata or {}).get("kind") == "finding"]
+    findings = [
+        asset
+        for asset in repository.list_assets(project_id=session_record.project_id)
+        if (asset.metadata or {}).get("kind") == "finding"
+    ]
     report_content = "\n\n".join(
         [
             f"# {session_record.title}",
@@ -1261,7 +1297,7 @@ def research_report(request: ResearchReportRequest) -> dict[str, object]:
     updated = session_record.model_copy(
         update={
             "report_asset_id": report_asset.id,
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
         }
     )
     repository.update_research_session(updated)
@@ -1287,12 +1323,14 @@ def _build_review_payload(review: ReviewSession) -> dict[str, object]:
     return {
         **review.model_dump(),
         "items": [item.model_dump() for item in repository.list_review_items(review.id)],
-        "comments": [comment.model_dump() for comment in repository.list_review_comments(review.id)],
+        "comments": [
+            comment.model_dump() for comment in repository.list_review_comments(review.id)
+        ],
     }
 
 
 def _parse_resolution(value: str) -> tuple[int, int]:
-    parts = value.lower().split('x')
+    parts = value.lower().split("x")
     if len(parts) != 2:
         return 1024, 1024
     try:
@@ -1308,62 +1346,82 @@ def _parse_resolution(value: str) -> tuple[int, int]:
 def _next_image_seed(seed: int | None) -> int:
     if seed is not None:
         return int(seed)
-    return int(__import__('time').time()) % 2_147_483_647
+    return int(__import__("time").time()) % 2_147_483_647
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    """Values crossing the untyped API boundary need one narrowing point."""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _run_project_id(run_id: str) -> str | None:
+    run = repository.get_run(run_id)
+    return run.project_id if run is not None else None
+
+
+def _as_int(value: object, default: int) -> int:
+    return int(value) if isinstance(value, (int, float, str)) and str(value).strip() else default
+
+
+def _as_float(value: object, default: float) -> float:
+    return float(value) if isinstance(value, (int, float, str)) and str(value).strip() else default
 
 
 def _coerce_image_payload(asset: dict[str, object] | None) -> dict[str, object]:
     source = asset or {}
-    metadata = source.get('metadata') if isinstance(source.get('metadata'), dict) else {}
+    metadata = _as_dict(source.get("metadata"))
     return {
-        'id': source.get('id'),
-        'project_id': source.get('project_id'),
-        'run_id': source.get('run_id'),
-        'job_id': source.get('job_id'),
-        'workflow_id': source.get('workflow_id'),
-        'parent_asset_id': source.get('parent_asset_id'),
-        'version': source.get('version'),
-        'uri': source.get('uri'),
-        'thumbnail_uri': source.get('thumbnail_uri'),
-        'content_hash': source.get('content_hash'),
-        'prompt': metadata.get('prompt', ''),
-        'negative_prompt': metadata.get('negative_prompt', ''),
-        'styles': metadata.get('styles', []),
-        'template': metadata.get('template'),
-        'variables': metadata.get('variables', {}),
-        'prompt_history': metadata.get('prompt_history', []),
-        'prompt_version': metadata.get('prompt_version', 1),
-        'seed': metadata.get('seed'),
-        'steps': metadata.get('steps'),
-        'cfg': metadata.get('cfg'),
-        'resolution': metadata.get('resolution'),
-        'sampler': metadata.get('sampler'),
-        'provider': metadata.get('provider'),
-        'workflow': metadata.get('workflow'),
-        'model': metadata.get('model'),
-        'execution_time_ms': metadata.get('execution_time_ms'),
-        'metadata': metadata,
-        'created_at': source.get('created_at'),
-        'updated_at': source.get('updated_at'),
+        "id": source.get("id"),
+        "project_id": source.get("project_id"),
+        "run_id": source.get("run_id"),
+        "job_id": source.get("job_id"),
+        "workflow_id": source.get("workflow_id"),
+        "parent_asset_id": source.get("parent_asset_id"),
+        "version": source.get("version"),
+        "uri": source.get("uri"),
+        "thumbnail_uri": source.get("thumbnail_uri"),
+        "content_hash": source.get("content_hash"),
+        "prompt": metadata.get("prompt", ""),
+        "negative_prompt": metadata.get("negative_prompt", ""),
+        "styles": metadata.get("styles", []),
+        "template": metadata.get("template"),
+        "variables": metadata.get("variables", {}),
+        "prompt_history": metadata.get("prompt_history", []),
+        "prompt_version": metadata.get("prompt_version", 1),
+        "seed": metadata.get("seed"),
+        "steps": metadata.get("steps"),
+        "cfg": metadata.get("cfg"),
+        "resolution": metadata.get("resolution"),
+        "sampler": metadata.get("sampler"),
+        "provider": metadata.get("provider"),
+        "workflow": metadata.get("workflow"),
+        "model": metadata.get("model"),
+        "execution_time_ms": metadata.get("execution_time_ms"),
+        "metadata": metadata,
+        "created_at": source.get("created_at"),
+        "updated_at": source.get("updated_at"),
     }
 
 
 def _resolve_image_base(image_id: str) -> dict[str, object]:
     asset = repository.get_asset(image_id)
     if asset is None:
-        raise HTTPException(status_code=404, detail='Image asset not found')
-    if asset.type != 'image':
-        raise HTTPException(status_code=400, detail='Asset is not an image')
+        raise HTTPException(status_code=404, detail="Image asset not found")
+    if asset.type != "image":
+        raise HTTPException(status_code=400, detail="Asset is not an image")
     return asset.model_dump()
 
 
 def _image_payload_from_request(
     base: dict[str, object] | None,
     request: ImageGenerateRequest | ImageVariantRequest,
-    prompt_fallback: str = '',
+    prompt_fallback: str = "",
 ) -> dict[str, object]:
-    base_metadata = {}
-    if base and isinstance(base.get('metadata'), dict):
-        base_metadata = dict(base.get('metadata', {}))
+    base_metadata: dict[str, object] = _as_dict(base.get("metadata")) if base else {}
 
     def _get(name: str, default: object) -> object:
         request_value = getattr(request, name, None)
@@ -1373,49 +1431,50 @@ def _image_payload_from_request(
             return base_metadata[name]
         return default
 
-    prompt = _get('prompt', prompt_fallback)
-    negative_prompt = _get('negative_prompt', '')
-    styles = _get('styles', [])
-    template = _get('template', None)
-    variables = _get('variables', {})
-    seed = _next_image_seed(_get('seed', None) if isinstance(_get('seed', None), int) else None)
-    steps = int(_get('steps', 30))
-    cfg = float(_get('cfg', 7.0))
-    resolution = str(_get('resolution', '1024x1024'))
-    sampler = str(_get('sampler', 'euler'))
-    provider_name = str(_get('provider', 'local-flux'))
-    workflow = str(_get('workflow', 'image.generate'))
-    model = str(_get('model', 'flux-dev'))
+    prompt = _get("prompt", prompt_fallback)
+    negative_prompt = _get("negative_prompt", "")
+    styles = _get("styles", [])
+    template = _get("template", None)
+    variables = _get("variables", {})
+    raw_seed = _get("seed", None)
+    seed = _next_image_seed(raw_seed if isinstance(raw_seed, int) else None)
+    steps = _as_int(_get("steps", 30), 30)
+    cfg = _as_float(_get("cfg", 7.0), 7.0)
+    resolution = str(_get("resolution", "1024x1024"))
+    sampler = str(_get("sampler", "euler"))
+    provider_name = str(_get("provider", "local-flux"))
+    workflow = str(_get("workflow", "image.generate"))
+    model = str(_get("model", "flux-dev"))
 
     width, height = _parse_resolution(resolution)
     rendered_prompt = str(prompt)
     if isinstance(variables, dict):
         for key, value in variables.items():
-            rendered_prompt = rendered_prompt.replace(f'{{{{{key}}}}}', str(value))
+            rendered_prompt = rendered_prompt.replace(f"{{{{{key}}}}}", str(value))
 
     base_prompt_history = []
-    if isinstance(base_metadata.get('prompt_history'), list):
-        base_prompt_history = list(base_metadata['prompt_history'])
+    if isinstance(base_metadata.get("prompt_history"), list):
+        base_prompt_history = _as_list(base_metadata["prompt_history"])
     next_prompt_history = [*base_prompt_history, rendered_prompt][-20:]
 
     return {
-        'prompt': rendered_prompt,
-        'negative_prompt': str(negative_prompt),
-        'styles': list(styles) if isinstance(styles, list) else [],
-        'template': template,
-        'variables': variables if isinstance(variables, dict) else {},
-        'prompt_history': next_prompt_history,
-        'prompt_version': len(next_prompt_history),
-        'seed': seed,
-        'steps': steps,
-        'cfg': cfg,
-        'resolution': resolution,
-        'sampler': sampler,
-        'provider': provider_name,
-        'workflow': workflow,
-        'model': model,
-        'width': width,
-        'height': height,
+        "prompt": rendered_prompt,
+        "negative_prompt": str(negative_prompt),
+        "styles": list(styles) if isinstance(styles, list) else [],
+        "template": template,
+        "variables": variables if isinstance(variables, dict) else {},
+        "prompt_history": next_prompt_history,
+        "prompt_version": len(next_prompt_history),
+        "seed": seed,
+        "steps": steps,
+        "cfg": cfg,
+        "resolution": resolution,
+        "sampler": sampler,
+        "provider": provider_name,
+        "workflow": workflow,
+        "model": model,
+        "width": width,
+        "height": height,
     }
 
 
@@ -1427,15 +1486,15 @@ def _execute_image_generation(
 ) -> dict[str, object]:
     project = repository.get_project(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail='Project not found')
+        raise HTTPException(status_code=404, detail="Project not found")
 
     run = orchestrator.create_run(
         RunCreate(
             title=f"Image generation: {str(payload.get('prompt', 'Untitled'))[:48]}",
-            description='Image Studio generation',
-            studio='image',
+            description="Image Studio generation",
+            studio="image",
             project_id=project_id,
-            workflow_id='image-studio-default',
+            workflow_id="image-studio-default",
         )
     )
 
@@ -1443,154 +1502,167 @@ def _execute_image_generation(
     if parent_asset_id is not None:
         parent_asset = repository.get_asset(parent_asset_id)
         if parent_asset is None:
-            raise HTTPException(status_code=404, detail='Parent image not found')
+            raise HTTPException(status_code=404, detail="Parent image not found")
         version = parent_asset.version + 1
 
     job_payload = {
-        'prompt': payload.get('prompt'),
-        'negative_prompt': payload.get('negative_prompt'),
-        'seed': payload.get('seed'),
-        'steps': payload.get('steps'),
-        'cfg': payload.get('cfg'),
-        'resolution': payload.get('resolution'),
-        'sampler': payload.get('sampler'),
-        'provider': payload.get('provider'),
-        'workflow': payload.get('workflow'),
-        'model': payload.get('model'),
-        'styles': payload.get('styles', []),
-        'template': payload.get('template'),
-        'variables': payload.get('variables', {}),
-        'prompt_history': payload.get('prompt_history', []),
-        'prompt_version': payload.get('prompt_version', 1),
-        'execution_time_ms': 0,
-        'parent_asset_id': parent_asset_id,
-        'version': version,
-        'input_asset_ids': source_asset_ids or [],
+        "prompt": payload.get("prompt"),
+        "negative_prompt": payload.get("negative_prompt"),
+        "seed": payload.get("seed"),
+        "steps": payload.get("steps"),
+        "cfg": payload.get("cfg"),
+        "resolution": payload.get("resolution"),
+        "sampler": payload.get("sampler"),
+        "provider": payload.get("provider"),
+        "workflow": payload.get("workflow"),
+        "model": payload.get("model"),
+        "styles": payload.get("styles", []),
+        "template": payload.get("template"),
+        "variables": payload.get("variables", {}),
+        "prompt_history": payload.get("prompt_history", []),
+        "prompt_version": payload.get("prompt_version", 1),
+        "execution_time_ms": 0,
+        "parent_asset_id": parent_asset_id,
+        "version": version,
+        "input_asset_ids": source_asset_ids or [],
     }
 
     job = orchestrator.enqueue_job(
         run.id,
-        action='image.generate',
+        action="image.generate",
         payload=job_payload,
-        capability_req={'capability_id': 'cap-image-generation', 'requirements': {'required_vram_gb': 0}},
+        capability_req={
+            "capability_id": "cap-image-generation",
+            "requirements": {"required_vram_gb": 0},
+        },
     )
 
     result = runtime.worker.execute_job(job)
-    if result.get('status') != 'completed':
-        raise HTTPException(status_code=500, detail=result.get('error') or 'Image generation failed')
+    if result.get("status") != "completed":
+        raise HTTPException(
+            status_code=500, detail=result.get("error") or "Image generation failed"
+        )
 
-    image_asset = repository.get_asset(result.get('asset_id')) if result.get('asset_id') else None
+    image_asset_id = result.get("asset_id")
+    image_asset = repository.get_asset(image_asset_id) if isinstance(image_asset_id, str) else None
     if image_asset is None:
-        raise HTTPException(status_code=500, detail='Generated image asset missing')
+        raise HTTPException(status_code=500, detail="Generated image asset missing")
 
     # Backfill execution timing metadata from provider output when available.
     metadata = dict(image_asset.metadata or {})
-    if isinstance(result.get('output'), dict):
-        output_payload = result['output']
-        if output_payload.get('execution_time_ms') is not None:
-            metadata['execution_time_ms'] = output_payload.get('execution_time_ms')
-    updated_asset = asset_service.update_asset(image_asset.id, {'metadata': metadata}) or image_asset
+    if isinstance(result.get("output"), dict):
+        output_payload = result["output"]
+        if output_payload.get("execution_time_ms") is not None:
+            metadata["execution_time_ms"] = output_payload.get("execution_time_ms")
+    updated_asset = (
+        asset_service.update_asset(image_asset.id, {"metadata": metadata}) or image_asset
+    )
 
     return {
-        'run': run.model_dump(),
-        'job': {
-            'id': job.id,
-            'run_id': job.run_id,
-            'status': result.get('status'),
-            'provider': result.get('provider'),
-            'output': result.get('output'),
+        "run": run.model_dump(),
+        "job": {
+            "id": job.id,
+            "run_id": job.run_id,
+            "status": result.get("status"),
+            "provider": result.get("provider"),
+            "output": result.get("output"),
         },
-        'image': _coerce_image_payload(updated_asset.model_dump()),
+        "image": _coerce_image_payload(updated_asset.model_dump()),
     }
 
 
-@app.post('/images/generate')
+@app.post("/images/generate")
 def generate_image(request: ImageGenerateRequest) -> dict[str, object]:
     payload = _image_payload_from_request(None, request, prompt_fallback=request.prompt)
     response = _execute_image_generation(
         project_id=request.project_id,
         payload={**payload, **dict(request.metadata)},
     )
-    image_id = response['image'].get('id') if isinstance(response.get('image'), dict) else None
+    image_payload = _as_dict(response.get("image"))
+    image_id = image_payload.get("id")
     if isinstance(image_id, str):
         repository.create_review_session(
             ReviewSession(
                 id=f"review-{__import__('uuid').uuid4().hex[:8]}",
                 project_id=request.project_id,
                 title=f"Image Review {str(payload.get('prompt', 'Untitled'))[:48]}",
-                status='pending',
+                status="pending",
                 asset_id=image_id,
-                workflow_id='image-studio-default',
-                metadata={'kind': 'image-review', 'auto_created': True},
+                workflow_id="image-studio-default",
+                metadata={"kind": "image-review", "auto_created": True},
             )
         )
     return response
 
 
-@app.get('/images')
+@app.get("/images")
 def list_images(project_id: str | None = None) -> list[dict[str, object]]:
     assets = repository.list_assets(project_id=project_id)
-    images = [asset for asset in assets if asset.type == 'image']
+    images = [asset for asset in assets if asset.type == "image"]
     return [_coerce_image_payload(image.model_dump()) for image in images]
 
 
-@app.get('/images/{image_id}')
+@app.get("/images/{image_id}")
 def get_image(image_id: str) -> dict[str, object]:
     return _coerce_image_payload(_resolve_image_base(image_id))
 
 
-@app.post('/images/{image_id}/variant')
+@app.post("/images/{image_id}/variant")
 def create_image_variant(image_id: str, request: ImageVariantRequest) -> dict[str, object]:
     base = _resolve_image_base(image_id)
-    payload = _image_payload_from_request(base, request, prompt_fallback=str((base.get('metadata') or {}).get('prompt', '')))
+    payload = _image_payload_from_request(
+        base, request, prompt_fallback=str(_as_dict(base.get("metadata")).get("prompt", ""))
+    )
     return _execute_image_generation(
-        project_id=str(base.get('project_id')),
+        project_id=str(base.get("project_id")),
         payload={**payload, **dict(request.metadata)},
         parent_asset_id=image_id,
         source_asset_ids=[image_id],
     )
 
 
-@app.post('/images/{image_id}/regenerate')
+@app.post("/images/{image_id}/regenerate")
 def regenerate_image(image_id: str, request: ImageVariantRequest) -> dict[str, object]:
     base = _resolve_image_base(image_id)
-    payload = _image_payload_from_request(base, request, prompt_fallback=str((base.get('metadata') or {}).get('prompt', '')))
+    payload = _image_payload_from_request(
+        base, request, prompt_fallback=str(_as_dict(base.get("metadata")).get("prompt", ""))
+    )
     # Regenerate intentionally creates another versioned variant in the same lineage.
     return _execute_image_generation(
-        project_id=str(base.get('project_id')),
+        project_id=str(base.get("project_id")),
         payload={**payload, **dict(request.metadata)},
         parent_asset_id=image_id,
         source_asset_ids=[image_id],
     )
 
 
-@app.get('/images/{image_id}/versions')
+@app.get("/images/{image_id}/versions")
 def list_image_versions(image_id: str) -> list[dict[str, object]]:
     base = _resolve_image_base(image_id)
-    lineage_root_id = str(base.get('parent_asset_id') or image_id)
+    lineage_root_id = str(base.get("parent_asset_id") or image_id)
     root_asset = repository.get_asset(lineage_root_id)
     if root_asset is None:
         root_asset = repository.get_asset(image_id)
     if root_asset is None:
-        raise HTTPException(status_code=404, detail='Image asset not found')
+        raise HTTPException(status_code=404, detail="Image asset not found")
 
     versions = [root_asset, *repository.list_child_assets(root_asset.id)]
-    versions = [asset for asset in versions if asset.type == 'image']
+    versions = [asset for asset in versions if asset.type == "image"]
     versions.sort(key=lambda item: item.version)
     return [_coerce_image_payload(asset.model_dump()) for asset in versions]
 
 
 def _normalize_asset_type(asset_type: str) -> str:
-    value = (asset_type or '').lower()
-    if value == 'image':
-        return 'image'
-    if value in {'document', 'text'}:
-        return 'research'
-    if value in {'dataset'}:
-        return 'knowledge'
-    if value in {'video'}:
-        return 'media'
-    return 'asset'
+    value = (asset_type or "").lower()
+    if value == "image":
+        return "image"
+    if value in {"document", "text"}:
+        return "research"
+    if value in {"dataset"}:
+        return "knowledge"
+    if value in {"video"}:
+        return "media"
+    return "asset"
 
 
 def _workspace_recent(project_id: str) -> dict[str, object]:
@@ -1603,29 +1675,27 @@ def _workspace_recent(project_id: str) -> dict[str, object]:
     workflows = repository.list_workflows(project_id)
 
     return {
-        'project_id': project_id,
-        'recent_activity': [
+        "project_id": project_id,
+        "recent_activity": [
             {
-                'id': job.id,
-                'type': 'job',
-                'action': job.action,
-                'status': job.status.value,
-                'provider': job.provider_name,
-                'created_at': job.created_at,
+                "id": job.id,
+                "type": "job",
+                "action": job.action,
+                "status": job.status.value,
+                "provider": job.provider_name,
+                "created_at": job.created_at,
             }
             for job in jobs[:20]
         ],
-        'recent_assets': [asset.model_dump() for asset in assets[:20]],
-        'recent_conversations': [conversation.model_dump() for conversation in chats[:10]],
-        'recent_research': [session.model_dump() for session in research[:10]],
-        'recent_reviews': [review.model_dump() for review in reviews[:10]],
-        'recent_images': [
-            _coerce_image_payload(asset.model_dump())
-            for asset in assets
-            if asset.type == 'image'
+        "recent_assets": [asset.model_dump() for asset in assets[:20]],
+        "recent_conversations": [conversation.model_dump() for conversation in chats[:10]],
+        "recent_research": [session.model_dump() for session in research[:10]],
+        "recent_reviews": [review.model_dump() for review in reviews[:10]],
+        "recent_images": [
+            _coerce_image_payload(asset.model_dump()) for asset in assets if asset.type == "image"
         ][:10],
-        'recent_workflows': [workflow.model_dump() for workflow in workflows[:10]],
-        'recent_runs': [run.model_dump() for run in runs[:10]],
+        "recent_workflows": [workflow.model_dump() for workflow in workflows[:10]],
+        "recent_runs": [run.model_dump() for run in runs[:10]],
     }
 
 
@@ -1635,78 +1705,94 @@ def _workspace_recommendations(project_id: str) -> dict[str, object]:
     research = repository.list_research_sessions(project_id)
     jobs = repository.list_jobs_by_project(project_id)
 
-    pending_reviews = [review for review in reviews if review.status in {'pending', 'changes_requested'}]
-    latest_image = next((asset for asset in assets if asset.type == 'image'), None)
+    pending_reviews = [
+        review for review in reviews if review.status in {"pending", "changes_requested"}
+    ]
+    latest_image = next((asset for asset in assets if asset.type == "image"), None)
     latest_research = research[0] if research else None
-    blocked_jobs = [job for job in jobs if job.status.value in {'blocked', 'failed'}]
+    blocked_jobs = [job for job in jobs if job.status.value in {"blocked", "failed"}]
 
     recommendations: list[dict[str, object]] = []
     if latest_research is not None:
-        recommendations.append({
-            'type': 'continue_research',
-            'title': 'Continue Research',
-            'reason': f"Research session '{latest_research.title}' is active.",
-            'action': 'open-research',
-            'reference_id': latest_research.id,
-        })
-        recommendations.append({
-            'type': 'summarize_findings',
-            'title': 'Summarize Findings',
-            'reason': 'Recent research sources are available for consolidation.',
-            'action': 'summarize-research',
-            'reference_id': latest_research.id,
-        })
-        recommendations.append({
-            'type': 'create_report',
-            'title': 'Create Report',
-            'reason': 'Generate a report from current research findings.',
-            'action': 'create-report',
-            'reference_id': latest_research.id,
-        })
+        recommendations.append(
+            {
+                "type": "continue_research",
+                "title": "Continue Research",
+                "reason": f"Research session '{latest_research.title}' is active.",
+                "action": "open-research",
+                "reference_id": latest_research.id,
+            }
+        )
+        recommendations.append(
+            {
+                "type": "summarize_findings",
+                "title": "Summarize Findings",
+                "reason": "Recent research sources are available for consolidation.",
+                "action": "summarize-research",
+                "reference_id": latest_research.id,
+            }
+        )
+        recommendations.append(
+            {
+                "type": "create_report",
+                "title": "Create Report",
+                "reason": "Generate a report from current research findings.",
+                "action": "create-report",
+                "reference_id": latest_research.id,
+            }
+        )
     if latest_image is not None:
-        recommendations.append({
-            'type': 'generate_variant',
-            'title': 'Generate Variant',
-            'reason': 'An image is available for iterative variation.',
-            'action': 'open-image-studio',
-            'reference_id': latest_image.id,
-        })
+        recommendations.append(
+            {
+                "type": "generate_variant",
+                "title": "Generate Variant",
+                "reason": "An image is available for iterative variation.",
+                "action": "open-image-studio",
+                "reference_id": latest_image.id,
+            }
+        )
     if pending_reviews:
-        recommendations.append({
-            'type': 'review_pending_asset',
-            'title': 'Review Pending Asset',
-            'reason': f'{len(pending_reviews)} reviews require attention.',
-            'action': 'open-review-studio',
-            'reference_id': pending_reviews[0].id,
-        })
-    published_reviews = [review for review in reviews if review.status == 'approved']
+        recommendations.append(
+            {
+                "type": "review_pending_asset",
+                "title": "Review Pending Asset",
+                "reason": f"{len(pending_reviews)} reviews require attention.",
+                "action": "open-review-studio",
+                "reference_id": pending_reviews[0].id,
+            }
+        )
+    published_reviews = [review for review in reviews if review.status == "approved"]
     if published_reviews:
-        recommendations.append({
-            'type': 'publish',
-            'title': 'Publish',
-            'reason': 'Approved reviews are ready for publication.',
-            'action': 'publish-review',
-            'reference_id': published_reviews[0].id,
-        })
+        recommendations.append(
+            {
+                "type": "publish",
+                "title": "Publish",
+                "reason": "Approved reviews are ready for publication.",
+                "action": "publish-review",
+                "reference_id": published_reviews[0].id,
+            }
+        )
     if blocked_jobs:
-        recommendations.append({
-            'type': 'resolve_blocked_job',
-            'title': 'Resolve Blocked Job',
-            'reason': f'{len(blocked_jobs)} job(s) are blocked or failed.',
-            'action': 'open-activity-center',
-            'reference_id': blocked_jobs[0].id,
-        })
+        recommendations.append(
+            {
+                "type": "resolve_blocked_job",
+                "title": "Resolve Blocked Job",
+                "reason": f"{len(blocked_jobs)} job(s) are blocked or failed.",
+                "action": "open-activity-center",
+                "reference_id": blocked_jobs[0].id,
+            }
+        )
 
     return {
-        'project_id': project_id,
-        'recommendations': recommendations,
+        "project_id": project_id,
+        "recommendations": recommendations,
     }
 
 
 def _workspace_context(project_id: str) -> dict[str, object]:
     project = repository.get_project(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail='Project not found')
+        raise HTTPException(status_code=404, detail="Project not found")
 
     assets = repository.list_assets(project_id=project_id)
     runs = repository.list_runs_by_project(project_id)
@@ -1715,60 +1801,72 @@ def _workspace_context(project_id: str) -> dict[str, object]:
     research = repository.list_research_sessions(project_id)
     reviews = repository.list_review_sessions(project_id)
 
-    pinned_assets = [asset for asset in assets if bool((asset.metadata or {}).get('pinned'))]
-    open_tasks = [job for job in jobs if job.status.value in {'queued', 'running', 'blocked'}]
-    suggested_tasks = _workspace_recommendations(project_id)['recommendations']
+    pinned_assets = [asset for asset in assets if bool((asset.metadata or {}).get("pinned"))]
+    open_tasks = [job for job in jobs if job.status.value in {"queued", "running", "blocked"}]
+    suggested_tasks = _as_list(_workspace_recommendations(project_id)["recommendations"])
     knowledge_highlights = [
         {
-            'asset_id': asset.id,
-            'title': (asset.metadata or {}).get('title') or asset.id,
-            'summary': asset.ai_summary or (asset.metadata or {}).get('content') or '',
-            'kind': _normalize_asset_type(asset.type),
+            "asset_id": asset.id,
+            "title": (asset.metadata or {}).get("title") or asset.id,
+            "summary": asset.ai_summary or (asset.metadata or {}).get("content") or "",
+            "kind": _normalize_asset_type(asset.type),
         }
         for asset in assets[:5]
     ]
 
     return {
-        'workspace_context': {
-            'project': project.model_dump(),
-            'project_summary': {
-                'total_assets': len(assets),
-                'total_runs': len(runs),
-                'running_jobs': len([job for job in jobs if job.status.value == 'running']),
-                'open_reviews': len([review for review in reviews if review.status in {'pending', 'changes_requested'}]),
-                'knowledge_growth': len([asset for asset in assets if _normalize_asset_type(asset.type) in {'research', 'knowledge'}]),
+        "workspace_context": {
+            "project": project.model_dump(),
+            "project_summary": {
+                "total_assets": len(assets),
+                "total_runs": len(runs),
+                "running_jobs": len([job for job in jobs if job.status.value == "running"]),
+                "open_reviews": len(
+                    [
+                        review
+                        for review in reviews
+                        if review.status in {"pending", "changes_requested"}
+                    ]
+                ),
+                "knowledge_growth": len(
+                    [
+                        asset
+                        for asset in assets
+                        if _normalize_asset_type(asset.type) in {"research", "knowledge"}
+                    ]
+                ),
             },
-            'recent_activity': [
+            "recent_activity": [
                 {
-                    'id': job.id,
-                    'action': job.action,
-                    'status': job.status.value,
-                    'created_at': job.created_at,
+                    "id": job.id,
+                    "action": job.action,
+                    "status": job.status.value,
+                    "created_at": job.created_at,
                 }
                 for job in jobs[:15]
             ],
-            'recent_assets': [asset.model_dump() for asset in assets[:15]],
-            'pinned_assets': [asset.model_dump() for asset in pinned_assets[:10]],
-            'open_tasks': [
+            "recent_assets": [asset.model_dump() for asset in assets[:15]],
+            "pinned_assets": [asset.model_dump() for asset in pinned_assets[:10]],
+            "open_tasks": [
                 {
-                    'id': job.id,
-                    'action': job.action,
-                    'status': job.status.value,
-                    'run_id': job.run_id,
+                    "id": job.id,
+                    "action": job.action,
+                    "status": job.status.value,
+                    "run_id": job.run_id,
                 }
                 for job in open_tasks[:10]
             ],
-            'suggested_tasks': suggested_tasks[:10],
-            'recent_conversations': [conversation.model_dump() for conversation in chats[:10]],
-            'recent_research': [session.model_dump() for session in research[:10]],
-            'recent_reviews': [review.model_dump() for review in reviews[:10]],
-            'recent_images': [
+            "suggested_tasks": suggested_tasks[:10],
+            "recent_conversations": [conversation.model_dump() for conversation in chats[:10]],
+            "recent_research": [session.model_dump() for session in research[:10]],
+            "recent_reviews": [review.model_dump() for review in reviews[:10]],
+            "recent_images": [
                 _coerce_image_payload(asset.model_dump())
                 for asset in assets
-                if asset.type == 'image'
+                if asset.type == "image"
             ][:10],
-            'knowledge_highlights': knowledge_highlights,
-            'recommendations': suggested_tasks,
+            "knowledge_highlights": knowledge_highlights,
+            "recommendations": suggested_tasks,
         }
     }
 
@@ -1776,7 +1874,7 @@ def _workspace_context(project_id: str) -> dict[str, object]:
 def _workspace_dashboard(project_id: str) -> dict[str, object]:
     project = repository.get_project(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail='Project not found')
+        raise HTTPException(status_code=404, detail="Project not found")
 
     assets = repository.list_assets(project_id=project_id)
     runs = repository.list_runs_by_project(project_id)
@@ -1788,85 +1886,105 @@ def _workspace_dashboard(project_id: str) -> dict[str, object]:
 
     recent_timeline = [
         {
-            'id': item['id'],
-            'type': item['type'],
-            'title': item['title'],
-            'created_at': item['created_at'],
+            "id": item["id"],
+            "type": item["type"],
+            "title": item["title"],
+            "created_at": item["created_at"],
         }
         for item in sorted(
             [
                 *[
-                    {'id': run.id, 'type': 'run', 'title': run.title, 'created_at': run.created_at}
+                    {"id": run.id, "type": "run", "title": run.title, "created_at": run.created_at}
                     for run in runs[:10]
                 ],
                 *[
-                    {'id': asset.id, 'type': 'asset', 'title': asset.id, 'created_at': asset.created_at}
+                    {
+                        "id": asset.id,
+                        "type": "asset",
+                        "title": asset.id,
+                        "created_at": asset.created_at,
+                    }
                     for asset in assets[:10]
                 ],
                 *[
-                    {'id': review.id, 'type': 'review', 'title': review.title, 'created_at': review.created_at}
+                    {
+                        "id": review.id,
+                        "type": "review",
+                        "title": review.title,
+                        "created_at": review.created_at,
+                    }
                     for review in reviews[:10]
                 ],
             ],
-            key=lambda record: str(record.get('created_at', '')),
+            key=lambda record: str(record.get("created_at", "")),
             reverse=True,
         )[:20]
     ]
 
     return {
-        'project_summary': {
-            'project': project.model_dump(),
-            'summary': f"{len(assets)} assets, {len(runs)} runs, {len(reviews)} reviews, {len(chats)} conversations",
+        "project_summary": {
+            "project": project.model_dump(),
+            "summary": f"{len(assets)} assets, {len(runs)} runs, {len(reviews)} reviews, {len(chats)} conversations",
         },
-        'project_health': {
-            'running_jobs': len([job for job in jobs if job.status.value == 'running']),
-            'blocked_jobs': len([job for job in jobs if job.status.value in {'blocked', 'failed'}]),
-            'open_reviews': len([review for review in reviews if review.status in {'pending', 'changes_requested'}]),
-            'research_sessions': len(research),
-            'image_queue': len([asset for asset in assets if asset.type == 'image']),
+        "project_health": {
+            "running_jobs": len([job for job in jobs if job.status.value == "running"]),
+            "blocked_jobs": len([job for job in jobs if job.status.value in {"blocked", "failed"}]),
+            "open_reviews": len(
+                [review for review in reviews if review.status in {"pending", "changes_requested"}]
+            ),
+            "research_sessions": len(research),
+            "image_queue": len([asset for asset in assets if asset.type == "image"]),
         },
-        'recent_timeline': recent_timeline,
-        'recent_workflows': [workflow.model_dump() for workflow in workflows[:10]],
-        'research_progress': {
-            'total_sessions': len(research),
-            'active_sessions': len([session for session in research if session.status == 'active']),
+        "recent_timeline": recent_timeline,
+        "recent_workflows": [workflow.model_dump() for workflow in workflows[:10]],
+        "research_progress": {
+            "total_sessions": len(research),
+            "active_sessions": len([session for session in research if session.status == "active"]),
         },
-        'review_queue': [review.model_dump() for review in reviews if review.status in {'pending', 'changes_requested'}],
-        'image_queue': [
-            _coerce_image_payload(asset.model_dump())
-            for asset in assets
-            if asset.type == 'image'
+        "review_queue": [
+            review.model_dump()
+            for review in reviews
+            if review.status in {"pending", "changes_requested"}
+        ],
+        "image_queue": [
+            _coerce_image_payload(asset.model_dump()) for asset in assets if asset.type == "image"
         ][:20],
-        'knowledge_growth': {
-            'research_assets': len([asset for asset in assets if _normalize_asset_type(asset.type) in {'research', 'knowledge'}]),
-            'conversations': len(chats),
-            'research_sessions': len(research),
+        "knowledge_growth": {
+            "research_assets": len(
+                [
+                    asset
+                    for asset in assets
+                    if _normalize_asset_type(asset.type) in {"research", "knowledge"}
+                ]
+            ),
+            "conversations": len(chats),
+            "research_sessions": len(research),
         },
     }
 
 
-@app.get('/workspace/context/{project_id}')
+@app.get("/workspace/context/{project_id}")
 def workspace_context(project_id: str) -> dict[str, object]:
     return _workspace_context(project_id)
 
 
-@app.get('/workspace/recommendations/{project_id}')
+@app.get("/workspace/recommendations/{project_id}")
 def workspace_recommendations(project_id: str) -> dict[str, object]:
     project = repository.get_project(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail='Project not found')
+        raise HTTPException(status_code=404, detail="Project not found")
     return _workspace_recommendations(project_id)
 
 
-@app.get('/workspace/recent/{project_id}')
+@app.get("/workspace/recent/{project_id}")
 def workspace_recent(project_id: str) -> dict[str, object]:
     project = repository.get_project(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail='Project not found')
+        raise HTTPException(status_code=404, detail="Project not found")
     return _workspace_recent(project_id)
 
 
-@app.get('/workspace/dashboard/{project_id}')
+@app.get("/workspace/dashboard/{project_id}")
 def workspace_dashboard(project_id: str) -> dict[str, object]:
     return _workspace_dashboard(project_id)
 
@@ -1919,7 +2037,7 @@ def approve_review(review_id: str, request: ReviewDecisionRequest) -> dict[str, 
         update={
             "status": "approved",
             "asset_id": request.asset_id,
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
             "metadata": {**review.metadata, **dict(request.metadata)},
         }
     )
@@ -1960,7 +2078,7 @@ def reject_review(review_id: str, request: ReviewDecisionRequest) -> dict[str, o
         update={
             "status": "changes_requested",
             "asset_id": request.asset_id,
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
             "metadata": {**review.metadata, **dict(request.metadata)},
         }
     )
@@ -2049,7 +2167,7 @@ def publish_review(review_id: str, request: ReviewPublishRequest) -> dict[str, o
             "status": "published",
             "asset_id": request.asset_id,
             "published_asset_id": published_asset.id,
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
             "metadata": {**review.metadata, **dict(request.metadata), "published": True},
         }
     )
@@ -2080,7 +2198,9 @@ def get_review_history(review_id: str) -> list[dict[str, object]]:
 
 @app.get("/chat/conversations")
 def list_chat_conversations(project_id: str | None = None) -> list[dict[str, object]]:
-    return [conversation.model_dump() for conversation in repository.list_chat_conversations(project_id)]
+    return [
+        conversation.model_dump() for conversation in repository.list_chat_conversations(project_id)
+    ]
 
 
 @app.get("/chat/conversation/{conversation_id}")
@@ -2106,15 +2226,37 @@ def update_chat_conversation(
         update={
             "title": request.title if request.title is not None else conversation.title,
             "pinned": request.pinned if request.pinned is not None else conversation.pinned,
-            "provider_name": request.provider_name if request.provider_name is not None else conversation.provider_name,
-            "execution_time_ms": request.execution_time_ms if request.execution_time_ms is not None else conversation.execution_time_ms,
+            "provider_name": (
+                request.provider_name
+                if request.provider_name is not None
+                else conversation.provider_name
+            ),
+            "execution_time_ms": (
+                request.execution_time_ms
+                if request.execution_time_ms is not None
+                else conversation.execution_time_ms
+            ),
             "tokens": request.tokens if request.tokens is not None else conversation.tokens,
-            "workflow_id": request.workflow_id if request.workflow_id is not None else conversation.workflow_id,
-            "parent_conversation_id": request.parent_conversation_id if request.parent_conversation_id is not None else conversation.parent_conversation_id,
-            "prompt_asset_id": request.prompt_asset_id if request.prompt_asset_id is not None else conversation.prompt_asset_id,
-            "response_asset_id": request.response_asset_id if request.response_asset_id is not None else conversation.response_asset_id,
+            "workflow_id": (
+                request.workflow_id if request.workflow_id is not None else conversation.workflow_id
+            ),
+            "parent_conversation_id": (
+                request.parent_conversation_id
+                if request.parent_conversation_id is not None
+                else conversation.parent_conversation_id
+            ),
+            "prompt_asset_id": (
+                request.prompt_asset_id
+                if request.prompt_asset_id is not None
+                else conversation.prompt_asset_id
+            ),
+            "response_asset_id": (
+                request.response_asset_id
+                if request.response_asset_id is not None
+                else conversation.response_asset_id
+            ),
             "metadata": {**conversation.metadata, **request.metadata},
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
         }
     )
     repository.update_chat_conversation(updated)
@@ -2163,9 +2305,10 @@ def create_chat_message(request: ChatMessageRequest) -> dict[str, object]:
         capability_req={"capability_id": "cap-reasoning", "requirements": {"required_vram_gb": 0}},
     )
     result = runtime.worker.execute_job(job)
-    response_asset = None
-    if result.get("asset_id"):
-        response_asset = repository.get_asset(result["asset_id"])
+    response_asset_id = result.get("asset_id")
+    response_asset = (
+        repository.get_asset(response_asset_id) if isinstance(response_asset_id, str) else None
+    )
     if response_asset is None:
         response_asset = asset_service.create_asset_from_request(
             AssetCreate(
@@ -2189,26 +2332,32 @@ def create_chat_message(request: ChatMessageRequest) -> dict[str, object]:
         response_asset = asset_service.update_asset(
             response_asset.id,
             {
-                "metadata": {
-                    **(response_asset.metadata or {}),
-                    "kind": "response",
-                    "conversation_id": conversation.id,
-                    "message_version": prompt_version + 1,
-                    "content": response_asset.metadata.get("text")
-                    or response_asset.metadata.get("content")
-                    or f"Generated response for: {request.content}",
-                    "provider_name": result.get("provider") or "local-text",
-                }
-                if response_asset.metadata is not None
-                else {
-                    "kind": "response",
-                    "conversation_id": conversation.id,
-                    "message_version": prompt_version + 1,
-                    "content": f"Generated response for: {request.content}",
-                    "provider_name": result.get("provider") or "local-text",
-                }
+                "metadata": (
+                    {
+                        **(response_asset.metadata or {}),
+                        "kind": "response",
+                        "conversation_id": conversation.id,
+                        "message_version": prompt_version + 1,
+                        "content": response_asset.metadata.get("text")
+                        or response_asset.metadata.get("content")
+                        or f"Generated response for: {request.content}",
+                        "provider_name": result.get("provider") or "local-text",
+                    }
+                    if response_asset.metadata is not None
+                    else {
+                        "kind": "response",
+                        "conversation_id": conversation.id,
+                        "message_version": prompt_version + 1,
+                        "content": f"Generated response for: {request.content}",
+                        "provider_name": result.get("provider") or "local-text",
+                    }
+                )
             },
         )
+    if response_asset is None:
+        # update_asset returns None when the asset disappeared between the read
+        # and the write. Surface that as a 404 instead of crashing below.
+        raise HTTPException(status_code=404, detail="Chat response asset not found")
     conversation = conversation.model_copy(
         update={
             "prompt_version": prompt_version,
@@ -2219,7 +2368,7 @@ def create_chat_message(request: ChatMessageRequest) -> dict[str, object]:
             "workflow_id": conversation.workflow_id,
             "prompt_asset_id": prompt_asset.id,
             "response_asset_id": response_asset.id,
-            "updated_at": __import__('datetime').datetime.now(__import__('datetime').UTC),
+            "updated_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
         }
     )
     repository.update_chat_conversation(conversation)
@@ -2228,7 +2377,7 @@ def create_chat_message(request: ChatMessageRequest) -> dict[str, object]:
             id=f"message-{__import__('uuid').uuid4().hex[:8]}",
             conversation_id=request.conversation_id,
             version=prompt_version,
-            role='user',
+            role="user",
             content=request.content,
             asset_id=prompt_asset.id,
             prompt_asset_id=prompt_asset.id,
@@ -2244,10 +2393,11 @@ def create_chat_message(request: ChatMessageRequest) -> dict[str, object]:
             id=f"message-{__import__('uuid').uuid4().hex[:8]}",
             conversation_id=request.conversation_id,
             version=prompt_version + 1,
-            role='assistant',
-            content=(response_asset.metadata or {}).get('content')
-            if response_asset is not None
-            else f"Generated response for: {request.content}",
+            role="assistant",
+            content=str(
+                _as_dict(response_asset.metadata).get("content")
+                or f"Generated response for: {request.content}"
+            ),
             asset_id=response_asset.id,
             prompt_asset_id=prompt_asset.id,
             response_asset_id=response_asset.id,
@@ -2298,7 +2448,7 @@ def create_workflow(request: WorkflowRequest) -> dict[str, object]:
         )
     )
     definition_id = request.id or workflow.id
-    workflow = workflow_engine.create_workflow(
+    workflow_definition = workflow_engine.create_workflow(
         WorkflowDefinition(
             id=definition_id,
             name=request.name,
@@ -2333,14 +2483,14 @@ def create_workflow(request: WorkflowRequest) -> dict[str, object]:
         )
     )
     return {
-        "id": workflow.id,
-        "workflow_id": workflow.id,
-        "project_id": workflow.project_id,
-        "name": workflow.name,
+        "id": workflow_definition.id,
+        "workflow_id": workflow_definition.id,
+        "project_id": workflow_definition.project_id,
+        "name": workflow_definition.name,
         "studio": request.studio,
         "default_action": request.default_action,
         "capability_req": capability_request.model_dump(),
-        "nodes": [node.model_dump() for node in workflow.nodes],
+        "nodes": [node.model_dump() for node in workflow_definition.nodes],
     }
 
 
@@ -2619,7 +2769,9 @@ def get_workflow_definition(workflow_id: str) -> dict[str, object]:
 
 
 @app.post("/workflow/{workflow_id}/execute")
-def execute_workflow_definition(workflow_id: str, request: WorkflowExecuteRequest) -> dict[str, object]:
+def execute_workflow_definition(
+    workflow_id: str, request: WorkflowExecuteRequest
+) -> dict[str, object]:
     workflow = workflow_engine.get_workflow(workflow_id)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -2715,7 +2867,11 @@ def list_activities(domain: str | None = None) -> list[dict[str, object]]:
             {
                 "id": job.id,
                 "name": job.action,
-                "projectId": repository.get_run(job.run_id).project_id if repository.get_run(job.run_id) else "project-unassigned",
+                "projectId": (
+                    _run_project_id(job.run_id)
+                    if repository.get_run(job.run_id)
+                    else "project-unassigned"
+                ),
                 "domain": _job_domain(job.action),
                 "state": _job_state(job.status.value),
                 "severity": _job_severity(job.status.value),
@@ -2860,7 +3016,7 @@ def validate_workflow_definition(request: WorkflowDefinitionRequest) -> dict[str
 
 
 @app.post("/workflow-engine/workflows/{workflow_definition_id}/execute")
-def execute_workflow_definition(
+def execute_workflow_engine_definition(
     workflow_definition_id: str, request: WorkflowExecuteRequest
 ) -> dict[str, object]:
     execution = workflow_engine.execute_workflow(
@@ -2886,22 +3042,6 @@ def execute_workflow_api(workflow_id: str) -> dict[str, object]:
     )
     execution = workflow_engine.execute_workflow(workflow_definition_id=workflow_id, run_id=run.id)
     return execution.model_dump()
-
-
-@app.get("/execution/{execution_id}")
-def get_execution(execution_id: str) -> dict[str, object]:
-    execution = workflow_engine.get_execution(execution_id)
-    if execution is None:
-        raise HTTPException(status_code=404, detail="Execution not found")
-    return execution.model_dump()
-
-
-@app.get("/execution/{execution_id}/timeline")
-def get_execution_timeline(execution_id: str) -> list[dict[str, object]]:
-    try:
-        return workflow_engine.get_execution_timeline(execution_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/workflow-engine/executions/{execution_id}/pause")
@@ -2938,6 +3078,110 @@ def inspect_execution_plan(execution_id: str) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return plan.model_dump()
+
+
+@app.get("/health/report")
+def health_report() -> dict[str, object]:
+    return diagnostics.health_report().model_dump(mode="json")
+
+
+@app.get("/diagnostics")
+def get_diagnostics() -> dict[str, object]:
+    return diagnostics.export()
+
+
+@app.get("/diagnostics/system")
+def get_system_information() -> dict[str, object]:
+    return diagnostics.system_information()
+
+
+@app.get("/diagnostics/environment")
+def get_environment_report() -> dict[str, object]:
+    return diagnostics.environment_report()
+
+
+@app.get("/diagnostics/dependencies")
+def get_dependency_report() -> list[dict[str, object]]:
+    return diagnostics.dependency_report()
+
+
+@app.get("/diagnostics/database")
+def get_database_status() -> dict[str, object]:
+    return diagnostics.database_status().model_dump(mode="json")
+
+
+@app.get("/diagnostics/providers")
+def get_provider_status() -> dict[str, object]:
+    return diagnostics.provider_status().model_dump(mode="json")
+
+
+@app.get("/diagnostics/workers")
+def get_worker_diagnostics() -> dict[str, object]:
+    return diagnostics.worker_status().model_dump(mode="json")
+
+
+@app.get("/diagnostics/plugins")
+def get_plugin_status() -> dict[str, object]:
+    return diagnostics.plugin_status().model_dump(mode="json")
+
+
+@app.get("/configuration")
+def get_configuration() -> dict[str, object]:
+    """The resolved configuration. Never includes the database URL."""
+    return {
+        "resolved": diagnostics.environment_report(),
+        "profiles": describe_profiles(),
+    }
+
+
+@app.post("/backups/export")
+def export_backup(request: BackupExportRequest) -> dict[str, object]:
+    try:
+        if request.scope is BackupScope.PROJECT:
+            archive = backup_service.export_project(request.scope_id or "")
+        elif request.scope is BackupScope.WORKSPACE:
+            archive = backup_service.export_workspace(request.scope_id or "")
+        elif request.scope is BackupScope.ORGANIZATION:
+            archive = backup_service.export_organization(request.scope_id or "")
+        else:
+            archive = backup_service.export_settings()
+    except BackupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return archive.model_dump(mode="json")
+
+
+@app.post("/backups/validate")
+def validate_backup(request: BackupRestoreRequest) -> dict[str, object]:
+    try:
+        archive = BackupArchive.model_validate(request.archive)
+    except Exception as exc:  # noqa: BLE001 - reported to the caller
+        raise HTTPException(status_code=400, detail=f"Invalid archive: {exc}") from exc
+    return backup_service.validate(archive).model_dump(mode="json")
+
+
+@app.post("/backups/restore")
+def restore_backup(request: BackupRestoreRequest) -> dict[str, object]:
+    try:
+        archive = BackupArchive.model_validate(request.archive)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid archive: {exc}") from exc
+    try:
+        result = backup_service.restore(archive, dry_run=request.dry_run)
+    except BackupError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result.model_dump(mode="json")
+
+
+@app.post("/recovery/sweep")
+def run_recovery_sweep(request: RecoverySweepRequest | None = None) -> dict[str, object]:
+    dry_run = request.dry_run if request else False
+    return recovery_service.run_full_sweep(dry_run=dry_run).model_dump(mode="json")
+
+
+@app.get("/recovery/report")
+def recovery_report() -> dict[str, object]:
+    """What a sweep would repair right now, without repairing anything."""
+    return recovery_service.run_full_sweep(dry_run=True).model_dump(mode="json")
 
 
 @app.get("/organizations")
@@ -2999,9 +3243,7 @@ def update_organization(
 
 
 @app.post("/organizations/{organization_id}/members")
-def add_organization_member(
-    organization_id: str, request: MemberAddRequest
-) -> dict[str, object]:
+def add_organization_member(organization_id: str, request: MemberAddRequest) -> dict[str, object]:
     try:
         membership = organization_service.add_member(
             organization_id=organization_id,
@@ -3049,9 +3291,7 @@ def remove_organization_member(
 
 
 @app.get("/organizations/{organization_id}/permissions/{identity_id}")
-def resolve_identity_permissions(
-    organization_id: str, identity_id: str
-) -> dict[str, object]:
+def resolve_identity_permissions(organization_id: str, identity_id: str) -> dict[str, object]:
     resolution = organization_service.resolve_permissions(identity_id, organization_id)
     return resolution.model_dump(mode="json")
 
@@ -3300,9 +3540,7 @@ def get_cluster_load() -> dict[str, object]:
 
 @app.get("/cluster/reservations")
 def list_cluster_reservations(worker_id: str | None = None) -> list[dict[str, object]]:
-    return [
-        r.model_dump(mode="json") for r in repository.list_reservations(worker_id=worker_id)
-    ]
+    return [r.model_dump(mode="json") for r in repository.list_reservations(worker_id=worker_id)]
 
 
 @app.get("/cluster/leases")
@@ -3395,9 +3633,7 @@ def list_approvals(
     pending_only: bool = False,
 ) -> list[dict[str, object]]:
     if pending_only:
-        approvals = approval_service.list_pending(
-            project_id=project_id, workspace_id=workspace_id
-        )
+        approvals = approval_service.list_pending(project_id=project_id, workspace_id=workspace_id)
     else:
         approvals = approval_service.list_requests(
             state=state, project_id=project_id, workspace_id=workspace_id
@@ -3414,8 +3650,7 @@ def list_approval_history(approval_id: str | None = None) -> list[dict[str, obje
 @app.get("/approvals/waiting-executions")
 def list_executions_waiting_approval() -> list[dict[str, object]]:
     return [
-        execution.model_dump(mode="json")
-        for execution in agent_runtime.list_waiting_approval()
+        execution.model_dump(mode="json") for execution in agent_runtime.list_waiting_approval()
     ]
 
 
@@ -3490,9 +3725,7 @@ def resume_execution_after_approval(approval_id: str) -> dict[str, object]:
 def list_approval_policies(
     project_id: str | None = None, workspace_id: str | None = None
 ) -> list[dict[str, object]]:
-    policies = approval_service.list_policies(
-        project_id=project_id, workspace_id=workspace_id
-    )
+    policies = approval_service.list_policies(project_id=project_id, workspace_id=workspace_id)
     return [policy.model_dump(mode="json") for policy in policies]
 
 
@@ -3500,8 +3733,10 @@ def list_approval_policies(
 def upsert_approval_policy(request: ApprovalPolicyRequest) -> dict[str, object]:
     payload = request.model_dump(exclude_none=True)
     payload.pop("id", None)
-    policy = ApprovalPolicy(**payload) if request.id is None else ApprovalPolicy(
-        id=request.id, **payload
+    policy = (
+        ApprovalPolicy(**payload)
+        if request.id is None
+        else ApprovalPolicy(id=request.id, **payload)
     )
     return approval_service.upsert_policy(policy).model_dump(mode="json")
 
@@ -3716,7 +3951,19 @@ def _deduce_import_asset_type(filename: str, mime_type: str | None) -> str:
         return "image"
     if suffix in {".md", ".txt", ".rtf"}:
         return "text"
-    if suffix in {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".toml", ".rs", ".go"}:
+    if suffix in {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".rs",
+        ".go",
+    }:
         return "code"
     if suffix in {".pdf", ".doc", ".docx"}:
         return "document"

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from .events import WorkerHeartbeatReceived
 from .models import HeartbeatReport, WorkerHeartbeat, WorkerNode, WorkerState
-from .worker_registry import WorkerRegistry, WorkerRegistryError
+from .worker_registry import LOCAL_WORKER_ID, WorkerRegistry, WorkerRegistryError
 
 if TYPE_CHECKING:
     from ..event_bus import EventBus
@@ -85,9 +85,18 @@ class HeartbeatService:
         for worker in self.repository.list_workers():
             if worker.status in {WorkerState.OFFLINE, WorkerState.PAUSED}:
                 continue
+            if self._is_in_process(worker):
+                # The in-process worker's liveness is the process itself. It has
+                # no agent to send heartbeats, so ageing it out would make a
+                # single-machine Atlas declare its own worker dead — and stall
+                # every placement — 90 seconds after boot.
+                continue
             if worker.last_heartbeat_at is None or worker.last_heartbeat_at < cutoff:
                 stale.append(worker)
         return stale
+
+    def _is_in_process(self, worker: WorkerNode) -> bool:
+        return worker.id == LOCAL_WORKER_ID
 
     def detect_timeouts(self, now: datetime | None = None) -> list[WorkerNode]:
         """Marks every worker past its heartbeat deadline OFFLINE."""

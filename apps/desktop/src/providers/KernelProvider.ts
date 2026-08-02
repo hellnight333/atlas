@@ -21,6 +21,14 @@ import type {
   ChatMessage,
   ChatMessageRequest,
   ApprovalCreatePayload,
+  BackupArchive,
+  BackupScope,
+  BackupValidation,
+  ConfigurationReport,
+  DiagnosticsExport,
+  HealthReport,
+  RecoveryReport,
+  RestoreResult,
   AuditAction,
   AuditRecord,
   IdentityProviderStatus,
@@ -1039,6 +1047,38 @@ export class KernelProvider implements AtlasProvider {
 
   async listIdentityProviders(): Promise<IdentityProviderStatus[]> {
     return this.client.get(atlasEndpoints.identityProviders)
+  }
+
+  async getHealthReport(): Promise<HealthReport> {
+    return this.client.get(atlasEndpoints.healthReport)
+  }
+
+  async getDiagnostics(): Promise<DiagnosticsExport> {
+    return this.client.get(atlasEndpoints.diagnostics)
+  }
+
+  async getConfiguration(): Promise<ConfigurationReport> {
+    return this.client.get(atlasEndpoints.configuration)
+  }
+
+  async exportBackup(scope: BackupScope, scopeId?: string): Promise<BackupArchive> {
+    return this.client.post(atlasEndpoints.backupExport, { scope, scope_id: scopeId })
+  }
+
+  async validateBackup(archive: BackupArchive): Promise<BackupValidation> {
+    return this.client.post(atlasEndpoints.backupValidate, { archive })
+  }
+
+  async restoreBackup(archive: BackupArchive, dryRun = false): Promise<RestoreResult> {
+    return this.client.post(atlasEndpoints.backupRestore, { archive, dry_run: dryRun })
+  }
+
+  async getRecoveryReport(): Promise<RecoveryReport> {
+    return this.client.get(atlasEndpoints.recoveryReport)
+  }
+
+  async runRecoverySweep(dryRun = false): Promise<RecoveryReport> {
+    return this.client.post(atlasEndpoints.recoverySweep, { dry_run: dryRun })
   }
 }
 

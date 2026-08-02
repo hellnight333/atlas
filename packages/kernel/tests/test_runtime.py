@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from atlas_kernel.api import agent_foundation, app, event_bus, repository
+from fastapi.testclient import TestClient
+
 from atlas_kernel.agents.events import (
     RuntimeCancelled,
     RuntimeCompleted,
@@ -12,8 +13,7 @@ from atlas_kernel.agents.events import (
     RuntimeTimedOut,
 )
 from atlas_kernel.agents.schedule_models import RuntimeExecutionStatus
-from fastapi.testclient import TestClient
-
+from atlas_kernel.api import agent_foundation, app, event_bus, repository
 
 client = TestClient(app)
 
@@ -99,7 +99,19 @@ def test_runtime_timeout() -> None:
     runtime_execution = agent_foundation._runtime.execute_entry(  # type: ignore[attr-defined]
         schedule,
         entry,
-        retry_policy=agent_foundation._runtime.list_runtime_executions()[0].retry_policy if agent_foundation._runtime.list_runtime_executions() else repository.get_runtime_execution(repository.list_runtime_executions()[0].execution_id).retry_policy if repository.list_runtime_executions() else __import__("atlas_kernel.agents.schedule_models", fromlist=["RuntimeRetryPolicy"]).RuntimeRetryPolicy(max_attempts=1, retry_delay=0.0, backoff=1.0),
+        retry_policy=(
+            agent_foundation._runtime.list_runtime_executions()[0].retry_policy
+            if agent_foundation._runtime.list_runtime_executions()
+            else (
+                repository.get_runtime_execution(
+                    repository.list_runtime_executions()[0].execution_id
+                ).retry_policy
+                if repository.list_runtime_executions()
+                else __import__(
+                    "atlas_kernel.agents.schedule_models", fromlist=["RuntimeRetryPolicy"]
+                ).RuntimeRetryPolicy(max_attempts=1, retry_delay=0.0, backoff=1.0)
+            )
+        ),
         timeout_seconds=0.0,
         heartbeat_interval_seconds=0.0,
     )

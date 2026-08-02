@@ -24,10 +24,16 @@ class SchedulerQueue:
         updated: list[str] = []
         tokens: list[ResumeToken] = []
         for entry in self.entries:
-            if entry.status in {QueueEntryStatus.QUEUED, QueueEntryStatus.READY, QueueEntryStatus.RUNNING}:
+            if entry.status in {
+                QueueEntryStatus.QUEUED,
+                QueueEntryStatus.READY,
+                QueueEntryStatus.RUNNING,
+            }:
                 entry.status = QueueEntryStatus.PAUSED
                 updated.append(entry.id)
-                tokens.append(ResumeToken(entry_id=entry.id, metadata={"paused_at": now.isoformat()}))
+                tokens.append(
+                    ResumeToken(entry_id=entry.id, metadata={"paused_at": now.isoformat()})
+                )
         return updated, tokens
 
     def resume(self, token_ids: set[str] | None = None) -> list[str]:
@@ -50,7 +56,11 @@ class SchedulerQueue:
 
     def retry(self, entry_id: str) -> bool:
         for entry in self.entries:
-            if entry.id == entry_id and entry.status in {QueueEntryStatus.BLOCKED, QueueEntryStatus.PAUSED, QueueEntryStatus.CANCELLED}:
+            if entry.id == entry_id and entry.status in {
+                QueueEntryStatus.BLOCKED,
+                QueueEntryStatus.PAUSED,
+                QueueEntryStatus.CANCELLED,
+            }:
                 entry.retry_count += 1
                 entry.status = QueueEntryStatus.QUEUED
                 entry.started_time = None

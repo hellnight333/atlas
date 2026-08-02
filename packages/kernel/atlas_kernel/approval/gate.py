@@ -67,9 +67,7 @@ class RuntimeApprovalGate:
                 reason=request.reason,
             )
         )
-        return ApprovalVerdict(
-            allowed=False, approval_id=request.id, reason=request.reason
-        )
+        return ApprovalVerdict(allowed=False, approval_id=request.id, reason=request.reason)
 
     def _verdict_for(
         self, request: Any, schedule: ExecutionSchedule, entry: ScheduleQueueEntry
@@ -102,9 +100,7 @@ class RuntimeApprovalGate:
 
         if request.state is ApprovalState.EXPIRED:
             self.event_bus.publish(
-                ExecutionExpired(
-                    execution_id=request.execution_id or "", approval_id=request.id
-                )
+                ExecutionExpired(execution_id=request.execution_id or "", approval_id=request.id)
             )
             return ApprovalVerdict(
                 allowed=False,
@@ -121,9 +117,7 @@ class RuntimeApprovalGate:
                 reason="approval cancelled",
             )
 
-        return ApprovalVerdict(
-            allowed=False, approval_id=request.id, reason=request.reason
-        )
+        return ApprovalVerdict(allowed=False, approval_id=request.id, reason=request.reason)
 
     def _existing_request(self, schedule_id: str, entry_id: str) -> Any | None:
         matches = [

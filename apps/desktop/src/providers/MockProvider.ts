@@ -23,6 +23,14 @@ import type {
   ImageGenerationResult,
   ImageVariantRequest,
   ApprovalCreatePayload,
+  BackupArchive,
+  BackupScope,
+  BackupValidation,
+  ConfigurationReport,
+  DiagnosticsExport,
+  HealthReport,
+  RecoveryReport,
+  RestoreResult,
   AuditAction,
   AuditRecord,
   IdentityProviderStatus,
@@ -2391,6 +2399,83 @@ export class MockProvider implements AtlasProvider {
       throw new Error('Organization not found')
     }
     return organization
+  }
+
+  async getHealthReport(): Promise<HealthReport> {
+    return {
+      healthy: true,
+      generated_at: new Date().toISOString(),
+      components: [
+        { name: 'database', healthy: true, detail: 'ok', data: {} },
+        { name: 'dependencies', healthy: true, detail: 'ok', data: {} },
+        { name: 'providers', healthy: true, detail: 'ok', data: { registered: 2 } },
+        { name: 'workers', healthy: true, detail: 'ok', data: { total: 5, online: 2 } },
+        { name: 'runtime', healthy: true, detail: 'ok', data: { total: 0 } },
+        { name: 'plugins', healthy: true, detail: 'no plugin SDK in this build', data: { sdk_available: false } },
+      ],
+    }
+  }
+
+  async getDiagnostics(): Promise<DiagnosticsExport> {
+    const health = await this.getHealthReport()
+    return {
+      generated_at: health.generated_at,
+      healthy: health.healthy,
+      failing_components: [],
+      system: { python_version: '3.13.0', platform: 'mock', hostname: 'mock-host' },
+      environment: { profile: 'development', offline: false, database_configured: true },
+      dependencies: [
+        { name: 'fastapi', installed: true, version: '0.115.0' },
+        { name: 'pydantic', installed: true, version: '2.9.0' },
+        { name: 'sqlalchemy', installed: true, version: '2.0.0' },
+      ],
+      components: health.components,
+    }
+  }
+
+  async getConfiguration(): Promise<ConfigurationReport> {
+    return {
+      resolved: { profile: 'development', offline: false, log_level: 'debug' },
+      profiles: [
+        { profile: 'development', defaults: { log_level: 'debug' } },
+        { profile: 'staging', defaults: { log_json: true } },
+        { profile: 'production', defaults: { log_json: true, integrity_check_on_startup: true } },
+        { profile: 'portable', defaults: { data_dir: './atlas-data' } },
+        { profile: 'offline', defaults: { offline: true } },
+      ],
+    }
+  }
+
+  async exportBackup(scope: BackupScope, scopeId?: string): Promise<BackupArchive> {
+    const data = { projects: [{ id: scopeId ?? 'p1', name: 'Mock Project' }] }
+    return {
+      manifest: {
+        format_version: 1,
+        scope,
+        scope_id: scopeId ?? null,
+        created_at: new Date().toISOString(),
+        atlas_profile: 'development',
+        counts: { projects: data.projects.length },
+        checksum: 'mock-checksum',
+      },
+      data,
+    }
+  }
+
+  async validateBackup(archive: BackupArchive): Promise<BackupValidation> {
+    return { valid: true, errors: [], warnings: [], manifest: archive.manifest }
+  }
+
+  async restoreBackup(_archive: BackupArchive, dryRun = false): Promise<RestoreResult> {
+    return { restored: { projects: dryRun ? 0 : 1 }, skipped: {}, dry_run: dryRun }
+  }
+
+  async getRecoveryReport(): Promise<RecoveryReport> {
+    return { generated_at: new Date().toISOString(), dry_run: true, actions: [] }
+  }
+
+  async runRecoverySweep(dryRun = false): Promise<RecoveryReport> {
+    return { generated_at: new Date().toISOString(), dry_run: dryRun, actions: [] }
   }
 }
 

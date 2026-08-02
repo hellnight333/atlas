@@ -63,12 +63,24 @@ class AutomationActionSpec:
 
 
 ACTION_CATALOG: dict[str, AutomationActionSpec] = {
-    "run_planner": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "text.generate", "planning"),
-    "queue_workflow": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "text.generate", "workflow"),
-    "start_runtime": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "text.generate", "workflow"),
-    "generate_asset": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "text.generate", "text"),
-    "generate_image": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "image.generate", "image"),
-    "generate_video": AutomationActionSpec(AutomationActionKind.EXECUTABLE, "video.generate", "media"),
+    "run_planner": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "text.generate", "planning"
+    ),
+    "queue_workflow": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "text.generate", "workflow"
+    ),
+    "start_runtime": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "text.generate", "workflow"
+    ),
+    "generate_asset": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "text.generate", "text"
+    ),
+    "generate_image": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "image.generate", "image"
+    ),
+    "generate_video": AutomationActionSpec(
+        AutomationActionKind.EXECUTABLE, "video.generate", "media"
+    ),
     "run_review": AutomationActionSpec(AutomationActionKind.STATE),
     "send_notification": AutomationActionSpec(AutomationActionKind.STATE),
     "create_task": AutomationActionSpec(AutomationActionKind.STATE),
@@ -176,16 +188,22 @@ class AutomationEngine:
         )
         return sorted(rules, key=lambda rule: (-rule.priority, rule.created_at, rule.id))
 
-    def update_rule(self, rule_id: str, changes: dict[str, Any], actor: str = "system") -> AutomationRule:
+    def update_rule(
+        self, rule_id: str, changes: dict[str, Any], actor: str = "system"
+    ) -> AutomationRule:
         rule = self._require_rule(rule_id)
         for action in changes.get("actions", []) or []:
-            action_type = action.type if isinstance(action, AutomationAction) else action.get("type")
+            action_type = (
+                action.type if isinstance(action, AutomationAction) else action.get("type")
+            )
             if action_type not in ACTION_CATALOG:
                 raise ValueError(f"Unsupported automation action: {action_type}")
 
         updated = rule.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         self.repository.update_automation_rule(updated)
-        self._audit(rule_id, f"Rule '{updated.name}' updated", actor, context={"fields": sorted(changes)})
+        self._audit(
+            rule_id, f"Rule '{updated.name}' updated", actor, context={"fields": sorted(changes)}
+        )
         self._register_schedule(updated)
         self.event_bus.publish(AutomationRuleUpdated(rule_id=updated.id, name=updated.name))
         return updated
@@ -238,7 +256,9 @@ class AutomationEngine:
             return trigger_data is not None
         return False
 
-    def evaluate_conditions(self, rule: AutomationRule, context: dict[str, Any] | None = None) -> bool:
+    def evaluate_conditions(
+        self, rule: AutomationRule, context: dict[str, Any] | None = None
+    ) -> bool:
         context = context or {}
         return all(self._evaluate_condition(condition, context) for condition in rule.conditions)
 
@@ -526,7 +546,9 @@ class AutomationEngine:
     def list_runs(self, rule_id: str | None = None) -> list[AutomationRun]:
         return self.repository.list_automation_runs(rule_id=rule_id)
 
-    def list_logs(self, run_id: str | None = None, rule_id: str | None = None) -> list[AutomationLog]:
+    def list_logs(
+        self, run_id: str | None = None, rule_id: str | None = None
+    ) -> list[AutomationLog]:
         return self.repository.list_automation_logs(run_id=run_id, rule_id=rule_id)
 
     def get_state(self, rule_id: str) -> AutomationState:

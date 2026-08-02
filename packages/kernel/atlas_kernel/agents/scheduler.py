@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from ..event_bus import EventBus
 from ..repository import AtlasRepository
-from .events import QueueUpdated, ScheduleCreated, TaskBlocked, TaskCancelled, TaskQueued, TaskReady, TaskResumed
 from .dependency_graph import DependencyGraph
+from .events import (
+    QueueUpdated,
+    ScheduleCreated,
+    TaskBlocked,
+    TaskCancelled,
+    TaskQueued,
+    TaskReady,
+    TaskResumed,
+)
 from .priorities import SchedulerPriorityEngine
 from .queue import SchedulerQueue
 from .schedule_models import (
@@ -14,7 +21,6 @@ from .schedule_models import (
     QueueEntryStatus,
     QueueUpdateResult,
     ScheduleQueueEntry,
-    SchedulerPriority,
     SchedulerRequest,
 )
 
@@ -22,7 +28,12 @@ from .schedule_models import (
 class AgentScheduler:
     """Deterministic scheduler. No provider/workflow execution."""
 
-    def __init__(self, repository: AtlasRepository, event_bus: EventBus, priority_engine: SchedulerPriorityEngine | None = None) -> None:
+    def __init__(
+        self,
+        repository: AtlasRepository,
+        event_bus: EventBus,
+        priority_engine: SchedulerPriorityEngine | None = None,
+    ) -> None:
         self.repository = repository
         self.event_bus = event_bus
         self.priority_engine = priority_engine or SchedulerPriorityEngine()
@@ -31,7 +42,7 @@ class AgentScheduler:
         edges: list[tuple[str, str]] = []
         entries: list[ScheduleQueueEntry] = []
 
-        for index, step in enumerate(request.steps):
+        for step in request.steps:
             for dependency in step.dependencies:
                 edges.append((dependency, step.id))
 
@@ -40,7 +51,9 @@ class AgentScheduler:
                 status=QueueEntryStatus.QUEUED,
                 priority=request.priority,
                 dependencies=list(step.dependencies),
-                executor_hint=(request.available_executors[0] if request.available_executors else None),
+                executor_hint=(
+                    request.available_executors[0] if request.available_executors else None
+                ),
                 capability=step.capability,
             )
             entries.append(queue_entry)
@@ -65,7 +78,11 @@ class AgentScheduler:
         ready_entry_ids = [entry.id for entry in entries if entry.plan_step.id in ready_step_ids]
         queue_state.mark_ready(ready_entry_ids)
 
-        blocked_entry_ids = [entry.id for entry in entries if entry.status == QueueEntryStatus.QUEUED and entry.dependencies]
+        blocked_entry_ids = [
+            entry.id
+            for entry in entries
+            if entry.status == QueueEntryStatus.QUEUED and entry.dependencies
+        ]
 
         estimated_seconds = sum(max(1, step.estimated_time_seconds) for step in request.steps)
         estimated_finish = datetime.now(UTC) + timedelta(seconds=estimated_seconds)
@@ -88,14 +105,26 @@ class AgentScheduler:
         )
 
         self.repository.create_schedule(schedule)
-        self.event_bus.publish(ScheduleCreated(schedule_id=schedule.schedule_id, plan_id=schedule.plan_id, agent_id=schedule.agent_id))
+        self.event_bus.publish(
+            ScheduleCreated(
+                schedule_id=schedule.schedule_id,
+                plan_id=schedule.plan_id,
+                agent_id=schedule.agent_id,
+            )
+        )
         for entry in schedule.queue_entries:
             if entry.status == QueueEntryStatus.READY:
-                self.event_bus.publish(TaskReady(schedule_id=schedule.schedule_id, entry_id=entry.id))
+                self.event_bus.publish(
+                    TaskReady(schedule_id=schedule.schedule_id, entry_id=entry.id)
+                )
             elif entry.id in schedule.blocked_entries:
-                self.event_bus.publish(TaskBlocked(schedule_id=schedule.schedule_id, entry_id=entry.id))
+                self.event_bus.publish(
+                    TaskBlocked(schedule_id=schedule.schedule_id, entry_id=entry.id)
+                )
             else:
-                self.event_bus.publish(TaskQueued(schedule_id=schedule.schedule_id, entry_id=entry.id))
+                self.event_bus.publish(
+                    TaskQueued(schedule_id=schedule.schedule_id, entry_id=entry.id)
+                )
 
         return schedule
 

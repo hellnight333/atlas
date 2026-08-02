@@ -451,9 +451,10 @@ def test_review_lifecycle_roundtrip():
     assert "approved" in event_types
     assert "published" in event_types
 
-
     def test_workspace_intelligence_endpoints_reflect_project_state():
-        workspace = client.post("/workspaces", json={"name": "ws-intel", "description": "workspace"})
+        workspace = client.post(
+            "/workspaces", json={"name": "ws-intel", "description": "workspace"}
+        )
         assert workspace.status_code == 200
         workspace_id = workspace.json()["workspace_id"]
 
@@ -473,20 +474,32 @@ def test_review_lifecycle_roundtrip():
 
         message = client.post(
             "/chat/message",
-            json={"conversation_id": conversation_id, "role": "user", "content": "Summarize current plan"},
+            json={
+                "conversation_id": conversation_id,
+                "role": "user",
+                "content": "Summarize current plan",
+            },
         )
         assert message.status_code == 200
 
         research_session = client.post(
             "/research/session",
-            json={"project_id": project_id, "title": "Research wave", "question": "What should we prioritize?"},
+            json={
+                "project_id": project_id,
+                "title": "Research wave",
+                "question": "What should we prioritize?",
+            },
         )
         assert research_session.status_code == 200
         session_id = research_session.json()["id"]
 
         source_search = client.post(
             "/research/search",
-            json={"session_id": session_id, "query": "priority framework", "provider": "mock-search"},
+            json={
+                "session_id": session_id,
+                "query": "priority framework",
+                "provider": "mock-search",
+            },
         )
         assert source_search.status_code == 200
 
@@ -528,7 +541,9 @@ def test_review_lifecycle_roundtrip():
 
         recommendations_payload = client.get(f"/workspace/recommendations/{project_id}")
         assert recommendations_payload.status_code == 200
-        recommendation_titles = {item["title"] for item in recommendations_payload.json()["recommendations"]}
+        recommendation_titles = {
+            item["title"] for item in recommendations_payload.json()["recommendations"]
+        }
         assert "Generate Variant" in recommendation_titles
 
         recent_payload = client.get(f"/workspace/recent/{project_id}")

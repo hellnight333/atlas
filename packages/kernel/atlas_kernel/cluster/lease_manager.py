@@ -133,7 +133,9 @@ class LeaseManager:
     def renew(self, lease_id: str, lease_seconds: int | None = None) -> ExecutionLease:
         lease = self._require_lease(lease_id)
         if lease.state is not LeaseState.ACTIVE:
-            raise LeaseManagerError(f"Lease {lease_id} is {lease.state.value} and cannot be renewed")
+            raise LeaseManagerError(
+                f"Lease {lease_id} is {lease.state.value} and cannot be renewed"
+            )
         now = datetime.now(UTC)
         seconds = lease_seconds or lease.lease_seconds
         renewed = lease.model_copy(

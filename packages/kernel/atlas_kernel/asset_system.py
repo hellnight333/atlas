@@ -158,9 +158,11 @@ class AssetService:
             uri=uri,
             content_hash=(output.get("hash") if isinstance(output.get("hash"), str) else None),
             metadata=metadata,
-            source_asset_ids=list(job.payload.get("input_asset_ids", []))
-            if isinstance(job.payload.get("input_asset_ids"), list)
-            else [],
+            source_asset_ids=(
+                list(job.payload.get("input_asset_ids", []))
+                if isinstance(job.payload.get("input_asset_ids"), list)
+                else []
+            ),
             thumbnail_uri=(uri if asset_type == "image" else None),
         )
         return self.create_asset(asset)

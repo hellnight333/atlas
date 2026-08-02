@@ -193,9 +193,7 @@ class ApprovalService:
             self.event_bus.publish(ApprovalViewed(approval_id=approval_id, actor=actor))
         return request
 
-    def approve(
-        self, approval_id: str, actor: str, comment: str | None = None
-    ) -> ApprovalRequest:
+    def approve(self, approval_id: str, actor: str, comment: str | None = None) -> ApprovalRequest:
         request = self._require_pending(approval_id)
         self._guard_actor(request, actor)
 
@@ -237,17 +235,13 @@ class ApprovalService:
             )
         return request
 
-    def reject(
-        self, approval_id: str, actor: str, comment: str | None = None
-    ) -> ApprovalRequest:
+    def reject(self, approval_id: str, actor: str, comment: str | None = None) -> ApprovalRequest:
         request = self._require_pending(approval_id)
         self._guard_actor(request, actor)
 
         now = datetime.now(UTC)
         request.decisions.append(
-            ApprovalDecision(
-                decision=ApprovalDecisionType.REJECT, actor=actor, comment=comment
-            )
+            ApprovalDecision(decision=ApprovalDecisionType.REJECT, actor=actor, comment=comment)
         )
         request.state = ApprovalState.REJECTED
         request.decided_at = now
@@ -362,13 +356,9 @@ class ApprovalService:
         if not actor or not actor.strip():
             raise ApprovalError("An approval decision requires an actor")
         if actor == request.requested_by:
-            raise SelfApprovalError(
-                f"{actor} requested this approval and may not decide it"
-            )
+            raise SelfApprovalError(f"{actor} requested this approval and may not decide it")
         if request.required_approvers and actor not in request.required_approvers:
-            raise ApprovalError(
-                f"{actor} is not an approver for {request.id}"
-            )
+            raise ApprovalError(f"{actor} is not an approver for {request.id}")
 
     def _is_due(self, request: ApprovalRequest) -> bool:
         return (

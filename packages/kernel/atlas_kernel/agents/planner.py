@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .cost_estimator import PlannerCostEstimator
-from .plan_models import ExecutionPlan, PlanStep, PlannerContext
+from .plan_models import ExecutionPlan, PlannerContext, PlanStep
 
 
 @dataclass
@@ -44,7 +44,9 @@ class AgentPlanner:
         duration = sum(step.estimated_time_seconds for step in steps)
         cost = round(sum(step.estimated_cost_usd for step in steps), 4)
         capabilities_required = sorted(set(step.capability for step in steps))
-        assets_required = [str(asset.get("id", "")) for asset in context.assets[:8] if asset.get("id")]
+        assets_required = [
+            str(asset.get("id", "")) for asset in context.assets[:8] if asset.get("id")
+        ]
         expected_outputs = [step.expected_output for step in steps]
         review_required = any(step.review_required for step in steps)
 

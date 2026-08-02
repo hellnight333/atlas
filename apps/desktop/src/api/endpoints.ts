@@ -131,4 +131,12 @@ export const atlasEndpoints = {
   auditById: (id: string) => `/api/audit/${id}`,
   identities: '/api/identities',
   identityProviders: '/api/identity-providers',
+  healthReport: '/api/health/report',
+  diagnostics: '/api/diagnostics',
+  configuration: '/api/configuration',
+  backupExport: '/api/backups/export',
+  backupValidate: '/api/backups/validate',
+  backupRestore: '/api/backups/restore',
+  recoveryReport: '/api/recovery/report',
+  recoverySweep: '/api/recovery/sweep',
 } as const

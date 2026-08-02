@@ -84,10 +84,7 @@ class PolicyResolver:
             and policy_set.domain is domain
             and policy_set.organization_id == organization_id
             and policy_set.scope is scope
-            and (
-                scope is PolicyScopeKind.ORGANIZATION
-                or policy_set.scope_id == scope_id
-            )
+            and (scope is PolicyScopeKind.ORGANIZATION or policy_set.scope_id == scope_id)
         ]
         # Deterministic order so the same inputs always resolve identically.
         return sorted(matches, key=lambda p: (p.created_at, p.id))

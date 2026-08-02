@@ -3,9 +3,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from atlas_kernel.api import app, graph_service
-from atlas_kernel.event_bus import ContextBundleGenerated, EdgeCreated, GraphSnapshotCreated, NodeCreated
+from atlas_kernel.event_bus import (
+    ContextBundleGenerated,
+    EdgeCreated,
+    GraphSnapshotCreated,
+    NodeCreated,
+)
 from atlas_kernel.models import KnowledgeEdge, KnowledgeNode, RelationshipType
-
 
 client = TestClient(app)
 
@@ -27,9 +31,27 @@ def _create_project() -> str:
 
 def test_graph_node_creation_and_edge_creation() -> None:
     project_id = _create_project()
-    project_node = graph_service.create_node(KnowledgeNode(id=project_id, node_type="Project", label="Graph Project", project_id=project_id, source_id=project_id))
-    asset_node = graph_service.create_node(KnowledgeNode(node_type="Asset", label="Graph Asset", project_id=project_id, source_id="asset-graph-1"))
-    edge = graph_service.create_edge(KnowledgeEdge(relationship=RelationshipType.BELONGS_TO, from_node=asset_node.id, to_node=project_node.id))
+    project_node = graph_service.create_node(
+        KnowledgeNode(
+            id=project_id,
+            node_type="Project",
+            label="Graph Project",
+            project_id=project_id,
+            source_id=project_id,
+        )
+    )
+    asset_node = graph_service.create_node(
+        KnowledgeNode(
+            node_type="Asset", label="Graph Asset", project_id=project_id, source_id="asset-graph-1"
+        )
+    )
+    edge = graph_service.create_edge(
+        KnowledgeEdge(
+            relationship=RelationshipType.BELONGS_TO,
+            from_node=asset_node.id,
+            to_node=project_node.id,
+        )
+    )
 
     assert project_node.id == project_id
     assert asset_node.project_id == project_id
@@ -38,11 +60,34 @@ def test_graph_node_creation_and_edge_creation() -> None:
 
 def test_graph_neighbors_and_traversal() -> None:
     project_id = _create_project()
-    project_node = graph_service.create_node(KnowledgeNode(node_type="Project", label="Project A", project_id=project_id, source_id=f"project-{project_id}"))
-    chat_node = graph_service.create_node(KnowledgeNode(node_type="Chat", label="Chat A", project_id=project_id, source_id="chat-a"))
-    asset_node = graph_service.create_node(KnowledgeNode(node_type="Asset", label="Asset A", project_id=project_id, source_id="asset-a"))
-    graph_service.create_edge(KnowledgeEdge(relationship=RelationshipType.BELONGS_TO, from_node=chat_node.id, to_node=project_node.id))
-    graph_service.create_edge(KnowledgeEdge(relationship=RelationshipType.REFERENCES, from_node=chat_node.id, to_node=asset_node.id))
+    project_node = graph_service.create_node(
+        KnowledgeNode(
+            node_type="Project",
+            label="Project A",
+            project_id=project_id,
+            source_id=f"project-{project_id}",
+        )
+    )
+    chat_node = graph_service.create_node(
+        KnowledgeNode(node_type="Chat", label="Chat A", project_id=project_id, source_id="chat-a")
+    )
+    asset_node = graph_service.create_node(
+        KnowledgeNode(
+            node_type="Asset", label="Asset A", project_id=project_id, source_id="asset-a"
+        )
+    )
+    graph_service.create_edge(
+        KnowledgeEdge(
+            relationship=RelationshipType.BELONGS_TO,
+            from_node=chat_node.id,
+            to_node=project_node.id,
+        )
+    )
+    graph_service.create_edge(
+        KnowledgeEdge(
+            relationship=RelationshipType.REFERENCES, from_node=chat_node.id, to_node=asset_node.id
+        )
+    )
 
     neighbors = graph_service.neighbors(chat_node.id)
     path = graph_service.shortest_path(project_node.id, asset_node.id)
@@ -59,8 +104,12 @@ def test_graph_context_bundle_and_snapshot() -> None:
 
     graph_service.event_bus.subscribe(NodeCreated, lambda event: created_nodes.append(event))
     graph_service.event_bus.subscribe(EdgeCreated, lambda event: created_edges.append(event))
-    graph_service.event_bus.subscribe(GraphSnapshotCreated, lambda event: created_snapshots.append(event))
-    graph_service.event_bus.subscribe(ContextBundleGenerated, lambda event: created_contexts.append(event))
+    graph_service.event_bus.subscribe(
+        GraphSnapshotCreated, lambda event: created_snapshots.append(event)
+    )
+    graph_service.event_bus.subscribe(
+        ContextBundleGenerated, lambda event: created_contexts.append(event)
+    )
 
     project_id = _create_project()
     asset = client.post(

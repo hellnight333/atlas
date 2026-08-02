@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from atlas_kernel.api import app, event_bus
 from atlas_kernel.agents.events import (
     AgentAssigned,
     AgentCompleted,
@@ -12,7 +11,7 @@ from atlas_kernel.agents.events import (
     AgentWaiting,
     TeamCompleted,
 )
-
+from atlas_kernel.api import app, event_bus
 
 client = TestClient(app)
 

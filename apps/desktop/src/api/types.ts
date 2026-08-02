@@ -697,6 +697,76 @@ export type AgentPlanRequest = {
   goal: string
 }
 
+export type ComponentStatus = {
+  name: string
+  healthy: boolean
+  detail: string
+  data: Record<string, unknown>
+}
+
+export type HealthReport = {
+  healthy: boolean
+  generated_at: string
+  components: ComponentStatus[]
+}
+
+export type DiagnosticsExport = {
+  generated_at: string
+  healthy: boolean
+  failing_components: string[]
+  system: Record<string, unknown>
+  environment: Record<string, unknown>
+  dependencies: Array<{ name: string; installed: boolean; version: string | null }>
+  components: ComponentStatus[]
+}
+
+export type ConfigurationReport = {
+  resolved: Record<string, unknown>
+  profiles: Array<{ profile: string; defaults: Record<string, unknown> }>
+}
+
+export type BackupScope = 'project' | 'workspace' | 'organization' | 'settings'
+
+export type BackupManifest = {
+  format_version: number
+  scope: BackupScope
+  scope_id?: string | null
+  created_at: string
+  atlas_profile: string
+  counts: Record<string, number>
+  checksum: string
+}
+
+export type BackupArchive = {
+  manifest: BackupManifest
+  data: Record<string, Array<Record<string, unknown>>>
+}
+
+export type BackupValidation = {
+  valid: boolean
+  errors: string[]
+  warnings: string[]
+  manifest?: BackupManifest | null
+}
+
+export type RestoreResult = {
+  restored: Record<string, number>
+  skipped: Record<string, number>
+  dry_run: boolean
+}
+
+export type RecoveryAction = {
+  kind: string
+  target_id: string
+  detail: string
+}
+
+export type RecoveryReport = {
+  generated_at: string
+  dry_run: boolean
+  actions: RecoveryAction[]
+}
+
 export type OrgPermission =
   | 'Project.Read'
   | 'Project.Write'
@@ -1645,4 +1715,12 @@ export interface AtlasProvider {
   listIdentities(): Promise<OrgIdentity[]>
   createIdentity(payload: { subject: string; displayName: string; email?: string }): Promise<OrgIdentity>
   listIdentityProviders(): Promise<IdentityProviderStatus[]>
+  getHealthReport(): Promise<HealthReport>
+  getDiagnostics(): Promise<DiagnosticsExport>
+  getConfiguration(): Promise<ConfigurationReport>
+  exportBackup(scope: BackupScope, scopeId?: string): Promise<BackupArchive>
+  validateBackup(archive: BackupArchive): Promise<BackupValidation>
+  restoreBackup(archive: BackupArchive, dryRun?: boolean): Promise<RestoreResult>
+  getRecoveryReport(): Promise<RecoveryReport>
+  runRecoverySweep(dryRun?: boolean): Promise<RecoveryReport>
 }
