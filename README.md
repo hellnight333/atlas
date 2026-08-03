@@ -12,6 +12,13 @@ only when they are a clear win.
 | Doc | What it covers |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | Master context, principles, scope discipline |
+| **[docs/QUICK_START.md](docs/QUICK_START.md)** | **Start here — download to running in ten minutes** |
+| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Every platform, and the unsigned-build warnings |
+| [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | What is actually built. Read before anything else |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Every screen, explained |
+| [docs/PROVIDER_SETUP.md](docs/PROVIDER_SETUP.md) | Why no model provider can be connected yet |
+| [docs/FAQ.md](docs/FAQ.md) | The questions people actually ask |
+| [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Confirmed problems |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, kernel components, compute topology, worker protocol |
 | [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | Local setup, commands, and engineering guardrails |
 | [docs/CI.md](docs/CI.md) | CI pipeline and failure policy |
@@ -19,6 +26,13 @@ only when they are a clear win.
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases and their exit criteria |
 | [docs/LESSONS_FROM_NAML.md](docs/LESSONS_FROM_NAML.md) | Production bugs already paid for once — read before writing provider or deploy code |
 | [docs/decisions/](docs/decisions/) | Architecture Decision Records |
+
+## Status: public alpha
+
+Atlas coordinates AI work — scheduling, automation, approvals, governance,
+lineage and recovery — and all of that is complete and runs with no
+credentials. **It has no model provider integrations yet**, so it cannot
+generate content today. [What is actually built](docs/IMPLEMENTATION_STATUS.md).
 
 ## The one rule
 

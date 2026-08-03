@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — a personal AI operating system</title>
+<meta name="description" content="An AI operating system that runs on your own machine. Scheduling, automation, approvals and governance for AI work.">
+<meta property="og:title" content="Atlas — a personal AI operating system">
+<meta property="og:description" content="An AI operating system that runs on your own machine. Scheduling, automation, approvals and governance for AI work.">
+<meta property="og:image" content="assets/logo-512.png">
+<link rel="icon" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img src="assets/logo-512.png" alt="">Atlas</a>
+  <nav class="site">
+    <a href="features.html">Features</a>
+    <a href="studios.html">Studios</a>
+    <a href="enterprise.html">Teams</a>
+    <a href="docs.html">Docs</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="community.html">Community</a>
+    <a href="download.html">Download</a>
+    <a href="https://github.com/hellnight333/atlas">GitHub</a>
+  </nav>
+</div></header>
+<main class="wrap">
+<div class="hero">
+  <h1>An AI operating system<br>for your own machine</h1>
+  <p class="lede">Atlas coordinates AI work the way an operating system coordinates programs:
+  it decides what runs, where, in what order, and whether a human approves it first.
+  No account, no cloud, no telemetry.</p>
+  <div class="btn-row">
+    <a class="btn btn-primary" href="download.html">Download for free</a>
+    <a class="btn btn-ghost" href="https://github.com/hellnight333/atlas">View source</a>
+  </div>
+</div>
+
+<div class="notice">
+  <strong>Public alpha — read before installing</strong>
+  <p>Atlas has <strong>no model provider integrations yet</strong>. It cannot generate
+  text, images or video today, and no API key will change that. What is complete is
+  everything Atlas does to <em>coordinate</em> work: scheduling, automation, approvals,
+  governance, lineage and recovery — all of which runs with no credentials at all.
+  <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">See exactly what is built</a>.</p>
+</div>
+
+<h2>What it does</h2>
+<div class="grid">
+  <div class="card"><span class="icon">⚙️</span><h3>Automation</h3>
+    <p>Triggers, conditions and actions as declarative data. Dry-run any rule to see
+    exactly what it would do before it does it.</p></div>
+  <div class="card"><span class="icon">✋</span><h3>Nothing runs itself</h3>
+    <p>When a policy matches, work stops <em>before a job exists</em> and waits for a person.
+    Atlas never publishes, deletes or spends on its own.</p></div>
+  <div class="card"><span class="icon">🖥️</span><h3>Your machines</h3>
+    <p>The scheduler places work from what a job needs and what each machine offers.
+    Capacity is reserved before work is created, so nothing starts that cannot finish.</p></div>
+  <div class="card"><span class="icon">🕸️</span><h3>Lineage</h3>
+    <p>A knowledge graph records what came from what, so you can trace any output back
+    to the brief and the source behind it.</p></div>
+  <div class="card"><span class="icon">🏢</span><h3>Teams and permissions</h3>
+    <p>Organizations, roles and policies that inherit down scopes. Ask why someone can do
+    something and Atlas names the role that granted it.</p></div>
+  <div class="card"><span class="icon">🔒</span><h3>Private by construction</h3>
+    <p>No account, no sign-in, and no Atlas server for anything to be sent to.
+    Telemetry is off by default.</p></div>
+</div>
+
+<h2>Installs in one step</h2>
+<p>Atlas bundles its own PostgreSQL database and its own Python runtime. You do not
+install a database, a runtime or a dependency — you run the installer and Atlas works.</p>
+<pre>Download  →  Open  →  Atlas creates its own database  →  Ready</pre>
+
+<h2>Try it without any setup</h2>
+<p>The <strong>Automation Studio</strong> example installs a real project with four real
+automation rules and runs end to end on a machine with no credentials. Not a walkthrough
+of a feature — the feature itself, as records you can open, edit and delete.</p>
+<ul class="clean">
+  <li>Rules arrive switched off, because a demo should not start doing work you did not ask for</li>
+  <li>Run one while it is off and it says <code>skipped — rule disabled</code>, which is the truth</li>
+  <li>Enable it, run it, and the action is genuinely applied</li>
+</ul>
+<p><a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Ten-minute quick start →</a></p>
+</main>
+<footer class="site"><div class="wrap">
+  <div class="cols">
+    <div><h4>Product</h4>
+      <a href="features.html">Features</a><a href="studios.html">Studios</a>
+      <a href="download.html">Download</a><a href="roadmap.html">Roadmap</a></div>
+    <div><h4>Documentation</h4>
+      <a href="docs.html">All docs</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Quick start</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">What is built</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md">FAQ</a></div>
+    <div><h4>Community</h4>
+      <a href="community.html">Get involved</a>
+      <a href="https://github.com/hellnight333/atlas/discussions">Discussions</a>
+      <a href="https://github.com/hellnight333/atlas/issues">Issues</a></div>
+    <div><h4>Legal</h4>
+      <a href="license.html">License</a><a href="privacy.html">Privacy</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/.github/SECURITY.md">Security</a></div>
+  </div>
+  <div class="legal">
+    <p class="muted">Atlas 0.12.0-alpha.1 &middot; Source-available under the Business Source License 1.1,
+    converting to Apache-2.0 on 2030-08-03. &copy; 2026 Ayoub Soleimani.</p>
+    <p class="muted">Public alpha. <a href="https://github.com/hellnight333/atlas/blob/main/docs/KNOWN_ISSUES.md">Known issues</a>.</p>
+  </div>
+</div></footer>
+</body></html>

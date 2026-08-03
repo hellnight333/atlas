@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — Atlas</title>
+<meta name="description" content="Atlas collects nothing by default and operates no server.">
+<meta property="og:title" content="Privacy — Atlas">
+<meta property="og:description" content="Atlas collects nothing by default and operates no server.">
+<meta property="og:image" content="assets/logo-512.png">
+<link rel="icon" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img src="assets/logo-512.png" alt="">Atlas</a>
+  <nav class="site">
+    <a href="features.html">Features</a>
+    <a href="studios.html">Studios</a>
+    <a href="enterprise.html">Teams</a>
+    <a href="docs.html">Docs</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="community.html">Community</a>
+    <a href="download.html">Download</a>
+    <a href="https://github.com/hellnight333/atlas">GitHub</a>
+  </nav>
+</div></header>
+<main class="wrap">
+<h1>Privacy</h1>
+<p class="lede muted">Atlas collects nothing by default, and operates no server that could
+receive your data.</p>
+
+<h2>What Atlas sends when you do nothing</h2>
+<p><strong>Nothing.</strong> A fresh install has telemetry disabled and the update check
+disabled. No request is made to any Atlas-operated endpoint, because none exists.</p>
+<p>There is no account, no sign-in and no sync. Atlas does not know who you are.</p>
+
+<h2>If you turn diagnostics on</h2>
+<table>
+  <tr><th>Mode</th><th>Collects</th></tr>
+  <tr><td><code>disabled</code></td><td>Nothing. The default</td></tr>
+  <tr><td><code>crash_only</code></td><td>Anonymous crash reports</td></tr>
+  <tr><td><code>diagnostics</code></td><td>Crash reports plus version and platform</td></tr>
+</table>
+
+<p>A crash report carries the exception <em>type</em>, the Atlas frames it passed through,
+your OS and architecture, and a random install id.</p>
+
+<p>It deliberately excludes the exception <strong>message</strong>, because messages
+routinely embed file paths and your own text, and every stack frame outside the Atlas
+package, because those paths contain your username and project names.</p>
+
+<p>This is enforced structurally: events are assembled from an allow-list of field names in
+the source, so a field cannot be collected until someone deliberately adds it. A deny-list
+would leak on the first oversight.</p>
+
+<h2>Where it goes</h2>
+<p>A local file you can read. Atlas runs no telemetry server, so there is nowhere for
+events to be sent.</p>
+
+<h2>The install id</h2>
+<p>Random, generated only when you enable telemetry, and not derived from your hardware,
+username or network. Disabling telemetry <strong>destroys it</strong> — re-enabling later
+produces a new one.</p>
+
+<h2>Model providers</h2>
+<p>Once real providers exist, prompts and assets you send to one go to that provider under
+your own key and their terms. Atlas is the client, not the counterparty. The
+<code>offline</code> profile refuses cloud providers outright.</p>
+
+<h2>Deleting everything</h2>
+<p>Uninstall, then delete the data folder. There is no copy anywhere else.</p>
+
+<p><a href="https://github.com/hellnight333/atlas/blob/main/docs/PRIVACY.md">Full privacy documentation →</a></p>
+</main>
+<footer class="site"><div class="wrap">
+  <div class="cols">
+    <div><h4>Product</h4>
+      <a href="features.html">Features</a><a href="studios.html">Studios</a>
+      <a href="download.html">Download</a><a href="roadmap.html">Roadmap</a></div>
+    <div><h4>Documentation</h4>
+      <a href="docs.html">All docs</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Quick start</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">What is built</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md">FAQ</a></div>
+    <div><h4>Community</h4>
+      <a href="community.html">Get involved</a>
+      <a href="https://github.com/hellnight333/atlas/discussions">Discussions</a>
+      <a href="https://github.com/hellnight333/atlas/issues">Issues</a></div>
+    <div><h4>Legal</h4>
+      <a href="license.html">License</a><a href="privacy.html">Privacy</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/.github/SECURITY.md">Security</a></div>
+  </div>
+  <div class="legal">
+    <p class="muted">Atlas 0.12.0-alpha.1 &middot; Source-available under the Business Source License 1.1,
+    converting to Apache-2.0 on 2030-08-03. &copy; 2026 Ayoub Soleimani.</p>
+    <p class="muted">Public alpha. <a href="https://github.com/hellnight333/atlas/blob/main/docs/KNOWN_ISSUES.md">Known issues</a>.</p>
+  </div>
+</div></footer>
+</body></html>

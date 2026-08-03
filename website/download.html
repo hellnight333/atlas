@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Atlas</title>
+<meta name="description" content="Download Atlas for Windows, macOS or Linux. Bundles its own database — nothing else to install.">
+<meta property="og:title" content="Download Atlas">
+<meta property="og:description" content="Download Atlas for Windows, macOS or Linux. Bundles its own database — nothing else to install.">
+<meta property="og:image" content="assets/logo-512.png">
+<link rel="icon" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img src="assets/logo-512.png" alt="">Atlas</a>
+  <nav class="site">
+    <a href="features.html">Features</a>
+    <a href="studios.html">Studios</a>
+    <a href="enterprise.html">Teams</a>
+    <a href="docs.html">Docs</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="community.html">Community</a>
+    <a href="download.html" aria-current="page">Download</a>
+    <a href="https://github.com/hellnight333/atlas">GitHub</a>
+  </nav>
+</div></header>
+<main class="wrap">
+<h1>Download Atlas</h1>
+<p class="lede muted">Free. Bundles its own PostgreSQL and Python runtime, so there is
+nothing else to install.</p>
+
+<div class="notice">
+  <strong>Public alpha — read before installing</strong>
+  <p>Atlas has <strong>no model provider integrations yet</strong>. It cannot generate
+  text, images or video today, and no API key will change that. What is complete is
+  everything Atlas does to <em>coordinate</em> work: scheduling, automation, approvals,
+  governance, lineage and recovery — all of which runs with no credentials at all.
+  <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">See exactly what is built</a>.</p>
+</div>
+
+<div class="btn-row" style="justify-content:flex-start;margin:1.5rem 0">
+  <a class="btn btn-primary" href="https://github.com/hellnight333/atlas/releases/latest">All downloads on GitHub</a>
+</div>
+
+<table>
+  <tr><th>Platform</th><th>File</th><th>Notes</th></tr>
+  <tr><td>Windows 10/11</td><td><code>Atlas_&lt;version&gt;_x64-setup.exe</code></td><td>Installer</td></tr>
+  <tr><td>Windows (portable)</td><td><code>..._portable.zip</code></td><td>Runs from a folder or USB drive</td></tr>
+  <tr><td>macOS (Apple Silicon)</td><td><code>Atlas_&lt;version&gt;_aarch64.dmg</code></td><td>M1 and later</td></tr>
+  <tr><td>macOS (Intel)</td><td><code>Atlas_&lt;version&gt;_x86_64.dmg</code></td><td>macOS 10.15+</td></tr>
+  <tr><td>Linux</td><td><code>Atlas_&lt;version&gt;.AppImage</code></td><td>Needs FUSE; built on Ubuntu 22.04</td></tr>
+  <tr><td>Linux (archive)</td><td><code>..._linux-x86_64.tar.gz</code></td><td>Extract and run</td></tr>
+</table>
+
+<p class="muted">About 140 MB compressed, 300 MB installed — most of it PostgreSQL.</p>
+
+<h2>Verify your download</h2>
+<p><strong>Alpha builds are unsigned</strong>, so your operating system cannot vouch for them.
+Every release publishes <code>SHA256SUMS.txt</code>. Check it before running the file.</p>
+<pre>shasum -a 256 Atlas_0.12.0-alpha.1_aarch64.dmg        # macOS / Linux
+certutil -hashfile Atlas_0.12.0-alpha.1_x64-setup.exe SHA256   # Windows</pre>
+
+<h2>The warning you will see</h2>
+<p><strong>macOS:</strong> "Atlas cannot be opened because the developer cannot be verified."
+Right-click the app and choose <strong>Open</strong> — that specific gesture is the consent
+macOS accepts. Double-clicking will keep refusing.</p>
+<p><strong>Windows:</strong> SmartScreen shows "Windows protected your PC". Click
+<strong>More info</strong> → <strong>Run anyway</strong>.</p>
+<p class="muted">Both happen because signing certificates cost 99–500 USD a year and are not
+part of the alpha. Checksums are the integrity guarantee instead.</p>
+
+<p><a href="https://github.com/hellnight333/atlas/blob/main/docs/INSTALLATION.md">Full installation guide →</a></p>
+</main>
+<footer class="site"><div class="wrap">
+  <div class="cols">
+    <div><h4>Product</h4>
+      <a href="features.html">Features</a><a href="studios.html">Studios</a>
+      <a href="download.html">Download</a><a href="roadmap.html">Roadmap</a></div>
+    <div><h4>Documentation</h4>
+      <a href="docs.html">All docs</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Quick start</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">What is built</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md">FAQ</a></div>
+    <div><h4>Community</h4>
+      <a href="community.html">Get involved</a>
+      <a href="https://github.com/hellnight333/atlas/discussions">Discussions</a>
+      <a href="https://github.com/hellnight333/atlas/issues">Issues</a></div>
+    <div><h4>Legal</h4>
+      <a href="license.html">License</a><a href="privacy.html">Privacy</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/.github/SECURITY.md">Security</a></div>
+  </div>
+  <div class="legal">
+    <p class="muted">Atlas 0.12.0-alpha.1 &middot; Source-available under the Business Source License 1.1,
+    converting to Apache-2.0 on 2030-08-03. &copy; 2026 Ayoub Soleimani.</p>
+    <p class="muted">Public alpha. <a href="https://github.com/hellnight333/atlas/blob/main/docs/KNOWN_ISSUES.md">Known issues</a>.</p>
+  </div>
+</div></footer>
+</body></html>

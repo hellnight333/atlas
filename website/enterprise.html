@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teams — Atlas</title>
+<meta name="description" content="Organizations, roles, permissions, policy inheritance and append-only audit in Atlas.">
+<meta property="og:title" content="Teams — Atlas">
+<meta property="og:description" content="Organizations, roles, permissions, policy inheritance and append-only audit in Atlas.">
+<meta property="og:image" content="assets/logo-512.png">
+<link rel="icon" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img src="assets/logo-512.png" alt="">Atlas</a>
+  <nav class="site">
+    <a href="features.html">Features</a>
+    <a href="studios.html">Studios</a>
+    <a href="enterprise.html" aria-current="page">Teams</a>
+    <a href="docs.html">Docs</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="community.html">Community</a>
+    <a href="download.html">Download</a>
+    <a href="https://github.com/hellnight333/atlas">GitHub</a>
+  </nav>
+</div></header>
+<main class="wrap">
+<h1>Atlas for teams</h1>
+<p class="lede muted">Multi-tenant governance is built and working. One caveat matters more
+than the rest, and it is stated first.</p>
+
+<div class="notice">
+  <strong>The kernel API has no authentication</strong>
+  <p>Atlas binds to localhost and assumes one trusted operator on the machine. The
+  organization and permission system governs actions <em>inside</em> Atlas — it is not a
+  network authentication layer. <strong>Do not expose Atlas to a network you do not
+  control.</strong> A shared team deployment is not supported in this release.</p>
+</div>
+
+<h2>What is implemented</h2>
+<h3>Organizations and roles</h3>
+<p>Creating an organization seeds seven built-in roles, from owner to viewer. Custom roles
+resolve through identical code, so they are not second-class.</p>
+
+<h3>Permissions you can explain</h3>
+<p>Every granted permission comes back with the role and membership that produced it — the
+same data support and the UI both see, so answers never disagree.</p>
+
+<h3>Policies that inherit</h3>
+<pre>Organization → Workspace → Project → Object</pre>
+<p>A narrower scope overrides a broader one, key by key. Lock a key and no narrower scope
+can override it — that is the enforcement mechanism, not a suggestion.</p>
+
+<h3>Membership with expiry</h3>
+<p>Temporary access grants nothing after its expiry. There is no grace period.</p>
+
+<h3>Append-only audit</h3>
+<p>Logins, permission changes, policy changes, worker assignment, publishing, deletion and
+exports. There is no update or delete path for an audit record anywhere in the kernel, and
+re-inserting a modified one is a no-op.</p>
+
+<h2>Licensing for commercial use</h2>
+<p>Internal use inside your company is <strong>permitted</strong> under the Business Source
+License, commercially or not. The restriction is on offering Atlas to third parties as a
+hosted or embedded service. <a href="license.html">Full terms →</a></p>
+</main>
+<footer class="site"><div class="wrap">
+  <div class="cols">
+    <div><h4>Product</h4>
+      <a href="features.html">Features</a><a href="studios.html">Studios</a>
+      <a href="download.html">Download</a><a href="roadmap.html">Roadmap</a></div>
+    <div><h4>Documentation</h4>
+      <a href="docs.html">All docs</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Quick start</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">What is built</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md">FAQ</a></div>
+    <div><h4>Community</h4>
+      <a href="community.html">Get involved</a>
+      <a href="https://github.com/hellnight333/atlas/discussions">Discussions</a>
+      <a href="https://github.com/hellnight333/atlas/issues">Issues</a></div>
+    <div><h4>Legal</h4>
+      <a href="license.html">License</a><a href="privacy.html">Privacy</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/.github/SECURITY.md">Security</a></div>
+  </div>
+  <div class="legal">
+    <p class="muted">Atlas 0.12.0-alpha.1 &middot; Source-available under the Business Source License 1.1,
+    converting to Apache-2.0 on 2030-08-03. &copy; 2026 Ayoub Soleimani.</p>
+    <p class="muted">Public alpha. <a href="https://github.com/hellnight333/atlas/blob/main/docs/KNOWN_ISSUES.md">Known issues</a>.</p>
+  </div>
+</div></footer>
+</body></html>

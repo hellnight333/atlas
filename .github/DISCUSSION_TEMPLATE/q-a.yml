@@ -1,0 +1,22 @@
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before asking: [FAQ](https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md)
+        and [what is actually implemented](https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md)
+        answer the two most common questions — whether Atlas can generate
+        content yet (not yet) and what works without a provider (most of it).
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: The goal, not only the step you are stuck on.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Atlas version
+      placeholder: "0.12.0-alpha.1"

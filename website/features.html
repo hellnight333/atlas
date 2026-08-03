@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features — Atlas</title>
+<meta name="description" content="What Atlas does today: automation, approvals, clustering, knowledge graph, governance, diagnostics.">
+<meta property="og:title" content="Features — Atlas">
+<meta property="og:description" content="What Atlas does today: automation, approvals, clustering, knowledge graph, governance, diagnostics.">
+<meta property="og:image" content="assets/logo-512.png">
+<link rel="icon" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img src="assets/logo-512.png" alt="">Atlas</a>
+  <nav class="site">
+    <a href="features.html" aria-current="page">Features</a>
+    <a href="studios.html">Studios</a>
+    <a href="enterprise.html">Teams</a>
+    <a href="docs.html">Docs</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="community.html">Community</a>
+    <a href="download.html">Download</a>
+    <a href="https://github.com/hellnight333/atlas">GitHub</a>
+  </nav>
+</div></header>
+<main class="wrap">
+<h1>Features</h1>
+<p class="lede muted">Everything on this page is implemented and running today. Anything not
+built is on the <a href="roadmap.html">roadmap</a>, never here.</p>
+
+<div class="notice">
+  <strong>Public alpha — read before installing</strong>
+  <p>Atlas has <strong>no model provider integrations yet</strong>. It cannot generate
+  text, images or video today, and no API key will change that. What is complete is
+  everything Atlas does to <em>coordinate</em> work: scheduling, automation, approvals,
+  governance, lineage and recovery — all of which runs with no credentials at all.
+  <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">See exactly what is built</a>.</p>
+</div>
+
+<h2>Automation</h2>
+<p>Rules made of three declarative parts — a trigger, conditions and actions. No code.</p>
+<ul class="clean">
+  <li>Schedule, event or manual triggers</li>
+  <li><strong>Dry run</strong> shows precisely what a rule would do, without doing it</li>
+  <li>Automation enqueues work through the scheduler and never calls a provider directly</li>
+  <li>Conflict detection between rules that could fight each other</li>
+</ul>
+
+<h2>Approvals and governance</h2>
+<p>Declarative policies that pause execution <em>before a job is created</em>.</p>
+<table>
+  <tr><th>Guarantee</th><th>Why</th></tr>
+  <tr><td>You cannot approve your own request</td><td>Separation of duties, enforced not advised</td></tr>
+  <tr><td>Only designated approvers decide</td><td>Policy names them explicitly</td></tr>
+  <tr><td>No double-voting toward a quorum</td><td>One person is one approval</td></tr>
+  <tr><td>Decided requests cannot be re-decided</td><td>The record is final</td></tr>
+</table>
+
+<h2>Distributed execution</h2>
+<p>You never choose a worker. The scheduler places work from what the job requires and what
+each machine advertises, reserves capacity <em>before</em> creating the job, and returns the
+slot on every terminal path.</p>
+<p>If work is waiting, Atlas names the constraint that failed rather than leaving you guessing.</p>
+
+<h2>Knowledge graph</h2>
+<p>Nodes, edges and lineage across projects, so any output can be traced back to what produced it.</p>
+
+<h2>Organizations</h2>
+<p>Teams, roles, permissions and membership with expiry. Permissions resolve from role
+<em>data</em>, never a role-name check, so a custom role behaves exactly like a built-in one.
+Audit is append-only — no kernel path can update or delete a record.</p>
+
+<h2>Operations</h2>
+<div class="grid">
+  <div class="card"><h3>Diagnostics</h3><p>Component health and an export that is safe to
+  attach to a bug report — it omits the database URL and every credential.</p></div>
+  <div class="card"><h3>Backup and restore</h3><p>Checksummed archives, validation before
+  restore, and restore that is additive rather than destructive.</p></div>
+  <div class="card"><h3>Crash recovery</h3><p>Requeues orphaned work, expires dead leases and
+  releases stale reservations. Nothing is deleted.</p></div>
+</div>
+
+<h2>What is deliberately absent</h2>
+<table>
+  <tr><th>Not present</th><th>Reason</th></tr>
+  <tr><td>Auto-update</td><td>Software that replaces its own code unasked is a security property nobody agreed to</td></tr>
+  <tr><td>Telemetry by default</td><td>Off unless you turn it on, and there is no server to receive it</td></tr>
+  <tr><td>Accounts and sign-in</td><td>Atlas has no idea who you are</td></tr>
+  <tr><td>Autonomous execution</td><td>Anything irreversible waits for a human</td></tr>
+</table>
+</main>
+<footer class="site"><div class="wrap">
+  <div class="cols">
+    <div><h4>Product</h4>
+      <a href="features.html">Features</a><a href="studios.html">Studios</a>
+      <a href="download.html">Download</a><a href="roadmap.html">Roadmap</a></div>
+    <div><h4>Documentation</h4>
+      <a href="docs.html">All docs</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/QUICK_START.md">Quick start</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">What is built</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/docs/FAQ.md">FAQ</a></div>
+    <div><h4>Community</h4>
+      <a href="community.html">Get involved</a>
+      <a href="https://github.com/hellnight333/atlas/discussions">Discussions</a>
+      <a href="https://github.com/hellnight333/atlas/issues">Issues</a></div>
+    <div><h4>Legal</h4>
+      <a href="license.html">License</a><a href="privacy.html">Privacy</a>
+      <a href="https://github.com/hellnight333/atlas/blob/main/.github/SECURITY.md">Security</a></div>
+  </div>
+  <div class="legal">
+    <p class="muted">Atlas 0.12.0-alpha.1 &middot; Source-available under the Business Source License 1.1,
+    converting to Apache-2.0 on 2030-08-03. &copy; 2026 Ayoub Soleimani.</p>
+    <p class="muted">Public alpha. <a href="https://github.com/hellnight333/atlas/blob/main/docs/KNOWN_ISSUES.md">Known issues</a>.</p>
+  </div>
+</div></footer>
+</body></html>
