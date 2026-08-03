@@ -33,7 +33,12 @@ jobs:
             target: aarch64-apple-darwin
             pg: darwin-arm64
             bundles: app
-          - os: macos-13
+          # macos-13 was retired by GitHub, so this job simply queued until it
+          # was cancelled -- it never ran a single step, which reads like a
+          # stalled build rather than a missing runner. macos-15-intel is the
+          # current standard (free, unlimited for public repositories)
+          # Intel runner.
+          - os: macos-15-intel
             label: macOS (Intel)
             target: x86_64-apple-darwin
             pg: darwin-amd64
@@ -132,14 +137,19 @@ jobs:
           # Unset is what "do not sign" means. This built locally, where the
           # variables simply do not exist, and only failed in CI.
           #
-          # linuxdeploy is itself an AppImage, and an AppImage self-mounts via
-          # FUSE, which GitHub runners restrict. The log shows it downloading
-          # successfully and then failing to execute:
+          # --verbose is not noise-for-its-own-sake. tauri-bundler runs
+          # linuxdeploy with std::process::Command::output(), which captures
+          # stdout and stderr and then discards them, reporting only
           #   failed to bundle project: `failed to run linuxdeploy`
-          # Extracting instead of mounting is the supported escape hatch, and
-          # the variable is inert on macOS and Windows.
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # It only surfaces the tool's own output when the log level is above
+          # Error. An AppImage failure is undiagnosable without this.
+          #
+          # APPIMAGE_EXTRACT_AND_RUN was set here to work around a suspected
+          # FUSE restriction. That was wrong: tauri-bundler already sets the
+          # variable itself and also passes --appimage-extract-and-run, so it
+          # was inert. The real failure was an unsatisfiable dependency inside
+          # the bundled PostgreSQL tree, fixed in infra/packaging/fetch_postgres.py.
+        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --verbose
 
       # ----------------------------------------------------------------------
       # SIGNING — deliberately not configured for the Public Alpha.

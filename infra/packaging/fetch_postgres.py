@@ -56,6 +56,28 @@ PLATFORMS: dict[str, str] = {
 #: psql are deliberately absent -- Atlas connects through psycopg.
 REQUIRED_BINARIES = ("initdb", "pg_ctl", "postgres")
 
+#: PostgreSQL's procedural-language extensions link against language runtimes
+#: that Atlas does not bundle: plpython3 needs libpython3.6m.so.1.0, plperl
+#: needs libperl, pltcl needs libtcl. Atlas runs no in-database Python, Perl or
+#: Tcl -- it talks to the server through psycopg -- so these are unusable here
+#: for the same reason psql is absent above.
+#:
+#: They are not merely dead weight, they broke the Linux installer. linuxdeploy
+#: walks every ELF file in the AppDir to resolve shared-library dependencies.
+#: It reached lib/postgresql/hstore_plpython3.so, could not find
+#: libpython3.6m.so.1.0 -- Python 3.6 is end-of-life and ships on no current
+#: distribution -- and aborted the entire bundle with:
+#:
+#:     ERROR: Could not find dependency: libpython3.6m.so.1.0
+#:     ERROR: Failed to deploy dependencies for existing files
+#:
+#: Tauri reported only `failed to run linuxdeploy`, because it discards the
+#: tool's output unless the build runs with --verbose. See docs/PACKAGING.md.
+#:
+#: Matched against the whole tree, so this covers the loadable modules
+#: (.so/.dll/.dylib) and the .control/.sql files that advertise the extensions.
+UNUSABLE_EXTENSION_PATTERNS = ("*plpython3*", "*plperl*", "*pltcl*")
+
 
 def host_platform() -> str:
     import platform
@@ -128,6 +150,17 @@ def prune(root: Path) -> None:
         path = root / relative
         if path.is_dir():
             shutil.rmtree(path)
+
+    removed = []
+    for pattern in UNUSABLE_EXTENSION_PATTERNS:
+        for path in sorted(root.rglob(pattern)):
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+                removed.append(path.relative_to(root).as_posix())
+    if removed:
+        print(f"  dropped {len(removed)} procedural-language extension files")
+        for name in removed:
+            print(f"    - {name}")
 
 
 def verify(root: Path, platform_key: str) -> None:

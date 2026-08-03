@@ -199,6 +199,68 @@ Shutdown reverses the order — kernel first, then `pg_ctl stop -m fast`.
 Stopping the database under a live kernel fills the log with connection errors
 that look like a fault when they are only a shutdown.
 
+## Diagnosing a bundler failure
+
+`tauri build` runs the platform bundler through `std::process::Command::output()`,
+which captures the tool's stdout and stderr and then **discards them** unless the
+log level is above `Error`. On a failure you get only:
+
+```
+failed to bundle project: `failed to run linuxdeploy`
+```
+
+That message contains no diagnostic information whatsoever. The release workflow
+therefore passes `--verbose`, which switches the bundler to a path that surfaces
+the tool's real output. If you are debugging a packaging failure by hand, do the
+same — without it you are guessing.
+
+This cost the RC1 Linux build two speculative fixes before anyone saw the actual
+error. `APPIMAGE_EXTRACT_AND_RUN=1` was one of them, added on the theory that
+linuxdeploy could not self-mount via FUSE on a CI runner. It was inert:
+tauri-bundler already sets that variable itself *and* passes
+`--appimage-extract-and-run`. The FUSE theory was never in the log; it was
+pattern-matching.
+
+### The AppImage / bundled-PostgreSQL interaction
+
+linuxdeploy walks **every ELF file** in the AppDir to resolve shared-library
+dependencies, including everything under `resources/`. A single file it cannot
+resolve aborts the whole bundle.
+
+The bundled Zonky PostgreSQL tree ships PostgreSQL's procedural-language
+extensions, which link against language runtimes Atlas does not bundle:
+
+| Extension | Wants |
+|---|---|
+| `plpython3`, `hstore_plpython3`, `jsonb_plpython3`, `ltree_plpython3` | `libpython3.6m.so.1.0` |
+| `plperl`, `bool_plperl`, `hstore_plperl`, `jsonb_plperl` | `libperl` |
+| `pltcl` | `libtcl` |
+
+Python 3.6 is end-of-life and ships on no current distribution, so:
+
+```
+ERROR: Could not find dependency: libpython3.6m.so.1.0
+ERROR: Failed to deploy dependencies for existing files
+```
+
+Atlas runs no in-database Python, Perl or Tcl — it talks to the server through
+psycopg — so `prune()` in `infra/packaging/fetch_postgres.py` removes these,
+along with the `.control`/`.sql` files that advertise them. This is the same
+reasoning that already excludes `psql`.
+
+Note that linuxdeploy stops at the *first* unresolvable dependency, so a build
+going green proves only that one offender is gone. To check the whole tree at
+once:
+
+```bash
+pg=apps/desktop/src-tauri/resources/postgres
+export LD_LIBRARY_PATH="$PWD/$pg/lib:$PWD/$pg/lib/postgresql"
+find "$pg" -type f -exec sh -c \
+  'head -c4 "$1" | grep -q ELF && ldd "$1" 2>/dev/null | grep -q "not found" && echo "$1"' _ {} \;
+```
+
+That should print nothing. At the time of RC1 it scanned 99 ELF files clean.
+
 ## Known packaging issues
 
 - **The bundle is large.** ~160 MB installed, most of it PostgreSQL. A future
