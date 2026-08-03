@@ -45,6 +45,17 @@ jobs:
           python-version: '3.13'
           cache: pip
 
+      # The Media Factory tests decode what they produce rather than trusting
+      # it, so they need a real ffmpeg. Installed explicitly rather than relying
+      # on the runner image: the tests skip when it is absent, and a silent skip
+      # would quietly drop those modules out of the coverage gate.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
