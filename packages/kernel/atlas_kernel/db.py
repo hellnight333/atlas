@@ -710,6 +710,18 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+
+        # Installation-level settings. First-run state lives here rather than in
+        # the browser: localStorage forgets on a cache clear and would show setup
+        # again in a second window. One row per key; the onboarding row is the
+        # only one today.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_app_settings (
+            key TEXT PRIMARY KEY,
+            value JSONB NOT NULL DEFAULT '{}',
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
         conn.execute(text("""
         ALTER TABLE atlas_runtime_executions
         ADD COLUMN IF NOT EXISTS approval_id TEXT,

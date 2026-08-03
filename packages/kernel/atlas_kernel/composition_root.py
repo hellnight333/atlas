@@ -16,7 +16,9 @@ from .cluster.heartbeat_service import HeartbeatService
 from .cluster.lease_manager import LeaseManager
 from .cluster.worker_registry import WorkerRegistry
 from .config import AtlasConfig, load_config
+from .db import engine as db_engine
 from .db import init_db
+from .demo_installer import DemoInstaller
 from .diagnostics import DiagnosticsService
 from .event_bus import EventBus
 from .execution_policy import ExecutionPolicyEngine
@@ -24,6 +26,7 @@ from .executor import ExecutionLocationExecutor, JobExecutor, LocalExecutor
 from .graph_service import GraphService
 from .logging_setup import configure_logging
 from .models import ActionSpec, CapabilitySpec, ExecutorSpec, ModelSpec, ProviderSpec, RecipeSpec
+from .onboarding import OnboardingService
 from .orchestrator import Orchestrator
 from .organization.audit import AuditService
 from .organization.identity import IdentityService
@@ -73,6 +76,8 @@ class AtlasRuntime:
     backup_service: BackupService
     recovery_service: RecoveryService
     telemetry: TelemetryService
+    onboarding: OnboardingService
+    demo_installer: DemoInstaller
     update_service: UpdateService
     orchestrator: Orchestrator
     workflow_delegate: KernelWorkflowNodeDelegate
@@ -223,6 +228,15 @@ def create_runtime(
         feed=GitHubReleaseFeed() if config.update_check_enabled else StaticFeed()
     )
 
+    onboarding = OnboardingService(engine=db_engine)
+    demo_installer = DemoInstaller(
+        orchestrator=orchestrator,
+        automation_engine=automation_engine,
+        graph_service=graph_service,
+        repository=repository,
+        approval_service=approval_service,
+    )
+
     return AtlasRuntime(
         event_bus=event_bus,
         registry=registry,
@@ -256,6 +270,8 @@ def create_runtime(
         backup_service=backup_service,
         recovery_service=recovery_service,
         telemetry=telemetry,
+        onboarding=onboarding,
+        demo_installer=demo_installer,
         update_service=update_service,
     )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,8 @@ from .cluster.models import (
 from .cluster.worker_registry import WorkerRegistryError
 from .composition_root import create_runtime
 from .config import TelemetryMode, describe_profiles
+from .demos import catalogue as demo_catalogue
+from .demos import get as get_demo
 from .event_bus import CapabilityRegistered, CapabilityUpdated, RecipeRegistered, RecipeSelected
 from .models import (
     AssetCreate,
@@ -62,6 +64,7 @@ from .models import (
     WorkspaceCreate,
     normalize_capability_request,
 )
+from .onboarding import OnboardingStep, Theme
 from .organization.models import (
     AuditAction,
     Branding,
@@ -87,6 +90,28 @@ from .workflow_engine import (
 )
 
 app = FastAPI(title="Atlas Kernel")
+
+
+@app.middleware("http")
+async def accept_api_prefix(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Serve every route under ``/api`` as well as at the root.
+
+    The desktop client addresses the kernel as ``/api/projects``; the kernel
+    defines ``/projects``. Without this the packaged application boots a
+    perfectly healthy kernel and then 404s on every request, which looks like
+    the kernel is broken when it is only being asked the wrong question.
+
+    Rewriting one prefix here is preferable to renaming 190-odd routes or
+    editing 63 client endpoints, and it leaves both address forms valid.
+    """
+    path = request.scope.get("path", "")
+    if path.startswith("/api/"):
+        request.scope["path"] = path[4:]
+    elif path == "/api":
+        request.scope["path"] = "/"
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -120,6 +145,8 @@ identity_service = runtime.identity_service
 audit_service = runtime.audit_service
 diagnostics = runtime.diagnostics
 telemetry = runtime.telemetry
+onboarding = runtime.onboarding
+demo_installer = runtime.demo_installer
 update_service = runtime.update_service
 backup_service = runtime.backup_service
 recovery_service = runtime.recovery_service
@@ -4062,3 +4089,78 @@ def _job_progress(status: str) -> int:
         "completed": 100,
         "cancelled": 100,
     }.get(status, 0)
+
+
+# ---------------------------------------------------------------------------
+# First run
+# ---------------------------------------------------------------------------
+
+
+@app.get("/onboarding")
+def get_onboarding() -> dict[str, object]:
+    return onboarding.state().to_dict()
+
+
+class OnboardingStepRequest(BaseModel):
+    """Everything a setup step can record. All optional: each step sends only
+    what it collected, and the rest keeps its current value."""
+
+    workspace_id: str | None = None
+    workspace_name: str | None = None
+    theme: Theme | None = None
+    data_directory: str | None = None
+    configured_providers: list[str] | None = None
+
+
+@app.post("/onboarding/step/{step}")
+def complete_onboarding_step(
+    step: OnboardingStep, request: OnboardingStepRequest
+) -> dict[str, object]:
+    """Mark a setup step complete and advance."""
+    state = onboarding.complete_step(step, **request.model_dump(exclude_unset=True))
+    return state.to_dict()
+
+
+@app.post("/onboarding/skip")
+def skip_onboarding() -> dict[str, object]:
+    """Leave setup. Every unanswered choice keeps its default."""
+    return onboarding.skip().to_dict()
+
+
+@app.post("/onboarding/reset")
+def reset_onboarding() -> dict[str, object]:
+    """Run setup again. Nothing the user created is removed."""
+    return onboarding.reset().to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Demo projects
+# ---------------------------------------------------------------------------
+
+
+@app.get("/demos")
+def list_demos() -> list[dict[str, object]]:
+    return demo_catalogue()
+
+
+@app.get("/demos/{demo_id}")
+def get_demo_detail(demo_id: str) -> dict[str, object]:
+    demo = get_demo(demo_id)
+    if demo is None:
+        raise HTTPException(status_code=404, detail=f"No demo named {demo_id!r}")
+    return demo.summary()
+
+
+@app.post("/demos/{demo_id}/install")
+def install_demo(demo_id: str) -> dict[str, object]:
+    """Create the demo's project, automation rules and graph for real.
+
+    Idempotent: installing twice opens the existing project rather than
+    creating a duplicate.
+    """
+    demo = get_demo(demo_id)
+    if demo is None:
+        raise HTTPException(status_code=404, detail=f"No demo named {demo_id!r}")
+    result = demo_installer.install(demo)
+    onboarding.record_demo(demo_id)
+    return result.to_dict()
