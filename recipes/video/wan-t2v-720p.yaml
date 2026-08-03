@@ -1,0 +1,56 @@
+# The real one. Local text-to-video on a GPU worker via ComfyUI + Wan 2.1.
+#
+# Not yet exercised: no GPU worker is connected. It is written now, and pinned,
+# so that swapping it in is a routing change rather than a design change --
+# and so the shape of a real recipe is settled before the hardware arrives to
+# apply pressure to it.
+#
+# `provider` is a preference, not an instruction. The router still decides, so
+# this keeps working when the work moves to a second workstation, a rented GPU,
+# or several workers at once.
+id: wan-t2v-720p
+version: 1.0.0
+capability: video.generate
+description: >
+  Text-to-video at 720p on a local GPU. Wan 2.1 T2V 1.3B, chosen over the 14B
+  because 1.3B fits comfortably on a single consumer card and the difference is
+  not visible at this resolution and length.
+
+provider: comfy-wan-t2v
+model: wan2.1-t2v-1.3b
+
+# NOT YET PINNED. The ComfyUI API graph is committed when the GPU worker is
+# provisioned and the graph has actually been run, at which point this becomes:
+#
+#   workflow: ../workflows/wan_t2v_720p.json
+#
+# Deliberately absent rather than a placeholder: the loader hashes the graph and
+# provenance records that hash, so committing an unverified file would claim a
+# reproducibility this recipe does not yet have. Until the graph exists, no
+# render made from this recipe would be reproducible, and Atlas should be able
+# to say so -- see RenderProvenance.is_reproducible.
+
+prompt_template: "{prompt}, cinematic, natural lighting, steady camera"
+negative_prompt: >
+  blurry, low quality, watermark, text overlay, distorted faces, extra limbs,
+  jpeg artifacts
+
+# Pinned. A recipe whose output changes between runs is not a recipe, and an
+# unrecorded seed cannot be recovered afterwards at any price.
+seed: 20260803
+
+parameters:
+  width: 1280
+  height: 720
+  frames: 81
+  fps: 16
+  steps: 30
+  cfg: 6.0
+  sampler: uni_pc
+  scheduler: simple
+
+# Measured on the target card, not guessed. These drive the "estimated render
+# time / estimated cost" an operator sees before approving a re-render.
+# Electricity only -- a local GPU has no per-second billing.
+estimated_cost_per_second: 0.0
+estimated_seconds_per_second: 14.0

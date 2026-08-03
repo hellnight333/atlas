@@ -238,6 +238,19 @@ class SceneRender(BaseModel):
     #: can be identified rather than invalidating the whole rendition.
     source_fingerprint: str = ""
     job_id: str | None = None
+    #: The provider's own job reference, persisted rather than kept in memory so
+    #: a poll can happen in a different process than the submit. Nothing here
+    #: may assume one GPU or one machine.
+    provider_handle: str | None = None
+    #: Everything needed to make this exact render again -- see
+    #: ``media.provenance.RenderProvenance``, whose shape this holds. Stored as
+    #: a plain dict because the kernel must not grow a column each time a new
+    #: provider has something of its own to record.
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    #: Measured, not estimated. Feeds the cost and duration an operator is shown
+    #: before approving a re-render.
+    render_ms: int | None = None
+    cost_usd: float | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

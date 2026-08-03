@@ -364,10 +364,12 @@ class MediaRepository:
                 INSERT INTO atlas_scene_renders
                     (id, rendition_id, scene_id, index_in_script, status, provider, recipe_id,
                      media_asset_id, audio_asset_id, duration_seconds, source_fingerprint,
-                     job_id, error, created_at, updated_at)
+                     job_id, provider_handle, provenance, render_ms, cost_usd,
+                     error, created_at, updated_at)
                 VALUES (:id, :rendition_id, :scene_id, :index_in_script, :status, :provider,
                         :recipe_id, :media_asset_id, :audio_asset_id, :duration_seconds,
-                        :source_fingerprint, :job_id, :error, :created_at, :updated_at)
+                        :source_fingerprint, :job_id, :provider_handle, :provenance,
+                        :render_ms, :cost_usd, :error, :created_at, :updated_at)
                 ON CONFLICT (rendition_id, scene_id) DO NOTHING
                 """),
                 {
@@ -383,6 +385,10 @@ class MediaRepository:
                     "duration_seconds": render.duration_seconds,
                     "source_fingerprint": render.source_fingerprint,
                     "job_id": render.job_id,
+                    "provider_handle": render.provider_handle,
+                    "provenance": json.dumps(render.provenance),
+                    "render_ms": render.render_ms,
+                    "cost_usd": render.cost_usd,
                     "error": render.error,
                     "created_at": render.created_at,
                     "updated_at": render.updated_at,
@@ -427,6 +433,10 @@ class MediaRepository:
             "duration_seconds",
             "source_fingerprint",
             "job_id",
+            "provider_handle",
+            "provenance",
+            "render_ms",
+            "cost_usd",
             "error",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
@@ -434,6 +444,8 @@ class MediaRepository:
             return self.get_scene_render(render_id)
         if isinstance(updates.get("status"), WorkStatus):
             updates["status"] = updates["status"].value
+        if "provenance" in updates:
+            updates["provenance"] = json.dumps(updates["provenance"])
         assignments = ", ".join(f"{key} = :{key}" for key in updates)
         with SessionLocal() as session:
             session.execute(

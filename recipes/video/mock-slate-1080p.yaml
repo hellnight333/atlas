@@ -1,0 +1,28 @@
+# Placeholder video generation, for use until a GPU worker exists.
+#
+# This is scaffolding. It renders a readable slate rather than a real scene, so
+# that assembly, subtitles, approval and publishing can be built and verified
+# against genuine media instead of a placeholder URI.
+#
+# M013 is NOT complete while this recipe is in the path.
+id: mock-slate-1080p
+version: 1.0.0
+capability: video.generate
+description: >
+  Renders a coloured slate carrying the scene heading and its visual direction.
+  Exists so the pipeline downstream of generation can be exercised for real
+  before any GPU is available.
+
+provider: mock-video
+model: none
+
+prompt_template: "{prompt}"
+
+parameters:
+  width: 1920
+  height: 1080
+  fps: 24
+
+# Deliberately absent: no cost, because nothing is being paid for, and no
+# benchmark, because timing a placeholder would tell an operator nothing about
+# what a real render will take.

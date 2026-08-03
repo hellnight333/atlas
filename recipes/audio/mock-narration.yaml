@@ -1,0 +1,20 @@
+# Placeholder narration, for use until a TTS provider exists.
+#
+# Produces real audio of a realistic length rather than speech, so that mixing,
+# scene timing and subtitle synchronisation are exercised against genuine
+# streams. Scaffolding, like mock-slate-1080p.
+id: mock-narration
+version: 1.0.0
+capability: audio.narrate
+description: >
+  A quiet tone lasting as long as the narration would take to speak. Exists so
+  assembly can be built and verified before a real voice is available.
+
+provider: mock-tts
+model: none
+
+prompt_template: "{prompt}"
+
+parameters:
+  sample_rate: 48000
+  channels: 2

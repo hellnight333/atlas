@@ -757,6 +757,15 @@ def init_db() -> None:
             END IF;
         END $$;
         """))
+        # Provenance arrived after the first M013 tables. Additive, so plain
+        # ADD COLUMN IF NOT EXISTS rather than a guarded block.
+        conn.execute(text("""
+        ALTER TABLE atlas_scene_renders
+        ADD COLUMN IF NOT EXISTS provider_handle TEXT,
+        ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS render_ms INTEGER,
+        ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION
+        """))
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_episodes (
             id TEXT PRIMARY KEY,
@@ -823,6 +832,18 @@ def init_db() -> None:
             duration_seconds DOUBLE PRECISION,
             source_fingerprint TEXT NOT NULL DEFAULT '',
             job_id TEXT,
+            -- The provider's own job reference. Persisted rather than held in
+            -- memory so a poll can happen on a different worker than the
+            -- submit: Atlas must never assume one GPU or one process.
+            provider_handle TEXT,
+            -- Everything needed to reproduce this exact render, years later.
+            -- One column rather than a dozen because the fields a provider
+            -- needs differ per provider, and the kernel must not grow a column
+            -- every time a new one appears. Shape is enforced by
+            -- media.provenance.RenderProvenance, not by the schema.
+            provenance JSONB NOT NULL DEFAULT '{}',
+            render_ms INTEGER,
+            cost_usd DOUBLE PRECISION,
             error TEXT,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
