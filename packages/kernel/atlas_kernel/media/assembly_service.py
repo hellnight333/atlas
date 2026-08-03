@@ -118,6 +118,15 @@ class AssemblyService:
             raise
 
         asset = self._store(result, rendition)
+        # The caption sidecar is an artefact in its own right, not a file that
+        # happens to sit beside the video. Storing it means it survives the
+        # workspace being cleaned up, and the publisher can find it without
+        # guessing at paths -- which it could not, because the asset store
+        # renames what it keeps.
+        captions_asset = self._store_captions(result, rendition)
+        if captions_asset is not None:
+            result.metadata["captions_asset_id"] = captions_asset.id
+
         self.media.update_rendition(
             rendition.id,
             status=WorkStatus.READY,
@@ -159,6 +168,31 @@ class AssemblyService:
         if registration.provider.poll(handle).state.value != "succeeded":
             return None
         return registration.provider.fetch(handle, workspace / "music.m4a")
+
+    def _store_captions(self, result: AssemblyResult, rendition: Rendition) -> Asset | None:
+        sidecar = result.metadata.get("subtitle_sidecar")
+        if not sidecar:
+            return None
+        path = Path(sidecar)
+        if not path.exists():
+            return None
+        payload = path.read_bytes()
+        return self.assets.create_asset(
+            Asset(
+                type="document",
+                project_id=self.project_id,
+                uri=path.name,
+                mime_type="application/x-subrip",
+                file_size=len(payload),
+                tags=["captions", "rendition"],
+                metadata={
+                    "rendition_id": rendition.id,
+                    "episode_id": rendition.episode_id,
+                    "cue_count": result.metadata.get("cue_count"),
+                },
+            ),
+            payload=payload,
+        )
 
     def _store(self, result: AssemblyResult, rendition: Rendition) -> Asset:
         payload = result.output.read_bytes()
