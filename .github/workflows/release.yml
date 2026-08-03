@@ -2,16 +2,15 @@ name: Release
 
 # Installers are built here, not on a developer machine. Tauri cannot
 # cross-compile, so each platform needs its own native runner.
+# A dispatch builds every platform, collects the artifacts and generates the
+# checksums, but never creates a GitHub Release -- that step requires a tag.
+# Use it to validate the whole pipeline before tagging. There was a `dry_run`
+# input here that nothing ever read; the tag is the real switch.
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Build artifacts but do not publish a release"
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -242,7 +241,11 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Deliberately not gated on the tag as a whole. Everything here except the
+    # final upload is safe to run on any dispatch, and gating the whole job
+    # meant the checksum and release-note steps had never executed once before
+    # the tag push that would publish them. Only creating the GitHub Release is
+    # irreversible, so only that step waits for a tag.
     steps:
       - uses: actions/checkout@v4
 
@@ -288,9 +291,18 @@ jobs:
             echo "Atlas bundles its own PostgreSQL. You do not need to install a database."
           } >> release-notes.md
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           body_path: release-notes.md
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           fail_on_unmatched_files: true
+
+      - name: Report what a tagged run would have published
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "Not a tag, so no GitHub Release was created."
+          echo "The artifacts and checksums above are what a tagged run would publish."
+          ls -lh artifacts
