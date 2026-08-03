@@ -2,7 +2,7 @@
 
 Two layers, deliberately separated:
 
-* **Content** — ``Campaign``, ``Episode``, ``Script``, ``Scene``. What is being
+* **Content** — ``Series``, ``Episode``, ``Script``, ``Scene``. What is being
   said. Knows nothing about video, resolution, codecs or providers.
 * **Rendering** — ``Rendition``, ``SceneRender``. One rendered *form* of an
   episode. Everything medium-specific lives here.

@@ -19,7 +19,6 @@ from sqlalchemy import text
 
 from ..db import SessionLocal
 from .models import (
-    Campaign,
     Episode,
     Publication,
     PublicationStatus,
@@ -28,6 +27,7 @@ from .models import (
     Scene,
     SceneRender,
     Script,
+    Series,
     Visibility,
     WorkStatus,
 )
@@ -40,61 +40,61 @@ def _now() -> datetime:
 class MediaRepository:
     # -- content layer ----------------------------------------------------
 
-    def create_campaign(self, campaign: Campaign) -> Campaign:
+    def create_series(self, series: Series) -> Series:
         with SessionLocal() as session:
             session.execute(
                 text("""
-                INSERT INTO atlas_campaigns
+                INSERT INTO atlas_series
                     (id, name, description, default_channel, metadata, created_at)
                 VALUES (:id, :name, :description, :default_channel, :metadata, :created_at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
-                    "id": campaign.id,
-                    "name": campaign.name,
-                    "description": campaign.description,
-                    "default_channel": campaign.default_channel,
-                    "metadata": json.dumps(campaign.metadata),
-                    "created_at": campaign.created_at,
+                    "id": series.id,
+                    "name": series.name,
+                    "description": series.description,
+                    "default_channel": series.default_channel,
+                    "metadata": json.dumps(series.metadata),
+                    "created_at": series.created_at,
                 },
             )
             session.commit()
-        return campaign
+        return series
 
-    def get_campaign(self, campaign_id: str) -> Campaign | None:
+    def get_series(self, series_id: str) -> Series | None:
         with SessionLocal() as session:
             row = (
                 session.execute(
-                    text("SELECT * FROM atlas_campaigns WHERE id = :id"), {"id": campaign_id}
+                    text("SELECT * FROM atlas_series WHERE id = :id"), {"id": series_id}
                 )
                 .mappings()
                 .first()
             )
-        return Campaign(**dict(row)) if row else None
+        return Series(**dict(row)) if row else None
 
-    def list_campaigns(self) -> list[Campaign]:
+    def list_series(self) -> list[Series]:
         with SessionLocal() as session:
             rows = (
-                session.execute(text("SELECT * FROM atlas_campaigns ORDER BY created_at"))
+                session.execute(text("SELECT * FROM atlas_series ORDER BY created_at"))
                 .mappings()
                 .all()
             )
-        return [Campaign(**dict(row)) for row in rows]
+        return [Series(**dict(row)) for row in rows]
 
     def create_episode(self, episode: Episode) -> Episode:
         with SessionLocal() as session:
             session.execute(
                 text("""
                 INSERT INTO atlas_episodes
-                    (id, campaign_id, brief, title, summary, status, metadata,
+                    (id, series_id, brief, title, summary, status, metadata,
                      created_at, updated_at)
-                VALUES (:id, :campaign_id, :brief, :title, :summary, :status, :metadata,
+                VALUES (:id, :series_id, :brief, :title, :summary, :status, :metadata,
                         :created_at, :updated_at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
                     "id": episode.id,
-                    "campaign_id": episode.campaign_id,
+                    "series_id": episode.series_id,
                     "brief": episode.brief,
                     "title": episode.title,
                     "summary": episode.summary,
@@ -118,12 +118,12 @@ class MediaRepository:
             )
         return Episode(**dict(row)) if row else None
 
-    def list_episodes(self, campaign_id: str | None = None) -> list[Episode]:
+    def list_episodes(self, series_id: str | None = None) -> list[Episode]:
         sql = "SELECT * FROM atlas_episodes"
         params: dict[str, Any] = {}
-        if campaign_id is not None:
-            sql += " WHERE campaign_id = :campaign_id"
-            params["campaign_id"] = campaign_id
+        if series_id is not None:
+            sql += " WHERE series_id = :series_id"
+            params["series_id"] = series_id
         sql += " ORDER BY created_at"
         with SessionLocal() as session:
             rows = session.execute(text(sql), params).mappings().all()

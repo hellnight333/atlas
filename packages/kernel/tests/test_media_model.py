@@ -14,7 +14,6 @@ from uuid import uuid4
 import pytest
 
 from atlas_kernel.media.models import (
-    Campaign,
     Episode,
     Publication,
     PublicationStatus,
@@ -23,6 +22,7 @@ from atlas_kernel.media.models import (
     Scene,
     SceneRender,
     Script,
+    Series,
     Visibility,
     WorkStatus,
     fingerprint_scenes,
@@ -62,7 +62,7 @@ def _scenes(count: int = 3, script_id: str = "script-1") -> list[Scene]:
     ]
 
 
-@pytest.mark.parametrize("model", [Campaign, Episode, Script, Scene])
+@pytest.mark.parametrize("model", [Series, Episode, Script, Scene])
 def test_content_entities_carry_no_medium_specific_fields(model: type) -> None:
     """A blog renderer must never inherit a field only video needed.
 
@@ -197,6 +197,6 @@ def test_publication_defaults_are_private() -> None:
 
 
 def test_defaults_are_the_conservative_ones() -> None:
-    assert Episode(campaign_id="c", brief="b").status is WorkStatus.PENDING
+    assert Episode(series_id="c", brief="b").status is WorkStatus.PENDING
     assert Rendition(episode_id="e", script_id="s").kind is RenditionKind.VIDEO_1080P
     assert Rendition(episode_id="e", script_id="s").status is WorkStatus.PENDING

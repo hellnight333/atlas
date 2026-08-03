@@ -726,11 +726,11 @@ def init_db() -> None:
         # -- Media Factory (M013) ------------------------------------------
         #
         # Two layers, and the boundary is deliberate. The content tables
-        # (campaigns, episodes, scripts, scenes) carry no media columns at all,
+        # (series, episodes, scripts, scenes) carry no media columns at all,
         # so a future blog or podcast renderer never inherits a field that only
         # video needed. See docs/VIDEO_FACTORY.md.
         conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS atlas_campaigns (
+        CREATE TABLE IF NOT EXISTS atlas_series (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
@@ -739,10 +739,28 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+        # M013 pre-release rename: Campaign became Series, because Atlas runs
+        # media properties for years and a campaign is by definition something
+        # that ends. Neither shape was ever released, so this only has to fix
+        # development databases created earlier the same day. `CREATE TABLE IF
+        # NOT EXISTS` cannot reshape an existing table, hence the explicit
+        # rename. Safe to delete once no such database remains.
+        conn.execute(text("DROP TABLE IF EXISTS atlas_campaigns"))
+        conn.execute(text("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'atlas_episodes' AND column_name = 'campaign_id'
+            ) THEN
+                ALTER TABLE atlas_episodes RENAME COLUMN campaign_id TO series_id;
+            END IF;
+        END $$;
+        """))
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_episodes (
             id TEXT PRIMARY KEY,
-            campaign_id TEXT NOT NULL,
+            series_id TEXT NOT NULL,
             brief TEXT NOT NULL,
             title TEXT NOT NULL DEFAULT '',
             summary TEXT NOT NULL DEFAULT '',
@@ -936,7 +954,7 @@ def init_db() -> None:
 INDEX_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     # Media Factory (M013). Every one of these backs a read that happens on the
     # hot path of building or reviewing a video.
-    ("idx_episodes_campaign", "atlas_episodes", "campaign_id"),
+    ("idx_episodes_series", "atlas_episodes", "series_id"),
     ("idx_scripts_episode", "atlas_scripts", "episode_id"),
     ("idx_scenes_script", "atlas_scenes", "script_id"),
     ("idx_renditions_episode", "atlas_renditions", "episode_id"),

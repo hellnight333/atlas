@@ -19,7 +19,7 @@ and deferred.
 ```
 CONTENT  (medium-agnostic — knows nothing about video)
 
-  brief → Campaign → Episode → Script → Scene, Scene, Scene…
+  brief → Series → Episode → Script → Scene, Scene, Scene…
                                          each: heading, narration text,
                                                visual direction, duration
 
@@ -75,14 +75,23 @@ Rendition kind, one publish target, one path.
 
 | Entity | Holds | Notes |
 |---|---|---|
-| `Campaign` | name, theme, default channel, cadence | a series. M013 creates one implicitly; no UI |
-| `Episode` | campaign, brief, title, status | one unit of content |
+| `Series` | name, description, default channel | a long-lived body of related episodes. M013 creates one implicitly; no UI |
+| `Episode` | series, brief, title, status | one unit of content |
 | `Script` | episode, version, model + recipe that wrote it | versioned, so a rewrite does not destroy the old one |
 | `Scene` | script, index, heading, narration text, visual direction, target seconds | **the narrative beat.** No media fields, ever |
 
 `Script` is versioned because rewriting the script is a normal thing to want,
 and because a Rendition must be able to say which script version it was built
 from.
+
+**On the name `Series`.** Not `Campaign`: Atlas is meant to run media properties
+for years, and a campaign is by definition something that ends. Not `Studio`:
+that word is already Atlas's own — a studio is one of the six capability
+plugins, and reusing it would collide with the architecture's most load-bearing
+noun. Not `Channel`: a series *has* a channel and may eventually publish the
+same episode to several, so the two are not the same thing. `Series`/`Episode`
+is also the pairing every reader already knows. If a brand ever needs to own
+several series, `Brand` becomes a parent — additive, unlike a rename.
 
 ### Rendering layer — medium-specific
 
@@ -111,9 +120,9 @@ that authorised a specific upload must stay auditable afterwards.
 
 ### What M013 actually creates
 
-One `Campaign` (implicit), one `Episode`, one `Script` at version 1, three to
+One `Series` (implicit), one `Episode`, one `Script` at version 1, three to
 five `Scene`s, one `Rendition`, one `SceneRender` per scene, one `Publication`.
-No campaign management, no episode browser, no rendition picker. The tables
+No series management, no episode browser, no rendition picker. The tables
 exist; the product surface does not.
 
 ---
@@ -246,7 +255,7 @@ Each step ends somewhere demonstrable, so progress is visible rather than
 asserted.
 
 1. **Data model + repository.** Migration and CRUD for the content layer
-   (`Campaign`/`Episode`/`Script`/`Scene`) and the rendering layer
+   (`Series`/`Episode`/`Script`/`Scene`) and the rendering layer
    (`Rendition`/`SceneRender`), with the seam enforced: no media column on a
    content table.
 2. **`mock-video` + `mock-tts` producing real files.** Proves the seam.
@@ -273,7 +282,7 @@ Named so they stay out until one video exists end to end:
 - **Any second Rendition kind.** Shorts, thumbnails, blog posts, podcasts,
   translations and social posts are what the content/rendering seam exists *for*
   — they are not built here. The tables make them cheap later; nothing more.
-- Campaign or episode management surfaces — no browser, no scheduling, no
+- Series or episode management surfaces — no browser, no scheduling, no
   cadence enforcement.
 - Multi-provider routing policy, benchmark harness, quality scoring.
 - Cloud video adapters — unless local generation proves impossible.

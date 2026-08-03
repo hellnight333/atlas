@@ -48,8 +48,20 @@ class WorkStatus(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-class Campaign(BaseModel):
-    """A series. Episodes belong to one.
+class Series(BaseModel):
+    """A long-lived body of related episodes. Every episode belongs to one.
+
+    Named ``Series`` rather than ``Campaign`` because Atlas is meant to run
+    media properties for years, and a campaign is by definition something that
+    ends. ``Series``/``Episode`` is also the pairing every reader already knows.
+
+    Not called ``Studio``: that word is taken by Atlas's own architecture, where
+    a studio is one of the six capability plugins. Not called ``Channel``
+    either -- a series *has* a channel (below) and may eventually publish the
+    same episode to several, so the two are not the same thing.
+
+    If a brand ever needs to own several series, ``Brand`` becomes a parent of
+    this. That is an additive change; renaming this later would not be.
 
     Milestone 013 creates exactly one implicitly and offers no way to manage
     them. It exists so an episode has somewhere to belong other than nowhere.
@@ -58,7 +70,7 @@ class Campaign(BaseModel):
     id: str = Field(default_factory=_new_id)
     name: str
     description: str = ""
-    #: Where episodes in this campaign publish by default. A platform handle,
+    #: Where episodes in this series publish by default. A platform handle,
     #: not credentials -- secrets never live in the domain model.
     default_channel: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -69,7 +81,7 @@ class Episode(BaseModel):
     """One unit of content: the thing a person would name."""
 
     id: str = Field(default_factory=_new_id)
-    campaign_id: str
+    series_id: str
     #: What was asked for, in the operator's own words.
     brief: str
     title: str = ""

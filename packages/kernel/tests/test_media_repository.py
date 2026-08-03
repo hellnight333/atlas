@@ -12,7 +12,6 @@ import pytest
 
 from atlas_kernel import db
 from atlas_kernel.media.models import (
-    Campaign,
     Episode,
     Publication,
     PublicationStatus,
@@ -20,6 +19,7 @@ from atlas_kernel.media.models import (
     Scene,
     SceneRender,
     Script,
+    Series,
     Visibility,
     WorkStatus,
     fingerprint_scenes,
@@ -36,9 +36,9 @@ def repo() -> MediaRepository:
 
 @pytest.fixture
 def episode(repo: MediaRepository) -> Episode:
-    campaign = repo.create_campaign(Campaign(name=f"Campaign {uuid4().hex[:8]}"))
+    series = repo.create_series(Series(name=f"Series {uuid4().hex[:8]}"))
     return repo.create_episode(
-        Episode(campaign_id=campaign.id, brief="Explain the Atlas kernel in 30 seconds.")
+        Episode(series_id=series.id, brief="Explain the Atlas kernel in 30 seconds.")
     )
 
 
@@ -69,7 +69,7 @@ def _script_with_scenes(
     return script, scenes
 
 
-def test_campaign_episode_script_scene_round_trip(repo: MediaRepository, episode: Episode) -> None:
+def test_series_episode_script_scene_round_trip(repo: MediaRepository, episode: Episode) -> None:
     script, scenes = _script_with_scenes(repo, episode, count=4)
 
     assert repo.get_episode(episode.id) == episode
@@ -245,10 +245,10 @@ def test_updates_ignore_fields_that_are_not_allowed(
 ) -> None:
     """The update helpers take **kwargs, so the allow-list is what stops a typo
     or a hostile key from reaching the SQL."""
-    updated = repo.update_episode(episode.id, title="Real title", campaign_id="hijacked")
+    updated = repo.update_episode(episode.id, title="Real title", series_id="hijacked")
     assert updated is not None
     assert updated.title == "Real title"
-    assert updated.campaign_id == episode.campaign_id
+    assert updated.series_id == episode.series_id
 
 
 def test_media_tables_have_no_orphans_after_use() -> None:
