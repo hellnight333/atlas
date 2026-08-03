@@ -18,11 +18,15 @@ import { StudioWorkspaceScreen } from '../features/studios/screens/StudioWorkspa
 import { WorkflowStudioScreen } from '../features/studios/screens/WorkflowStudioScreen'
 import { ResearchWorkspaceScreen } from '../features/workspace/screens/ResearchWorkspaceScreen'
 import { DesktopShellLayout } from '../layouts/DesktopShellLayout'
+import { RouteErrorScreen } from './RouteErrorScreen'
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <DesktopShellLayout />,
+    // Without this, react-router shows its own developer fallback and the
+    // application's error boundary never sees the failure.
+    errorElement: <RouteErrorScreen />,
     children: [
       { index: true, element: <DesktopOverviewScreen /> },
       { path: 'workspace', element: <HomeWorkspaceScreen /> },

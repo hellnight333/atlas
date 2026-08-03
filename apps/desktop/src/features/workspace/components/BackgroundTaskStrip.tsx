@@ -1,9 +1,25 @@
+import { useMemo } from 'react'
+
 import { Button, Dock } from '../../../components'
 import { useActivityStore, useUIStore } from '../../../stores'
 
+const ACTIVE_STATES = new Set(['running', 'blocked'])
+
 export function BackgroundTaskStrip() {
-  const jobs = useActivityStore((state) => state.jobs.filter((job) => job.state === 'running' || job.state === 'blocked'))
+  // Select the array, then narrow it here. Filtering *inside* the selector
+  // returns a new array on every call, and a Zustand selector is the
+  // `getSnapshot` for `useSyncExternalStore`: React compares the value it read
+  // during render with the one it reads at commit, sees two different arrays,
+  // and re-renders to catch up — forever. That is React error #185, "Maximum
+  // update depth exceeded", and it took down the whole application the instant
+  // the workspace rendered.
+  //
+  // `state.jobs` is a stable reference until the store actually changes, so
+  // this subscribes correctly and the filtering happens where it belongs.
+  const allJobs = useActivityStore((state) => state.jobs)
   const setActivityCenterOpen = useUIStore((state) => state.setActivityCenterOpen)
+
+  const jobs = useMemo(() => allJobs.filter((job) => ACTIVE_STATES.has(job.state)), [allJobs])
 
   return (
     <Dock title="Background Task Strip" action={<Button onClick={() => setActivityCenterOpen(true)}>Open Activity Center</Button>}>
