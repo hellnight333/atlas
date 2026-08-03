@@ -82,6 +82,18 @@ The first release intended for people other than the author.
   `ExitRequested`, so the kernel and database survived the window closing.
 - **Killing the kernel left half of it alive** — PyInstaller runs the real
   interpreter as a child process, so only the bootloader was being stopped.
+- **The Linux AppImage would not build.** linuxdeploy inspects every ELF file
+  in the bundle to resolve shared libraries, and the bundled PostgreSQL shipped
+  procedural-language extensions linked against runtimes Atlas does not
+  include — `plpython3` wants `libpython3.6m.so.1.0`, which no current
+  distribution carries. One unresolvable file aborts the whole bundle. Atlas
+  runs no in-database Python, Perl or Tcl, so these are now pruned along with
+  `psql`. Tauri reported only `failed to run linuxdeploy` because it discards
+  the bundler's output unless built with `--verbose`, which the release
+  workflow now always passes.
+- **The macOS Intel installer was never built.** GitHub retired the `macos-13`
+  runner, so that job queued until it was cancelled rather than failing — which
+  looks like a slow build, not a missing machine. Now on `macos-15-intel`.
 
 ### Known limitations
 
