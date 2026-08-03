@@ -850,6 +850,19 @@ def init_db() -> None:
             UNIQUE (rendition_id, scene_id)
         )
         """))
+        # Generic, and deliberately so. The kernel records "this node was last
+        # built with this effective fingerprint" and knows nothing about what a
+        # node is. Video uses it today; a podcast, a blog post or a listing will
+        # use the same table without a migration.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_dependency_fingerprints (
+            scope TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            PRIMARY KEY (scope, node_id)
+        )
+        """))
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_publications (
             id TEXT PRIMARY KEY,

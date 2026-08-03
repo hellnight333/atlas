@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..models import Asset
 from . import capabilities
@@ -141,47 +141,66 @@ class SceneRenderService:
         *,
         video_recipe_id: str,
         narration_recipe_id: str | None = None,
+        render_visual: bool = True,
+        render_narration: bool = True,
     ) -> RenderOutcome:
-        """Render one scene: picture, then narration.
+        """Render one scene: the picture, the narration, or only one of them.
+
+        The two flags are the point. A rewritten voiceover changes the speech
+        node and nothing else, so re-rendering the picture would spend GPU
+        minutes to produce a file nobody asked for. Anything skipped keeps the
+        asset it already had.
 
         Failure is contained here. One scene failing is one scene failing, and
         the rendition survives to be retried or partially rebuilt.
         """
-        self.media.update_scene_render(scene_render.id, status=WorkStatus.RUNNING, error=None)
+        if not (render_visual or render_narration):
+            return RenderOutcome(scene_render=scene_render)
 
-        try:
-            recipe = self.recipes.get(video_recipe_id)
-            media_asset, provenance = self._render_visual(scene_render, scene, recipe)
-        except (ProviderError, Exception) as error:  # noqa: BLE001 - recorded, not swallowed
-            message = f"{type(error).__name__}: {error}"
-            self.media.update_scene_render(scene_render.id, status=WorkStatus.FAILED, error=message)
-            return RenderOutcome(scene_render=scene_render, error=message)
+        self.media.update_scene_render(scene_render.id, status=WorkStatus.RUNNING, error=None)
+        updates: dict[str, Any] = {"status": WorkStatus.READY, "error": None}
+
+        media_asset: Asset | None = None
+        if render_visual:
+            try:
+                recipe = self.recipes.get(video_recipe_id)
+                media_asset, provenance = self._render_visual(scene_render, scene, recipe)
+            except (ProviderError, Exception) as error:  # noqa: BLE001 - recorded, not swallowed
+                message = f"{type(error).__name__}: {error}"
+                self.media.update_scene_render(
+                    scene_render.id, status=WorkStatus.FAILED, error=message
+                )
+                return RenderOutcome(scene_render=scene_render, error=message)
+
+            updates.update(
+                media_asset_id=media_asset.id,
+                provider=provenance.provider,
+                recipe_id=provenance.recipe_id,
+                provenance=provenance.model_dump(mode="json"),
+                render_ms=provenance.render_ms,
+                cost_usd=provenance.cost_usd,
+                duration_seconds=scene.target_seconds,
+            )
+        elif scene_render.media_asset_id:
+            media_asset = self.assets.repository.get_asset(scene_render.media_asset_id)
 
         audio_asset: Asset | None = None
-        if narration_recipe_id and scene.narration.strip():
+        if render_narration and narration_recipe_id and scene.narration.strip():
             try:
                 audio_asset = self._render_narration(
                     scene_render, scene, self.recipes.get(narration_recipe_id)
                 )
+                updates["audio_asset_id"] = audio_asset.id
             except Exception as error:  # noqa: BLE001
                 # Deliberately not fatal. A scene with a picture and no voice is
                 # reviewable and fixable; failing the whole scene for it would
                 # throw away a render that already cost GPU time.
-                self.media.update_scene_render(scene_render.id, error=f"narration failed: {error}")
+                updates["error"] = f"narration failed: {error}"
+        elif scene_render.audio_asset_id:
+            audio_asset = self.assets.repository.get_asset(scene_render.audio_asset_id)
 
-        updated = self.media.update_scene_render(
-            scene_render.id,
-            status=WorkStatus.READY,
-            media_asset_id=media_asset.id,
-            audio_asset_id=audio_asset.id if audio_asset else None,
-            provider=provenance.provider,
-            recipe_id=provenance.recipe_id,
-            provenance=provenance.model_dump(mode="json"),
-            render_ms=provenance.render_ms,
-            cost_usd=provenance.cost_usd,
-            duration_seconds=scene.target_seconds,
-            source_fingerprint=scene.content_fingerprint(),
-        )
+        updates["source_fingerprint"] = scene.content_fingerprint()
+        updated = self.media.update_scene_render(scene_render.id, **updates)
         return RenderOutcome(
             scene_render=updated or scene_render,
             media_asset=media_asset,
@@ -336,12 +355,23 @@ class SceneRenderService:
         video_recipe_id: str,
         narration_recipe_id: str | None = None,
         only: list[str] | None = None,
+        render_visuals: list[str] | None = None,
+        render_narration: list[str] | None = None,
     ) -> list[RenderOutcome]:
-        """Render every scene, or only the ones named.
+        """Render the scenes, or only the parts of them that need it.
 
-        ``only`` is what partial regeneration passes: the scene ids that
-        actually changed. Everything else keeps the render it already has.
+        ``render_visuals`` and ``render_narration`` are scene-id allow-lists,
+        taken straight from a regeneration plan. ``None`` means "all of them",
+        which is what a first build wants. Passing them separately is what makes
+        "re-voice scene 3, keep its picture" possible -- a single scene-level
+        list cannot express it.
+
+        ``only`` is the coarse form, kept for callers that genuinely want a
+        whole scene redone.
         """
+        if only is not None:
+            render_visuals = only if render_visuals is None else render_visuals
+            render_narration = only if render_narration is None else render_narration
         planned = self.plan(rendition, scenes)
         by_id = {scene.id: scene for scene in scenes}
         self.media.update_rendition(rendition.id, status=WorkStatus.RUNNING, error=None)
@@ -351,7 +381,9 @@ class SceneRenderService:
             scene = by_id.get(scene_render.scene_id)
             if scene is None:
                 continue
-            if only is not None and scene.id not in only:
+            do_visual = render_visuals is None or scene.id in render_visuals
+            do_narration = render_narration is None or scene.id in render_narration
+            if not (do_visual or do_narration):
                 outcomes.append(RenderOutcome(scene_render=scene_render))
                 continue
             outcomes.append(
@@ -360,6 +392,8 @@ class SceneRenderService:
                     scene,
                     video_recipe_id=video_recipe_id,
                     narration_recipe_id=narration_recipe_id,
+                    render_visual=do_visual,
+                    render_narration=do_narration,
                 )
             )
 

@@ -24,6 +24,16 @@ def _new_id() -> str:
     return str(uuid4())
 
 
+def _digest(*parts: object) -> str:
+    """A stable hash of some inputs.
+
+    ``None`` and an empty string stay distinct: "absent" and "blank" are not
+    the same state, and conflating them would hide a real change.
+    """
+    material = "\x1f".join("\x00NULL" if part is None else str(part) for part in parts)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
 # ---------------------------------------------------------------------------
 # Shared status
 # ---------------------------------------------------------------------------
@@ -153,14 +163,40 @@ class Scene(BaseModel):
             raise ValueError("target_seconds must be positive")
         return value
 
-    def content_fingerprint(self) -> str:
-        """Identity of what this scene *says*, for staleness checks.
+    def visual_fingerprint(self) -> str:
+        """Identity of what a picture renderer is given.
 
-        Only authored content participates. Editing the narration should
-        invalidate a cut; renaming metadata should not.
+        Separate from the narration on purpose. Rewriting a voiceover must not
+        invalidate a picture that nothing about it changed -- that would throw
+        away GPU minutes for a text edit.
         """
-        material = f"{self.index}\x1f{self.heading}\x1f{self.narration}\x1f{self.visual_direction}"
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return _digest(self.heading, self.visual_direction)
+
+    def narration_fingerprint(self) -> str:
+        """Identity of what a speech renderer is given."""
+        return _digest(self.narration)
+
+    def layout_fingerprint(self) -> str:
+        """Identity of where this scene sits and how long it runs.
+
+        Assembly depends on this; the renderers do not. Reordering scenes or
+        changing a duration is a re-cut, not a re-render.
+        """
+        return _digest(self.index, self.target_seconds)
+
+    def content_fingerprint(self) -> str:
+        """Everything authored about this scene, combined.
+
+        Coarse by construction: anything that changes invalidates it. Kept for
+        callers that only need "did this scene change at all"; anything
+        deciding *what to rebuild* should use the specific fingerprints above,
+        or it will rebuild far more than it needs to.
+        """
+        return _digest(
+            self.visual_fingerprint(),
+            self.narration_fingerprint(),
+            self.layout_fingerprint(),
+        )
 
 
 # ---------------------------------------------------------------------------
