@@ -16,6 +16,17 @@ choice and implementation plan must align with it.
 4. **Never over-engineer.** Simple, modular, production-ready. No speculative abstraction.
 5. **Premium feel.** Professional, minimal, Apple-like, fast.
 
+## Standing UI rules (see PROJECT_MEMORY.md for why)
+
+1. **Never allocate inside a Zustand selector.** Select stable references only;
+   do all filtering and mapping in `useMemo`, or wrap in `useShallow`. An
+   allocating selector re-renders without end — React error #185 — and it took
+   the whole application down.
+2. **Every error a user can see must also be recorded** in `logs/startup.log`
+   and the diagnostics system. A user must never look at an error Atlas has no
+   trace of. That includes every route `errorElement`, not only the root
+   boundary — `RouterProvider` catches route errors before any boundary above it.
+
 ## The one architectural rule
 
 **No studio may call a provider directly.** All capability flows through the kernel.

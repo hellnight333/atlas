@@ -86,9 +86,22 @@ impl StartupLog {
         let path = dir.join("startup.log");
         rotate_if_large(&path);
 
+        // Which binary this actually is. Not a nicety: a stale build left in a
+        // `target/` directory looks identical to the installed one, launches
+        // just as happily, and faithfully reproduces bugs that were fixed hours
+        // ago. A whole debugging round was spent on exactly that. One line here
+        // answers "which Atlas am I running" before anyone asks.
+        let exe = std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+
         append(
             &path,
-            &format!("\n=== Atlas {} ===", env!("CARGO_PKG_VERSION")),
+            &format!(
+                "\n=== Atlas {} ({}) ===\n  binary: {exe}",
+                env!("CARGO_PKG_VERSION"),
+                option_env!("ATLAS_BUILD_COMMIT").unwrap_or("local build")
+            ),
         );
         if let Ok(mut pending) = self.pending.lock() {
             for line in pending.drain(..) {
