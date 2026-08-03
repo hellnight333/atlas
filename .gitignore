@@ -52,6 +52,14 @@ assets/
 !website/assets/
 !website/assets/**
 
+# Source code, not generated media. The blanket `assets/` rule above silently
+# excluded apps/desktop/src/features/assets/, so router.tsx imported a screen
+# that was never committed and a clean checkout could not compile.
+!apps/desktop/src/assets/
+!apps/desktop/src/assets/**
+!apps/desktop/src/features/assets/
+!apps/desktop/src/features/assets/**
+
 # OS
 .DS_Store
 
