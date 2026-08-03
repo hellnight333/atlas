@@ -307,3 +307,38 @@ Named so they stay out until one video exists end to end:
   Fine for a test channel, worth knowing before a retry loop is written.
 - **Wan VRAM.** 1.3B fits comfortably; 14B does not fit every card. The recipe
   pins the checkpoint so this is a recipe choice, not a runtime surprise.
+
+---
+
+## Connecting a YouTube channel
+
+Needed once, by a person, before anything can be published. Atlas cannot do any
+of it on your behalf.
+
+1. **Google Cloud project** — create one, then enable **YouTube Data API v3**.
+2. **OAuth consent screen** — External, in Testing mode is fine. Add your own
+   Google account under *Test users*, or consent will be refused.
+3. **OAuth client** — type **Desktop app**. Download the JSON. Atlas rejects a
+   Web client by name rather than failing later at the redirect with a message
+   that sends you somewhere unhelpful.
+4. **A channel to publish to.** A private test channel. Check its default upload
+   visibility is private: Atlas never *requests* public, and reads the video
+   back after upload and fails if it is public anyway, but the channel default
+   is the thing that would cause that.
+5. Point Atlas at the JSON and authorise once. The refresh token is written to
+   `logs/../youtube-token.json` in the data directory with mode `0600` —
+   unencrypted, the same choice `gcloud`, `gh` and `aws` make. Anything that can
+   read it as your user can act as your user on that channel.
+
+### Quota, which will bite before anything else does
+
+An upload costs **~1600 units** against a default **10,000/day**. That is about
+**six uploads a day**. It is not a rate limit that resets in an hour; it resets
+at midnight Pacific. Atlas reports a quota rejection as a quota rejection rather
+than a generic 403, because the generic message sends you to the wrong page.
+
+### What is not implemented
+
+Playlists, scheduling (`publishAt`), thumbnails, localisations, end screens,
+monetisation. None are needed to publish one video, and each is an unbenchmarked
+guess until there is a channel to try it against.
