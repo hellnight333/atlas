@@ -4,10 +4,11 @@ import { useWorkspaceStore } from '../../../stores'
 const items = [
   { label: 'Desktop Overview', to: '/' },
   { label: 'Home Workspace', to: '/workspace' },
-  { label: 'Project Workspace', to: '/project/p1' },
-  { label: 'Chat Studio', to: '/project/p1/chat' },
-  { label: 'Studio Workspace', to: '/studio/s1' },
-  { label: 'Asset Workspace', to: '/asset/a1' },
+  // Project, chat, studio and asset screens are reached by opening a real
+  // record from Home Workspace. They were previously listed here pointing at
+  // the sample identifiers p1/s1/a1, which exist in mock data but not in an
+  // installed Atlas -- so on a real install every one of those links led to a
+  // screen with nothing in it.
   { label: 'Image Studio', to: '/image-studio' },
   { label: 'Research', to: '/research' },
   { label: 'Review', to: '/review' },
