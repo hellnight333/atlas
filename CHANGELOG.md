@@ -10,6 +10,45 @@ to anyone.
 
 ## [Unreleased]
 
+### Fixed — desktop stability
+
+Found by running the *released* build against a real data directory, rather
+than a development build against a temporary one. Every one of these needs a
+packaged app and real state to reproduce.
+
+- **Two copies of Atlas could destroy the database.** A second launch reclaimed
+  the data directory from the first: it killed the running kernel and stopped
+  the database beneath a window that had already rendered and would therefore
+  never show an error. With an orphaned server still attached, two PostgreSQL
+  processes reached the same cluster and left WAL from one against the control
+  file of the other — which is not recoverable. Atlas now takes a lock on the
+  data directory and a second copy refuses to start, naming the process that
+  holds it. A lock left by a crash is ignored: the recorded pid is checked for
+  liveness and for being an Atlas process.
+- **A damaged lock file made Atlas permanently unstartable.** `pg_ctl` will not
+  stop a server whose `postmaster.pid` it cannot parse, and will not start one
+  while the file exists — the shape a power loss leaves behind. Atlas now reads
+  the file itself, stops the recorded server if it is genuinely alive, and
+  removes the file when it is not.
+- **"Examine the log output."** was the entire diagnosis a user got when
+  PostgreSQL refused to start. Atlas now reads the log on their behalf and shows
+  the actual reason.
+- **A database beyond repair was a dead end.** Atlas now recognises the states
+  PostgreSQL reports when the files themselves are broken, says so plainly, and
+  offers to move the damaged database aside and start over. Nothing is deleted —
+  it is renamed and left where it was.
+- **A kernel that died after startup was invisible.** The window stayed up,
+  rendered and useless, with every request failing silently. That is
+  indistinguishable from a hang. It now shows the diagnostics screen.
+- **The startup deadline was too tight and fired falsely.** 30 seconds per stage
+  is not enough for a first run under Rosetta, where `initdb` and a cold kernel
+  import are each easily that long. It is now 120 seconds per stage — long
+  enough that the shell always reports the real failure first — and the splash
+  admits when it is taking a while instead of looking frozen.
+- **The download page listed filenames that do not exist** and gave no warning
+  about architecture. The Intel build runs on Apple Silicon through Rosetta at
+  roughly a fifth of the speed, with nothing on screen to say why.
+
 ## [0.12.0-alpha.2] — RC1 Hotfix
 
 `0.12.0-alpha.1` built on every platform and installed correctly, and was still

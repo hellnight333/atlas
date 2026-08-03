@@ -163,6 +163,12 @@ export async function openLogFolder(): Promise<void> {
   await invoke('open_log_folder')
 }
 
+/** Move a damaged database aside and start over. Destructive; ask first. */
+export async function resetDatabase(): Promise<string> {
+  if (!isDesktopShell()) return ''
+  return invoke<string>('reset_database')
+}
+
 /** Run the boot sequence again after a failure. */
 export async function retryBootstrap(): Promise<void> {
   if (!isDesktopShell()) return

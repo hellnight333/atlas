@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { isDesktopShell } from '../api/runtime'
-import { logStartup } from '../api/shell'
+import { logStartup, onBootstrapProgress, type BootstrapProgress } from '../api/shell'
 import { BootScreen } from '../features/onboarding/BootScreen'
 import { OnboardingFlow } from '../features/onboarding/OnboardingFlow'
 import { StartupDiagnostics } from '../features/onboarding/StartupDiagnostics'
@@ -35,6 +35,7 @@ const LOAD_DEADLINE_MS = 30_000
 export function AppGate() {
   const [booted, setBooted] = useState(() => !isDesktopShell())
   const [stalled, setStalled] = useState(false)
+  const [lost, setLost] = useState<BootstrapProgress | null>(null)
   const { state, load, phase } = useOnboardingStore()
 
   const handleReady = useCallback(() => setBooted(true), [])
@@ -61,6 +62,28 @@ export function AppGate() {
     return () => clearTimeout(timer)
   }, [booted, phase])
 
+  // Keep listening after boot. The shell reports a kernel that dies later, and
+  // without this the window stays up, rendered and useless: every request fails
+  // and nothing on screen ever says why. A dead backend behind a live window is
+  // indistinguishable, to the person using it, from a hang.
+  useEffect(() => {
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+    onBootstrapProgress((next) => {
+      if (cancelled || next.stage !== 'failed') return
+      // Only meaningful once the application is up; before that the boot screen
+      // owns the failure and says so more precisely.
+      setLost(next)
+    }).then((fn) => {
+      if (cancelled) fn()
+      else unsubscribe = fn
+    })
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [])
+
   useEffect(() => {
     if (state?.theme) applyTheme(state.theme)
   }, [state?.theme])
@@ -68,6 +91,16 @@ export function AppGate() {
   useEffect(() => {
     if (phase === 'ready') logStartup('setup state loaded')
   }, [phase])
+
+  if (lost && booted) {
+    logStartup(`backend lost after boot: ${lost.detail ?? lost.message}`)
+    return (
+      <StartupDiagnostics
+        stage={lost.message}
+        reason={lost.detail ?? 'The Atlas kernel is no longer running.'}
+      />
+    )
+  }
 
   if (!booted) {
     return <BootScreen onReady={handleReady} />

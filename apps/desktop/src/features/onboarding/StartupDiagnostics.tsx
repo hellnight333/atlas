@@ -1,6 +1,12 @@
 import { useCallback, useState } from 'react'
 
-import { diagnosticReport, openLogFolder, retryBootstrap, startupLog } from '../../api/shell'
+import {
+  diagnosticReport,
+  openLogFolder,
+  resetDatabase,
+  retryBootstrap,
+  startupLog,
+} from '../../api/shell'
 
 /**
  * What Atlas shows instead of a blank window when it cannot start.
@@ -34,6 +40,25 @@ export function StartupDiagnostics({ reason, stage, onRetry, retryLabel = 'Retry
   const [copied, setCopied] = useState<Copied>('idle')
   const [retrying, setRetrying] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [confirmingReset, setConfirmingReset] = useState(false)
+
+  // Offered only when the database is the thing that is broken. A reset button
+  // shown for a network error would be an invitation to destroy data over a
+  // problem it cannot fix.
+  const databaseIsDamaged =
+    /damaged beyond repair|checkpoint record|different database system|incompatible with server|control file/i.test(
+      reason,
+    )
+
+  const doReset = useCallback(async () => {
+    setActionError(null)
+    try {
+      const archived = await resetDatabase()
+      setActionError(`Old database kept at ${archived}. Atlas is starting over.`)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
 
   const viewLogs = useCallback(async () => {
     setShowLog(true)
@@ -116,6 +141,20 @@ export function StartupDiagnostics({ reason, stage, onRetry, retryLabel = 'Retry
           >
             View logs
           </button>
+          {databaseIsDamaged && (
+            <button
+              type="button"
+              onClick={() => (confirmingReset ? void doReset() : setConfirmingReset(true))}
+              className={
+                'rounded-md px-4 py-2 text-sm font-medium transition ' +
+                (confirmingReset
+                  ? 'bg-rose-500 text-white hover:bg-rose-400'
+                  : 'border border-rose-500/50 text-rose-200 hover:border-rose-400')
+              }
+            >
+              {confirmingReset ? 'Yes — start with a new database' : 'Reset the database'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void copyReport()}
@@ -128,6 +167,13 @@ export function StartupDiagnostics({ reason, stage, onRetry, retryLabel = 'Retry
         {copied === 'failed' && (
           <p className="mt-3 text-center text-xs text-amber-300/90">
             The clipboard was not available, so the report is shown below instead.
+          </p>
+        )}
+
+        {confirmingReset && (
+          <p className="mt-3 text-center text-xs text-rose-300">
+            This starts Atlas over with an empty database. The damaged one is kept, renamed,
+            in the same folder — nothing is deleted.
           </p>
         )}
 

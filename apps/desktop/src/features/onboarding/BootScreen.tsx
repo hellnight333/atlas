@@ -12,14 +12,23 @@ import { isDesktopShell } from '../../api/runtime'
 import { StartupDiagnostics } from './StartupDiagnostics'
 
 /**
- * How long Atlas may sit on the splash before it owes the user an explanation.
+ * How long any single stage may take before the UI gives up on it.
  *
- * The shell gives the kernel 90 seconds, deliberately — a first run on a cold
- * machine really can take that long. But the user must not be looking at a
- * silent window for 90 seconds to find that out, so the UI stops waiting well
- * before the shell does and offers diagnostics instead.
+ * Per stage, not per boot: a boot that is still advancing is not stuck, and
+ * timing the whole thing punishes a slow machine for being slow. The timer
+ * resets whenever the stage changes.
+ *
+ * It was 30s, which was too tight and produced a *false* failure screen on a
+ * first run under Rosetta — `initdb` and a cold kernel import are each easily
+ * that long when every instruction is being translated. The shell reports a
+ * real failure of its own at 90s, so this only has to be long enough that the
+ * shell always gets to speak first; when it does, the user sees the actual
+ * reason rather than "it took too long".
  */
-const BOOT_DEADLINE_MS = 30_000
+const STAGE_DEADLINE_MS = 120_000
+
+/** When to admit it is taking a while, rather than looking frozen. */
+const SLOW_AFTER_MS = 20_000
 
 /**
  * What the user looks at while Atlas starts itself.
@@ -49,6 +58,8 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
     isDesktopShell() ? INITIAL_PROGRESS : BROWSER_PROGRESS,
   )
   const [timedOut, setTimedOut] = useState(false)
+  const [slow, setSlow] = useState(false)
+  const [seconds, setSeconds] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -72,14 +83,31 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
     }
   }, [onReady])
 
-  // Stop waiting after the deadline, whatever the shell is still doing.
+  // Give up only if a single stage stops making progress. Resets on every
+  // stage change, so a slow boot is allowed to be slow.
   useEffect(() => {
     if (progress.stage === 'ready' || progress.stage === 'failed') return
     const timer = setTimeout(() => {
-      logStartup(`boot deadline reached while at stage ${progress.stage}`)
+      logStartup(`stage ${progress.stage} exceeded ${STAGE_DEADLINE_MS / 1000}s`)
       setTimedOut(true)
-    }, BOOT_DEADLINE_MS)
+    }, STAGE_DEADLINE_MS)
     return () => clearTimeout(timer)
+  }, [progress.stage])
+
+  // A progress bar that has not moved for twenty seconds reads as frozen even
+  // when it is working. Saying so, with a count, is the difference between
+  // waiting and wondering whether to force-quit.
+  useEffect(() => {
+    setSlow(false)
+    setSeconds(0)
+    if (progress.stage === 'ready' || progress.stage === 'failed') return
+    const started = Date.now()
+    const tick = setInterval(() => {
+      const elapsed = Math.round((Date.now() - started) / 1000)
+      setSeconds(elapsed)
+      if (elapsed * 1000 >= SLOW_AFTER_MS) setSlow(true)
+    }, 1000)
+    return () => clearInterval(tick)
   }, [progress.stage])
 
   const failed = progress.stage === 'failed'
@@ -92,7 +120,9 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
           failed
             ? (progress.detail ??
               'The shell reported a failure but did not say what went wrong. The startup log below has the sequence it managed to complete.')
-            : `Atlas did not finish starting within ${BOOT_DEADLINE_MS / 1000} seconds. It was still at "${progress.message}".`
+            : `Atlas stopped making progress at "${progress.message}" and has been ` +
+              `there for over ${STAGE_DEADLINE_MS / 1000} seconds. The startup log below ` +
+              `shows every step it did complete.`
         }
       />
     )
@@ -112,6 +142,13 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
         {progress.first_run && (
           <p className="mt-2 text-sm text-slate-400">
             Setting things up for the first time. This happens once.
+          </p>
+        )}
+
+        {slow && (
+          <p className="mt-2 text-sm text-amber-300/80">
+            Still working — {seconds}s so far. A first run, or a translated build on Apple
+            Silicon, is slower.
           </p>
         )}
 

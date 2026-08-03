@@ -40,6 +40,17 @@ nothing else to install.</p>
   <a href="https://github.com/hellnight333/atlas/blob/main/docs/IMPLEMENTATION_STATUS.md">See exactly what is built</a>.</p>
 </div>
 
+<div class="notice">
+  <strong>macOS: pick the right one</strong>
+  <p>The two macOS downloads sit next to each other and differ by one word.
+  <code>aarch64-apple-darwin</code> is for Apple Silicon (M1 and later);
+  <code>x86_64-apple-darwin</code> is for older Intel Macs. The Intel build
+  <em>will</em> run on Apple Silicon through Rosetta — it just runs about five
+  times slower and takes far longer to start, with nothing on screen to tell you
+  why. If you are unsure, run <code>uname -m</code> in Terminal:
+  <code>arm64</code> means Apple Silicon.</p>
+</div>
+
 <div class="btn-row" style="justify-content:flex-start;margin:1.5rem 0">
   <a class="btn btn-primary" href="https://github.com/hellnight333/atlas/releases/latest">All downloads on GitHub</a>
 </div>
@@ -48,8 +59,8 @@ nothing else to install.</p>
   <tr><th>Platform</th><th>File</th><th>Notes</th></tr>
   <tr><td>Windows 10/11</td><td><code>Atlas_&lt;version&gt;_x64-setup.exe</code></td><td>Installer</td></tr>
   <tr><td>Windows (portable)</td><td><code>..._portable.zip</code></td><td>Runs from a folder or USB drive</td></tr>
-  <tr><td>macOS (Apple Silicon)</td><td><code>Atlas_&lt;version&gt;_aarch64.dmg</code></td><td>M1 and later</td></tr>
-  <tr><td>macOS (Intel)</td><td><code>Atlas_&lt;version&gt;_x86_64.dmg</code></td><td>macOS 10.15+</td></tr>
+  <tr><td><strong>macOS (Apple Silicon)</strong></td><td><code>Atlas_&lt;version&gt;_aarch64-apple-darwin.dmg</code></td><td><strong>M1, M2, M3, M4 — almost certainly you</strong></td></tr>
+  <tr><td>macOS (Intel)</td><td><code>Atlas_&lt;version&gt;_x86_64-apple-darwin.dmg</code></td><td>Only for pre-2020 Intel Macs</td></tr>
   <tr><td>Linux</td><td><code>Atlas_&lt;version&gt;.AppImage</code></td><td>Needs FUSE; built on Ubuntu 22.04</td></tr>
   <tr><td>Linux (archive)</td><td><code>..._linux-x86_64.tar.gz</code></td><td>Extract and run</td></tr>
 </table>
@@ -59,7 +70,7 @@ nothing else to install.</p>
 <h2>Verify your download</h2>
 <p><strong>Alpha builds are unsigned</strong>, so your operating system cannot vouch for them.
 Every release publishes <code>SHA256SUMS.txt</code>. Check it before running the file.</p>
-<pre>shasum -a 256 Atlas_0.12.0-alpha.2_aarch64.dmg        # macOS / Linux
+<pre>shasum -a 256 Atlas_0.12.0-alpha.2_aarch64-apple-darwin.dmg   # macOS / Linux
 certutil -hashfile Atlas_0.12.0-alpha.2_x64-setup.exe SHA256   # Windows</pre>
 
 <h2>The warning you will see</h2>

@@ -150,6 +150,29 @@ fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Move a damaged database aside and start over.
+///
+/// Offered on the diagnostics screen only when the database is the thing that
+/// is broken. Destructive in effect, so it is never automatic: a person has to
+/// ask for it, having been told what it does.
+#[tauri::command]
+fn reset_database(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .try_state::<BootstrapState>()
+        .and_then(|state| state.data_dir.lock().ok().and_then(|slot| slot.clone()))
+        .ok_or_else(|| "Atlas has not chosen a data directory yet.".to_string())?;
+
+    shutdown(&app);
+    let archived = bootstrap::reset_database(&dir).map_err(|e| e.to_string())?;
+    bootstrap::log(
+        &app,
+        &format!("database reset; old one kept at {}", archived.display()),
+    );
+
+    retry_bootstrap(app)?;
+    Ok(archived.display().to_string())
+}
+
 /// Run the boot sequence again after a failure.
 #[tauri::command]
 fn retry_bootstrap(app: tauri::AppHandle) -> Result<(), String> {
@@ -208,7 +231,8 @@ fn main() {
             startup_log,
             diagnostic_report,
             open_log_folder,
-            retry_bootstrap
+            retry_bootstrap,
+            reset_database
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -263,6 +287,10 @@ fn shutdown(app: &tauri::AppHandle) {
         }
         if let Some(dir) = state.data_dir.lock().unwrap().clone() {
             bootstrap::clear_kernel_pid(&dir);
+            // Last, and only if it is ours. A lock left behind is not fatal --
+            // the next launch checks liveness -- but leaving one is untidy and
+            // makes the next start log a recovery it did not need.
+            bootstrap::release_instance_lock(&dir);
         }
     }
 }

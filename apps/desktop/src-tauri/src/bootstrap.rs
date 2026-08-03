@@ -248,6 +248,95 @@ fn run_initdb(bin_dir: &Path, pg_data: &Path) -> Result<(), BootstrapError> {
     Ok(())
 }
 
+/// Whether a process is alive *and* is one of ours.
+///
+/// Liveness alone is not enough: pids are reused, and killing or deferring to
+/// an unrelated program because it inherited a number would be worse than the
+/// problem being solved. The command name is checked too.
+fn is_live_atlas_process(pid: u32, needle: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let Ok(output) = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+        else {
+            return false;
+        };
+        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        return text.contains(&needle.to_lowercase());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let Ok(output) = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+        else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        !text.trim().is_empty() && text.contains(&needle.to_lowercase())
+    }
+}
+
+/// Where this instance records that it owns the data directory.
+fn instance_lock_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("atlas.lock")
+}
+
+/// Claim exclusive use of the data directory, or refuse to start.
+///
+/// This is the guard that turns a nuisance into a non-event. Without it a
+/// second Atlas launched against the same data directory will reclaim it from
+/// the first -- killing its kernel and stopping its database out from under a
+/// window that has already rendered and will therefore never show an error.
+/// Worse, two PostgreSQL servers reaching the same cluster can leave WAL from
+/// one against the control file of the other, which is not a recoverable
+/// state: the cluster is destroyed and everything in it is gone.
+///
+/// A stale lock is not a problem. The recorded pid is checked for liveness and
+/// for being an Atlas process, so a crash leaves a lock that the next launch
+/// correctly ignores.
+fn acquire_instance_lock(app: &AppHandle, data_dir: &Path) -> Result<(), BootstrapError> {
+    let lock = instance_lock_file(data_dir);
+
+    if let Ok(contents) = fs::read_to_string(&lock) {
+        if let Ok(pid) = contents.trim().parse::<u32>() {
+            if pid != std::process::id() && is_live_atlas_process(pid, "atlas") {
+                return Err(fail(format!(
+                    "Atlas is already running (process {pid}) and is using this \
+                     data directory.\n\nTwo copies cannot share one database. The \
+                     second would stop the first, and both writing at once can \
+                     destroy the data outright.\n\nSwitch to the Atlas window that \
+                     is already open, or quit it before starting this one."
+                )));
+            }
+            log(app, &format!("ignoring stale instance lock from pid {pid}"));
+        }
+    }
+
+    fs::write(&lock, std::process::id().to_string())
+        .map_err(|e| fail(format!("could not claim {}: {e}", lock.display())))?;
+    log(
+        app,
+        &format!("instance lock acquired ({})", std::process::id()),
+    );
+    Ok(())
+}
+
+/// Give up the data directory. Best effort, and only if the lock is ours.
+pub fn release_instance_lock(data_dir: &Path) {
+    let lock = instance_lock_file(data_dir);
+    if let Ok(contents) = fs::read_to_string(&lock) {
+        if contents.trim().parse::<u32>() == Ok(std::process::id()) {
+            let _ = fs::remove_file(&lock);
+        }
+    }
+}
+
 /// Where the running kernel's pid is recorded, so a later run can clean up
 /// after a crash.
 fn kernel_pid_file(data_dir: &Path) -> PathBuf {
@@ -290,21 +379,81 @@ fn reclaim_kernel(data_dir: &Path) {
 /// This treats the data directory as exclusively ours. Two copies of Atlas
 /// sharing one data directory is already unsupported -- PostgreSQL itself
 /// refuses it -- so reclaiming it is the behaviour that makes recovery work.
-fn reclaim_data_dir(bin_dir: &Path, pg_data: &Path) {
-    if !pg_data.join("postmaster.pid").exists() {
+fn reclaim_data_dir(app: &AppHandle, bin_dir: &Path, pg_data: &Path) {
+    let pid_file = pg_data.join("postmaster.pid");
+    if !pid_file.exists() {
         return;
     }
-    let _ = Command::new(bin_dir.join(postgres_exe("pg_ctl")))
+    log(app, "postgres: a lock file from a previous run is present");
+
+    // The polite route first. Works when the file is intact, whether the
+    // server it names is alive or already gone.
+    let stopped = Command::new(bin_dir.join(postgres_exe("pg_ctl")))
         .arg("-D")
         .arg(pg_data)
         .args(["-m", "fast", "-w", "stop"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    if stopped {
+        log(app, "postgres: previous server stopped cleanly");
+        return;
+    }
+
+    // pg_ctl refused, which nearly always means the lock file is unreadable or
+    // truncated -- the shape a hard power loss leaves behind. Before this was
+    // handled, that state was terminal: pg_ctl would not stop it because it
+    // could not parse it, and would not start because the file was there.
+    // Atlas could never start again.
+    log(
+        app,
+        "postgres: pg_ctl could not stop it; inspecting the lock file directly",
+    );
+
+    // Line one of postmaster.pid is the postmaster's pid.
+    let owner = fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|body| body.lines().next().map(str::to_owned))
+        .and_then(|first| first.trim().parse::<u32>().ok());
+
+    match owner {
+        Some(pid) if is_live_atlas_process(pid, "postgres") => {
+            // A real server is still on this directory. Stop it, or the next
+            // start will run a second one against the same files -- which is
+            // how a cluster gets destroyed rather than merely inconvenienced.
+            log(
+                app,
+                &format!("postgres: orphaned server {pid} is alive; stopping it"),
+            );
+            kill_tree(pid);
+            for _ in 0..50 {
+                if !is_live_atlas_process(pid, "postgres") {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Some(pid) => log(app, &format!("postgres: recorded server {pid} is gone")),
+        None => log(app, "postgres: the lock file is unreadable"),
+    }
+
+    // Safe now: nothing is running against this directory. PostgreSQL's own
+    // documentation says a lock file whose postmaster is gone may be removed.
+    if fs::remove_file(&pid_file).is_ok() {
+        log(app, "postgres: removed the stale lock file");
+    }
 }
 
-fn start_postgres(bin_dir: &Path, pg_data: &Path, port: u16) -> Result<(), BootstrapError> {
-    reclaim_data_dir(bin_dir, pg_data);
+fn start_postgres(
+    app: &AppHandle,
+    bin_dir: &Path,
+    pg_data: &Path,
+    port: u16,
+) -> Result<(), BootstrapError> {
+    reclaim_data_dir(app, bin_dir, pg_data);
     let log = pg_data.join("server.log");
     let output = Command::new(bin_dir.join(postgres_exe("pg_ctl")))
         .arg("-D")
@@ -318,14 +467,66 @@ fn start_postgres(bin_dir: &Path, pg_data: &Path, port: u16) -> Result<(), Boots
         .map_err(|e| fail(format!("could not run pg_ctl: {e}")))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(fail(format!(
-            "PostgreSQL did not start: {}. See {}",
-            stderr.lines().last().unwrap_or("no output"),
-            log.display()
-        )));
+        // pg_ctl says "Examine the log output." and exits. Doing as it asks on
+        // the user's behalf is the difference between a diagnosis and homework:
+        // the real reason is always in server.log, and a person looking at a
+        // diagnostics screen cannot be expected to go and find it.
+        let detail = postgres_failure_detail(&log);
+        return Err(fail(format!("PostgreSQL did not start. {detail}")));
     }
     Ok(())
+}
+
+/// Read out of server.log why PostgreSQL refused, in words worth showing.
+fn postgres_failure_detail(log_path: &Path) -> String {
+    let Some(tail) = tail_file(log_path, 40) else {
+        return format!("Nothing was written to {}.", log_path.display());
+    };
+
+    // A cluster whose WAL and control file disagree, or whose checkpoint cannot
+    // be found, is not going to recover on the next attempt. Saying so, and
+    // saying what can be done, beats an error the user will retry forever.
+    // The set PostgreSQL uses when the files themselves are the problem. Found
+    // by corrupting a cluster and reading what it actually said: a control file
+    // scribbled over reports "incompatible with server", not a checkpoint
+    // error, and matching only the checkpoint wording left the user with a dead
+    // end and no reset offered.
+    const UNRECOVERABLE: [&str; 6] = [
+        "could not locate a valid checkpoint record",
+        "is from different database system",
+        "database files are incompatible with server",
+        "incorrect checksum in control file",
+        "control file contains invalid data",
+        "PANIC",
+    ];
+    let unrecoverable = UNRECOVERABLE.iter().any(|needle| tail.contains(needle));
+
+    let reason = tail
+        .lines()
+        .rev()
+        .find(|line| {
+            line.contains("FATAL")
+                || line.contains("PANIC")
+                || line.contains("ERROR")
+                || line.contains("could not")
+        })
+        .map(str::trim)
+        .unwrap_or("The database log does not say why.");
+
+    if unrecoverable {
+        format!(
+            "{reason}\n\nThe database files are damaged beyond repair, which usually \
+             follows a power loss or two copies of Atlas running at once. Atlas will not \
+             delete them on your behalf. To start over, move this folder aside and \
+             reopen Atlas -- a new database will be created:\n{}",
+            log_path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        )
+    } else {
+        format!("{reason}\n\nFull log: {}", log_path.display())
+    }
 }
 
 /// Forget the recorded kernel pid after a clean shutdown, so the next start
@@ -496,6 +697,10 @@ pub fn run(app: &AppHandle) -> Result<u16, BootstrapError> {
     fs::create_dir_all(&data_dir)
         .map_err(|e| fail(format!("could not create {}: {e}", data_dir.display())))?;
 
+    // Before anything is reclaimed. Reclaiming is safe only once we know no
+    // other Atlas is using this directory -- otherwise "recovery" is theft.
+    acquire_instance_lock(app, &data_dir)?;
+
     // Clear anything a previous crash left running before claiming the port
     // and data directory for ourselves.
     reclaim_kernel(&data_dir);
@@ -524,7 +729,7 @@ pub fn run(app: &AppHandle) -> Result<u16, BootstrapError> {
         None,
     );
     log(app, &format!("postgres: launching on port {pg_port}"));
-    start_postgres(&bin_dir, &pg_data, pg_port)?;
+    start_postgres(app, &bin_dir, &pg_data, pg_port)?;
     // pg_ctl was invoked with -w, so it has already waited for the server to
     // accept connections. Reaching this line is the readiness signal.
     log(app, &format!("postgres: ready on port {pg_port}"));
@@ -616,6 +821,31 @@ fn spawn_kernel(
                 CommandEvent::Terminated(payload) => {
                     let note = format!("kernel exited with status {:?}", payload.code);
                     log_kernel_line(&handle, &note);
+
+                    // If Atlas had already started, the window is open and
+                    // rendered, and nothing on screen would ever mention that
+                    // the backend behind it has died. Every request would fail
+                    // silently and the application would simply stop working --
+                    // indistinguishable, to the person using it, from a hang.
+                    let was_running = handle
+                        .try_state::<BootstrapState>()
+                        .and_then(|state| state.progress.lock().ok().and_then(|p| p.clone()))
+                        .map(|progress| progress.stage == Stage::Ready)
+                        .unwrap_or(false);
+                    if was_running {
+                        report_failure(
+                            &handle,
+                            format!(
+                                "The Atlas kernel stopped unexpectedly ({}). Atlas cannot \
+                                 do anything until it is restarted. See logs/kernel.log in \
+                                 the Atlas data directory for what it said on the way out.",
+                                payload
+                                    .code
+                                    .map(|code| format!("exit code {code}"))
+                                    .unwrap_or_else(|| "no exit code".into())
+                            ),
+                        );
+                    }
                     // Recorded so the boot wait can stop immediately instead of
                     // spending the full timeout waiting for a process that is
                     // already gone.
@@ -731,6 +961,33 @@ fn kill_tree(pid: u32) {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// Move a damaged database aside so a fresh one can be created.
+///
+/// Never deletes. A cluster PostgreSQL cannot open may still contain something
+/// recoverable by someone who knows what they are doing, and Atlas is not
+/// entitled to decide otherwise on a user's behalf. It is renamed with a
+/// timestamp and left where they can find it.
+///
+/// This exists because the alternative was a dead end: an unrecoverable cluster
+/// left Atlas permanently unable to start, and the only way out was Finder or a
+/// terminal. That is not something a daily-driver application may ask of anyone.
+pub fn reset_database(data_dir: &Path) -> Result<PathBuf, BootstrapError> {
+    let pg_data = data_dir.join("postgres");
+    if !pg_data.exists() {
+        return Err(fail("there is no database to reset"));
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let archived = data_dir.join(format!("postgres.damaged.{stamp}"));
+
+    fs::rename(&pg_data, &archived)
+        .map_err(|e| fail(format!("could not move the old database aside: {e}")))?;
+    Ok(archived)
 }
 
 /// Read a log file tail for the diagnostics screen, if it exists.
