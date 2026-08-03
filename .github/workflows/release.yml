@@ -122,10 +122,23 @@ jobs:
         working-directory: apps/desktop
         env:
           ATLAS_BUILD_COMMIT: ${{ github.sha }}
-          # Signing is intentionally absent for the alpha. See the block below
+          # Signing is intentionally absent for the alpha — see the block below
           # and docs/PACKAGING.md before adding certificates.
-          APPLE_SIGNING_IDENTITY: ""
-          TAURI_SIGNING_PRIVATE_KEY: ""
+          #
+          # These are deliberately NOT set to "". Tauri checks whether the
+          # variable is *present*, not whether it has a value, so an empty
+          # string made it attempt codesign with a blank identity and fail:
+          #   failed codesign application: failed to run command codesign
+          # Unset is what "do not sign" means. This built locally, where the
+          # variables simply do not exist, and only failed in CI.
+          #
+          # linuxdeploy is itself an AppImage, and an AppImage self-mounts via
+          # FUSE, which GitHub runners restrict. The log shows it downloading
+          # successfully and then failing to execute:
+          #   failed to bundle project: `failed to run linuxdeploy`
+          # Extracting instead of mounting is the supported escape hatch, and
+          # the variable is inert on macOS and Windows.
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # ----------------------------------------------------------------------
