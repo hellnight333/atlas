@@ -14,6 +14,32 @@ and deferred.
 
 ---
 
+## Status: frozen, 2026-08-04
+
+**Steps 1–7 are complete and the pipeline runs end to end.** A brief becomes
+scenes, scenes become renders, renders become one MP4 with narration, captions,
+music and transitions, a person approves the outcome, and it uploads privately
+to YouTube.
+
+It runs **against mocks**, and the milestone is explicitly not finished while
+`mock-video` is in the path. Two things are needed, and neither can be done from
+here:
+
+| Blocker | Needed for | Where |
+|---|---|---|
+| **GPU worker** | replacing `mock-video` with real generation | `docs/GPU_WORKER.md` |
+| **YouTube credentials** | the first real upload | *Connecting a YouTube channel*, below |
+
+M013 is frozen until the GPU worker exists. No work continues into M014.
+
+What is *not* mocked, and has been verified against real files: assembly,
+subtitles, music mixing, transitions, the dependency graph, partial
+regeneration, the approval gate, and every guard around publishing. Only
+generation itself is stood in for — which was the point of putting the seam at
+the provider boundary.
+
+---
+
 ## The shape
 
 ```
