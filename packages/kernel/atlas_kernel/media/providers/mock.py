@@ -219,3 +219,50 @@ class MockNarrationProvider(_CompletedOnSubmit):
 
         self._results[handle] = target
         return handle
+
+
+class MockMusicProvider(_CompletedOnSubmit):
+    """A stand-in for a music provider or a licensed library.
+
+    Produces a real, quiet bed track of the requested length so mixing, gain
+    and fades are exercised against genuine audio. A soft two-tone pad rather
+    than silence, because a bed that cannot be heard proves nothing about
+    whether it was mixed correctly.
+    """
+
+    name = "mock-music"
+
+    def submit(self, request: RenderRequest) -> str:
+        handle = f"mock-music-{uuid4().hex[:12]}"
+        target = self._root / f"{handle}.m4a"
+        duration = max(1.0, request.duration_seconds)
+
+        try:
+            ffmpeg.run(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=196:duration={duration}:sample_rate=48000",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=294:duration={duration}:sample_rate=48000",
+                    "-filter_complex",
+                    "[0:a][1:a]amix=inputs=2,volume=0.25[a]",
+                    "-map",
+                    "[a]",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    "aac",
+                    "-y",
+                    str(target),
+                ]
+            )
+        except ffmpeg.FfmpegError as error:
+            self._failures[handle] = str(error)
+            return handle
+
+        self._results[handle] = target
+        return handle

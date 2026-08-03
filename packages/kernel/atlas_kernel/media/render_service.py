@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..models import Asset
+from . import capabilities
 from .models import Rendition, Scene, SceneRender, WorkStatus, fingerprint_scenes
 from .provenance import RenderProvenance
 from .providers.base import JobState, ProviderError, RenderRequest
@@ -43,8 +44,10 @@ DEFAULT_RENDER_TIMEOUT_SECONDS = 1800
 #: quick render is not held up by the polling interval itself.
 POLL_INTERVAL_SECONDS = 1.0
 
-VIDEO_CAPABILITY = "video.generate"
-NARRATION_CAPABILITY = "audio.narrate"
+#: Re-exported so existing callers keep working, but the names now come from
+#: the shared vocabulary rather than being spelled out again here.
+VIDEO_CAPABILITY = capabilities.VIDEO_GENERATE
+NARRATION_CAPABILITY = capabilities.SPEECH_GENERATE
 
 
 @dataclass

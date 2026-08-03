@@ -1,0 +1,20 @@
+# Placeholder music bed, until a music provider or a licensed library exists.
+#
+# Produces real audio rather than silence, so gain, fades and mixing are
+# exercised against something audible. A bed that cannot be heard proves
+# nothing about whether it was mixed correctly. Scaffolding.
+id: mock-music-bed
+version: 1.0.0
+capability: music.generate
+description: >
+  A soft two-tone pad for the length of the piece. Exists so the mixing stage
+  can be built and verified before real music is available.
+
+provider: mock-music
+model: none
+
+prompt_template: "{prompt}"
+
+parameters:
+  sample_rate: 48000
+  channels: 2

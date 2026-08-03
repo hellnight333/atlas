@@ -50,7 +50,7 @@ def test_capabilities_are_declared_not_inferred() -> None:
         "mock-slate-1080p",
         "wan-t2v-720p",
     }
-    assert {r.id for r in registry.for_capability("audio.narrate")} == {"mock-narration"}
+    assert {r.id for r in registry.for_capability("speech.generate")} == {"mock-narration"}
 
 
 def test_the_real_video_recipe_pins_its_seed() -> None:

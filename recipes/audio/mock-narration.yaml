@@ -5,7 +5,7 @@
 # streams. Scaffolding, like mock-slate-1080p.
 id: mock-narration
 version: 1.0.0
-capability: audio.narrate
+capability: speech.generate
 description: >
   A quiet tone lasting as long as the narration would take to speak. Exists so
   assembly can be built and verified before a real voice is available.
