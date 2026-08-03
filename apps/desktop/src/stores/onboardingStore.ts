@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 
+import { logStartup } from '../api/shell'
 import {
   ASSUMED_COMPLETE,
   onboardingService,
@@ -57,10 +58,18 @@ export const useOnboardingStore = create<OnboardingStore>((set, get) => ({
         // shows nothing rather than trapping the user on a broken screen.
         onboardingService.demos().catch(() => [] as DemoSummary[]),
       ])
+      logStartup(`setup state from kernel: completed=${state.completed} step=${state.current_step}`)
       set({ state, demos, phase: 'ready' })
-    } catch {
+    } catch (error) {
       // No kernel to ask. Treat setup as done so the application still opens;
       // a browser running against mock data has nothing to set up.
+      //
+      // This branch is load-bearing and it is also a liar: it makes a broken
+      // kernel look like a finished setup. It skipped the first-run wizard on
+      // every packaged launch and nobody could see why, so it says so now.
+      logStartup(
+        `setup state unavailable, assuming setup is complete and skipping the wizard: ${message(error)}`,
+      )
       set({ state: ASSUMED_COMPLETE, demos: [], phase: 'ready' })
     }
   },

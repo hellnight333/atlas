@@ -112,14 +112,37 @@ async def accept_api_prefix(request: Request, call_next):  # type: ignore[no-unt
     return await call_next(request)
 
 
+#: Origins allowed to call the kernel.
+#:
+#: The packaged desktop app is not served over http -- Tauri serves the
+#: frontend from its own scheme, so the webview's origin is ``tauri://localhost``
+#: on macOS and Linux and ``http://tauri.localhost`` on Windows. Neither was
+#: listed here, so every request from an installed Atlas was rejected by CORS
+#: while the identical code worked against the Vite dev server.
+#:
+#: The symptom was not an error message. The browser reports a blocked request
+#: as a bare "Load failed", the onboarding store treats any failure as "setup
+#: already done", and the app opened straight into an empty workspace with no
+#: first-run wizard and no data. Installed Atlas could not talk to its own
+#: kernel at all.
+#:
+#: This list is not a security boundary -- the kernel binds 127.0.0.1 and is
+#: never reachable off the machine. It exists so a browser will hand us the
+#: response it already fetched.
+ALLOWED_ORIGINS = [
+    # The packaged desktop shell.
+    "tauri://localhost",
+    "http://tauri.localhost",
+    # Vite: dev server and preview build.
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:4174",
+    "http://localhost:4174",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:4174",
-        "http://localhost:4174",
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

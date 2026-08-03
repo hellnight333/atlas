@@ -17,7 +17,7 @@ from typing import Any
 
 #: The single source of truth. Semantic version, optionally with a pre-release
 #: suffix. Update this and only this to cut a release.
-VERSION = "0.12.0-alpha.1"
+VERSION = "0.12.0-alpha.2"
 
 #: Human name for the release, shown in the welcome screen and release notes.
 RELEASE_NAME = "Public Alpha"

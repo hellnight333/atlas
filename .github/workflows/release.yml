@@ -186,6 +186,34 @@ jobs:
           find "$bundle" -type f \( -name "*.AppImage" -o -name "*-setup.exe" \) \
             -exec cp {} "$out/" \;
 
+          # The bundled database, taken from the tree fetch_postgres.py filled.
+          #
+          # RC1 copied "$exe_dir/resources" here, which never existed: the
+          # config maps "resources/postgres" to "postgres", so Tauri writes
+          # $exe_dir/postgres. The copy failed every time and was hidden by a
+          # trailing `|| true`, so both portable archives shipped with no
+          # database at all while the release notes promised one.
+          postgres="apps/desktop/src-tauri/resources/postgres"
+          if [ ! -x "$postgres/bin/pg_ctl" ] && [ ! -f "$postgres/bin/pg_ctl.exe" ]; then
+            echo "::error::bundled PostgreSQL missing from $postgres"
+            exit 1
+          fi
+
+          # A portable archive that cannot start a database is not a release
+          # artifact. Never let a resource copy fail quietly.
+          verify_portable() {
+            local root="$1"
+            local missing=0
+            for required in postgres/bin/pg_ctl postgres/bin/initdb postgres/bin/postgres; do
+              if [ ! -e "$root/$required" ] && [ ! -e "$root/$required.exe" ]; then
+                echo "::error::portable archive is missing $required"
+                missing=1
+              fi
+            done
+            [ "$missing" -eq 0 ] || exit 1
+            echo "portable archive verified: $(find "$root/postgres" -type f | wc -l) database files"
+          }
+
           # Portable forms. M012 asks for a zip on Windows and a tar.gz on
           # Linux so Atlas can be run without an installer at all.
           case "${{ runner.os }}" in
@@ -206,10 +234,11 @@ jobs:
               portable="$out/portable"
               mkdir -p "$portable/Atlas"
               cp "$exe_dir/atlas-desktop.exe" "$portable/Atlas/Atlas.exe"
-              cp -r "$exe_dir/resources" "$portable/Atlas/" 2>/dev/null || true
+              cp -r "$postgres" "$portable/Atlas/postgres"
               cp "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}.exe" \
                  "$portable/Atlas/atlas-kernel.exe"
               cp LICENSE NOTICE "$portable/Atlas/"
+              verify_portable "$portable/Atlas"
               (cd "$portable" && 7z a -tzip "../Atlas_${version}_windows-x86_64_portable.zip" Atlas >/dev/null)
               rm -rf "$portable"
               ;;
@@ -218,10 +247,11 @@ jobs:
               staging="$out/staging/Atlas"
               mkdir -p "$staging"
               cp "$exe_dir/atlas-desktop" "$staging/atlas"
-              cp -r "$exe_dir/resources" "$staging/" 2>/dev/null || true
+              cp -r "$postgres" "$staging/postgres"
               cp "apps/desktop/src-tauri/binaries/atlas-kernel-${{ matrix.target }}" \
                  "$staging/atlas-kernel"
               cp LICENSE NOTICE "$staging/"
+              verify_portable "$staging"
               tar -czf "$out/Atlas_${version}_linux-x86_64.tar.gz" -C "$out/staging" Atlas
               rm -rf "$out/staging"
               ;;

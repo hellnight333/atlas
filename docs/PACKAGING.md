@@ -261,6 +261,73 @@ find "$pg" -type f -exec sh -c \
 
 That should print nothing. At the time of RC1 it scanned 99 ELF files clean.
 
+## Where the bundled database actually lives
+
+`tauri.conf.json` maps `"resources/postgres": "postgres"`, so the bundler writes
+the tree to **`postgres`**, not `resources/postgres`:
+
+| Form | Path |
+|---|---|
+| macOS `.app` | `Atlas.app/Contents/Resources/postgres` |
+| AppImage | `$APPDIR/usr/lib/Atlas/postgres` |
+| Unbundled build | `target/<triple>/release/postgres` |
+| Portable archive | `Atlas/postgres`, beside the executable |
+
+RC1's portable archives copied `$exe_dir/resources`, which has never existed,
+under `2>/dev/null || true`. Both shipped with no database while the release
+notes promised one.
+
+**Never guard a copy that carries content with `|| true`.** If a resource does
+not arrive, the build must fail. `verify_portable` in `release.yml` checks for
+`initdb`, `pg_ctl` and `postgres` in every archive and exits non-zero otherwise.
+
+Runtime lookup is in `resolve_postgres_bin`. It cannot rely on `resource_dir()`
+alone: on Linux that resolves to `/usr/lib/atlas-desktop` for a plain binary,
+which is wrong for an archive unpacked into a home directory. It searches the
+executable's own directory too, and writes every path it tried to the startup
+log.
+
+## When Atlas will not start
+
+Every launch writes `logs/startup.log` in the data directory, from both the Rust
+shell (`[shell]`) and the webview (`[ui]`), with a UTC timestamp and milliseconds
+since launch. A boot that stops has a last line, and that line names the step.
+
+```
++1776ms  [shell] postgres: ready on port 50699
++1778ms  [shell] stage=WaitingForKernel Waiting for the kernel to come up
++2801ms  [shell] health: HTTP 200 after 6 attempt(s), 1022ms
++2803ms  [ui]    api base url resolved: http://127.0.0.1:50700
++2838ms  [ui]    setup state from kernel: completed=false step=welcome
++2838ms  [ui]    rendering first-run setup
+```
+
+Both halves are needed. RC1's black screen had a *perfect* shell log — database
+and kernel up in under three seconds — and failed entirely in the webview, which
+was writing nothing at all. The lines that mattered were `[ui]`.
+
+Running `Atlas.app/Contents/MacOS/atlas-desktop` from a terminal prints the same
+stream to stderr, which is also the fallback when the data directory itself
+cannot be written.
+
+If the UI never appears, Atlas stops waiting after 30 seconds and shows a
+diagnostics screen with Retry, Open diagnostics, View logs and Copy diagnostic
+report. A render crash lands on the same screen through the root error boundary,
+so a blank window is no longer a possible outcome.
+
+### The packaged app has a different origin
+
+Tauri serves the frontend from its own scheme. The webview's origin is
+`tauri://localhost` on macOS and Linux, and `http://tauri.localhost` on Windows —
+never `http://localhost:5173`. Anything origin-sensitive must list all three;
+`ALLOWED_ORIGINS` in `packages/kernel/atlas_kernel/api.py` does, and a test in
+`test_api_surface.py` keeps it that way.
+
+This is the sharpest edge in the whole desktop build, because the dev server and
+the installed app differ in exactly one property that nothing in development
+exercises. RC1 blocked every kernel request from an installed Atlas and worked
+flawlessly under `npm run dev`.
+
 ## Known packaging issues
 
 - **The bundle is large.** ~160 MB installed, most of it PostgreSQL. A future

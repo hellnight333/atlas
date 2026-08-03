@@ -560,3 +560,31 @@ def test_review_lifecycle_roundtrip():
         assert "project_health" in dashboard
         assert isinstance(dashboard["recent_timeline"], list)
         assert isinstance(dashboard["review_queue"], list)
+
+
+def test_packaged_desktop_origin_is_allowed_by_cors():
+    """The installed app must be able to call its own kernel.
+
+    Tauri serves the frontend from its own scheme, so a packaged Atlas has
+    origin ``tauri://localhost`` (``http://tauri.localhost`` on Windows) rather
+    than the Vite dev server's ``http://localhost:5173``. RC1 allowed only the
+    dev origins, so every request from an installed Atlas was blocked and the
+    app opened into an empty workspace with no first-run wizard.
+
+    A browser reports that as "Load failed" with no detail, and the onboarding
+    store reads any failure as "setup already done", so nothing anywhere said
+    what was wrong. Hence this test.
+    """
+    for origin in ("tauri://localhost", "http://tauri.localhost"):
+        preflight = client.options(
+            "/api/onboarding",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert preflight.status_code == 200, origin
+        assert preflight.headers.get("access-control-allow-origin") == origin
+
+        response = client.get("/api/onboarding", headers={"Origin": origin})
+        assert response.headers.get("access-control-allow-origin") == origin, origin

@@ -3,12 +3,23 @@ import { useEffect, useState } from 'react'
 import {
   BROWSER_PROGRESS,
   INITIAL_PROGRESS,
-  databaseLog,
+  logStartup,
   onBootstrapProgress,
   type BootstrapProgress,
   type BootstrapStage,
 } from '../../api/shell'
 import { isDesktopShell } from '../../api/runtime'
+import { StartupDiagnostics } from './StartupDiagnostics'
+
+/**
+ * How long Atlas may sit on the splash before it owes the user an explanation.
+ *
+ * The shell gives the kernel 90 seconds, deliberately — a first run on a cold
+ * machine really can take that long. But the user must not be looking at a
+ * silent window for 90 seconds to find that out, so the UI stops waiting well
+ * before the shell does and offers diagnostics instead.
+ */
+const BOOT_DEADLINE_MS = 30_000
 
 /**
  * What the user looks at while Atlas starts itself.
@@ -37,15 +48,17 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
   const [progress, setProgress] = useState<BootstrapProgress>(
     isDesktopShell() ? INITIAL_PROGRESS : BROWSER_PROGRESS,
   )
-  const [log, setLog] = useState<string | null>(null)
-  const [showDetail, setShowDetail] = useState(false)
+  const [timedOut, setTimedOut] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
 
+    logStartup('boot screen mounted')
+
     onBootstrapProgress((next) => {
       if (cancelled) return
+      logStartup(`bootstrap event: ${next.stage} — ${next.message}`)
       setProgress(next)
       if (next.stage === 'ready') onReady()
     }).then((fn) => {
@@ -59,96 +72,68 @@ export function BootScreen({ onReady }: { onReady: () => void }) {
     }
   }, [onReady])
 
-  const failed = progress.stage === 'failed'
-  const percent = failed ? 100 : Math.round((stageIndex(progress.stage) / (STAGE_ORDER.length - 1)) * 100)
+  // Stop waiting after the deadline, whatever the shell is still doing.
+  useEffect(() => {
+    if (progress.stage === 'ready' || progress.stage === 'failed') return
+    const timer = setTimeout(() => {
+      logStartup(`boot deadline reached while at stage ${progress.stage}`)
+      setTimedOut(true)
+    }, BOOT_DEADLINE_MS)
+    return () => clearTimeout(timer)
+  }, [progress.stage])
 
-  async function loadLog() {
-    setShowDetail(true)
-    setLog(await databaseLog(120))
+  const failed = progress.stage === 'failed'
+
+  if (failed || timedOut) {
+    return (
+      <StartupDiagnostics
+        stage={progress.message}
+        reason={
+          failed
+            ? (progress.detail ??
+              'The shell reported a failure but did not say what went wrong. The startup log below has the sequence it managed to complete.')
+            : `Atlas did not finish starting within ${BOOT_DEADLINE_MS / 1000} seconds. It was still at "${progress.message}".`
+        }
+      />
+    )
   }
+
+  const percent = Math.round((stageIndex(progress.stage) / (STAGE_ORDER.length - 1)) * 100)
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6">
       <div className="w-full max-w-md text-center">
-        <div
-          className={
-            'mx-auto mb-8 flex h-16 w-16 items-center justify-center rounded-2xl border ' +
-            (failed
-              ? 'border-rose-500/40 bg-rose-500/10'
-              : 'border-slate-700 bg-slate-900')
-          }
-        >
-          <div
-            className={
-              'h-4 w-4 rounded-full ' +
-              (failed ? 'bg-rose-400' : 'animate-pulse bg-cyan-300')
-            }
-            aria-hidden
-          />
+        <div className="mx-auto mb-8 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900">
+          <div className="h-4 w-4 animate-pulse rounded-full bg-cyan-300" aria-hidden />
         </div>
 
-        <h1 className="text-lg font-medium text-slate-100">
-          {failed ? 'Atlas could not start' : progress.message}
-        </h1>
+        <h1 className="text-lg font-medium text-slate-100">{progress.message}</h1>
 
-        {progress.first_run && !failed && (
+        {progress.first_run && (
           <p className="mt-2 text-sm text-slate-400">
             Setting things up for the first time. This happens once.
           </p>
         )}
 
-        {progress.detail && !failed && !progress.first_run && (
+        {progress.detail && !progress.first_run && (
           <p className="mt-2 truncate text-xs text-slate-500" title={progress.detail}>
             {progress.detail}
           </p>
         )}
 
-        {!failed && (
+        <div
+          className="mt-8 h-1 w-full overflow-hidden rounded-full bg-slate-800"
+          role="progressbar"
+          aria-valuenow={percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Startup progress"
+        >
           <div
-            className="mt-8 h-1 w-full overflow-hidden rounded-full bg-slate-800"
-            role="progressbar"
-            aria-valuenow={percent}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label="Startup progress"
-          >
-            <div
-              className="h-full rounded-full bg-cyan-400 transition-all duration-500 ease-out"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-        )}
-
-        {failed && (
-          <div className="mt-6 space-y-4 text-left">
-            <div
-              role="alert"
-              className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-200"
-            >
-              {progress.detail ?? 'The reason was not reported.'}
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={loadLog}
-                className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:border-slate-500"
-              >
-                Show database log
-              </button>
-            </div>
-
-            {showDetail && (
-              <pre className="max-h-56 overflow-auto rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-[11px] leading-relaxed text-slate-400">
-                {log ?? 'No log has been written yet.'}
-              </pre>
-            )}
-
-            <p className="text-xs text-slate-500">
-              Quitting and reopening Atlas clears anything a previous crash left running.
-            </p>
-          </div>
-        )}
+            className="h-full rounded-full bg-cyan-400 transition-all duration-500 ease-out"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
       </div>
     </div>
   )

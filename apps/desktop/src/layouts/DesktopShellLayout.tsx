@@ -11,6 +11,7 @@ import { InspectorPanel } from '../features/inspector/components/InspectorPanel'
 import { MissionControlOverlay } from '../features/mission-control/components/MissionControlOverlay'
 import { BackgroundTaskStrip } from '../features/workspace/components/BackgroundTaskStrip'
 import { WorkspaceHeader } from '../features/workspace/components/WorkspaceHeader'
+import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { useActivityStore, useCommandPaletteStore, useMissionControlStore, useNotificationStore, useUIStore } from '../stores'
 
 const routeLabels: Record<string, string> = {
@@ -24,6 +25,9 @@ const routeLabels: Record<string, string> = {
 }
 
 export function DesktopShellLayout() {
+  // Lives here rather than in `App` because it calls `useNavigate`, and `App`
+  // renders outside the router it provides. See the note in App.tsx.
+  useGlobalShortcuts()
   const navigate = useNavigate()
   const location = useLocation()
   const jobs = useActivityStore((state) => state.jobs)

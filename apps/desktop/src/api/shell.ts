@@ -64,11 +64,16 @@ export async function resolveBackend(): Promise<BackendInfo | null> {
     const info = await invoke<BackendInfo>('backend')
     if (info.api_base_url) {
       setRuntimeBaseUrl(info.api_base_url)
+      logStartup(`api base url resolved: ${info.api_base_url}`)
+    } else {
+      // Every later request would go to the webview's own origin and 404.
+      logStartup('api base url is still null; the shell has no kernel port yet')
     }
     return info
-  } catch {
+  } catch (error) {
     // The shell is present but not answering yet. The caller retries via the
     // bootstrap event rather than failing outright.
+    logStartup(`could not ask the shell for the kernel port: ${String(error)}`)
     return null
   }
 }
@@ -115,6 +120,53 @@ export async function onBootstrapProgress(
   handler(existing)
 
   return unlisten
+}
+
+/**
+ * Write a line into the same `logs/startup.log` the shell writes to.
+ *
+ * The shell can only record what it does itself; it cannot see whether the
+ * window ever rendered. Without these lines the log ends at "kernel: ready"
+ * and says nothing about the half of startup that was actually failing.
+ *
+ * Never throws and never blocks the caller — a diagnostic that can break the
+ * boot it is diagnosing is worse than no diagnostic.
+ */
+export function logStartup(message: string): void {
+  if (!isDesktopShell()) return
+  void invoke('log_startup', { message }).catch(() => {})
+}
+
+/** Tail of `logs/startup.log`. */
+export async function startupLog(lines = 300): Promise<string | null> {
+  if (!isDesktopShell()) return null
+  try {
+    return await invoke<string | null>('startup_log', { lines })
+  } catch {
+    return null
+  }
+}
+
+/** Everything worth sending when Atlas will not start. */
+export async function diagnosticReport(): Promise<string> {
+  if (!isDesktopShell()) return 'Atlas is running in a browser; there is no shell to report on.'
+  try {
+    return await invoke<string>('diagnostic_report')
+  } catch (error) {
+    return `Could not assemble a diagnostic report: ${String(error)}`
+  }
+}
+
+/** Reveal the log directory in the user's file manager. */
+export async function openLogFolder(): Promise<void> {
+  if (!isDesktopShell()) return
+  await invoke('open_log_folder')
+}
+
+/** Run the boot sequence again after a failure. */
+export async function retryBootstrap(): Promise<void> {
+  if (!isDesktopShell()) return
+  await invoke('retry_bootstrap')
 }
 
 /** Tail of the PostgreSQL log, for the troubleshooting panel. */

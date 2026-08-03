@@ -10,6 +10,67 @@ to anyone.
 
 ## [Unreleased]
 
+## [0.12.0-alpha.2] — RC1 Hotfix
+
+`0.12.0-alpha.1` built on every platform and installed correctly, and was still
+unusable. Three faults, each of which presented as silence rather than an error.
+Nothing here is a new feature.
+
+### Fixed
+
+- **Atlas opened to a black window and stayed there.** `App` called
+  `useGlobalShortcuts`, which calls `useNavigate`, but `App` is the component
+  that *provides* the router — so the hook ran outside its own context and threw
+  `useNavigate() may be used only in the context of a <Router> component` on
+  every render. React unmounts the tree when a render throws, so the result was
+  an empty document: no error, no log, nothing to distinguish it from a hang.
+  Router-dependent hooks now live in `DesktopShellLayout`, inside the router.
+- **An installed Atlas could not talk to its own kernel.** Tauri serves the
+  frontend from its own scheme, so the packaged webview's origin is
+  `tauri://localhost` (`http://tauri.localhost` on Windows). The kernel's CORS
+  policy allowed only the Vite dev server, so every request from a real
+  installation was blocked. The browser reports that as a bare "Load failed",
+  and the onboarding store reads any failure as "setup already done" — so Atlas
+  skipped the first-run wizard and opened an empty workspace, on every launch,
+  while working perfectly in `npm run dev`.
+- **Both portable archives shipped without a database.** The Linux `tar.gz` and
+  the Windows `.zip` contained no PostgreSQL at all, while the release notes
+  promised one. `tauri.conf.json` maps `resources/postgres` to `postgres`, so
+  Tauri writes `$exe_dir/postgres`; the workflow copied `$exe_dir/resources`,
+  which never existed, and a trailing `|| true` hid the failure every time. The
+  build now fails if the database is missing from an archive.
+- **Resource lookup ignored the portable layout.** `resource_dir()` resolves to
+  `/usr/lib/atlas-desktop` for a plain Linux binary, which is not where an
+  archive unpacked into a home directory keeps anything. The executable's own
+  directory is now searched too, and every path tried is logged.
+- **A boot failure could take 30 seconds to appear.** Bootstrap can fail in
+  under a second, before the webview has loaded, and the failure was emitted but
+  never stored — so a window that mounted afterwards saw only the last
+  successful stage and waited. Failures are now recorded like any other stage.
+- **Kernel readiness was declared too early.** The shell accepted a bare TCP
+  connect as proof the kernel was up, but a listening socket accepts connections
+  while the worker is still importing. Readiness now means an answered
+  `GET /health`.
+
+### Added
+
+- **`logs/startup.log`,** written by both the shell and the webview, covering
+  the whole sequence: storage, `initdb`, PostgreSQL launch and readiness, kernel
+  launch, health polling, the webview loading, setup state, and the first screen
+  rendered. Each line carries a UTC timestamp and milliseconds since launch.
+  Also mirrored to stderr, and it survives a data directory that cannot be
+  written by falling back to stderr alone.
+- **`logs/kernel.log`** — the kernel's own output, previously emitted only as an
+  event that nothing was listening for when it mattered.
+- **A diagnostics screen** shown whenever Atlas cannot start, or has not started
+  within 30 seconds. It always names a reason and offers Retry, Open
+  diagnostics, View logs, and Copy diagnostic report.
+- **A root error boundary,** so a render crash anywhere shows that screen rather
+  than a blank window. This class of bug can no longer present as a black
+  screen.
+- **Bounded requests on the boot path,** so a kernel that accepts a connection
+  and then never answers fails instead of leaving the UI pending forever.
+
 ## [0.12.0-alpha.1] — Public Alpha
 
 The first release intended for people other than the author.
@@ -171,7 +232,8 @@ foundation through Milestone 006F, then the Automation Engine — deterministic,
 trigger-driven, and structurally unable to call a provider directly or bypass
 the scheduler.
 
-[Unreleased]: https://github.com/hellnight333/atlas/compare/v0.12.0-alpha.1...HEAD
+[Unreleased]: https://github.com/hellnight333/atlas/compare/v0.12.0-alpha.2...HEAD
+[0.12.0-alpha.2]: https://github.com/hellnight333/atlas/releases/tag/v0.12.0-alpha.2
 [0.12.0-alpha.1]: https://github.com/hellnight333/atlas/releases/tag/v0.12.0-alpha.1
 [0.11.0]: https://github.com/hellnight333/atlas/releases/tag/v0.11-production
 [0.10.0]: https://github.com/hellnight333/atlas/releases/tag/v0.10-enterprise

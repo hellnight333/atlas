@@ -4,6 +4,56 @@ Start here: `GET /health/report`. It names the failing component and why.
 Then `GET /diagnostics` for an export you can paste into a bug report — it
 contains no credentials.
 
+If Atlas will not open far enough to answer either, read
+[The desktop app will not open](#the-desktop-app-will-not-open) first.
+
+---
+
+## The desktop app will not open
+
+Every launch writes **`logs/startup.log`** in the Atlas data directory:
+
+| Platform | Data directory |
+|---|---|
+| macOS | `~/Library/Application Support/io.github.hellnight333.atlas` |
+| Linux | `~/.local/share/io.github.hellnight333.atlas` |
+| Windows | `%APPDATA%\io.github.hellnight333.atlas` |
+
+Set `ATLAS_DATA_DIR` to override it.
+
+The log records both halves of startup — the Rust shell as `[shell]` and the
+window as `[ui]` — with a timestamp and milliseconds since launch. Whatever the
+last line is, that is the step that did not finish. `logs/kernel.log` holds the
+kernel's own output, and `postgres/server.log` the database's.
+
+If a window is open, you do not need the files: Atlas shows a diagnostics screen
+after 30 seconds, or immediately on a failure, with **Copy diagnostic report** —
+which bundles the stage, the paths, and all three logs into one block of text.
+
+**A window opens and stays blank**
+
+Should no longer be possible; a render crash now shows the diagnostics screen.
+If you see it anyway, the last `[ui]` line in `startup.log` is the diagnosis,
+and `render crash:` lines carry the message and component stack.
+
+**"Waiting for the kernel to come up", then nothing**
+
+The kernel is started but not answering `GET /health`. Read `logs/kernel.log`.
+A kernel that exits during startup is reported at once rather than waited out.
+
+**"the bundled PostgreSQL is missing"**
+
+The message lists every path that was searched. In a development checkout, run
+`python3 infra/packaging/fetch_postgres.py`. In an installed copy it means the
+archive was built wrong — please report it with the log.
+
+**The first-run wizard never appears and the workspace is empty**
+
+Atlas could not reach its kernel and assumed setup was already done. The log
+says `setup state unavailable, assuming setup is complete`. The cause is usually
+origin-related — see *The packaged app has a different origin* in
+`docs/PACKAGING.md`.
+
 ---
 
 ## The kernel will not start

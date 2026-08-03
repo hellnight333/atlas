@@ -19,8 +19,36 @@ export class AtlasApiClient {
     return this.explicitBaseUrl ?? getRuntimeBaseUrl() ?? import.meta.env.VITE_ATLAS_API_BASE_URL ?? ''
   }
 
-  async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`)
+  /**
+   * A fetch that is guaranteed to settle.
+   *
+   * Without a deadline, a request to a kernel that has bound its port but is
+   * not yet serving never resolves and never rejects. The caller's promise
+   * stays pending forever, and any UI waiting on it — the boot gate, in
+   * practice — sits on a blank screen with no error to report.
+   *
+   * No timeout is applied unless one is asked for, because some calls
+   * legitimately run for minutes.
+   */
+  private async send(path: string, init: RequestInit, timeoutMs?: number): Promise<Response> {
+    if (!timeoutMs) return fetch(`${this.baseUrl}${path}`, init)
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      return await fetch(`${this.baseUrl}${path}`, { ...init, signal: controller.signal })
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`${path} did not respond within ${Math.round(timeoutMs / 1000)}s`)
+      }
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async get<T>(path: string, timeoutMs?: number): Promise<T> {
+    const response = await this.send(path, {}, timeoutMs)
     if (!response.ok) {
       throw this.createNetworkPlaceholder(await safeErrorPayload(response))
     }

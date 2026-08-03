@@ -110,9 +110,16 @@ export const ASSUMED_COMPLETE: OnboardingState = {
   progress: 1,
 }
 
+/**
+ * These two run on the boot path, before anything is on screen. They must fail
+ * rather than hang: the gate treats an error as "setup already done" and opens
+ * the application, but a pending promise leaves it on a blank screen forever.
+ */
+const BOOT_REQUEST_TIMEOUT_MS = 15_000
+
 export const onboardingService = {
   async state(): Promise<OnboardingState> {
-    return client.get<OnboardingState>('/api/onboarding')
+    return client.get<OnboardingState>('/api/onboarding', BOOT_REQUEST_TIMEOUT_MS)
   },
 
   async completeStep(step: OnboardingStepId, payload: StepPayload = {}): Promise<OnboardingState> {
@@ -132,7 +139,7 @@ export const onboardingService = {
   },
 
   async demos(): Promise<DemoSummary[]> {
-    return client.get<DemoSummary[]>('/api/demos')
+    return client.get<DemoSummary[]>('/api/demos', BOOT_REQUEST_TIMEOUT_MS)
   },
 
   async installDemo(demoId: string): Promise<DemoInstallResult> {
