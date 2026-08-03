@@ -722,6 +722,114 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+
+        # -- Media Factory (M013) ------------------------------------------
+        #
+        # Two layers, and the boundary is deliberate. The content tables
+        # (campaigns, episodes, scripts, scenes) carry no media columns at all,
+        # so a future blog or podcast renderer never inherits a field that only
+        # video needed. See docs/VIDEO_FACTORY.md.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_campaigns (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            default_channel TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_episodes (
+            id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL,
+            brief TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_scripts (
+            id TEXT PRIMARY KEY,
+            episode_id TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            authored_by TEXT NOT NULL DEFAULT 'human',
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            UNIQUE (episode_id, version)
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_scenes (
+            id TEXT PRIMARY KEY,
+            script_id TEXT NOT NULL,
+            index_in_script INTEGER NOT NULL,
+            heading TEXT NOT NULL DEFAULT '',
+            narration TEXT NOT NULL DEFAULT '',
+            visual_direction TEXT NOT NULL DEFAULT '',
+            target_seconds DOUBLE PRECISION NOT NULL DEFAULT 5.0,
+            metadata JSONB NOT NULL DEFAULT '{}',
+            UNIQUE (script_id, index_in_script)
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_renditions (
+            id TEXT PRIMARY KEY,
+            episode_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'video/1080p',
+            status TEXT NOT NULL DEFAULT 'pending',
+            asset_id TEXT,
+            scene_fingerprint TEXT NOT NULL DEFAULT '',
+            build_metadata JSONB NOT NULL DEFAULT '{}',
+            error TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_scene_renders (
+            id TEXT PRIMARY KEY,
+            rendition_id TEXT NOT NULL,
+            scene_id TEXT NOT NULL,
+            index_in_script INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            provider TEXT,
+            recipe_id TEXT,
+            media_asset_id TEXT,
+            audio_asset_id TEXT,
+            duration_seconds DOUBLE PRECISION,
+            source_fingerprint TEXT NOT NULL DEFAULT '',
+            job_id TEXT,
+            error TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            UNIQUE (rendition_id, scene_id)
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_publications (
+            id TEXT PRIMARY KEY,
+            rendition_id TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT 'youtube',
+            approval_id TEXT,
+            visibility TEXT NOT NULL DEFAULT 'private',
+            title TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            tags JSONB NOT NULL DEFAULT '[]',
+            thumbnail_asset_id TEXT,
+            remote_id TEXT,
+            remote_url TEXT,
+            status TEXT NOT NULL DEFAULT 'pending_approval',
+            error TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
         conn.execute(text("""
         ALTER TABLE atlas_runtime_executions
         ADD COLUMN IF NOT EXISTS approval_id TEXT,
@@ -826,6 +934,15 @@ def init_db() -> None:
 #: Every index covers a lookup the kernel performs on a hot path. Names are
 #: explicit so a DBA can audit them, and IF NOT EXISTS keeps startup idempotent.
 INDEX_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
+    # Media Factory (M013). Every one of these backs a read that happens on the
+    # hot path of building or reviewing a video.
+    ("idx_episodes_campaign", "atlas_episodes", "campaign_id"),
+    ("idx_scripts_episode", "atlas_scripts", "episode_id"),
+    ("idx_scenes_script", "atlas_scenes", "script_id"),
+    ("idx_renditions_episode", "atlas_renditions", "episode_id"),
+    ("idx_scene_renders_rendition", "atlas_scene_renders", "rendition_id"),
+    ("idx_scene_renders_scene", "atlas_scene_renders", "scene_id"),
+    ("idx_publications_rendition", "atlas_publications", "rendition_id"),
     ("idx_assets_project", "atlas_assets", "project_id"),
     ("idx_assets_run", "atlas_assets", "run_id"),
     ("idx_assets_job", "atlas_assets", "job_id"),
@@ -933,6 +1050,21 @@ def check_integrity() -> dict[str, object]:
             "automation_runs_without_rule",
             "SELECT COUNT(*) FROM atlas_automation_runs ar "
             "LEFT JOIN atlas_automation_rules r ON ar.rule_id = r.id WHERE r.id IS NULL",
+        ),
+        (
+            "scenes_without_script",
+            "SELECT COUNT(*) FROM atlas_scenes s "
+            "LEFT JOIN atlas_scripts sc ON s.script_id = sc.id WHERE sc.id IS NULL",
+        ),
+        (
+            "scene_renders_without_rendition",
+            "SELECT COUNT(*) FROM atlas_scene_renders sr "
+            "LEFT JOIN atlas_renditions r ON sr.rendition_id = r.id WHERE r.id IS NULL",
+        ),
+        (
+            "publications_without_rendition",
+            "SELECT COUNT(*) FROM atlas_publications p "
+            "LEFT JOIN atlas_renditions r ON p.rendition_id = r.id WHERE r.id IS NULL",
         ),
     ]
 
