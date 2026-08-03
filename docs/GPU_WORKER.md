@@ -172,8 +172,23 @@ later is much harder to attribute.
    render one scene from a recipe.
 7. **`QueueProvider`** on the kernel, registered for `video.generate` with
    `is_local=True`. The router prefers it over anything cloud automatically.
-8. **Remove `mock-video` from the registration.** *M013 is complete when a real
-   scene renders through this path and the assembled video uploads.*
+8. **Remove `mock-video` from the registration.**
+
+## M013 is complete when all three are true
+
+Not before. Each is a thing that has happened, not a thing that is built.
+
+- [ ] **The mock provider is gone.** `mock-video` is no longer registered for
+      `video.generate`; the real ComfyUI/Wan provider serves it.
+- [ ] **One complete end-to-end render.** A brief becomes scenes, scenes render
+      on the GPU, and the assembled MP4 exists in the Library with provenance
+      that `is_reproducible()` reports as complete.
+- [ ] **One real private YouTube upload.** Approved by a person, uploaded, and
+      visible on the test channel as private.
+
+Everything upstream of these is already done and tested. `mock-tts` and
+`mock-music` may remain — narration and music are not what M013 set out to
+prove, and replacing them is a later milestone's work.
 
 ---
 
