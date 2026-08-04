@@ -7,6 +7,15 @@ Ranked first in [`BUSINESS_ROADMAP.md`](../BUSINESS_ROADMAP.md) because it compo
 where the other factories are capped, and because every other factory's commercial path
 runs through it. Read [`SHIP_RULE.md`](../SHIP_RULE.md) before extending this.
 
+> **FROZEN 2026-08-04.** The architecture below is settled. No further
+> architectural change unless implementation against real businesses reveals a
+> real-world problem — not because something could be tidier, and not because a
+> future factory might want it differently. Both are how a frozen design thaws.
+>
+> Remaining blockers are external, and all three are Ayoub's to define:
+> **niche + geography**, **the initial offer**, **a sending identity**. The first
+> two unblock a live scan; only the third unblocks outreach.
+
 ---
 
 ## Business is the permanent customer record
