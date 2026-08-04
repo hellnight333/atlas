@@ -16,19 +16,18 @@ toward it without adding complexity today.
 
 ## The rule that outranks the others
 
-**Optimise for shipping businesses, not shipping software.** Every milestone must
-move Atlas closer to revenue. Given a choice between improving architecture, adding an
-abstraction or polishing internal code — and producing something sellable, publishing,
-deploying, acquiring customers, generating leads, or removing manual work from the
-operator — take the second.
+**Atlas exists to build businesses, not software.** Given a choice between another
+abstraction, refactor or architectural improvement — and shipping a product, deploying
+a website, acquiring customers or removing manual work from the operator — always
+prefer shipping. Architecture exists to enable shipping; architecture is never the
+product.
 
-Architecture exists to enable shipping. **Atlas must never become an architecture
-project.** The metric is businesses created, products shipped, customers acquired and
-revenue generated — not code quality. Tiebreaker: *what does someone outside this repo
-get from this, and when?*
+Milestones rank by: revenue → manual work eliminated → products shipped → customers
+acquired → reach → architecture. When work is blocked, pick the highest-ROI thing that
+can proceed *now*; never fall through to architecture by default.
 
-This does not license shipping broken things — work that removes a shipping blocker is
-shipping work. See rule SHIP-1 in `PROJECT_MEMORY.md`.
+**Read [`SHIP_RULE.md`](SHIP_RULE.md) in full before proposing any milestone.** It
+overrides everything below whenever priorities conflict.
 
 ## Non-negotiable principles
 
