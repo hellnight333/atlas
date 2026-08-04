@@ -4,9 +4,58 @@ Builds, deploys and maintains real websites for real customers. Scope, phases an
 non-goals live in [`M015.md`](../M015.md); this describes what exists and why it
 is shaped this way.
 
-**Phase A is implemented and proven against a real host: publish, gate, promote,
-verify, roll back.** Phase B (generation from `Site` content) and Phase C
-(scheduled health checks) are not.
+**Phase A is frozen and proven.** **Phase B — generation from content — is
+implemented**, and a generated site has been deployed to a real host with the
+gate passing on zero findings. Phase C (scheduled health checks) is not built.
+
+## Phase B: no fabricated business facts
+
+The invariant this phase exists to enforce. M014's rule is that Atlas may not
+make a claim about a business it cannot substantiate; publishing **as** that
+business is strictly worse. An invented opening time is wrong in the customer's
+own voice, on their own domain, and *they* carry the consequences — somebody
+turns up at 8pm because the site Atlas wrote said the shop was open.
+
+Two mechanisms, different in kind:
+
+**Facts carry a source, and there is no source meaning "a model wrote it."**
+`FactSource` has `OPERATOR`, `CUSTOMER`, `BUSINESS_RECORD`, `OBSERVED` — and no
+`GENERATED`. That does not stop a determined caller attributing an invention to
+the operator, and is not meant to: it makes every fact **attributable**, so a
+wrong one leads back to its source instead of dissolving into the output.
+
+**Absent facts are absent from the page.** No placeholders, no "Call us today!",
+no filler where a phone number should be. This is the mechanism that does the
+work, because the tempting failure is not inventing an address — it is padding a
+thin page with confident copy that asserts nothing anyone supplied. A business
+that supplied its weekday hours publishes its weekday hours; the weekend is not
+guessed, and not rendered as "Closed".
+
+`Prose` is a separate type from `Fact`. Prose may be written; it is rendered
+where prose belongs and cannot become the opening hours by being written
+confidently.
+
+### An honest consequence
+
+A site carrying one fact **fails Atlas's own detector on thin content**, and is
+refused. That is correct rather than a bug: a page with twenty characters of text
+will not rank, and the remedy is to get more content from the customer — a
+conversation, not a code change. Atlas will not pad a page to get it past its own
+gate.
+
+### The vulnerability the tests found
+
+A test asserting content cannot inject markup failed on the first run, and the
+hole was real: **JSON escaping does not escape `</script>`**. A business name
+containing one would close the structured-data block, and everything after it
+would be parsed as markup — cross-site scripting on the customer's own domain,
+published by Atlas, in their name.
+
+`html.escape` is not the fix: the contents of a `<script>` element are not parsed
+as HTML, so escaped entities would arrive literally and break the JSON. The three
+characters are escaped as JSON `\u003c` / `\u003e` / `\u0026`, which keeps the
+payload valid and makes the sequence unrepresentable. Both properties are now
+regression-tested.
 
 ## Proven end to end, 2026-08-04
 
