@@ -1,9 +1,85 @@
 # Project memory
 
-Things Atlas learned the expensive way, and the rules that came out of them.
+Where Atlas is going, things it learned the expensive way, and the rules that
+came out of them.
 
 Not a changelog — the changelog says what changed. This says what to never do
 again, and why, so the reasoning survives the people who were there.
+
+---
+
+## Long-term vision
+
+**Recorded 2026-08-04. This is direction, not backlog.** Nothing below is
+scheduled. It exists so that a decision made today does not quietly foreclose
+it. Development continues milestone by milestone against the current roadmap.
+
+### What Atlas is
+
+Atlas is not a video generator. Atlas is an autonomous AI operating system for
+building, operating, deploying and growing digital businesses.
+
+**The operator states a goal. Atlas decides how to reach it.** They should never
+have to choose the database, the framework, the cloud, the deployment target,
+the infrastructure, the AI provider or the orchestration. They ask; Atlas
+selects.
+
+This is the same principle as `CLAUDE.md` §2 — the operator never picks a
+ControlNet or a LoRA — carried all the way up. What Atlas hides at the recipe
+level, it must also hide at the infrastructure level.
+
+### The invariants
+
+These are what make the destinations below reachable. Each one is cheap to hold
+now and expensive to retrofit, which is the whole reason for writing them down
+before they are needed.
+
+| Invariant | What it forbids |
+|---|---|
+| Everything modular and reusable | A second orchestrator. Every factory reuses one kernel. |
+| Content independent from rendering | Media fields on a source model. Source is `Series → Episode → Script → Scene`; every output is a Rendition. |
+| Providers disposable | The kernel knowing which vendor did the work. |
+| Capabilities never depend on vendors | A recipe named for a provider. Recipes declare `video.generate`, not "Seedance". |
+| Workers stateless | Work that only one machine can resume. |
+| Everything reproducible | A generated asset without provider, model, version, workflow, recipe, parameters, seed, prompts, LoRAs and workflow hash. |
+| Irreversible actions need approval | Anything public, billable or destructive happening unattended, unless explicitly automated. |
+
+### The factories
+
+Destinations. All of them sit on the same kernel; none of them introduce
+orchestration of their own.
+
+- **Media** — one source model, many rendered outputs: video, shorts, podcasts,
+  music, blogs, presentations, images, thumbnails. *(M013 built the first slice.)*
+- **Website** — given a goal: design, implement, deploy, monitor, improve,
+  redeploy.
+- **Amazon** — keyword research, image generation, listing creation, A+ content,
+  daily monitoring, competitor analysis, inventory analytics.
+- **AI SaaS** — build and deploy complete products: image tools, PDF tools, SEO
+  tools, marketing tools, automation, subscriptions.
+- **Opportunity** — continuously find businesses that need work (no website,
+  weak SEO, poor UX, unoptimised Amazon or Airbnb listings), prepare a
+  personalised proposal, and after human approval, run outreach over email,
+  WhatsApp and CRM. **No spam** — approval is the gate, not a formality.
+- **Browser / Computer agent** — operate authenticated software the way a person
+  does: Merchant Center, Meta Ads, Seller Central, Hostinger, Cloudflare,
+  Stripe, WordPress, Shopify. Eventually configuring services itself once given
+  credentials.
+- **Deployment · SSH infrastructure · Business automation** — Atlas manages a
+  fleet (workstation, GPU workers, Hetzner, cloud) and decides where each job
+  runs: GPU rendering, deployment, crawling, browser automation, background work.
+- **Multi-model orchestration** — planner, reasoner, coder, vision, search,
+  image, video, speech. Each selected **by capability, never by vendor.** Atlas
+  must never depend on a single model.
+
+### How to use this
+
+When a design choice appears, prefer the option that grows naturally toward the
+above **without adding complexity today**. That last clause is doing real work:
+`CLAUDE.md` §4 forbids speculative abstraction, and this section does not repeal
+it. The test is not "does this support all eleven factories" — it is "does this
+make them harder later?" Building the general case now is a violation; choosing
+the specific case that generalises later is the point.
 
 ---
 

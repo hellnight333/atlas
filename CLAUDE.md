@@ -1,10 +1,18 @@
 # ATLAS — Master Context
 
-**Atlas is a personal AI Operating System.** Not an app. Not an assistant. A modular
-ecosystem that builds software, media and businesses. Expected lifespan: years.
+**Atlas is an autonomous AI Operating System** for building, operating, deploying and
+growing digital businesses. Not an app. Not an assistant. Not a video generator.
+Expected lifespan: years.
+
+The operator states a goal; Atlas decides how to reach it. They should never have to
+choose the database, framework, cloud, deployment target, infrastructure, AI provider
+or orchestration.
 
 Read this file before answering any Atlas question. Every design decision, technology
-choice and implementation plan must align with it.
+choice and implementation plan must align with it. For where this is heading — the
+factories, and the invariants that keep them reachable — see **Long-term vision** in
+`PROJECT_MEMORY.md`. That is direction, not backlog: prefer the choice that grows
+toward it without adding complexity today.
 
 ## Non-negotiable principles
 
