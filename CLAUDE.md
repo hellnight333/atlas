@@ -27,7 +27,8 @@ acquired → reach → architecture. When work is blocked, pick the highest-ROI 
 can proceed *now*; never fall through to architecture by default.
 
 **Read [`SHIP_RULE.md`](SHIP_RULE.md) in full before proposing any milestone.** It
-overrides everything below whenever priorities conflict.
+overrides everything below whenever priorities conflict. [`BUSINESS_ROADMAP.md`](BUSINESS_ROADMAP.md)
+ranks the ten factories against it and names the current next milestone.
 
 ## Non-negotiable principles
 
