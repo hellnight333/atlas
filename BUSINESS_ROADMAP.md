@@ -77,10 +77,17 @@ Every other factory makes something; this one finds who will pay for it.
 leads it finds). Depends on Browser Agent later, for outreach into channels with no
 API. Constrains nothing.
 
+**Leverage.** Highest on the list. Its output **compounds** — it runs continuously and
+never exhausts its market — where a catalogue or a client site is finite. And every
+other factory's *commercial* path runs through it: selling Amazon optimisation to other
+sellers, or websites to SMBs, both begin with finding and reaching them.
+
 **Risk.** Cold outreach is a reputation and compliance surface. Ayoub's standing rule
-is *no spam*, and the approval gate is load-bearing, not decorative. Also: leads
-without delivery capacity are a pipeline you cannot service — which is why this ranks
-below the factory that already has a customer.
+is *no spam*, and the approval gate is load-bearing, not decorative. Second: leads
+without delivery capacity are a pipeline you cannot service — survivable while delivery
+is manual, which is why Website Factory follows immediately. Third and largest: **close
+rate is unproven.** If it is near zero the factory produces nothing, so the MVP exists
+to measure it cheaply.
 
 ---
 
@@ -396,98 +403,181 @@ Three structural facts fall out of this table:
 
 ## Objective ranking
 
-**Method.** Each factory scored 1–5 on Ayoub's five criteria, weighted in the order
-SHIP-1 states them. *Technical dependency* is scored as **freedom from blockers** —
-5 means nothing stands in the way, 1 means blocked today.
+### The correction that produced this ranking
+
+The first version of this document ranked Amazon first. It got there by scoring
+*strategic value* at ×1 — the **lowest** weight of five — and strategic value is
+precisely where leverage lives. The relationship matrix showed Opportunity feeding four
+other factories, that fact was written down, and then a ×1 weight buried it.
+
+That is a scoring error, not a judgement call. Atlas is meant to become an operating
+system that builds businesses, not a tool that improves one. A ranking that optimises
+for the next dirham will always select the factory serving the customer who already
+exists, and will therefore never build the engine that finds new ones.
+
+**Leverage is now a first-class criterion, weighted highest, and it replaces
+"strategic value" rather than sitting beside it** — the two measure the same thing, and
+counting both would double-count it.
+
+**Method.** Scored 1–5. *Freedom from dependency*: 5 = nothing in the way, 1 = blocked
+today. *Platform leverage*: how many other factories this one multiplies, and whether
+its output **compounds** or is **capped**.
 
 | Criterion | Weight | Rationale |
 |---|---|---|
-| Revenue potential | ×3 | SHIP-1 priority 1 |
-| Manual work eliminated | ×2.5 | SHIP-1 priority 2 |
-| Time to MVP | ×2 | Sooner into the real world |
+| Platform leverage | ×3 | Does this multiply other factories, and does it compound? |
+| Revenue potential | ×2.5 | SHIP-1 priority 1 |
+| Manual work eliminated | ×2 | SHIP-1 priority 2 |
+| Time to MVP | ×1.5 | Sooner into the real world |
 | Freedom from dependency | ×1.5 | Blocked work cannot ship |
-| Strategic value | ×1 | Real, but last — this is the architecture slot |
 
-| # | Factory | Rev ×3 | Manual ×2.5 | Time ×2 | Deps ×1.5 | Strat ×1 | **Total** |
+| # | Factory | Lev ×3 | Rev ×2.5 | Manual ×2 | Time ×1.5 | Deps ×1.5 | **Total** |
 |---|---|---|---|---|---|---|---|
-| **1** | **Amazon** | 5 | 5 | 4 | 4 | 4 | **45.5** |
-| **2** | **Opportunity** | 4 | 2 | 5 | 5 | 5 | **39.5** |
-| 3 | Website | 4 | 3 | 3 | 3 | 4 | 34.0 |
-| 4 | Browser / Computer | 2 | 5 | 2 | 4 | 5 | 33.5 |
-| 5 | Deployment | 1 | 3 | 4 | 5 | 5 | 31.0 |
-| 5 | Business automation | 2 | 4 | 3 | 4 | 3 | 31.0 |
-| 7 | SSH infrastructure | 1 | 3 | 4 | 5 | 4 | 30.0 |
-| 8 | AI SaaS | 5 | 1 | 1 | 2 | 5 | 27.5 |
-| 9 | Media | 2 | 4 | 3 | 1 | 3 | 26.5 |
-| 10 | Multi-model orchestrator | 1 | 1 | 4 | 5 | 3 | 24.0 |
+| **1** | **Opportunity** | 5 | 4 | 2 | 5 | 5 | **44.0** |
+| **2** | **Amazon** | 2 | 5 | 5 | 4 | 4 | **40.5** |
+| **3** | **Website** | 5 | 4 | 3 | 3 | 3 | **40.0** |
+| 4 | Browser / Computer | 5 | 2 | 5 | 2 | 4 | 39.0 |
+| 5 | Deployment | 4 | 1 | 3 | 4 | 5 | 34.0 |
+| 6 | Business automation | 3 | 2 | 4 | 3 | 4 | 32.5 |
+| 7 | SSH infrastructure | 3 | 1 | 3 | 4 | 5 | 31.0 |
+| 8 | Multi-model orchestrator | 4 | 1 | 1 | 4 | 5 | 30.0 |
+| 9 | Media | 3 | 2 | 4 | 3 | 1 | 28.0 |
+| 10 | AI SaaS | 2 | 5 | 1 | 1 | 2 | 25.0 |
 
 ### What the ranking says
 
-**Amazon Factory wins on the criterion that decides everything: it has a paying
-customer today.** Ayoub sells on Amazon UAE and KSA right now. Improving those
-listings lifts revenue that already exists — no acquisition, no close rate, no trust
-gap, and a result measurable against a live baseline within weeks. Every other revenue
-factory must first find someone willing to pay.
+**Opportunity Factory is now clearly first, and the margin is real** — 3.5 points clear
+of second, where the rest of the table is separated by fractions. Three properties do
+that work:
 
-**AI SaaS scores maximum on revenue and still lands 8th.** That is the ranking working
-correctly rather than a flaw in it: the highest ceiling on the list is also the
-longest path to the first dirham, and SHIP-1 ranks time-to-real-world above ambition.
-It stays a destination.
+*It compounds; the others are capped.* Amazon Factory optimises a catalogue, and a
+catalogue is finite — once the listings are good, the marginal value falls away. A
+demand engine has no such ceiling. It runs continuously and its output grows.
 
-**Media lands 9th despite being 70% built.** Sunk effort is not a criterion. It is
-blocked externally, and SHIP-1's revenue-first rule exists precisely to stop blocked
-work from absorbing attention it no longer earns.
+*Every other factory's commercial path runs through it.* This is the argument I missed
+entirely. Amazon Factory's second revenue mechanism — selling listing optimisation to
+other GCC sellers — **requires finding and reaching those sellers**, which is
+Opportunity Factory. The same is true of Website and AI SaaS. Ranking Amazon first put
+the delivery arm before the demand engine, and then relied on the demand engine to make
+it a business.
 
-**Deployment, SSH and Multi-model are enablers, not milestones.** They score
-respectably on strategic value and near-zero on revenue. Each should be built *thinly,
-inside the factory that first needs it* — Deployment when Website ships, SSH when the
-GPU worker arrives — never as a project of its own. This is the exact failure mode
-SHIP-1 was written to prevent.
+*It has no blockers at all.* No GPU, no marketplace API approval, no new credentials.
 
-**A correction to what I said an hour ago.** I recommended Opportunity Factory first.
-Working the numbers changes the answer: Opportunity generates leads, and leads are
-worth nothing without delivery capacity, whereas Amazon Factory serves a business that
-already exists and already earns. Amazon first, Opportunity second — and Opportunity
-becomes far stronger once there is a proven result to sell.
+**Amazon and Website are a statistical tie** — 40.5 against 40.0, which is inside the
+noise of any 1–5 scoring exercise. **The numbers do not choose between them, so
+something else must.** The tiebreaker is which one closes a loop:
+
+Website Factory is the delivery arm for Opportunity Factory. Together they are a
+**complete self-contained business** — find businesses with a fixable web problem,
+propose, deliver, charge — that needs no other factory to function. Website also
+carries Deployment, and Deployment is the hard blocker on AI SaaS, so building Website
+buys most of the infrastructure the highest-ceiling factory will eventually need.
+
+Amazon Factory closes no loop with anything. It serves a *different* business (Oskar),
+and its value as a product depends on Opportunity existing first.
+
+**So Website takes second on leverage, despite trailing by half a point on score.**
+
+**Amazon Factory keeps a real and specific role at third.** It is still the fastest
+measurable revenue on the list and the least blocked — and more importantly, it
+produces the thing that makes Opportunity Factory's outreach actually convert: **a
+proven, owned case study.** "We increased conversion on our own catalogue by X" is a
+materially stronger opening than a generic pitch. It is a strong candidate to run
+alongside or immediately after Opportunity rather than being deferred indefinitely.
+
+**AI SaaS falls to last under this lens, from 8th.** It scores maximum on revenue and
+minimum on nearly everything else: it consumes leverage rather than creating it, is
+blocked behind Deployment, and its true dependency — distribution — cannot be built at
+all. It remains the highest-ceiling destination and the worst possible starting point.
+
+**Media falls to 9th.** Blocked externally, capped leverage, indirect revenue. Sunk
+effort is still not a criterion.
+
+**Enablers stay enablers.** Deployment, SSH and Multi-model score well on leverage and
+near-zero on revenue — which is exactly the signature of infrastructure. Each gets
+built *thinly, inside the first factory that needs it*: Deployment inside Website, SSH
+when the GPU worker arrives. Never as a milestone of its own. Multi-model's 4 on
+leverage next to 1 on revenue is precisely the trap SHIP-1 exists to prevent.
+
+### The honest cost of going Opportunity-first
+
+Worth stating plainly rather than leaving for later:
+
+**Opportunity Factory adds manual work before it removes any.** It scores 2 on manual
+work eliminated — the second-lowest on the table — because every lead it produces
+consumes Ayoub's time in closing, and initially in delivery too. That is in direct
+tension with SHIP-1 priority 2, and it is the strongest argument for the Amazon-first
+ranking I originally gave.
+
+It is a real cost, not a fatal one. Building a demand engine always costs time before
+it returns any, and Ayoub has an operating team that can service early leads by hand
+while Website Factory is built. But it constrains the MVP: **automate the research and
+the proposal — where the hours actually go — and leave only the close to a human.** A
+version that generates leads without generating the proposal would make the problem
+worse rather than better.
+
+**And the number that decides everything is unproven.** Close rate on cold,
+evidence-backed outreach is an assumption. If it is near zero, the factory produces
+nothing regardless of how well it is built. That is not a reason to defer it — it is
+the reason to build the smallest version that measures it honestly and early.
 
 ---
 
-## Proposed next milestone
+## Proposed sequence
 
-### M014 — Amazon Factory MVP
+*(Numbering note: the frozen media continuation is deferred, not renumbered. These are
+the next milestones Atlas works on, not the next media milestones.)*
 
-*(Numbering note: the frozen media continuation is deferred, not renumbered. This is
-the next milestone Atlas works on, not the next media milestone.)*
+### M014 — Opportunity Factory MVP  ← **proposed next**
 
-**Outcome.** Measurably better performance on a real subset of Oskar's live Amazon
-catalogue, produced by Atlas and approved by Ayoub.
+**Outcome.** A repeatable engine that finds real businesses with a specific, provable
+commercial defect and produces a personalised proposal Ayoub can approve and send —
+with the **close rate measured**.
 
 **Scope.**
-- Ingest a real catalogue subset (exports plus public marketplace data — **no SP-API
-  approval on the critical path**)
-- Keyword research and competitor analysis per ASIN
-- Generate optimised title, bullets, description, backend keywords, with the reasoning
-  attached
-- Product imagery via the existing media layer where it does not need the blocked GPU
-- Approval gate — Ayoub approves the *outcome*, Atlas executes the plan
-- Apply changes, then **measure before/after against a live baseline**
+- One niche, one geography. Narrow enough that the proposals are genuinely specific.
+- Discovery: find businesses and detect concrete defects — no website, broken or
+  insecure site, unusable on mobile, weak SEO, unclaimed or unoptimised listings
+- **Evidence per prospect** — a screenshot, a score, a named finding. A proposal that
+  cannot point at the problem is a cold email.
+- Proposal generation: personalised, evidence-backed, priced
+- **Approval gate** — Ayoub approves per prospect or per batch. Nothing sends
+  unapproved. This is the product, not a safety wrapper.
+- One channel (email), with suppression and a full audit trail
+- Track replies through to conversations
 
-**Explicitly out of scope.** A generic marketplace abstraction. Noon/eBay/Shopify
-connectors. Full SP-API integration. Inventory forecasting. Building any of these
-before one ASIN improves would be a SHIP-1 violation.
+**Explicitly out of scope.** WhatsApp and CRM channels. Multi-channel orchestration.
+Any auto-send path that bypasses approval. A generic crawling framework. Automated
+delivery of the work sold — early delivery is manual and that is correct.
 
-**Effort.** 8–12 build-days.
+**Effort.** 6–9 build-days.
 
-**Success is a number, not a demo:** N listings updated, measured lift or honest
-absence of it. If the lift is not there, that is a finding worth having early and
-cheaply.
+**Success is a number, not a demo:** *N* prospects found with named defects, *M*
+proposals approved and sent, and a measured reply and conversation rate. If the close
+rate is near zero, that is the single most valuable thing to learn, and learning it in
+nine days is the point.
 
-**Why this and not the alternatives.** Website needs Deployment first and a customer
-second. Opportunity produces leads with nothing yet to deliver. Media is blocked.
-Amazon needs nothing that does not already exist, and its customer is already paying.
+**Why this first.** It compounds where the others are capped, it is the commercial path
+for every other factory including Amazon's, and nothing blocks it.
 
-**What it sets up.** A proven, owned case study — which is the single strongest input
-to Opportunity Factory, the proposed milestone after it.
+### M015 — Website Factory MVP (carrying Deployment)
+
+The delivery arm that closes the loop with M014, and the milestone that buys the
+deployment spine AI SaaS will need. One vertical, one template family, real domain,
+live URL, verified uptime, rollback. **10–15 build-days plus 6–10 for Deployment** —
+the most expensive milestone in the sequence, and the reason it follows a milestone
+that proves demand exists first.
+
+### M016 — Amazon Factory MVP
+
+Unchanged in scope from the previous draft: real ASINs, keyword and competitor
+analysis, generated listing content with reasoning attached, approval, apply, and a
+measured before/after. **8–12 build-days**, nothing blocking.
+
+Worth running **earlier than its slot if M014's build is ever waiting on something
+external** — it is the least blocked factory on the list, and its output is the case
+study that makes M014's outreach convert. Under the revenue-first rule, that is exactly
+what a blocked stretch should be filled with.
 
 ---
 
@@ -495,11 +585,14 @@ to Opportunity Factory, the proposed milestone after it.
 
 These change the plan, so they are worth answering before M014 starts:
 
-1. **Which catalogue?** Oskar Phones or Teqtronix, UAE or KSA — and roughly how many
-   ASINs are worth touching first?
-2. **Is SP-API worth starting in parallel?** Approval is slow but not on the critical
-   path. Beginning the application now costs nothing and may unblock the version after.
-3. **What does "better" mean to you** — sessions, conversion rate, units, or revenue
-   per ASIN? The measurement decides what gets built.
-4. **Naml boundary:** confirm Atlas serves **Oskar** here, and does not touch Naml's
-   existing marketing stack.
+1. **Which niche and geography** should the first Opportunity run target? This is the
+   single highest-impact input — it decides whether the proposals are specific enough
+   to convert, and your read on the market beats any scoring model here.
+2. **Who delivers the first sold engagement?** Confirming that early delivery is manual
+   (your team) sets the MVP scope correctly and keeps Website Factory out of M014.
+3. **What is the offer?** A fixed-price website, an audit, a retainer? The proposal
+   generator needs something concrete to propose.
+4. **Outreach identity and channel** — which domain and sending address, given the
+   reputation exposure and your standing *no spam* rule.
+5. **Run M016 in parallel?** If Oskar's catalogue is available now, the Amazon case
+   study is the strongest single input to M014's conversion rate.
