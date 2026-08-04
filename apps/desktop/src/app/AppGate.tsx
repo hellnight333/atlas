@@ -7,6 +7,7 @@ import { OnboardingFlow } from '../features/onboarding/OnboardingFlow'
 import { StartupDiagnostics } from '../features/onboarding/StartupDiagnostics'
 import { applyTheme, useOnboardingStore } from '../stores/onboardingStore'
 import { App } from './App'
+import { RenderProbe } from './RenderProbe'
 
 /**
  * What the user sees before the application proper.
@@ -131,9 +132,19 @@ export function AppGate() {
 
   if (state && !state.completed) {
     logStartup('rendering first-run setup')
-    return <OnboardingFlow onDone={() => void load()} />
+    return (
+      <>
+        <RenderProbe label="onboarding" />
+        <OnboardingFlow onDone={() => void load()} />
+      </>
+    )
   }
 
   logStartup('rendering main application')
-  return <App />
+  return (
+    <>
+      <RenderProbe label="workspace" />
+      <App />
+    </>
+  )
 }
