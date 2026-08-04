@@ -57,6 +57,14 @@ ranks the ten factories against it and names the current next milestone.
 This is the rule that stops Atlas from decaying into a pile of disconnected tools.
 A PR that breaks it does not merge.
 
+## One customer entity
+
+**Business IDs are immutable, and no factory creates its own customer entity.** Every
+factory — website, Amazon, media, SaaS, support, billing — references the same
+`Business` id, and `BusinessEvent` is Atlas's permanent memory timeline for that
+company. Enforced by `packages/kernel/tests/test_one_customer_entity.py`, which reads
+the source and fails on a second customer table or model. See `docs/OPPORTUNITY_FACTORY.md`.
+
 ## Layers
 
 ```

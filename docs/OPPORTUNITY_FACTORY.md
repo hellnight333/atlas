@@ -63,6 +63,31 @@ real relation would be an abstraction with no user. Each factory adds its own
 exactly one Business record with a stable id — that costs nothing and is what
 prevents the duplication.
 
+### Standing rule: one customer entity, one immutable id
+
+> Business IDs are immutable. Every factory — website, Amazon, media, SaaS,
+> support, billing — references the same Business id. **No factory creates its
+> own customer entity.**
+
+`Business` is frozen, so the id cannot be reassigned, and `merged_with` checks
+explicitly rather than trusting itself — `model_copy` does not validate. An id
+that can change is a history that can be orphaned: timeline entries written
+yesterday would point at nothing, and nothing downstream recovers that.
+
+The second half is enforced by `tests/test_one_customer_entity.py`, which reads
+the source and fails if any table or model outside the allow-list is named for a
+company — `atlas_clients`, `WebsiteClient`, `atlas_amazon_businesses`. The
+failure it prevents is slow and quiet: a factory finds it inconvenient to reach
+across to `atlas_businesses`, adds its own table, nothing breaks that day, and
+months later one company has three rows, a split timeline, and a suppression on
+one that does not protect the others.
+
+Matching is on the **head noun** rather than the substring, because a thing is
+named by what it ends in. `WebsiteClient` is a client; `ClientSecrets` is a set
+of secrets and `ContactHistory` is a history. Substring matching flagged both of
+the latter on the first run, and a guard that cries wolf earns an allow-list,
+then a longer one, then gets ignored.
+
 ## Identity resolution
 
 Autonomous discovery means several sources reporting the same businesses. Google

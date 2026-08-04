@@ -137,7 +137,17 @@ class Business(BaseModel):
     example-uae-services niche" — it is a company, which may be qualified under
     several niches over time. The niche belongs on the Opportunity, which is the
     thing that has a niche.
+
+    **The id is immutable.** Every factory that ever touches this company —
+    website, listings, media, SaaS, support, billing — references this id, and
+    the timeline in ``BusinessEvent`` is keyed on it. An id that can change is a
+    history that can be orphaned: events written yesterday would point at
+    nothing, and no amount of care downstream recovers that. The model is frozen
+    so it cannot be reassigned, and ``merged_with`` checks explicitly rather
+    than trusting itself, because ``model_copy`` does not validate.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_new_id)
     name: str
@@ -170,7 +180,7 @@ class Business(BaseModel):
         overwriting a good phone number with a worse one is not recoverable.
         Genuinely new facts are filled in, and every source is remembered.
         """
-        return self.model_copy(
+        merged = self.model_copy(
             update={
                 "website": self.website or other.website,
                 "email": self.email or other.email,
@@ -182,6 +192,12 @@ class Business(BaseModel):
                 "last_seen_at": _now(),
             }
         )
+        if merged.id != self.id:  # pragma: no cover - defensive
+            raise ValueError(
+                "a merge may not change a business id; every factory and every "
+                "timeline entry references it"
+            )
+        return merged
 
 
 class FindingKind(StrEnum):
