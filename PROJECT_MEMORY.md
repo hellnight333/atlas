@@ -130,6 +130,110 @@ and any added later — logs before it renders.
 
 ## Lessons learned
 
+### Deployment
+
+Learned building and proving M015 Phase A. See `docs/WEBSITE_FACTORY.md` for the
+implementation and `infra/phase_a_proof.py` for the run these came from.
+
+#### Provider independence is a set of decisions, not a stated intent
+
+"Provider-independent" is a phrase every system claims and few survive, because
+independence leaks through details nobody notices until the day of the move.
+Four decisions carry it, and each one is a place it could have been lost:
+
+| Decision | What it prevents |
+|---|---|
+| Atlas holds the **artifact** — files stored byte for byte, not a path | A build that only exists inside one provider |
+| Atlas holds the **deployment state** — what is live is Atlas's row | An answer that depends on an account someone else can close |
+| Rollback uses **Atlas's artifacts**, never the provider's history | Rollback silently becoming a provider feature |
+| Changing host is **publish + promote** to another target | A "migration project" |
+
+The test that makes it real: deploy a build to one target, deploy the *same
+build* to another, and compare the bytes that landed. If that is not an ordinary
+operation producing an identical artifact, the abstraction has already failed.
+
+#### Rollback from Atlas's own artifact, even though it is slower
+
+Promoting a version the provider still holds is faster. It is also a rollback
+that depends on a retention policy Atlas does not control, and it fails **the day
+the provider prunes an old deployment or is swapped** — which is exactly the day
+someone needs it.
+
+Republishing from the stored build is slower and always works. It has a second
+benefit worth as much: the provider-independence claim is exercised **every time
+anyone reverts**, rather than the first time somebody tries to move a customer.
+A property tested only when it matters is a property nobody has tested.
+
+Proven by deleting the previous version from the server before rolling back.
+
+#### Testing against production infrastructure without touching it
+
+The box ran 49 production containers behind a **single bind-mounted Caddyfile**.
+Adding a vhost meant restarting the proxy in front of live businesses, and the
+firewall allowed only 22/80/443.
+
+Neither was done. Instead: a **separate web server container** with its own
+config on a spare port, **bound to loopback and reached over an SSH tunnel** —
+no proxy restart, no firewall rule, nothing shared with production.
+
+**The general rule: prove a pipeline beside production, never through it.** The
+cost of an isolated environment is minutes. The cost of restarting a proxy in
+front of someone's revenue to demonstrate something is not bounded, and
+"deployment tooling" is a category where the blast radius is the whole point.
+A deployment adapter that edits a reverse proxy fronting other people's sites is
+a deployment adapter with a blast radius.
+
+#### Verify TLS properly or the check means nothing
+
+The gate exists to inspect what a visitor is served. A gate that fetched over
+`verify=False` would be inspecting a connection it had not validated — theatre,
+and worse than no gate because it reads as assurance.
+
+Internal certificates are fine. **Skipping verification is not.** Fetch the CA
+root, hand it to the client, and let the check be real. It cost one command.
+
+Related: the gate rejected the test suite's own preview URLs on its first run
+because they were `http://`. That was correct — a customer site over plain HTTP
+is one of the defects being sold against. Exempting it would have made the tests
+pass and weakened the gate; the tests changed instead. **When a guard fails on
+your own work, the first question is whether the guard is right.**
+
+#### Deployment architecture: publish, then promote
+
+Designing against two hosts at once is what produced the interface. An interface
+phrased as *"copy these files to this path"* encodes a filesystem and a
+Pages-style host cannot satisfy it; one phrased as *"upload and give me a
+deployment id"* encodes the opposite and a box cannot. **Publish a versioned
+artifact, then promote it** is what they share.
+
+It buys more than portability. Promotion being separate from publication means an
+artifact can be **reachable but not yet live**, which is the only thing that makes
+a pre-promotion quality gate possible — the gate inspects what visitors will get,
+on the real host, over real TLS, before anyone is served it.
+
+**One adapter cannot validate an interface.** Write the second one, even thin.
+An interface validated in prose is validated by nobody.
+
+#### File-level correctness and a working site are different claims
+
+The first live run deployed, promoted and rolled back **perfectly**: the `current`
+symlink pointed exactly where it should at every step. Every HTTP check failed,
+because the web server was serving the directory that *holds* the symlink rather
+than the symlink itself.
+
+Nothing in the deployment code was wrong. The lesson is the same one the UI
+section records in different words — *verifying a fix means looking at the
+result* — and it is why every promotion is confirmed by fetching the live URL
+rather than by trusting a tool's exit code.
+
+Two related configuration traps, both of which look like the code failing:
+
+- **`auto_https off` disables certificate provisioning entirely.** The site then
+  serves a TLS handshake with no certificate to offer. `local_certs` is the
+  option that means "use an internal CA".
+- **A client connecting to an IP sends no SNI**, so a name-based server has no
+  site to match and aborts the handshake. `default_sni` names the site to assume.
+
 ### UI rendering
 
 #### React error #185, and the crash that had no trace
