@@ -468,8 +468,20 @@ class OutreachMessage(BaseModel):
     provider_message_id: str | None = None
 
 
+#: The Opportunity Factory's own name on the timeline. Each factory owns a
+#: namespace, so Website can record "deployed" and Amazon "listing_updated"
+#: without either of them appearing in the enum below or touching this module.
+OPPORTUNITY_FACTORY = "opportunity"
+
+
 class PipelineEventKind(StrEnum):
-    """Things that happen to an opportunity. The measurement substrate."""
+    """Things that happen to an opportunity, and the measurement substrate.
+
+    Deliberately **not** the full vocabulary of the timeline. Other factories
+    have their own kinds and must not have to add members here — a closed enum
+    covering every factory would make this module a dependency of all of them,
+    which is the coupling ``BusinessEvent.factory`` exists to avoid.
+    """
 
     DISCOVERED = "discovered"
     QUALIFIED = "qualified"
@@ -487,29 +499,57 @@ class PipelineEventKind(StrEnum):
     LOST = "lost"
 
 
-class PipelineEvent(BaseModel):
-    """An append-only record of pipeline movement.
+class BusinessEvent(BaseModel):
+    """One thing that happened to a company. Append-only, and shared.
 
-    Metrics are derived from these rather than from mutable stage fields,
-    because a funnel computed from current state cannot tell you that forty
-    businesses reached "sent" and came back to nothing.
+    **This is Atlas's permanent memory of a business**, not the Opportunity
+    Factory's log that other factories may borrow. Every factory writes here:
+    outreach today; a website deployed, a listing updated, a video published, a
+    support ticket answered, later. One company, one chronological history,
+    whichever part of Atlas caused the entry.
+
+    That is why ``kind`` is a plain string rather than a closed enum. Each
+    factory owns its namespace under its own ``factory`` label and adds kinds
+    without editing this module — an enum spanning every factory would make the
+    opportunity package a dependency of all of them, and the first factory to
+    need a new kind would have to change code it does not own.
+
+    Append-only is the other half. Metrics are derived from these rather than
+    from mutable stage fields, because a funnel computed from current state
+    cannot tell you that forty businesses reached "sent" and came back to
+    nothing — and a memory you can overwrite is not a memory.
     """
 
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_new_id)
-    #: The business this happened to. Required — everything Atlas ever does for
-    #: a company lands on one timeline keyed by the permanent record.
+    #: The business this happened to. Required — this is what makes the timeline
+    #: one history per company rather than one per pipeline.
     business_id: str
+    #: Which part of Atlas caused it. Namespaces ``kind`` and lets a reader ask
+    #: for the whole history or one factory's slice of it.
+    factory: str = OPPORTUNITY_FACTORY
+    #: What happened, within that factory's vocabulary.
+    kind: str
     #: The opportunity it happened under, when there is one. Optional because a
-    #: company is discovered before it has an opportunity, and because the
-    #: conversations, websites and support history that will land here later are
-    #: not opportunities at all.
+    #: company is discovered before it has an opportunity, and because a
+    #: deployment or a support ticket is not an opportunity at all.
     opportunity_id: str | None = None
-    kind: PipelineEventKind
     at: datetime = Field(default_factory=_now)
     actor: str = "system"
     detail: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind_is_named(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("an event must say what happened")
+        return value.strip()
+
+
+#: Kept so existing call sites and imports keep working. The name that describes
+#: what this is now is ``BusinessEvent``.
+PipelineEvent = BusinessEvent
 
 
 # ---------------------------------------------------------------------------

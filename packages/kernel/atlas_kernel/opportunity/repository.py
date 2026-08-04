@@ -24,12 +24,13 @@ from sqlalchemy import text
 from ..db import SessionLocal
 from .identity import strong_keys, with_identity
 from .models import (
+    OPPORTUNITY_FACTORY,
     Business,
+    BusinessEvent,
     Evidence,
     Finding,
     Opportunity,
     OutreachMessage,
-    PipelineEvent,
     Proposal,
     ProposalClaim,
 )
@@ -365,20 +366,29 @@ class OpportunityRepository:
 
     # -- measurement ------------------------------------------------------
 
-    def record_event(self, event: PipelineEvent) -> PipelineEvent:
+    def record_event(self, event: BusinessEvent) -> BusinessEvent:
+        """Append to a business's permanent history.
+
+        Public on purpose: any factory writes here. It is the one call another
+        factory needs in order to contribute to the timeline, and it takes a
+        business rather than an opportunity precisely so a deployment or a
+        support ticket can use it.
+        """
         with SessionLocal() as session:
             session.execute(
                 text("""
-                INSERT INTO atlas_pipeline_events
-                    (id, opportunity_id, business_id, kind, actor, detail, at)
-                VALUES (:id, :opportunity_id, :business_id, :kind, :actor, :detail, :at)
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor, detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id, :actor,
+                        :detail, :at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
                     "id": event.id,
-                    "opportunity_id": event.opportunity_id,
                     "business_id": event.business_id,
-                    "kind": event.kind.value,
+                    "factory": event.factory,
+                    "kind": str(event.kind),
+                    "opportunity_id": event.opportunity_id,
                     "actor": event.actor,
                     "detail": json.dumps(event.detail),
                     "at": event.at,
@@ -387,27 +397,58 @@ class OpportunityRepository:
             session.commit()
         return event
 
-    def list_events(self, niche: str | None = None) -> list[PipelineEvent]:
-        query = "SELECT e.* FROM atlas_pipeline_events e"
-        params: dict[str, object] = {}
-        if niche:
-            query += " JOIN atlas_opportunities o ON o.id = e.opportunity_id WHERE o.niche = :niche"
-            params["niche"] = niche
-        query += " ORDER BY e.at"
+    def timeline(self, business_id: str, *, factory: str | None = None) -> list[BusinessEvent]:
+        """One company's whole history, oldest first.
+
+        The answer to "what has Atlas ever done with this company" -- outreach,
+        and in time deployments, listings, published media and support. Pass
+        ``factory`` for one part of Atlas's contribution; omit it for the
+        chronology, which is the point of keeping them in one table.
+        """
+        query = "SELECT * FROM atlas_business_events WHERE business_id = :bid"
+        params: dict[str, object] = {"bid": business_id}
+        if factory is not None:
+            query += " AND factory = :factory"
+            params["factory"] = factory
+        query += " ORDER BY at, id"
         with SessionLocal() as session:
             rows = session.execute(text(query), params).mappings().all()
-        return [
-            PipelineEvent(
-                id=row["id"],
-                opportunity_id=row["opportunity_id"],
-                business_id=row["business_id"],
-                kind=row["kind"],
-                actor=row["actor"],
-                detail=_decoded(row["detail"]),
-                at=row["at"],
+        return [self._event_from_row(row) for row in rows]
+
+    @staticmethod
+    def _event_from_row(row) -> BusinessEvent:
+        return BusinessEvent(
+            id=row["id"],
+            business_id=row["business_id"],
+            factory=row["factory"],
+            kind=row["kind"],
+            opportunity_id=row["opportunity_id"],
+            actor=row["actor"],
+            detail=dict(_decoded(row["detail"])),
+            at=row["at"],
+        )
+
+    def list_events(self, niche: str | None = None) -> list[BusinessEvent]:
+        """Outreach events, optionally for one niche. Feeds the funnel.
+
+        Scoped to this factory. The timeline is shared, and counting a website
+        deployment as a funnel stage would corrupt every rate downstream the
+        moment a second factory starts writing to it.
+        """
+        query = "SELECT e.* FROM atlas_business_events e"
+        params: dict[str, object] = {"factory": OPPORTUNITY_FACTORY}
+        if niche:
+            query += (
+                " JOIN atlas_opportunities o ON o.id = e.opportunity_id"
+                " WHERE o.niche = :niche AND e.factory = :factory"
             )
-            for row in rows
-        ]
+            params["niche"] = niche
+        else:
+            query += " WHERE e.factory = :factory"
+        query += " ORDER BY e.at, e.id"
+        with SessionLocal() as session:
+            rows = session.execute(text(query), params).mappings().all()
+        return [self._event_from_row(row) for row in rows]
 
     # -- no-spam guarantees, made durable ---------------------------------
 

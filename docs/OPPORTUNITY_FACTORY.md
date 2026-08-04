@@ -28,10 +28,34 @@ the example-uae-services niche" — it is a company, which may be qualified unde
 several niches over its life. The niche lives on the Opportunity, which is the
 thing that has one.
 
-`atlas_pipeline_events` is keyed on `business_id` with a **nullable**
-`opportunity_id`. That is the timeline seam: a company is discovered before it
-has an opportunity, and the conversations, emails, deployments and support
-history that land here later are not opportunities at all.
+### The business timeline
+
+`atlas_business_events` is **Atlas's permanent memory of a company**, not the
+Opportunity Factory's log that others may borrow. One company, one chronological
+history, whichever part of Atlas caused the entry:
+
+```python
+repo.record_event(BusinessEvent(business_id=b, kind="sent"))
+repo.record_event(BusinessEvent(business_id=b, factory="website", kind="deployed"))
+repo.record_event(BusinessEvent(business_id=b, factory="amazon", kind="listing_updated"))
+
+repo.timeline(b)                     # the whole history, oldest first
+repo.timeline(b, factory="website")  # one factory's slice
+```
+
+`kind` is a **plain string namespaced by `factory`**, not a closed enum. An enum
+spanning every factory would make this package a dependency of all of them, and
+the first factory needing a new kind would have to edit code it does not own.
+`opportunity_id` is nullable because a deployment or a support ticket is not an
+opportunity, and requiring one would force other factories to invent a fake.
+
+`record_event` is public for exactly this reason: it is the one call another
+factory needs in order to contribute.
+
+**The funnel filters on `factory`.** A website factory writing `"sent"` to mean a
+deploy notification would otherwise inflate the reply-rate denominator with
+nothing looking wrong — a silent corruption, which is the kind worth designing
+against.
 
 **No join table was built.** A generic "business owns X" links table with one
 real relation would be an abstraction with no user. Each factory adds its own
@@ -46,11 +70,24 @@ Maps and a directory will both return the same clinic, spelled differently.
 Without resolution the funnel double-counts it, the cooldown protects only one
 copy, and someone eventually receives two proposals from the same sender.
 
-**The asymmetry that shapes the whole design: merging two different companies is
-much worse than failing to merge one.** A missed merge costs a duplicate row. A
-wrong merge attaches one business's findings to another's proposal — a false
-claim about a stranger's website, which is exactly what the evidence rule exists
-to prevent.
+**Standing rule: false negatives are acceptable, false positives are not.**
+Duplicate records cost a row. Merging two different companies takes one
+company's history into another's and attaches its findings to the other's
+proposal — a false claim about a stranger's website, which is exactly what the
+evidence rule exists to prevent. Once it has happened the timeline above is no
+longer a record of anything.
+
+This is not a tuning preference. It decides which way **every** ambiguous case
+goes, and `tests/test_business_memory.py` states it as an invariant: each
+plausible-looking match Atlas might be tempted by — same name and city, a shared
+four-digit extension, a shared hosting platform — is asserted to be *refused*.
+There is also a test asserting that two rows for one company is the **correct**
+outcome when nothing strong agrees, so the intent survives someone later
+"improving" the matcher.
+
+Conservative must not mean silent: refused matches are surfaced through
+`find_possible_duplicates` for a human, because a duplicate nobody can see is a
+duplicate nobody can fix.
 
 So matching is on **strong keys only** — domain, email, phone. A shared name and
 city is a *weak* key: it is surfaced as a possible duplicate for a human and

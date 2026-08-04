@@ -1027,27 +1027,60 @@ def init_db() -> None:
             sent_at TIMESTAMP WITH TIME ZONE
         )
         """))
-        # Append-only, and keyed on the business rather than the opportunity.
-        # The funnel is derived from these -- a funnel computed from current
-        # state cannot tell you that forty businesses were contacted and came
-        # back to nothing -- but the timeline is the point: conversations,
-        # websites and support history land here later, and none of those are
-        # opportunities, which is why opportunity_id is nullable.
+        # Atlas's permanent memory of a company. Append-only, keyed on the
+        # business, and **shared across factories**: outreach today; a website
+        # deployed, a listing updated, a video published, a support ticket
+        # answered, later. One company, one chronological history, whichever
+        # part of Atlas caused the entry.
+        #
+        # `factory` namespaces `kind`, so a new factory adds its own vocabulary
+        # without an enum spanning all of them and without editing the
+        # opportunity package. `opportunity_id` is nullable because a company is
+        # discovered before it has an opportunity, and a deployment is not one
+        # at all.
+        #
+        # Pre-release rename from atlas_pipeline_events: "pipeline" named it
+        # after the first factory to write to it. Safe to delete once no
+        # development database created earlier remains.
         conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS atlas_pipeline_events (
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.tables
+                       WHERE table_name = 'atlas_pipeline_events')
+               AND NOT EXISTS (SELECT 1 FROM information_schema.tables
+                               WHERE table_name = 'atlas_business_events') THEN
+                ALTER TABLE atlas_pipeline_events RENAME TO atlas_business_events;
+            END IF;
+        END $$;
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_business_events (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
-            opportunity_id TEXT,
+            factory TEXT NOT NULL DEFAULT 'opportunity',
             kind TEXT NOT NULL,
+            opportunity_id TEXT,
             actor TEXT NOT NULL DEFAULT 'system',
             detail JSONB NOT NULL DEFAULT '{}',
             at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
-        conn.execute(text("ALTER TABLE atlas_pipeline_events ALTER COLUMN opportunity_id DROP NOT NULL"))
         conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_pipeline_events_business_idx "
-            "ON atlas_pipeline_events (business_id, kind)"
+            "ALTER TABLE atlas_business_events ADD COLUMN IF NOT EXISTS factory TEXT "
+            "NOT NULL DEFAULT 'opportunity'"
+        ))
+        conn.execute(text(
+            "ALTER TABLE atlas_business_events ALTER COLUMN opportunity_id DROP NOT NULL"
+        ))
+        # Reading one company's whole history is the common query, so the index
+        # leads with the business and orders by time.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_business_events_timeline_idx "
+            "ON atlas_business_events (business_id, at)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_business_events_factory_idx "
+            "ON atlas_business_events (factory, kind)"
         ))
         # Durable so that "never contact me again" survives a restart. A
         # suppression list that lives only in memory is not a suppression list.

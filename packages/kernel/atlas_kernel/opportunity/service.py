@@ -25,12 +25,12 @@ from .gate import OutreachGate, OutreachOutcome
 from .metrics import FunnelReport, build_report
 from .models import (
     Business,
+    BusinessEvent,
     Finding,
     NicheProfile,
     Opportunity,
     OpportunityStage,
     OutreachMessage,
-    PipelineEvent,
     PipelineEventKind,
     Proposal,
 )
@@ -63,7 +63,7 @@ class OpportunityService:
     #: one for any run that actually sends.
     repository: OpportunityRepository | None = None
     #: In-memory event log, mirrored to the repository when there is one.
-    events: list[PipelineEvent] = field(default_factory=list)
+    events: list[BusinessEvent] = field(default_factory=list)
 
     # -- discovery and qualification -------------------------------------
 
@@ -291,7 +291,7 @@ class OpportunityService:
         *,
         opportunity_id: str | None = None,
         actor: str = "system",
-    ) -> PipelineEvent:
+    ) -> BusinessEvent:
         """Append to the timeline.
 
         The business is required and the opportunity is optional, which is the
@@ -301,7 +301,7 @@ class OpportunityService:
         the permanent record rather than scattered across whichever pipeline
         happened to be running.
         """
-        event = PipelineEvent(
+        event = BusinessEvent(
             opportunity_id=opportunity_id,
             business_id=business_id,
             kind=kind,

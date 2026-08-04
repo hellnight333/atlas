@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .models import PipelineEvent, PipelineEventKind
+from .models import OPPORTUNITY_FACTORY, BusinessEvent, PipelineEventKind
 
 #: The funnel, in order. Each entry maps a reported stage to the events that
 #: count as reaching it.
@@ -106,11 +106,19 @@ class FunnelReport:
         }
 
 
-def build_report(events: list[PipelineEvent]) -> FunnelReport:
-    """Reduce an event log to a funnel."""
+def build_report(events: list[BusinessEvent]) -> FunnelReport:
+    """Reduce a business timeline to this factory's funnel.
+
+    Filters on ``factory`` rather than assuming every event is an outreach
+    event. The timeline is shared -- a website deployment and a support ticket
+    land on it too -- and counting those as funnel stages would quietly corrupt
+    every rate the moment a second factory starts writing.
+    """
     report = FunnelReport()
-    by_kind: dict[PipelineEventKind, set[str]] = {}
+    by_kind: dict[str, set[str]] = {}
     for event in events:
+        if event.factory != OPPORTUNITY_FACTORY:
+            continue
         by_kind.setdefault(event.kind, set()).add(event.business_id)
 
     for stage, kinds in FUNNEL:
