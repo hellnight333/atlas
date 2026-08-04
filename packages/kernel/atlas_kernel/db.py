@@ -882,6 +882,117 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+        # -- Opportunity Factory (M014) ------------------------------------
+        #
+        # Same layering discipline as the Media Factory: prospects and findings
+        # are facts about the world and carry no channel, no proposal and no
+        # send state. That is what lets Website, Amazon and SaaS each put a
+        # different offer over the same discovery later. See
+        # docs/OPPORTUNITY_FACTORY.md.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_prospects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            niche TEXT NOT NULL,
+            geography TEXT NOT NULL DEFAULT '',
+            website TEXT,
+            email TEXT,
+            phone TEXT,
+            source TEXT NOT NULL DEFAULT 'unknown',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            discovered_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        # Evidence is NOT NULL and the application refuses an empty list. A
+        # claim Atlas cannot substantiate must be impossible to store, not
+        # merely discouraged.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_findings (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            evidence JSONB NOT NULL,
+            detected_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_opportunities (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL,
+            niche TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'discovered',
+            score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            estimated_value DOUBLE PRECISION,
+            currency TEXT NOT NULL DEFAULT 'AED',
+            finding_ids JSONB NOT NULL DEFAULT '[]',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_proposals (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL,
+            opportunity_id TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            claims JSONB NOT NULL,
+            offer TEXT NOT NULL DEFAULT '',
+            price DOUBLE PRECISION,
+            currency TEXT NOT NULL DEFAULT 'AED',
+            findings_fingerprint TEXT NOT NULL DEFAULT '',
+            generator TEXT NOT NULL DEFAULT 'unknown',
+            generated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_outreach_messages (
+            id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            prospect_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            approval_id TEXT,
+            approved_fingerprint TEXT,
+            provider_message_id TEXT,
+            detail TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            sent_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        # Append-only. The funnel is derived from these rather than from each
+        # opportunity's current stage, because a funnel computed from current
+        # state cannot tell you that forty prospects were contacted and came
+        # back to nothing.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_pipeline_events (
+            id TEXT PRIMARY KEY,
+            opportunity_id TEXT NOT NULL,
+            prospect_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            actor TEXT NOT NULL DEFAULT 'system',
+            detail JSONB NOT NULL DEFAULT '{}',
+            at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_pipeline_events_prospect_idx "
+            "ON atlas_pipeline_events (prospect_id, kind)"
+        ))
+        # Durable so that "never contact me again" survives a restart. A
+        # suppression list that lives only in memory is not a suppression list.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_outreach_suppressions (
+            entry TEXT PRIMARY KEY,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
         conn.execute(text("""
         ALTER TABLE atlas_runtime_executions
         ADD COLUMN IF NOT EXISTS approval_id TEXT,
