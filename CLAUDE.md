@@ -14,6 +14,22 @@ factories, and the invariants that keep them reachable — see **Long-term visio
 `PROJECT_MEMORY.md`. That is direction, not backlog: prefer the choice that grows
 toward it without adding complexity today.
 
+## The rule that outranks the others
+
+**Optimise for shipping businesses, not shipping software.** Every milestone must
+move Atlas closer to revenue. Given a choice between improving architecture, adding an
+abstraction or polishing internal code — and producing something sellable, publishing,
+deploying, acquiring customers, generating leads, or removing manual work from the
+operator — take the second.
+
+Architecture exists to enable shipping. **Atlas must never become an architecture
+project.** The metric is businesses created, products shipped, customers acquired and
+revenue generated — not code quality. Tiebreaker: *what does someone outside this repo
+get from this, and when?*
+
+This does not license shipping broken things — work that removes a shipping blocker is
+shipping work. See rule SHIP-1 in `PROJECT_MEMORY.md`.
+
 ## Non-negotiable principles
 
 1. **One system.** Everything connected, modular, replaceable, benchmarked, documented.

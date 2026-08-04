@@ -88,6 +88,43 @@ the specific case that generalises later is the point.
 These are not style preferences. Each one exists because breaking it took the
 product down.
 
+### SHIP-1 — Optimise for shipping businesses, not shipping software
+
+**Every milestone must move Atlas closer to revenue.** When there is a choice
+between the left column and the right, take the right:
+
+| Prefer this less | Prefer this more |
+|---|---|
+| Improving architecture | Producing something that can be sold |
+| Another abstraction | Publishing something |
+| Another framework | Deploying something |
+| Polishing internal code | Acquiring customers · generating leads |
+| | Reducing Ayoub's manual work |
+
+Architecture exists to enable shipping. **Atlas must never become an
+architecture project.** The success metric is not code quality — it is
+businesses created, products shipped, customers acquired, revenue generated.
+
+**The tiebreaker, when a decision is genuinely close:** *what does someone
+outside this repo get from it, and when?* Work with no answer is the work to
+cut.
+
+Two clarifications, because this rule is easy to misread in both directions:
+
+*It does not license shipping broken things.* A blank window ships nothing; a
+lost database ships nothing ever again. Work that removes a shipping blocker
+**is** shipping work, however internal it looks. The line is not
+internal-versus-external, it is *unblocks-delivery* versus *is-nicer*.
+
+*It does not repeal the invariants above.* Those are guardrails on decisions
+already being made — content independent from rendering, providers disposable,
+workers stateless. They cost a design choice, not a milestone. The moment one of
+them turns into a project of its own, SHIP-1 wins and the invariant waits until
+something real needs it.
+
+**This rule bites hardest exactly when the architecture work feels obviously
+correct.** That is the signal to check it, not the exemption from it.
+
 ### UI-1 — Never allocate inside a Zustand selector
 
 Select stable references only. Do every `filter`, `map`, `sort` or object build
