@@ -1082,6 +1082,76 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS atlas_business_events_factory_idx "
             "ON atlas_business_events (factory, kind)"
         ))
+        # -- Website Factory (M015) ----------------------------------------
+        #
+        # Same layering as Media and Opportunity: a site is content and carries
+        # no HTML, theme or host; a build is the rendered artifact; a deployment
+        # is one build sent to one target. See M015.md.
+        #
+        # The artifact is STORED, not referenced. `files` holds the build byte
+        # for byte, which is the literal mechanism behind "rebuild from Business
+        # memory" and behind moving a customer between hosts without a
+        # migration. A row pointing at a directory on somebody's laptop would
+        # satisfy every type in the package and none of the invariants.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_sites (
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            domain TEXT,
+            content JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        # `fingerprint` is written once and recomputed on read. The redundancy
+        # is deliberate: it is what lets a rebuild be checked rather than
+        # trusted, and it catches both an altered record and non-deterministic
+        # rendering.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_site_builds (
+            id TEXT PRIMARY KEY,
+            site_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
+            files JSONB NOT NULL,
+            fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            generator TEXT NOT NULL DEFAULT 'authored',
+            provenance JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """))
+        # Atlas's record of what is live and where -- never read back from a
+        # provider's API, which depends on an account that can be closed. One
+        # build may have many deployments: the same artifact on Cloudflare and
+        # on Hetzner is two rows, and moving a customer promotes a different one
+        # rather than rebuilding anything.
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_site_deployments (
+            id TEXT PRIMARY KEY,
+            build_id TEXT NOT NULL,
+            site_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
+            target TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            remote_id TEXT,
+            preview_url TEXT,
+            live_url TEXT,
+            build_fingerprint TEXT NOT NULL DEFAULT '',
+            gate_findings JSONB NOT NULL DEFAULT '[]',
+            detail TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            promoted_at TIMESTAMP WITH TIME ZONE
+        )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_site_deployments_live_idx "
+            "ON atlas_site_deployments (site_id, target, status)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_site_builds_site_idx "
+            "ON atlas_site_builds (site_id, created_at)"
+        ))
         # Durable so that "never contact me again" survives a restart. A
         # suppression list that lives only in memory is not a suppression list.
         conn.execute(text("""
