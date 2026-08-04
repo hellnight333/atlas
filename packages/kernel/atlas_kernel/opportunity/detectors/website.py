@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ..models import Evidence, EvidenceKind, Finding, FindingKind, NicheProfile, Prospect, Severity
+from ..models import Business, Evidence, EvidenceKind, Finding, FindingKind, NicheProfile, Severity
 
 #: Slower than this and a visitor on a phone notices. Seconds.
 SLOW_RESPONSE_SECONDS = 3.0
@@ -35,6 +35,35 @@ THIN_CONTENT_CHARS = 400
 REQUEST_TIMEOUT_SECONDS = 15.0
 #: Cap on stored body text, so evidence stays inspectable rather than enormous.
 EVIDENCE_EXCERPT_CHARS = 500
+
+# -- Confidence -------------------------------------------------------------
+#
+# Every number below is justified by *how the observation was made*, not by how
+# strongly the detector feels about it. A confidence a detector invents is worse
+# than none at all, because it looks like rigour while being decoration.
+
+#: A transport failure Atlas watched happen. About as certain as this gets --
+#: though a site can be down for a minute and fine for a year.
+OBSERVED_FAILURE_CONFIDENCE = 0.95
+
+#: A tag read straight out of the returned document. Nearly certain, and short
+#: of it for one real reason: single-page applications inject <title> and meta
+#: tags client-side, so a served document without them is not always a page
+#: without them. Common enough to matter, rare enough not to suppress.
+DIRECT_MARKUP_CONFIDENCE = 0.85
+
+#: Counting visible text in the served HTML. Same client-rendering caveat, and
+#: it bites harder here: a React site legitimately ships almost no body text.
+RENDERED_CONTENT_CONFIDENCE = 0.7
+
+#: One timing sample, over one network, from one place. Enough to raise the
+#: question and nowhere near enough to assert as fact -- which is exactly what
+#: the confidence floor is for.
+SINGLE_SAMPLE_TIMING_CONFIDENCE = 0.45
+
+#: A field missing from somebody else's record. Only ever as good as the source,
+#: and the source is often a directory nobody has updated in three years.
+SOURCE_RECORD_CONFIDENCE = 0.6
 
 
 class _PageFacts(HTMLParser):
@@ -105,7 +134,7 @@ def _normalise(url: str) -> str:
 
 
 class WebsiteDetector:
-    """Inspects a prospect's website and reports evidenced defects.
+    """Inspects a business's website and reports evidenced defects.
 
     ``client`` is injectable so tests exercise the real logic against a
     transport they control. Nothing in here special-cases being under test --
@@ -137,29 +166,29 @@ class WebsiteDetector:
 
     # -- the one public method ------------------------------------------
 
-    def inspect(self, prospect: Prospect, profile: NicheProfile) -> list[Finding]:
-        if not prospect.website:
-            return self._no_website(prospect)
+    def inspect(self, business: Business, profile: NicheProfile) -> list[Finding]:
+        if not business.website:
+            return self._no_website(business)
 
-        url = _normalise(prospect.website)
+        url = _normalise(business.website)
         started = time.monotonic()
         try:
             response = self._get_client().get(url)
         except ssl.SSLError as error:
-            return [self._tls_invalid(prospect, url, error)]
+            return [self._tls_invalid(business, url, error)]
         except httpx.HTTPError as error:
-            return [self._unreachable(prospect, url, error)]
+            return [self._unreachable(business, url, error)]
         elapsed = time.monotonic() - started
 
         findings: list[Finding] = []
         if response.status_code >= 400:
-            findings.append(self._bad_status(prospect, url, response, elapsed))
+            findings.append(self._bad_status(business, url, response, elapsed))
             # A 500 tells us nothing about the page's SEO. Stop here rather than
             # generating findings about an error page's missing h1.
             return findings
 
-        findings.extend(self._transport_findings(prospect, url, response, elapsed))
-        findings.extend(self._content_findings(prospect, response))
+        findings.extend(self._transport_findings(business, url, response, elapsed))
+        findings.extend(self._content_findings(business, response))
         return findings
 
     # -- finding builders ------------------------------------------------
@@ -179,32 +208,34 @@ class WebsiteDetector:
             detector=self.name,
         )
 
-    def _no_website(self, prospect: Prospect) -> list[Finding]:
+    def _no_website(self, business: Business) -> list[Finding]:
         # Asserted, not observed: the claim rests on the source record having no
         # website, and saying so plainly is more honest than dressing a missing
         # field up as an observation.
         return [
             Finding(
-                prospect_id=prospect.id,
+                business_id=business.id,
                 kind=FindingKind.NO_WEBSITE,
                 severity=Severity.HIGH,
+                confidence=SOURCE_RECORD_CONFIDENCE,
                 statement="No website is listed for this business.",
                 evidence=[
                     self._evidence(
                         EvidenceKind.ASSERTED,
-                        f"prospect:{prospect.id}",
-                        {"website": None, "source": prospect.source},
-                        f"No website recorded in {prospect.source}.",
+                        f"business:{business.id}",
+                        {"website": None, "sources": business.sources},
+                        f"No website recorded in {', '.join(business.sources) or 'the source record'}.",
                     )
                 ],
             )
         ]
 
-    def _unreachable(self, prospect: Prospect, url: str, error: Exception) -> Finding:
+    def _unreachable(self, business: Business, url: str, error: Exception) -> Finding:
         return Finding(
-            prospect_id=prospect.id,
+            business_id=business.id,
             kind=FindingKind.SITE_UNREACHABLE,
             severity=Severity.HIGH,
+            confidence=OBSERVED_FAILURE_CONFIDENCE,
             statement="The website did not respond when we tried to load it.",
             evidence=[
                 self._evidence(
@@ -216,11 +247,12 @@ class WebsiteDetector:
             ],
         )
 
-    def _tls_invalid(self, prospect: Prospect, url: str, error: Exception) -> Finding:
+    def _tls_invalid(self, business: Business, url: str, error: Exception) -> Finding:
         return Finding(
-            prospect_id=prospect.id,
+            business_id=business.id,
             kind=FindingKind.TLS_INVALID,
             severity=Severity.HIGH,
+            confidence=OBSERVED_FAILURE_CONFIDENCE,
             statement="The site's security certificate is not valid, so browsers warn visitors away.",
             evidence=[
                 self._evidence(
@@ -233,12 +265,13 @@ class WebsiteDetector:
         )
 
     def _bad_status(
-        self, prospect: Prospect, url: str, response: httpx.Response, elapsed: float
+        self, business: Business, url: str, response: httpx.Response, elapsed: float
     ) -> Finding:
         return Finding(
-            prospect_id=prospect.id,
+            business_id=business.id,
             kind=FindingKind.SITE_UNREACHABLE,
             severity=Severity.HIGH,
+            confidence=OBSERVED_FAILURE_CONFIDENCE,
             statement=f"The website returns an error ({response.status_code}) instead of a page.",
             evidence=[
                 self._evidence(
@@ -255,7 +288,7 @@ class WebsiteDetector:
         )
 
     def _transport_findings(
-        self, prospect: Prospect, url: str, response: httpx.Response, elapsed: float
+        self, business: Business, url: str, response: httpx.Response, elapsed: float
     ) -> list[Finding]:
         findings: list[Finding] = []
         final_url = str(response.url)
@@ -263,9 +296,10 @@ class WebsiteDetector:
         if urlparse(final_url).scheme != "https":
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.NO_HTTPS,
                     severity=Severity.HIGH,
+                    confidence=OBSERVED_FAILURE_CONFIDENCE,
                     statement="The site is served over an unencrypted connection, "
                     "which browsers label as 'Not secure'.",
                     evidence=[
@@ -285,9 +319,10 @@ class WebsiteDetector:
         if elapsed > SLOW_RESPONSE_SECONDS:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.SLOW_RESPONSE,
                     severity=Severity.MEDIUM,
+                    confidence=SINGLE_SAMPLE_TIMING_CONFIDENCE,
                     statement=f"The homepage took {elapsed:.1f} seconds to respond, "
                     "which loses visitors on mobile connections.",
                     evidence=[
@@ -307,7 +342,7 @@ class WebsiteDetector:
             )
         return findings
 
-    def _content_findings(self, prospect: Prospect, response: httpx.Response) -> list[Finding]:
+    def _content_findings(self, business: Business, response: httpx.Response) -> list[Finding]:
         content_type = response.headers.get("content-type", "")
         if "html" not in content_type.lower():
             return []
@@ -330,9 +365,10 @@ class WebsiteDetector:
         if not parser.viewport:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.NOT_MOBILE_FRIENDLY,
                     severity=Severity.HIGH,
+                    confidence=DIRECT_MARKUP_CONFIDENCE,
                     statement="The site has no mobile layout setting, so it renders "
                     "desktop-sized on phones.",
                     evidence=[
@@ -347,9 +383,10 @@ class WebsiteDetector:
         if not parser.title:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.MISSING_TITLE,
                     severity=Severity.HIGH,
+                    confidence=DIRECT_MARKUP_CONFIDENCE,
                     statement="The page has no title, so search results show the "
                     "raw address instead of the business name.",
                     evidence=[html_evidence({"title": None}, f"No <title> on {final_url}.")],
@@ -359,9 +396,10 @@ class WebsiteDetector:
         if not parser.meta_description:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.MISSING_META_DESCRIPTION,
                     severity=Severity.MEDIUM,
+                    confidence=DIRECT_MARKUP_CONFIDENCE,
                     statement="The page has no description, so Google writes its own "
                     "summary of the business.",
                     evidence=[
@@ -376,9 +414,10 @@ class WebsiteDetector:
         if not parser.first_h1:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.MISSING_H1,
                     severity=Severity.LOW,
+                    confidence=DIRECT_MARKUP_CONFIDENCE,
                     statement="The page has no main heading.",
                     evidence=[html_evidence({"h1": None}, f"No <h1> on {final_url}.")],
                 )
@@ -387,9 +426,10 @@ class WebsiteDetector:
         if not parser.has_structured_data:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.NO_STRUCTURED_DATA,
                     severity=Severity.LOW,
+                    confidence=DIRECT_MARKUP_CONFIDENCE,
                     statement="The site publishes no structured business details, so "
                     "opening hours and location do not appear in search results.",
                     evidence=[
@@ -404,9 +444,10 @@ class WebsiteDetector:
         if parser.visible_text_length < THIN_CONTENT_CHARS:
             findings.append(
                 Finding(
-                    prospect_id=prospect.id,
+                    business_id=business.id,
                     kind=FindingKind.THIN_CONTENT,
                     severity=Severity.MEDIUM,
+                    confidence=RENDERED_CONTENT_CONFIDENCE,
                     statement=f"The homepage has only {parser.visible_text_length} characters "
                     "of text, too little for search engines to rank it.",
                     evidence=[

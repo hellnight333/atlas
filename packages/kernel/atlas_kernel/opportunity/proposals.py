@@ -23,13 +23,13 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from .models import (
+    Business,
     Finding,
     FindingKind,
     NicheProfile,
     Opportunity,
     Proposal,
     ProposalClaim,
-    Prospect,
     Severity,
 )
 
@@ -70,7 +70,7 @@ class ProposalGenerator(Protocol):
     def name(self) -> str: ...
 
     def generate(
-        self, prospect: Prospect, opportunity: Opportunity, profile: NicheProfile
+        self, business: Business, opportunity: Opportunity, profile: NicheProfile
     ) -> Proposal: ...
 
 
@@ -91,13 +91,13 @@ class EvidenceProposalGenerator:
         return "evidence-composer"
 
     def generate(
-        self, prospect: Prospect, opportunity: Opportunity, profile: NicheProfile
+        self, business: Business, opportunity: Opportunity, profile: NicheProfile
     ) -> Proposal:
         if not opportunity.findings:
             # Reachable only by calling this directly on an unqualified
             # opportunity. Better a clear error here than a Pydantic failure
             # three frames down.
-            raise ValueError(f"cannot write a proposal for {prospect.name}: no findings to cite")
+            raise ValueError(f"cannot write a proposal for {business.name}: no findings to cite")
 
         selected = _ordered(opportunity.findings)[:MAX_CLAIMS_IN_FIRST_CONTACT]
         claims = [
@@ -109,11 +109,11 @@ class EvidenceProposalGenerator:
             for finding in selected
         ]
 
-        subject = self._subject(prospect, selected)
-        body = self._body(prospect, selected, profile)
+        subject = self._subject(business, selected)
+        body = self._body(business, selected, profile)
 
         return Proposal(
-            prospect_id=prospect.id,
+            business_id=business.id,
             opportunity_id=opportunity.id,
             subject=subject,
             body=body,
@@ -125,22 +125,22 @@ class EvidenceProposalGenerator:
             generator=self.name,
         )
 
-    def _subject(self, prospect: Prospect, findings: list[Finding]) -> str:
+    def _subject(self, business: Business, findings: list[Finding]) -> str:
         headline = findings[0]
         if headline.kind is FindingKind.NO_WEBSITE:
-            return f"{prospect.name} — you don't have a website listed"
+            return f"{business.name} — you don't have a website listed"
         if headline.kind in {FindingKind.SITE_UNREACHABLE, FindingKind.TLS_INVALID}:
-            return f"{prospect.name} — your website isn't loading for visitors"
+            return f"{business.name} — your website isn't loading for visitors"
         if headline.kind is FindingKind.NO_HTTPS:
-            return f"{prospect.name} — your site shows a 'Not secure' warning"
+            return f"{business.name} — your site shows a 'Not secure' warning"
         if headline.kind is FindingKind.NOT_MOBILE_FRIENDLY:
-            return f"{prospect.name} — your site is hard to use on a phone"
-        return f"{prospect.name} — {len(findings)} things costing you customers online"
+            return f"{business.name} — your site is hard to use on a phone"
+        return f"{business.name} — {len(findings)} things costing you customers online"
 
-    def _body(self, prospect: Prospect, findings: list[Finding], profile: NicheProfile) -> str:
+    def _body(self, business: Business, findings: list[Finding], profile: NicheProfile) -> str:
         checked = findings[0].evidence[0].source
         lines = [
-            f"Hello {prospect.name},",
+            f"Hello {business.name},",
             "",
             f"I looked at {checked} today and found a few specific things "
             "that are likely costing you customers:",

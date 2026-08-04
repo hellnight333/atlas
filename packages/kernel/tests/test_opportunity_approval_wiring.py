@@ -27,9 +27,9 @@ from atlas_kernel.opportunity.gate import (
     OutreachNotApproved,
 )
 from atlas_kernel.opportunity.models import (
+    Business,
     OutreachStatus,
     PipelineEventKind,
-    Prospect,
 )
 from atlas_kernel.opportunity.outreach import (
     OutreachRefused,
@@ -71,15 +71,14 @@ def _service(channel: RecordingChannel, approvals, **kwargs) -> OpportunityServi
 
 def _prepared(service: OpportunityService):
     opportunity = service.scan(EXAMPLE_PROFILE, limit=1)[0]
-    prospect = Prospect(
-        id=opportunity.prospect_id,
+    business = Business(
+        id=opportunity.business_id,
         name="Al Noor Dental Clinic",
-        niche=EXAMPLE_PROFILE.id,
         geography="United Arab Emirates",
         website="https://alnoor.test",
         email="hello@alnoor.test",
     )
-    return prospect, opportunity, service.prepare(prospect, opportunity, EXAMPLE_PROFILE)
+    return business, opportunity, service.prepare(business, opportunity, EXAMPLE_PROFILE)
 
 
 class TestRealApprovalService:
@@ -231,17 +230,17 @@ class TestDurableRun:
         service = _service(RecordingChannel(), runtime.approval_service)
         service.repository = repository
 
-        prospect, opportunity, prepared = _prepared(service)
+        business, opportunity, prepared = _prepared(service)
         request = service.request_approval(prepared)
         approved = runtime.approval_service.approve(request.id, actor="ayoub")
         service.send(prepared, approved, EXAMPLE_PROFILE)
 
         # A fresh repository stands in for a restarted process.
         reloaded = OpportunityRepository()
-        assert reloaded.get_prospect(prospect.id) is not None
-        assert reloaded.list_findings(prospect.id)
+        assert reloaded.get_business(business.id) is not None
+        assert reloaded.list_findings(business.id)
         assert reloaded.load_contact_history().within_cooldown(
-            prospect.id, EXAMPLE_PROFILE.contact_cooldown_days
+            business.id, EXAMPLE_PROFILE.contact_cooldown_days
         )
         stored = [e for e in reloaded.list_events() if e.opportunity_id == opportunity.id]
         assert PipelineEventKind.SENT in [e.kind for e in stored]

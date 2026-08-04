@@ -44,7 +44,7 @@ def _evidence(source: str = "https://example.test") -> Evidence:
 
 def _finding(**overrides) -> Finding:
     payload = {
-        "prospect_id": "p1",
+        "business_id": "p1",
         "kind": FindingKind.MISSING_TITLE,
         "severity": Severity.HIGH,
         "statement": "The page has no title.",
@@ -71,7 +71,7 @@ class TestFindingRequiresEvidence:
     def test_missing_evidence_field_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             Finding(
-                prospect_id="p1",
+                business_id="p1",
                 kind=FindingKind.MISSING_TITLE,
                 severity=Severity.HIGH,
                 statement="The page has no title.",
@@ -103,7 +103,7 @@ class TestFindingRequiresEvidence:
 class TestProposalRequiresFindings:
     def _proposal(self, **overrides) -> Proposal:
         payload = {
-            "prospect_id": "p1",
+            "business_id": "p1",
             "opportunity_id": "o1",
             "subject": "Your site has no title",
             "body": "We looked at your site today.",
@@ -136,7 +136,7 @@ class TestProposalRequiresFindings:
 class TestFingerprints:
     def test_editing_the_body_changes_the_proposal_fingerprint(self) -> None:
         original = Proposal(
-            prospect_id="p1",
+            business_id="p1",
             opportunity_id="o1",
             subject="Subject",
             body="Original body",
@@ -148,9 +148,9 @@ class TestFingerprints:
     def test_changing_the_facts_changes_the_findings_fingerprint(self) -> None:
         """A re-run detector that finds something different must invalidate an
         approval granted on the old facts."""
-        first = Opportunity(prospect_id="p1", niche="n", findings=[_finding()])
+        first = Opportunity(business_id="p1", niche="n", findings=[_finding()])
         second = Opportunity(
-            prospect_id="p1",
+            business_id="p1",
             niche="n",
             findings=[_finding(statement="The page has no heading.")],
         )
@@ -160,8 +160,8 @@ class TestFingerprints:
         """Two detectors racing must not look like the facts changed."""
         a, b = _finding(), _finding(kind=FindingKind.MISSING_H1, statement="No h1.")
         assert (
-            Opportunity(prospect_id="p1", niche="n", findings=[a, b]).findings_fingerprint
-            == Opportunity(prospect_id="p1", niche="n", findings=[b, a]).findings_fingerprint
+            Opportunity(business_id="p1", niche="n", findings=[a, b]).findings_fingerprint
+            == Opportunity(business_id="p1", niche="n", findings=[b, a]).findings_fingerprint
         )
 
     def test_absent_and_blank_are_different_facts(self) -> None:

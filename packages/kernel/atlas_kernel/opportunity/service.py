@@ -20,10 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from .detectors.base import DetectorRegistry
+from .detectors.base import DetectorRegistry, DiscoveryResult
 from .gate import OutreachGate, OutreachOutcome
 from .metrics import FunnelReport, build_report
 from .models import (
+    Business,
     Finding,
     NicheProfile,
     Opportunity,
@@ -32,7 +33,6 @@ from .models import (
     PipelineEvent,
     PipelineEventKind,
     Proposal,
-    Prospect,
 )
 from .outreach import OutreachRefused, OutreachService
 from .proposals import EvidenceProposalGenerator, ProposalGenerator
@@ -44,7 +44,7 @@ from .repository import OpportunityRepository
 class PreparedOutreach:
     """Everything needed for a human to decide, and nothing sent yet."""
 
-    prospect: Prospect
+    business: Business
     opportunity: Opportunity
     proposal: Proposal
     message: OutreachMessage
@@ -67,21 +67,38 @@ class OpportunityService:
 
     # -- discovery and qualification -------------------------------------
 
-    def discover(self, profile: NicheProfile, limit: int = 50) -> list[Prospect]:
-        prospects = self.detectors.discover(profile, limit)
-        for prospect in prospects:
-            if self.repository is not None:
-                self.repository.save_prospect(prospect)
-            self._record(prospect.id, prospect.id, PipelineEventKind.DISCOVERED)
-        return prospects
+    def discover(self, profile: NicheProfile, limit: int = 50) -> DiscoveryResult:
+        """Ask every registered source and resolve the answers.
 
-    def inspect(self, prospect: Prospect, profile: NicheProfile) -> list[Finding]:
-        return self.detectors.inspect(prospect, profile)
+        Businesses are resolved against what is already stored before anything
+        is recorded, so a company found last week and found again today is the
+        same record with a second source attached — not a second row that
+        escapes the cooldown protecting the first.
+        """
+        result = self.detectors.discover(profile, limit)
+        resolved: list[Business] = []
+        for business in result.businesses:
+            if self.repository is not None:
+                business, is_new = self.repository.resolve_business(business)
+            else:
+                is_new = True
+            resolved.append(business)
+            if is_new:
+                self._record(business.id, PipelineEventKind.DISCOVERED)
+        return DiscoveryResult(
+            businesses=resolved,
+            duplicates_merged=result.duplicates_merged,
+            possible_duplicates=result.possible_duplicates,
+            source_failures=result.source_failures,
+        )
+
+    def inspect(self, business: Business, profile: NicheProfile) -> list[Finding]:
+        return self.detectors.inspect(business, profile)
 
     def qualify(
-        self, prospect: Prospect, findings: list[Finding], profile: NicheProfile
+        self, business: Business, findings: list[Finding], profile: NicheProfile
     ) -> Opportunity:
-        opportunity = qualify(prospect, findings, profile)
+        opportunity = qualify(business, findings, profile)
         if self.repository is not None:
             self.repository.save_opportunity(opportunity)
         kind = (
@@ -90,65 +107,65 @@ class OpportunityService:
             else PipelineEventKind.DISQUALIFIED
         )
         self._record(
-            opportunity.id,
-            prospect.id,
+            business.id,
             kind,
             {"score": opportunity.score, "findings": len(opportunity.findings)},
+            opportunity_id=opportunity.id,
         )
         return opportunity
 
     def scan(self, profile: NicheProfile, limit: int = 50) -> list[Opportunity]:
         """Discover and qualify in one pass. Contacts nobody."""
         opportunities: list[Opportunity] = []
-        for prospect in self.discover(profile, limit):
-            findings = self.inspect(prospect, profile)
-            opportunities.append(self.qualify(prospect, findings, profile))
+        for business in self.discover(profile, limit).businesses:
+            findings = self.inspect(business, profile)
+            opportunities.append(self.qualify(business, findings, profile))
         return rank(opportunities)
 
     # -- proposal and approval -------------------------------------------
 
     def prepare(
-        self, prospect: Prospect, opportunity: Opportunity, profile: NicheProfile
+        self, business: Business, opportunity: Opportunity, profile: NicheProfile
     ) -> PreparedOutreach:
         """Write the proposal and ask for approval. Sends nothing."""
         if opportunity.stage is not OpportunityStage.QUALIFIED:
             raise ValueError(
-                f"{prospect.name} did not qualify (score {opportunity.score} < "
+                f"{business.name} did not qualify (score {opportunity.score} < "
                 f"{profile.qualify_threshold}); Atlas does not write to businesses "
                 "it has nothing substantiated to say to"
             )
-        if not prospect.email:
-            raise ValueError(f"{prospect.name} has no email address to contact")
+        if not business.email:
+            raise ValueError(f"{business.name} has no email address to contact")
 
-        proposal = self.generator.generate(prospect, opportunity, profile)
+        proposal = self.generator.generate(business, opportunity, profile)
         if self.repository is not None:
             self.repository.save_proposal(proposal)
         self._record(
-            opportunity.id,
-            prospect.id,
+            business.id,
             PipelineEventKind.PROPOSAL_GENERATED,
             {"generator": proposal.generator, "claims": len(proposal.claims)},
+            opportunity_id=opportunity.id,
         )
 
         message = OutreachMessage(
             proposal_id=proposal.id,
-            prospect_id=prospect.id,
+            business_id=business.id,
             channel=self.outreach.channel_name,
-            recipient=prospect.email,
+            recipient=business.email,
             subject=proposal.subject,
             body=proposal.body,
         )
         if self.repository is not None:
             self.repository.save_message(message)
         outcome = OutreachOutcome(
-            prospect=prospect,
+            business=business,
             proposal=proposal,
             findings=opportunity.findings,
             channel=message.channel,
             recipient=message.recipient,
         )
         return PreparedOutreach(
-            prospect=prospect,
+            business=business,
             opportunity=opportunity,
             proposal=proposal,
             message=message,
@@ -158,10 +175,10 @@ class OpportunityService:
     def request_approval(self, prepared: PreparedOutreach, *, requested_by: str = "atlas"):
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
         self._record(
-            prepared.opportunity.id,
-            prepared.prospect.id,
+            prepared.business.id,
             PipelineEventKind.APPROVAL_REQUESTED,
             {"approval_id": request.id},
+            opportunity_id=prepared.opportunity.id,
         )
         return request
 
@@ -178,20 +195,20 @@ class OpportunityService:
         """Authorise against the approval, then send. Refusals are recorded."""
         authorised = self.gate.authorise(prepared.message, approval, prepared.proposal)
         self._record(
-            prepared.opportunity.id,
-            prepared.prospect.id,
+            prepared.business.id,
             PipelineEventKind.APPROVED,
             {"approval_id": approval.id},
+            opportunity_id=prepared.opportunity.id,
         )
 
         try:
             sent = self.outreach.send(authorised, prepared.proposal, profile, now=now)
         except OutreachRefused as refusal:
             self._record(
-                prepared.opportunity.id,
-                prepared.prospect.id,
+                prepared.business.id,
                 PipelineEventKind.SUPPRESSED,
                 {"reason": str(refusal)},
+                opportunity_id=prepared.opportunity.id,
             )
             raise
 
@@ -201,42 +218,62 @@ class OpportunityService:
         if self.repository is not None:
             self.repository.save_message(sent)
         self._record(
-            prepared.opportunity.id,
-            prepared.prospect.id,
+            prepared.business.id,
             kind,
             {"detail": sent.detail, "message_id": sent.provider_message_id},
+            opportunity_id=prepared.opportunity.id,
         )
         return sent
 
     # -- outcomes ---------------------------------------------------------
 
     def record_reply(
-        self, opportunity_id: str, prospect_id: str, *, actor: str = "operator"
+        self, opportunity_id: str, business_id: str, *, actor: str = "operator"
     ) -> None:
-        self._record(opportunity_id, prospect_id, PipelineEventKind.REPLIED, actor=actor)
+        self._record(
+            business_id,
+            PipelineEventKind.REPLIED,
+            {},
+            opportunity_id=opportunity_id,
+            actor=actor,
+        )
 
     def record_meeting(
-        self, opportunity_id: str, prospect_id: str, *, actor: str = "operator"
+        self, opportunity_id: str, business_id: str, *, actor: str = "operator"
     ) -> None:
-        self._record(opportunity_id, prospect_id, PipelineEventKind.MEETING_BOOKED, actor=actor)
+        self._record(
+            business_id,
+            PipelineEventKind.MEETING_BOOKED,
+            {},
+            opportunity_id=opportunity_id,
+            actor=actor,
+        )
 
     def record_won(
         self,
         opportunity_id: str,
-        prospect_id: str,
+        business_id: str,
         *,
         value: float | None = None,
         actor: str = "operator",
     ) -> None:
         self._record(
-            opportunity_id, prospect_id, PipelineEventKind.WON, {"value": value}, actor=actor
+            business_id,
+            PipelineEventKind.WON,
+            {"value": value},
+            opportunity_id=opportunity_id,
+            actor=actor,
         )
 
     def record_lost(
-        self, opportunity_id: str, prospect_id: str, *, reason: str = "", actor: str = "operator"
+        self, opportunity_id: str, business_id: str, *, reason: str = "", actor: str = "operator"
     ) -> None:
         self._record(
-            opportunity_id, prospect_id, PipelineEventKind.LOST, {"reason": reason}, actor=actor
+            business_id,
+            PipelineEventKind.LOST,
+            {"reason": reason},
+            opportunity_id=opportunity_id,
+            actor=actor,
         )
 
     # -- measurement ------------------------------------------------------
@@ -248,16 +285,25 @@ class OpportunityService:
 
     def _record(
         self,
-        opportunity_id: str,
-        prospect_id: str,
+        business_id: str,
         kind: PipelineEventKind,
         detail: dict | None = None,
         *,
+        opportunity_id: str | None = None,
         actor: str = "system",
     ) -> PipelineEvent:
+        """Append to the timeline.
+
+        The business is required and the opportunity is optional, which is the
+        right way round: a company is discovered before it has an opportunity,
+        and everything that ever happens to it — proposals now, conversations,
+        websites and support history later — belongs on one timeline keyed by
+        the permanent record rather than scattered across whichever pipeline
+        happened to be running.
+        """
         event = PipelineEvent(
             opportunity_id=opportunity_id,
-            prospect_id=prospect_id,
+            business_id=business_id,
             kind=kind,
             detail=detail or {},
             actor=actor,

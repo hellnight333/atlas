@@ -13,7 +13,7 @@ construction:
   instead of a hope about how well a prompt was written.
 
 The layering matters too. Nothing in the source layer may reference a channel, a
-proposal or a send: a prospect is a fact about the world and does not know it is
+proposal or a send: a business is a fact about the world and does not know it is
 being sold to. That separation is what will let Website, Amazon and SaaS each
 put a different offer over the same discovery later, without any of this
 changing.
@@ -111,38 +111,77 @@ class Evidence(BaseModel):
 # ---------------------------------------------------------------------------
 # Source layer — facts about the world.
 #
+# Business is the permanent customer record. Nothing here knows about channels,
+# proposals or sends.
+#
 # Nothing below this heading until the OFFER heading may reference a proposal, a
 # channel, a message or a send.
 # ---------------------------------------------------------------------------
 
 
-class Prospect(BaseModel):
-    """A business that might have a problem worth solving.
+class Business(BaseModel):
+    """The permanent record of a company. **One per company, forever.**
 
-    Deliberately thin. A prospect knows who it is and how to reach it, and
-    nothing about whether it has been contacted, scored or sold to — that state
-    lives on the objects whose job it is.
+    This is deliberately not called a Prospect. "Prospect" is a role a company
+    plays inside a sales pipeline, and naming the entity after one role is how
+    every factory ends up with its own copy of the same customer — a Prospect
+    here, a Client in the website factory, a Seller in the Amazon factory, three
+    rows for one company and no way to tell they are the same.
+
+    So a Business knows who it is and how to reach it, and nothing about what is
+    being done with it. Opportunities reference it. Websites, listings, media,
+    projects, deployments and support history will reference it the same way,
+    each owning its own state and none duplicating this record.
+
+    ``niche`` is deliberately absent. A company is not "a dental clinic in the
+    example-uae-services niche" — it is a company, which may be qualified under
+    several niches over time. The niche belongs on the Opportunity, which is the
+    thing that has a niche.
     """
 
     id: str = Field(default_factory=_new_id)
     name: str
-    #: The niche profile this prospect was discovered under.
-    niche: str
-    geography: str
+    geography: str = ""
     website: str | None = None
     email: str | None = None
     phone: str | None = None
-    #: Where this prospect came from, so a bad source can be switched off.
-    source: str = "unknown"
+    #: Stable keys used to recognise this company again. See ``identity.py``.
+    identity_keys: list[str] = Field(default_factory=list)
+    #: Every source that has reported this company, in the order first seen.
+    #: A list rather than a field, because the second source to find a business
+    #: is evidence about it and overwriting would throw that away.
+    sources: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    discovered_at: datetime = Field(default_factory=_now)
+    first_seen_at: datetime = Field(default_factory=_now)
+    last_seen_at: datetime = Field(default_factory=_now)
 
     @field_validator("name")
     @classmethod
     def _named(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("a prospect must have a name")
+            raise ValueError("a business must have a name")
         return value.strip()
+
+    def merged_with(self, other: Business) -> Business:
+        """Fold a fresh sighting into the stored record.
+
+        Existing values win. A later source correcting an earlier one is
+        possible but rarer than a later source being sloppier, and silently
+        overwriting a good phone number with a worse one is not recoverable.
+        Genuinely new facts are filled in, and every source is remembered.
+        """
+        return self.model_copy(
+            update={
+                "website": self.website or other.website,
+                "email": self.email or other.email,
+                "phone": self.phone or other.phone,
+                "geography": self.geography or other.geography,
+                "identity_keys": sorted(set(self.identity_keys) | set(other.identity_keys)),
+                "sources": self.sources + [s for s in other.sources if s not in self.sources],
+                "metadata": {**other.metadata, **self.metadata},
+                "last_seen_at": _now(),
+            }
+        )
 
 
 class FindingKind(StrEnum):
@@ -188,13 +227,25 @@ class Finding(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_new_id)
-    prospect_id: str
+    business_id: str
     kind: FindingKind
     severity: Severity
     #: One sentence, stated as fact, in language the business owner would use.
     #: Not marketing copy -- this ends up quoted in a proposal.
     statement: str
     evidence: list[Evidence]
+    #: How much this particular observation should be trusted, 0-1.
+    #:
+    #: Not all detectors are equally reliable and not all observations are
+    #: equally direct. Reading a missing ``<title>`` out of the markup is nearly
+    #: certain; calling a site slow from one timing sample is a guess with a
+    #: network in the way. Scoring multiplies severity by this, so a weak signal
+    #: cannot push a business over the qualification bar on its own.
+    #:
+    #: The number must be *justified* by how the observation was made — see the
+    #: named constants in ``detectors/website.py``. A confidence a detector
+    #: invents is worse than no confidence at all, because it looks like rigour.
+    confidence: float = 1.0
     detected_at: datetime = Field(default_factory=_now)
 
     @field_validator("evidence")
@@ -213,9 +264,21 @@ class Finding(BaseModel):
             raise ValueError("a finding must state what is wrong")
         return value.strip()
 
+    @field_validator("confidence")
+    @classmethod
+    def _within_range(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"confidence must be between 0 and 1, got {value}")
+        return value
+
     @property
     def weight(self) -> float:
-        return SEVERITY_WEIGHT[self.severity]
+        """Severity discounted by how sure we are.
+
+        A high-severity guess and a low-severity certainty should not score the
+        same, and multiplying is the least surprising way to say so.
+        """
+        return round(SEVERITY_WEIGHT[self.severity] * self.confidence, 4)
 
     @property
     def fingerprint(self) -> str:
@@ -223,6 +286,7 @@ class Finding(BaseModel):
             self.kind,
             self.severity,
             self.statement,
+            self.confidence,
             *(item.fingerprint for item in self.evidence),
         )
 
@@ -242,7 +306,7 @@ class OpportunityStage(StrEnum):
     DISQUALIFIED = "disqualified"
 
 
-#: Stages that end the pipeline for a prospect.
+#: Stages that end the pipeline for a business.
 TERMINAL_STAGES: frozenset[OpportunityStage] = frozenset(
     {OpportunityStage.WON, OpportunityStage.LOST, OpportunityStage.DISQUALIFIED}
 )
@@ -252,7 +316,7 @@ class Opportunity(BaseModel):
     """A scored bundle of findings that constitutes something sellable."""
 
     id: str = Field(default_factory=_new_id)
-    prospect_id: str
+    business_id: str
     niche: str
     findings: list[Finding] = Field(default_factory=list)
     stage: OpportunityStage = OpportunityStage.DISCOVERED
@@ -314,7 +378,7 @@ class Proposal(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
-    prospect_id: str
+    business_id: str
     opportunity_id: str
     subject: str
     body: str
@@ -388,7 +452,7 @@ class OutreachMessage(BaseModel):
 
     id: str = Field(default_factory=_new_id)
     proposal_id: str
-    prospect_id: str
+    business_id: str
     channel: str
     recipient: str
     subject: str
@@ -428,14 +492,20 @@ class PipelineEvent(BaseModel):
 
     Metrics are derived from these rather than from mutable stage fields,
     because a funnel computed from current state cannot tell you that forty
-    prospects reached "sent" and came back to nothing.
+    businesses reached "sent" and came back to nothing.
     """
 
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_new_id)
-    opportunity_id: str
-    prospect_id: str
+    #: The business this happened to. Required — everything Atlas ever does for
+    #: a company lands on one timeline keyed by the permanent record.
+    business_id: str
+    #: The opportunity it happened under, when there is one. Optional because a
+    #: company is discovered before it has an opportunity, and because the
+    #: conversations, websites and support history that will land here later are
+    #: not opportunities at all.
+    opportunity_id: str | None = None
     kind: PipelineEventKind
     at: datetime = Field(default_factory=_now)
     actor: str = "system"
@@ -468,6 +538,10 @@ class NicheProfile(BaseModel):
     qualify_threshold: float = 5.0
     #: Findings this niche does not care about, even if detected.
     ignore_kinds: list[FindingKind] = Field(default_factory=list)
-    #: Days before the same prospect may be contacted again.
+    #: Findings below this confidence are dropped before scoring. A weak signal
+    #: should not reach a business owner as a stated fact, however many of them
+    #: pile up.
+    min_confidence: float = 0.5
+    #: Days before the same business may be contacted again.
     contact_cooldown_days: int = 90
     notes: str = ""

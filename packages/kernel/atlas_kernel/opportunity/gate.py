@@ -24,11 +24,11 @@ from typing import Any
 from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
 from ..approval.service import ApprovalService
 from .models import (
+    Business,
     Finding,
     OutreachMessage,
     OutreachStatus,
     Proposal,
-    Prospect,
 )
 
 #: Stored on the approval so the check at send time compares like with like.
@@ -52,7 +52,7 @@ class OutreachOutcome:
     point of the evidence invariant is that they should not have to.
     """
 
-    prospect: Prospect
+    business: Business
     proposal: Proposal
     findings: list[Finding]
     channel: str
@@ -64,7 +64,7 @@ class OutreachOutcome:
 
     def summary(self) -> dict[str, Any]:
         return {
-            "prospect": self.prospect.name,
+            "business": self.business.name,
             "recipient": self.recipient,
             "channel": self.channel,
             "subject": self.proposal.subject,
@@ -99,11 +99,11 @@ class OutreachGate:
             payload=outcome.summary(),
         )
         return self._approvals.create_request(
-            title=f"Contact {outcome.prospect.name}",
+            title=f"Contact {outcome.business.name}",
             context=context,
             metadata={
                 PROPOSAL_FINGERPRINT: outcome.fingerprint,
-                "prospect_id": outcome.prospect.id,
+                "business_id": outcome.business.id,
                 "proposal_id": outcome.proposal.id,
                 "recipient": outcome.recipient,
                 "channel": outcome.channel,

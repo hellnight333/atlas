@@ -9,9 +9,67 @@ runs through it. Read [`SHIP_RULE.md`](../SHIP_RULE.md) before extending this.
 
 ---
 
-## The two invariants
+## Business is the permanent customer record
 
-Everything else here is ordinary code. These two are load-bearing, enforced in the type
+**One row per company, for the life of the relationship.** Not a Prospect —
+"prospect" is a role a company plays inside one pipeline, and naming the
+permanent record after one role is how every factory ends up with its own copy
+of the same customer: a Prospect here, a Client in the website factory, a Seller
+in the Amazon factory, three rows for one company and no way to tell they are
+the same.
+
+A `Business` knows who it is and how to reach it, and nothing about what is being
+done with it. Opportunities reference `business_id`. Websites, listings, media,
+projects, deployments and support history will reference it the same way, each
+owning its own state and none duplicating this record.
+
+`Business` deliberately has **no niche**. A company is not "a dental clinic in
+the example-uae-services niche" — it is a company, which may be qualified under
+several niches over its life. The niche lives on the Opportunity, which is the
+thing that has one.
+
+`atlas_pipeline_events` is keyed on `business_id` with a **nullable**
+`opportunity_id`. That is the timeline seam: a company is discovered before it
+has an opportunity, and the conversations, emails, deployments and support
+history that land here later are not opportunities at all.
+
+**No join table was built.** A generic "business owns X" links table with one
+real relation would be an abstraction with no user. Each factory adds its own
+`business_id` reference when it exists. What matters today is that there is
+exactly one Business record with a stable id — that costs nothing and is what
+prevents the duplication.
+
+## Identity resolution
+
+Autonomous discovery means several sources reporting the same businesses. Google
+Maps and a directory will both return the same clinic, spelled differently.
+Without resolution the funnel double-counts it, the cooldown protects only one
+copy, and someone eventually receives two proposals from the same sender.
+
+**The asymmetry that shapes the whole design: merging two different companies is
+much worse than failing to merge one.** A missed merge costs a duplicate row. A
+wrong merge attaches one business's findings to another's proposal — a false
+claim about a stranger's website, which is exactly what the evidence rule exists
+to prevent.
+
+So matching is on **strong keys only** — domain, email, phone. A shared name and
+city is a *weak* key: it is surfaced as a possible duplicate for a human and
+**never merged automatically**, because two branches of one clinic and two
+unrelated companies with a common name are indistinguishable from here.
+
+Domains are normalised to the full host, deliberately **not** to a registrable
+domain — reducing `one.wixsite.com` and `two.wixsite.com` to `wixsite.com` would
+merge every business on a shared platform into a single company.
+
+Resolution happens twice: `BusinessIndex` dedupes within a run, and
+`OpportunityRepository.resolve_business` dedupes against everything ever stored.
+The first matters because one run of three sources reports the same clinic three
+times before anything is written; the second because a company found this month
+and again next month is one company.
+
+## The three invariants
+
+Everything else here is ordinary code. These three are load-bearing, enforced in the type
 system and by tests rather than by review:
 
 ### 1. A finding cannot exist without evidence
@@ -21,14 +79,41 @@ what**. There is no constructor path that produces an unevidenced finding — th
 rejects it. A claim about someone's business that Atlas cannot substantiate must be
 impossible to create, not merely discouraged.
 
-### 2. A proposal cannot exist without findings
+### 2. Every finding carries a confidence
+
+Not all detectors are equally reliable and not all observations are equally
+direct. `Finding.confidence` records how much this particular observation is
+worth trusting, and scoring multiplies severity by it — so a high-severity guess
+cannot outscore a moderate certainty.
+
+**The number must be justified by how the observation was made**, never invented.
+A confidence a detector makes up is worse than none, because it looks like rigour.
+The website detector's values are named constants, each with its reason:
+
+| Confidence | Observation | Why not higher |
+|---|---|---|
+| 0.95 | A transport failure Atlas watched happen | A site can be down for a minute and fine for a year |
+| 0.85 | A tag read out of the returned document | SPAs inject `<title>` and meta tags client-side |
+| 0.70 | Visible text counted in the served HTML | A React site legitimately ships almost no body text |
+| 0.60 | A field missing from someone else's record | Only as good as the source, often a stale directory |
+| 0.45 | One timing sample, one network, one place | Enough to raise the question, not to assert it |
+
+`NicheProfile.min_confidence` drops weak findings **before** scoring rather than
+merely down-weighting them. Otherwise enough weak signals sum their way past the
+qualification bar and arrive at a business owner stated as fact.
+
+Confidence is part of the finding fingerprint, so a re-run that becomes *less*
+sure invalidates an approval granted on the confident version.
+
+### 3. A proposal cannot exist without findings
 
 `Proposal` requires at least one `Finding` and every claim in it cites one by id. A
 proposal citing nothing is rejected at construction. This is what makes "never generic
 templates" a property of the system rather than a hope about prompt quality.
 
-Both are checked in `tests/test_opportunity_invariants.py`, which fails if either can
-be bypassed.
+All three are checked in `tests/test_opportunity_invariants.py`,
+`tests/test_opportunity_discovery.py` and `tests/test_opportunity_identity.py`,
+which fail if any can be bypassed.
 
 ---
 
@@ -38,7 +123,7 @@ Mirrors the Media Factory's discipline, for the same reason: the source layer mu
 learn about the channel it eventually reaches.
 
 ```
-SOURCE      Prospect                a business. no findings, no scoring, no channel.
+SOURCE      Business                the permanent customer record. one per company.
             Finding                 one evidenced defect. immutable once observed.
             Opportunity             a scored bundle of findings worth selling against.
 
@@ -51,7 +136,7 @@ DELIVERY    OutreachGate            the one place a human is asked.
 MEASURE     PipelineEvent           discovered → qualified → … → won/lost.
 ```
 
-**Nothing in SOURCE may reference a channel, a proposal or a send.** A prospect is a
+**Nothing in SOURCE may reference a channel, a proposal or a send.** A business is a
 fact about the world; it does not know it is being sold to. This is what lets the same
 discovery feed Website, Amazon, SaaS and Business Automation later without a rewrite —
 each is a different OFFER over the same SOURCE.
@@ -60,8 +145,8 @@ each is a different OFFER over the same SOURCE.
 
 Detection is capability-based, exactly as media rendering is:
 
-- `opportunity.discover` — produce candidate prospects for a niche and geography
-- `opportunity.inspect` — inspect one prospect, return evidenced findings
+- `opportunity.discover` — produce candidate businesses for a niche and geography
+- `opportunity.inspect` — inspect one business, return evidenced findings
 
 The kernel asks for a capability. It never asks for a specific detector and never
 branches on which one answered. Swapping a detector is a registration change.
@@ -74,9 +159,13 @@ performs a real HTTP fetch and records what it actually saw. None of them guess.
 
 Out of scope, and each omission is a decision rather than an oversight:
 
-- **No crawling framework.** Discovery in the MVP is a seed list the operator supplies.
-  Finding names is cheap; producing evidenced findings is the value, and that is where
-  the build went.
+- **No crawling framework.** Discovery in the MVP is a seed list the operator
+  supplies. Finding names is cheap; producing evidenced findings is the value,
+  and that is where the build went. The *architecture* is multi-source and
+  autonomous — the registry queries every registered source, resolves the
+  results against each other, tolerates one being down, and privileges the seed
+  list nowhere. Google Maps, directories, public web and data APIs each drop in
+  as a `BusinessSource` registration with no caller change.
 - **No WhatsApp, no CRM, no multi-channel.** One channel.
 - **No auto-send.** There is no code path from generation to send that does not pass a
   human. See below.
@@ -87,7 +176,7 @@ Out of scope, and each omission is a decision rather than an oversight:
 Reuses `atlas_kernel.approval` — the same service the Media Factory publishes through,
 not a second approval system.
 
-**The human approves an outcome:** this prospect, this proposal text, this channel. They
+**The human approves an outcome:** this business, this proposal text, this channel. They
 are not asked to authorise detector runs, scoring, or rendering. Those are Atlas's
 problem.
 
@@ -107,8 +196,10 @@ Three mechanisms, none of which is a prompt instruction:
 2. **Suppression.** A checked list of addresses and domains, consulted immediately
    before send, not at generation time — so a suppression added after approval still
    takes effect.
-3. **Contact frequency.** A prospect contacted once is not contactable again within the
-   configured window, regardless of approvals.
+3. **Contact frequency.** A business contacted once is not contactable again within
+   the configured window, regardless of approvals. Identity resolution is part of
+   this guarantee: a duplicate record would be a second cooldown, and therefore a
+   second email.
 
 ## The niche profile
 
@@ -127,7 +218,7 @@ Not emails sent. `metrics.py` reports the funnel:
 
 | Stage | Meaning |
 |---|---|
-| Discovered | candidates seen |
+| Discovered | distinct companies seen, after identity resolution |
 | Qualified | at least one evidenced finding above threshold |
 | Proposed | proposal generated and cited |
 | Approved | a human said yes |

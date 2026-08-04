@@ -22,7 +22,9 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 from ..db import SessionLocal
+from .identity import strong_keys, with_identity
 from .models import (
+    Business,
     Evidence,
     Finding,
     Opportunity,
@@ -30,7 +32,6 @@ from .models import (
     PipelineEvent,
     Proposal,
     ProposalClaim,
-    Prospect,
 )
 from .outreach import ContactHistory, SuppressionList
 
@@ -53,84 +54,183 @@ def _decoded(value: object) -> object:
 class OpportunityRepository:
     # -- source layer -----------------------------------------------------
 
-    def save_prospect(self, prospect: Prospect) -> Prospect:
+    def resolve_business(self, business: Business) -> tuple[Business, bool]:
+        """Find this company or create it. Returns the record and whether it is new.
+
+        The single most important method here. Autonomous discovery means the
+        same clinic arrives from Google Maps this week and a directory the next,
+        and without resolution the funnel double-counts it, the cooldown guards
+        only one copy, and someone eventually receives two proposals from the
+        same sender.
+
+        Matching is on strong keys only -- domain, email, phone. A shared name
+        and city is *not* enough, however plausible: merging two different
+        companies would attach one business's findings to another's proposal,
+        which is precisely the failure the evidence rule exists to prevent. A
+        missed merge costs a duplicate row; a wrong merge costs the claim.
+        """
+        stamped = with_identity(business)
+        keys = sorted(strong_keys(set(stamped.identity_keys)))
+        if keys:
+            with SessionLocal() as session:
+                rows = (
+                    session.execute(
+                        text("""
+                        SELECT * FROM atlas_businesses
+                        WHERE identity_keys ?| :keys
+                        ORDER BY first_seen_at, id
+                        """),
+                        {"keys": keys},
+                    )
+                    .mappings()
+                    .all()
+                )
+            if rows:
+                # A sighting can match more than one stored record -- a shared
+                # switchboard number, or a new record that turns out to bridge
+                # two Atlas already had. The oldest wins, deterministically:
+                # ordering by (first_seen_at, id) rather than taking whatever
+                # the planner returned first means the same input resolves the
+                # same way every time, which "LIMIT 1" alone does not guarantee.
+                #
+                # The others are deliberately **not** folded in. Merging two
+                # established customer records is irreversible and would take
+                # one company's history into another's; a human decides that.
+                # ``find_possible_duplicates`` surfaces them.
+                existing = self._business_from_row(rows[0])
+                merged = with_identity(existing.merged_with(stamped))
+                self.save_business(merged)
+                return merged, False
+
+        self.save_business(stamped)
+        return stamped, True
+
+    def find_possible_duplicates(self, business: Business) -> list[Business]:
+        """Companies sharing a name and place but nothing stronger.
+
+        Surfaced for a human. Never merged automatically -- two branches of one
+        clinic and two unrelated companies with a common name look identical
+        from here.
+        """
+        from .identity import normalise_name
+
+        key = f"name:{normalise_name(business.name, business.geography)}"
+        with SessionLocal() as session:
+            rows = (
+                session.execute(
+                    text("SELECT * FROM atlas_businesses WHERE identity_keys ? :key"),
+                    {"key": key},
+                )
+                .mappings()
+                .all()
+            )
+        candidates = [self._business_from_row(row) for row in rows if row["id"] != business.id]
+        stamped = strong_keys(set(with_identity(business).identity_keys))
+        return [
+            candidate
+            for candidate in candidates
+            if not (strong_keys(set(candidate.identity_keys)) & stamped)
+        ]
+
+    @staticmethod
+    def _business_from_row(row) -> Business:
+        payload = dict(row)
+        payload["identity_keys"] = list(_decoded(payload.get("identity_keys") or []))
+        payload["sources"] = list(_decoded(payload.get("sources") or []))
+        payload["metadata"] = dict(_decoded(payload.get("metadata") or {}))
+        return Business(**payload)
+
+    def save_business(self, business: Business) -> Business:
         with SessionLocal() as session:
             session.execute(
                 text("""
-                INSERT INTO atlas_prospects
-                    (id, name, niche, geography, website, email, phone, source,
-                     metadata, discovered_at)
-                VALUES (:id, :name, :niche, :geography, :website, :email, :phone,
-                        :source, :metadata, :discovered_at)
+                INSERT INTO atlas_businesses
+                    (id, name, geography, website, email, phone, identity_keys,
+                     sources, metadata, first_seen_at, last_seen_at)
+                VALUES (:id, :name, :geography, :website, :email, :phone,
+                        :identity_keys, :sources, :metadata, :first_seen_at,
+                        :last_seen_at)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
+                    geography = EXCLUDED.geography,
                     website = EXCLUDED.website,
                     email = EXCLUDED.email,
                     phone = EXCLUDED.phone,
-                    metadata = EXCLUDED.metadata
+                    identity_keys = EXCLUDED.identity_keys,
+                    sources = EXCLUDED.sources,
+                    metadata = EXCLUDED.metadata,
+                    last_seen_at = EXCLUDED.last_seen_at
                 """),
                 {
-                    **prospect.model_dump(exclude={"metadata"}),
-                    "metadata": json.dumps(prospect.metadata),
+                    **business.model_dump(exclude={"metadata", "identity_keys", "sources"}),
+                    "identity_keys": json.dumps(business.identity_keys),
+                    "sources": json.dumps(business.sources),
+                    "metadata": json.dumps(business.metadata),
                 },
             )
             session.commit()
-        return prospect
+        return business
 
-    def get_prospect(self, prospect_id: str) -> Prospect | None:
+    def get_business(self, business_id: str) -> Business | None:
         with SessionLocal() as session:
             row = (
                 session.execute(
-                    text("SELECT * FROM atlas_prospects WHERE id = :id"), {"id": prospect_id}
+                    text("SELECT * FROM atlas_businesses WHERE id = :id"), {"id": business_id}
                 )
                 .mappings()
                 .first()
             )
-        return Prospect(**dict(row)) if row else None
+        return self._business_from_row(row) if row else None
 
-    def list_prospects(self, niche: str | None = None) -> list[Prospect]:
-        query = "SELECT * FROM atlas_prospects"
-        params: dict[str, object] = {}
-        if niche:
-            query += " WHERE niche = :niche"
-            params["niche"] = niche
-        query += " ORDER BY discovered_at DESC"
+    def list_businesses(self) -> list[Business]:
+        """Every company Atlas knows about.
+
+        Not filtered by niche: a Business has no niche. It is a company, which
+        may be qualified under several niches over its life — the niche lives on
+        the Opportunity, which is the thing that has one.
+        """
         with SessionLocal() as session:
-            rows = session.execute(text(query), params).mappings().all()
-        return [Prospect(**dict(row)) for row in rows]
+            rows = (
+                session.execute(text("SELECT * FROM atlas_businesses ORDER BY first_seen_at DESC"))
+                .mappings()
+                .all()
+            )
+        return [self._business_from_row(row) for row in rows]
 
     def save_finding(self, finding: Finding) -> Finding:
         with SessionLocal() as session:
             session.execute(
                 text("""
                 INSERT INTO atlas_findings
-                    (id, prospect_id, kind, severity, statement, evidence, detected_at)
-                VALUES (:id, :prospect_id, :kind, :severity, :statement, :evidence, :detected_at)
+                    (id, business_id, kind, severity, statement, evidence, confidence, detected_at)
+                VALUES (:id, :business_id, :kind, :severity, :statement, :evidence,
+                        :confidence, :detected_at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
                     "id": finding.id,
-                    "prospect_id": finding.prospect_id,
+                    "business_id": finding.business_id,
                     "kind": finding.kind.value,
                     "severity": finding.severity.value,
                     "statement": finding.statement,
                     "evidence": json.dumps(
                         [item.model_dump(mode="json") for item in finding.evidence]
                     ),
+                    "confidence": finding.confidence,
                     "detected_at": finding.detected_at,
                 },
             )
             session.commit()
         return finding
 
-    def list_findings(self, prospect_id: str) -> list[Finding]:
+    def list_findings(self, business_id: str) -> list[Finding]:
         with SessionLocal() as session:
             rows = (
                 session.execute(
                     text(
-                        "SELECT * FROM atlas_findings WHERE prospect_id = :pid ORDER BY detected_at"
+                        "SELECT * FROM atlas_findings WHERE business_id = :pid ORDER BY detected_at"
                     ),
-                    {"pid": prospect_id},
+                    {"pid": business_id},
                 )
                 .mappings()
                 .all()
@@ -138,11 +238,12 @@ class OpportunityRepository:
         return [
             Finding(
                 id=row["id"],
-                prospect_id=row["prospect_id"],
+                business_id=row["business_id"],
                 kind=row["kind"],
                 severity=row["severity"],
                 statement=row["statement"],
                 evidence=[Evidence(**item) for item in _decoded(row["evidence"])],
+                confidence=row["confidence"],
                 detected_at=row["detected_at"],
             )
             for row in rows
@@ -154,28 +255,30 @@ class OpportunityRepository:
                 session.execute(
                     text("""
                     INSERT INTO atlas_findings
-                        (id, prospect_id, kind, severity, statement, evidence, detected_at)
-                    VALUES (:id, :prospect_id, :kind, :severity, :statement, :evidence, :detected_at)
+                        (id, business_id, kind, severity, statement, evidence, confidence, detected_at)
+                    VALUES (:id, :business_id, :kind, :severity, :statement, :evidence,
+                            :confidence, :detected_at)
                     ON CONFLICT (id) DO NOTHING
                     """),
                     {
                         "id": finding.id,
-                        "prospect_id": finding.prospect_id,
+                        "business_id": finding.business_id,
                         "kind": finding.kind.value,
                         "severity": finding.severity.value,
                         "statement": finding.statement,
                         "evidence": json.dumps(
                             [item.model_dump(mode="json") for item in finding.evidence]
                         ),
+                        "confidence": finding.confidence,
                         "detected_at": finding.detected_at,
                     },
                 )
             session.execute(
                 text("""
                 INSERT INTO atlas_opportunities
-                    (id, prospect_id, niche, stage, score, estimated_value, currency,
+                    (id, business_id, niche, stage, score, estimated_value, currency,
                      finding_ids, created_at, updated_at)
-                VALUES (:id, :prospect_id, :niche, :stage, :score, :estimated_value,
+                VALUES (:id, :business_id, :niche, :stage, :score, :estimated_value,
                         :currency, :finding_ids, :created_at, :updated_at)
                 ON CONFLICT (id) DO UPDATE SET
                     stage = EXCLUDED.stage,
@@ -185,7 +288,7 @@ class OpportunityRepository:
                 """),
                 {
                     "id": opportunity.id,
-                    "prospect_id": opportunity.prospect_id,
+                    "business_id": opportunity.business_id,
                     "niche": opportunity.niche,
                     "stage": opportunity.stage.value,
                     "score": opportunity.score,
@@ -206,9 +309,9 @@ class OpportunityRepository:
             session.execute(
                 text("""
                 INSERT INTO atlas_proposals
-                    (id, prospect_id, opportunity_id, subject, body, claims, offer,
+                    (id, business_id, opportunity_id, subject, body, claims, offer,
                      price, currency, findings_fingerprint, generator, generated_at)
-                VALUES (:id, :prospect_id, :opportunity_id, :subject, :body, :claims,
+                VALUES (:id, :business_id, :opportunity_id, :subject, :body, :claims,
                         :offer, :price, :currency, :findings_fingerprint, :generator,
                         :generated_at)
                 ON CONFLICT (id) DO NOTHING
@@ -241,10 +344,10 @@ class OpportunityRepository:
             session.execute(
                 text("""
                 INSERT INTO atlas_outreach_messages
-                    (id, proposal_id, prospect_id, channel, recipient, subject, body,
+                    (id, proposal_id, business_id, channel, recipient, subject, body,
                      status, approval_id, approved_fingerprint, provider_message_id,
                      detail, created_at, sent_at)
-                VALUES (:id, :proposal_id, :prospect_id, :channel, :recipient, :subject,
+                VALUES (:id, :proposal_id, :business_id, :channel, :recipient, :subject,
                         :body, :status, :approval_id, :approved_fingerprint,
                         :provider_message_id, :detail, :created_at, :sent_at)
                 ON CONFLICT (id) DO UPDATE SET
@@ -267,14 +370,14 @@ class OpportunityRepository:
             session.execute(
                 text("""
                 INSERT INTO atlas_pipeline_events
-                    (id, opportunity_id, prospect_id, kind, actor, detail, at)
-                VALUES (:id, :opportunity_id, :prospect_id, :kind, :actor, :detail, :at)
+                    (id, opportunity_id, business_id, kind, actor, detail, at)
+                VALUES (:id, :opportunity_id, :business_id, :kind, :actor, :detail, :at)
                 ON CONFLICT (id) DO NOTHING
                 """),
                 {
                     "id": event.id,
                     "opportunity_id": event.opportunity_id,
-                    "prospect_id": event.prospect_id,
+                    "business_id": event.business_id,
                     "kind": event.kind.value,
                     "actor": event.actor,
                     "detail": json.dumps(event.detail),
@@ -297,7 +400,7 @@ class OpportunityRepository:
             PipelineEvent(
                 id=row["id"],
                 opportunity_id=row["opportunity_id"],
-                prospect_id=row["prospect_id"],
+                business_id=row["business_id"],
                 kind=row["kind"],
                 actor=row["actor"],
                 detail=_decoded(row["detail"]),
@@ -326,7 +429,7 @@ class OpportunityRepository:
         return SuppressionList(row[0] for row in rows)
 
     def load_contact_history(self) -> ContactHistory:
-        """When each prospect was last successfully contacted.
+        """When each business was last successfully contacted.
 
         Read from sent messages rather than a separate counter, so the cooldown
         cannot drift away from what was actually delivered.
@@ -335,13 +438,13 @@ class OpportunityRepository:
             rows = (
                 session.execute(
                     text("""
-                SELECT prospect_id, MAX(sent_at) AS last_sent
+                SELECT business_id, MAX(sent_at) AS last_sent
                 FROM atlas_outreach_messages
                 WHERE status = 'sent' AND sent_at IS NOT NULL
-                GROUP BY prospect_id
+                GROUP BY business_id
                 """)
                 )
                 .mappings()
                 .all()
             )
-        return ContactHistory({row["prospect_id"]: row["last_sent"] for row in rows})
+        return ContactHistory({row["business_id"]: row["last_sent"] for row in rows})

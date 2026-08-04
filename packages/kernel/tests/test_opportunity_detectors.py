@@ -25,12 +25,12 @@ from atlas_kernel.opportunity.detectors.website import (
     WebsiteDetector,
 )
 from atlas_kernel.opportunity.models import (
+    Business,
     Evidence,
     EvidenceKind,
     Finding,
     FindingKind,
     NicheProfile,
-    Prospect,
     Severity,
 )
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
@@ -50,14 +50,13 @@ GOOD_PAGE = """
 BARE_PAGE = "<html><body><p>Coming soon</p></body></html>"
 
 
-def _prospect(website: str | None = "https://clinic.test") -> Prospect:
-    return Prospect(
+def _business(website: str | None = "https://clinic.test") -> Business:
+    return Business(
         name="Al Noor Dental Clinic",
-        niche=EXAMPLE_PROFILE.id,
         geography="United Arab Emirates",
         website=website,
         email="hello@clinic.test",
-        source="seed-list",
+        sources=["seed-list"],
     )
 
 
@@ -78,7 +77,7 @@ class TestCleanSite:
             return httpx.Response(200, html=GOOD_PAGE)
 
         detector = WebsiteDetector(client=_client(handler))
-        assert detector.inspect(_prospect(), EXAMPLE_PROFILE) == []
+        assert detector.inspect(_business(), EXAMPLE_PROFILE) == []
 
 
 class TestDefects:
@@ -86,7 +85,7 @@ class TestDefects:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(status, html=page, **kwargs)
 
-        return WebsiteDetector(client=_client(handler)).inspect(_prospect(), EXAMPLE_PROFILE)
+        return WebsiteDetector(client=_client(handler)).inspect(_business(), EXAMPLE_PROFILE)
 
     def test_a_bare_page_reports_every_missing_element(self) -> None:
         kinds = _kinds(self._findings(BARE_PAGE))
@@ -115,7 +114,7 @@ class TestDefects:
 
     def test_a_missing_website_is_asserted_not_pretended_to_be_observed(self) -> None:
         detector = WebsiteDetector(client=_client(lambda r: httpx.Response(200)))
-        findings = detector.inspect(_prospect(website=None), EXAMPLE_PROFILE)
+        findings = detector.inspect(_business(website=None), EXAMPLE_PROFILE)
         assert [f.kind for f in findings] == [FindingKind.NO_WEBSITE]
         assert findings[0].evidence[0].kind is EvidenceKind.ASSERTED
 
@@ -123,8 +122,8 @@ class TestDefects:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, html=GOOD_PAGE)
 
-        prospect = _prospect(website="http://clinic.test")
-        findings = WebsiteDetector(client=_client(handler)).inspect(prospect, EXAMPLE_PROFILE)
+        business = _business(website="http://clinic.test")
+        findings = WebsiteDetector(client=_client(handler)).inspect(business, EXAMPLE_PROFILE)
         assert FindingKind.NO_HTTPS in _kinds(findings)
 
     def test_a_bare_domain_is_tried_over_https(self) -> None:
@@ -134,8 +133,8 @@ class TestDefects:
             seen.append(str(request.url))
             return httpx.Response(200, html=GOOD_PAGE)
 
-        prospect = _prospect(website="clinic.test")
-        WebsiteDetector(client=_client(handler)).inspect(prospect, EXAMPLE_PROFILE)
+        business = _business(website="clinic.test")
+        WebsiteDetector(client=_client(handler)).inspect(business, EXAMPLE_PROFILE)
         assert seen == ["https://clinic.test"]
 
     def test_an_error_page_is_not_mined_for_seo_findings(self) -> None:
@@ -149,7 +148,7 @@ class TestDefects:
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("name resolution failed")
 
-        findings = WebsiteDetector(client=_client(handler)).inspect(_prospect(), EXAMPLE_PROFILE)
+        findings = WebsiteDetector(client=_client(handler)).inspect(_business(), EXAMPLE_PROFILE)
         assert [f.kind for f in findings] == [FindingKind.SITE_UNREACHABLE]
         assert "name resolution failed" in findings[0].evidence[0].observed["error"]
 
@@ -157,7 +156,7 @@ class TestDefects:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"ok": True})
 
-        findings = WebsiteDetector(client=_client(handler)).inspect(_prospect(), EXAMPLE_PROFILE)
+        findings = WebsiteDetector(client=_client(handler)).inspect(_business(), EXAMPLE_PROFILE)
         assert _kinds(findings) <= {FindingKind.NO_HTTPS, FindingKind.SLOW_RESPONSE}
 
     def test_script_and_style_text_does_not_count_as_content(self) -> None:
@@ -185,7 +184,7 @@ class TestSeverity:
 
         findings = {
             f.kind: f.severity
-            for f in WebsiteDetector(client=_client(handler)).inspect(_prospect(), EXAMPLE_PROFILE)
+            for f in WebsiteDetector(client=_client(handler)).inspect(_business(), EXAMPLE_PROFILE)
         }
         assert findings[FindingKind.NOT_MOBILE_FRIENDLY] is Severity.HIGH
         assert findings[FindingKind.MISSING_TITLE] is Severity.HIGH
@@ -197,20 +196,20 @@ class TestRegistry:
     def _profile(self) -> NicheProfile:
         return EXAMPLE_PROFILE
 
-    def test_one_failing_detector_does_not_abandon_the_prospect(self) -> None:
+    def test_one_failing_detector_does_not_abandon_the_business(self) -> None:
         class Broken:
             name = "broken"
 
-            def inspect(self, prospect, profile):
+            def inspect(self, business, profile):
                 raise RuntimeError("upstream down")
 
         class Working:
             name = "working"
 
-            def inspect(self, prospect, profile):
+            def inspect(self, business, profile):
                 return [
                     Finding(
-                        prospect_id=prospect.id,
+                        business_id=business.id,
                         kind=FindingKind.MISSING_H1,
                         severity=Severity.LOW,
                         statement="No main heading.",
@@ -223,7 +222,7 @@ class TestRegistry:
         registry = DetectorRegistry()
         registry.register_detector(Broken())
         registry.register_detector(Working())
-        assert len(registry.inspect(_prospect(), self._profile())) == 1
+        assert len(registry.inspect(_business(), self._profile())) == 1
 
     def test_all_detectors_failing_raises_rather_than_reporting_a_clean_site(self) -> None:
         """ "Found nothing" and "could not look" must not render the same way —
@@ -232,18 +231,18 @@ class TestRegistry:
         class Broken:
             name = "broken"
 
-            def inspect(self, prospect, profile):
+            def inspect(self, business, profile):
                 raise RuntimeError("upstream down")
 
         registry = DetectorRegistry()
         registry.register_detector(Broken())
         with pytest.raises(DetectorError, match="upstream down"):
-            registry.inspect(_prospect(), self._profile())
+            registry.inspect(_business(), self._profile())
 
     def test_an_unserved_capability_says_so(self) -> None:
         registry = DetectorRegistry()
         with pytest.raises(NoDetectorAvailable, match="opportunity.inspect"):
-            registry.inspect(_prospect(), self._profile())
+            registry.inspect(_business(), self._profile())
         with pytest.raises(NoDetectorAvailable, match="opportunity.discover"):
             registry.discover(self._profile(), 10)
 
@@ -251,7 +250,7 @@ class TestRegistry:
         class Named:
             name = "website"
 
-            def inspect(self, prospect, profile):
+            def inspect(self, business, profile):
                 return []
 
         registry = DetectorRegistry()
@@ -272,6 +271,6 @@ class TestTiming:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, html=GOOD_PAGE)
 
-        findings = WebsiteDetector(client=_client(handler)).inspect(_prospect(), EXAMPLE_PROFILE)
+        findings = WebsiteDetector(client=_client(handler)).inspect(_business(), EXAMPLE_PROFILE)
         slow = next(f for f in findings if f.kind is FindingKind.SLOW_RESPONSE)
         assert slow.evidence[0].observed["threshold_seconds"] == SLOW_RESPONSE_SECONDS

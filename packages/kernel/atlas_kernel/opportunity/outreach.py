@@ -10,7 +10,7 @@ can be tested:
    ordering is the whole point: the moment someone says "never contact me
    again", every already-approved message to them must die, including ones
    approved an hour ago.
-3. **Cooldown.** A prospect contacted once is not contactable again inside the
+3. **Cooldown.** A business contacted once is not contactable again inside the
    niche's window, regardless of how many approvals exist.
 
 ``OutreachService.send`` is the only path to a channel. The channel protocol
@@ -126,7 +126,7 @@ class SuppressionList:
 
 
 class ContactHistory:
-    """When each prospect was last contacted.
+    """When each business was last contacted.
 
     In-memory here; the repository is the durable record. Kept as its own object
     so the cooldown rule has one implementation rather than being reimplemented
@@ -136,14 +136,14 @@ class ContactHistory:
     def __init__(self, contacts: dict[str, datetime] | None = None) -> None:
         self._contacts: dict[str, datetime] = dict(contacts or {})
 
-    def record(self, prospect_id: str, when: datetime | None = None) -> None:
-        self._contacts[prospect_id] = when or datetime.now(UTC)
+    def record(self, business_id: str, when: datetime | None = None) -> None:
+        self._contacts[business_id] = when or datetime.now(UTC)
 
-    def last_contacted(self, prospect_id: str) -> datetime | None:
-        return self._contacts.get(prospect_id)
+    def last_contacted(self, business_id: str) -> datetime | None:
+        return self._contacts.get(business_id)
 
-    def within_cooldown(self, prospect_id: str, days: int, now: datetime | None = None) -> bool:
-        last = self._contacts.get(prospect_id)
+    def within_cooldown(self, business_id: str, days: int, now: datetime | None = None) -> bool:
+        last = self._contacts.get(business_id)
         if last is None:
             return False
         moment = now or datetime.now(UTC)
@@ -215,11 +215,11 @@ class OutreachService:
             raise OutreachRefused(updated.detail or "suppressed")
 
         if self.history.within_cooldown(
-            message.prospect_id, profile.contact_cooldown_days, now=now
+            message.business_id, profile.contact_cooldown_days, now=now
         ):
-            last = self.history.last_contacted(message.prospect_id)
+            last = self.history.last_contacted(message.business_id)
             raise OutreachRefused(
-                f"{message.prospect_id} was contacted on {last:%Y-%m-%d}, inside the "
+                f"{message.business_id} was contacted on {last:%Y-%m-%d}, inside the "
                 f"{profile.contact_cooldown_days}-day cooldown for {profile.id}"
             )
 
@@ -231,7 +231,7 @@ class OutreachService:
             )
 
         moment = now or datetime.now(UTC)
-        self.history.record(message.prospect_id, moment)
+        self.history.record(message.business_id, moment)
         return message.model_copy(
             update={
                 "status": OutreachStatus.SENT,

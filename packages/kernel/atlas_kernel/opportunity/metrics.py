@@ -2,12 +2,12 @@
 
 Computed from ``PipelineEvent`` rather than from each opportunity's current
 stage, and the difference is not academic: a funnel derived from current state
-cannot tell you that forty prospects reached "sent" and came back to nothing,
+cannot tell you that forty businesses reached "sent" and came back to nothing,
 because those forty now sit in whatever stage they ended in. Append-only events
 keep the history that makes a rate meaningful.
 
 Rates are ``None`` rather than ``0.0`` when the denominator is zero. A close
-rate of "0%" from three prospects reads like failure; "not enough data yet" is
+rate of "0%" from three businesses reads like failure; "not enough data yet" is
 the truth, and the two should not be rendered the same way.
 """
 
@@ -40,15 +40,15 @@ def _rate(numerator: int, denominator: int) -> float | None:
 
 @dataclass
 class FunnelReport:
-    """Counts of distinct prospects reaching each stage, and the rates between.
+    """Counts of distinct businesses reaching each stage, and the rates between.
 
-    Distinct prospects, not events: three follow-ups to one business is one
-    prospect contacted, and counting it as three would flatter every rate
+    Distinct businesses, not events: three follow-ups to one business is one
+    business contacted, and counting it as three would flatter every rate
     downstream of it.
     """
 
     counts: dict[str, int] = field(default_factory=dict)
-    #: Prospects who were looked at and deliberately rejected. Not a failure —
+    #: Businesses looked at and deliberately rejected. Not a failure —
     #: knowing the qualification bar is doing work is the point of measuring it.
     disqualified: int = 0
     rejected: int = 0
@@ -111,7 +111,7 @@ def build_report(events: list[PipelineEvent]) -> FunnelReport:
     report = FunnelReport()
     by_kind: dict[PipelineEventKind, set[str]] = {}
     for event in events:
-        by_kind.setdefault(event.kind, set()).add(event.prospect_id)
+        by_kind.setdefault(event.kind, set()).add(event.business_id)
 
     for stage, kinds in FUNNEL:
         reached: set[str] = set()

@@ -1,13 +1,26 @@
-"""Where candidate prospects come from.
+"""Where candidate businesses come from.
 
-The MVP ships one source: a list the operator supplies. That is a deliberate
-scope decision rather than a stub. Producing names is cheap and every market has
-a different way of doing it; producing *evidenced findings* about those names is
-the part that is hard, defensible and worth building, so that is where the
-milestone went.
+The MVP ships one source: a list the operator supplies. That is a scope
+decision, **not the architecture**. Producing names is cheap and every market
+has a different way of doing it; producing *evidenced findings* about those
+names is the hard, defensible part, so that is where this milestone went.
 
-A directory-backed or search-backed source implements the same protocol and
-registers alongside this one. Nothing else in the package changes when it does.
+Discovery is built to be autonomous and multi-source. The registry queries every
+registered source, resolves the results against one another by identity, and
+treats a duplicate across sources as the normal case rather than an anomaly.
+Nothing assumes a human supplied the list — ``SeedListSource`` is one
+implementation of ``BusinessSource``, privileged nowhere.
+
+Sources that drop in without changing a caller:
+
+* **Google Maps / Places** — businesses by category and area, with the
+  ``website`` field often absent, which is itself the strongest finding there is.
+* **Business directories** — chambers of commerce, trade bodies, listing sites.
+* **Public web** — search results, competitor pages, "our clients" listings.
+* **Data APIs** — licensing registries, marketplace seller directories.
+
+Each will need its own rate limiting, its own terms-of-use judgement and its own
+reliability rating, and none of that leaks past the protocol.
 """
 
 from __future__ import annotations
@@ -16,14 +29,14 @@ import csv
 import io
 from collections.abc import Iterable
 
-from .models import NicheProfile, Prospect
+from .models import Business, NicheProfile
 
 
 class SeedListSource:
-    """Prospects supplied directly by the operator.
+    """Businesss supplied directly by the operator.
 
     Rows missing a name are skipped rather than fabricated into "Unknown
-    business" -- an unnamed prospect cannot be written to honestly and would
+    business" -- an unnamed business cannot be written to honestly and would
     poison the funnel counts with entries nobody can act on.
     """
 
@@ -46,11 +59,11 @@ class SeedListSource:
         reader = csv.DictReader(io.StringIO(text))
         return cls([{k: (v or "") for k, v in row.items() if k} for row in reader], label=label)
 
-    def discover(self, profile: NicheProfile, limit: int) -> list[Prospect]:
+    def discover(self, profile: NicheProfile, limit: int) -> list[Business]:
         known = {"name", "website", "email", "phone"}
-        prospects: list[Prospect] = []
+        businesses: list[Business] = []
         for row in self._rows:
-            if len(prospects) >= limit:
+            if len(businesses) >= limit:
                 break
             normalised = {
                 (key or "").strip().lower(): (value or "").strip() for key, value in row.items()
@@ -58,16 +71,15 @@ class SeedListSource:
             name = normalised.get("name", "")
             if not name:
                 continue
-            prospects.append(
-                Prospect(
+            businesses.append(
+                Business(
                     name=name,
-                    niche=profile.id,
                     geography=profile.geography,
                     website=normalised.get("website") or None,
                     email=normalised.get("email") or None,
                     phone=normalised.get("phone") or None,
-                    source=self._label,
+                    sources=[self._label],
                     metadata={k: v for k, v in normalised.items() if k not in known and v},
                 )
             )
-        return prospects
+        return businesses

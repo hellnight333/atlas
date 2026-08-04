@@ -884,43 +884,105 @@ def init_db() -> None:
         """))
         # -- Opportunity Factory (M014) ------------------------------------
         #
-        # Same layering discipline as the Media Factory: prospects and findings
-        # are facts about the world and carry no channel, no proposal and no
-        # send state. That is what lets Website, Amazon and SaaS each put a
-        # different offer over the same discovery later. See
-        # docs/OPPORTUNITY_FACTORY.md.
+        # Business is the permanent customer record: one row per company, for
+        # the life of the relationship. Websites, listings, media, projects,
+        # deployments and support history will each reference business_id and
+        # own their own state — no factory keeps its own copy of the customer.
+        #
+        # Same layering discipline as the Media Factory: businesses and findings
+        # are facts about the world and carry no channel, proposal or send state.
+        # See docs/OPPORTUNITY_FACTORY.md.
+        #
+        # Pre-release rename: atlas_prospects became atlas_businesses, because
+        # "prospect" is a role a company plays in one pipeline and naming the
+        # permanent record after one role is how every factory ends up with its
+        # own duplicate of the same customer. Nothing was ever released, so this
+        # only has to fix development databases created the same day. Safe to
+        # delete once none remain.
         conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS atlas_prospects (
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.tables
+                       WHERE table_name = 'atlas_prospects')
+               AND NOT EXISTS (SELECT 1 FROM information_schema.tables
+                               WHERE table_name = 'atlas_businesses') THEN
+                ALTER TABLE atlas_prospects RENAME TO atlas_businesses;
+            END IF;
+        END $$;
+        """))
+        conn.execute(text("""
+        DO $$
+        DECLARE t text;
+        BEGIN
+            FOREACH t IN ARRAY ARRAY['atlas_findings', 'atlas_opportunities',
+                                     'atlas_proposals', 'atlas_outreach_messages',
+                                     'atlas_pipeline_events'] LOOP
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name = t AND column_name = 'prospect_id') THEN
+                    EXECUTE format('ALTER TABLE %I RENAME COLUMN prospect_id TO business_id', t);
+                END IF;
+            END LOOP;
+        END $$;
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS atlas_businesses (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            niche TEXT NOT NULL,
             geography TEXT NOT NULL DEFAULT '',
             website TEXT,
             email TEXT,
             phone TEXT,
-            source TEXT NOT NULL DEFAULT 'unknown',
+            identity_keys JSONB NOT NULL DEFAULT '[]',
+            sources JSONB NOT NULL DEFAULT '[]',
             metadata JSONB NOT NULL DEFAULT '{}',
-            discovered_at TIMESTAMP WITH TIME ZONE NOT NULL
+            first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+        # Additive columns for databases that predate identity resolution.
+        conn.execute(text("""
+        ALTER TABLE atlas_businesses
+        ADD COLUMN IF NOT EXISTS identity_keys JSONB NOT NULL DEFAULT '[]',
+        ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '[]',
+        ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP WITH TIME ZONE
+            NOT NULL DEFAULT now(),
+        ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE
+            NOT NULL DEFAULT now()
+        """))
+        conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS niche"))
+        conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS source"))
+        conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS discovered_at"))
+        # GIN over the identity keys: resolution runs once per discovered
+        # business, and a sequential scan per candidate is the difference
+        # between discovery scaling and not.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_businesses_identity_idx "
+            "ON atlas_businesses USING GIN (identity_keys jsonb_path_ops)"
+        ))
         # Evidence is NOT NULL and the application refuses an empty list. A
         # claim Atlas cannot substantiate must be impossible to store, not
-        # merely discouraged.
+        # merely discouraged. Confidence records how much the observation is
+        # worth trusting -- not every detector is equally reliable.
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_findings (
             id TEXT PRIMARY KEY,
-            prospect_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
             kind TEXT NOT NULL,
             severity TEXT NOT NULL,
             statement TEXT NOT NULL,
             evidence JSONB NOT NULL,
+            confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0,
             detected_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+        conn.execute(text(
+            "ALTER TABLE atlas_findings ADD COLUMN IF NOT EXISTS confidence "
+            "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+        ))
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_opportunities (
             id TEXT PRIMARY KEY,
-            prospect_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
             niche TEXT NOT NULL,
             stage TEXT NOT NULL DEFAULT 'discovered',
             score DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -934,7 +996,7 @@ def init_db() -> None:
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_proposals (
             id TEXT PRIMARY KEY,
-            prospect_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
             opportunity_id TEXT NOT NULL,
             subject TEXT NOT NULL,
             body TEXT NOT NULL,
@@ -951,7 +1013,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS atlas_outreach_messages (
             id TEXT PRIMARY KEY,
             proposal_id TEXT NOT NULL,
-            prospect_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
             channel TEXT NOT NULL,
             recipient TEXT NOT NULL,
             subject TEXT NOT NULL,
@@ -965,24 +1027,27 @@ def init_db() -> None:
             sent_at TIMESTAMP WITH TIME ZONE
         )
         """))
-        # Append-only. The funnel is derived from these rather than from each
-        # opportunity's current stage, because a funnel computed from current
-        # state cannot tell you that forty prospects were contacted and came
-        # back to nothing.
+        # Append-only, and keyed on the business rather than the opportunity.
+        # The funnel is derived from these -- a funnel computed from current
+        # state cannot tell you that forty businesses were contacted and came
+        # back to nothing -- but the timeline is the point: conversations,
+        # websites and support history land here later, and none of those are
+        # opportunities, which is why opportunity_id is nullable.
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_pipeline_events (
             id TEXT PRIMARY KEY,
-            opportunity_id TEXT NOT NULL,
-            prospect_id TEXT NOT NULL,
+            business_id TEXT NOT NULL,
+            opportunity_id TEXT,
             kind TEXT NOT NULL,
             actor TEXT NOT NULL DEFAULT 'system',
             detail JSONB NOT NULL DEFAULT '{}',
             at TIMESTAMP WITH TIME ZONE NOT NULL
         )
         """))
+        conn.execute(text("ALTER TABLE atlas_pipeline_events ALTER COLUMN opportunity_id DROP NOT NULL"))
         conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_pipeline_events_prospect_idx "
-            "ON atlas_pipeline_events (prospect_id, kind)"
+            "CREATE INDEX IF NOT EXISTS atlas_pipeline_events_business_idx "
+            "ON atlas_pipeline_events (business_id, kind)"
         ))
         # Durable so that "never contact me again" survives a restart. A
         # suppression list that lives only in memory is not a suppression list.
