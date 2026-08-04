@@ -560,7 +560,7 @@ nine days is the point.
 **Why this first.** It compounds where the others are capped, it is the commercial path
 for every other factory including Amazon's, and nothing blocks it.
 
-### M015 — Website Factory MVP (carrying Deployment)
+### M015 — Website Factory MVP (carrying Deployment)  ← **[defined in M015.md](M015.md)**
 
 The delivery arm that closes the loop with M014, and the milestone that buys the
 deployment spine AI SaaS will need. One vertical, one template family, real domain,
