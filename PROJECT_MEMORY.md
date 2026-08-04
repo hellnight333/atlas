@@ -234,6 +234,81 @@ Two related configuration traps, both of which look like the code failing:
 - **A client connecting to an IP sends no SNI**, so a name-based server has no
   site to match and aborts the handshake. `default_sni` names the site to assume.
 
+### Publishing on someone else's behalf
+
+Learned building M015 Phase B, where Atlas started writing pages that go out
+under a customer's name rather than its own.
+
+#### Publishing *as* a business is worse than making a claim *about* one
+
+M014's rule is that Atlas may not assert something about a business it cannot
+substantiate. Phase B crossed a line that needed a stronger rule: an invented
+opening time on a site Atlas built is wrong **in the customer's own voice, on
+their own domain**, and *they* absorb the consequence when somebody arrives at
+8pm to a closed shop.
+
+Two mechanisms, and it is worth being clear about which one actually works:
+
+**Facts carry a source, and there is no source meaning "a model wrote it."** The
+enum has `OPERATOR`, `CUSTOMER`, `BUSINESS_RECORD`, `OBSERVED` and no
+`GENERATED`. This does not stop a determined caller attributing an invention to
+the operator, and is not meant to — it makes every claim **attributable**, so a
+wrong one leads back to its source instead of dissolving into the output.
+
+**Absent facts are absent from the page.** No placeholder, no "Call us today!",
+no filler where a phone number should be. *This* is the mechanism that does the
+work, because the tempting failure is not inventing an address — nobody sets out
+to do that. It is padding a thin page with confident copy that asserts nothing
+anyone supplied, one sentence at a time, until the page reads like a claim.
+
+**The general shape: separate what may be written from what must be supplied,
+and make them different types.** Prose and Fact cannot be confused at a call
+site, so a paragraph cannot become the opening hours by being written
+confidently.
+
+#### A quality gate you cannot pad your way past
+
+A site carrying one fact fails Atlas's own thin-content check and is refused.
+That is correct: a twenty-character page will not rank, which is the thing being
+sold. The remedy is more content from the customer — **a conversation, not a code
+change.**
+
+The rule worth keeping: when your own output fails your own gate, the options are
+to improve the output or to get more input. Lowering the gate is a third option
+that always works and always costs more than it saves.
+
+Related, from the same milestone: the deploy gate rejected the test suite's own
+preview URLs because they were `http://`. Correct — plain HTTP is one of the
+defects being sold against. Exempting it would have made the tests pass and
+weakened the gate; the tests changed instead. **When a guard fails on your own
+work, the first question is whether the guard is right.**
+
+#### `</script>` is not escaped by JSON encoding
+
+Found by a test asserting content cannot inject markup, and it was a real hole
+rather than a hypothetical: a business name containing `</script>` closes a
+JSON-LD block, and everything after it parses as markup. Cross-site scripting on
+the customer's own domain, published by Atlas, in their name.
+
+`html.escape` is **not** the fix. The contents of a `<script>` element are not
+parsed as HTML, so entities arrive literally and break the JSON instead. Escape
+`<`, `>` and `&` as JSON unicode escapes (`\u003c`) — valid JSON, and the
+sequence becomes unrepresentable.
+
+The general rule: **JSON inside a `<script>` tag is not safe because it is valid
+JSON.** Two escaping contexts are nested, and satisfying the inner one says
+nothing about the outer.
+
+#### Determinism is a product property, not a build detail
+
+No build timestamp, no generated ids, no unordered iteration in the output. That
+is what lets "this site was rebuilt correctly" be settled by comparing
+fingerprints instead of by a person looking at two pages — and it is the entire
+basis of being able to rebuild a customer's site from the record years later.
+
+A footer reading "generated on 4 August" would have cost nothing to add and made
+every rebuild unverifiable.
+
 ### UI rendering
 
 #### React error #185, and the crash that had no trace
