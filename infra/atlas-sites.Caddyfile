@@ -1,0 +1,29 @@
+# Atlas Website Factory — isolated static host.
+#
+# Separate from /opt/naml-automation/Caddyfile, which fronts 49 production
+# containers. A deployment proof has no business restarting that.
+#
+# Bound to loopback and reached over an SSH tunnel, so no firewall rule is
+# opened on a production server to demonstrate a pipeline.
+{
+	admin off
+	# Internal CA. NOT `auto_https off` — that disables certificate
+	# provisioning entirely: a TLS handshake with nothing to offer.
+	local_certs
+	# A client connecting by IP sends no SNI, so Caddy has no site to match and
+	# aborts. This names the site to assume when SNI is absent.
+	default_sni 127.0.0.1
+}
+
+https://127.0.0.1:8791 {
+	root * /srv/sites
+
+	# A site directory holds `versions/` and a `current` symlink; the live
+	# document root is the symlink. This is the server-side half of the
+	# publish-then-promote layout — the deploy adapter moves files and swaps a
+	# link, and the web server is what decides that `current` is the one served.
+	@site_root path_regexp siteroot ^/([^/]+)/?$
+	rewrite @site_root /{re.siteroot.1}/current/
+
+	file_server
+}

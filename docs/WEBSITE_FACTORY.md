@@ -4,9 +4,58 @@ Builds, deploys and maintains real websites for real customers. Scope, phases an
 non-goals live in [`M015.md`](../M015.md); this describes what exists and why it
 is shaped this way.
 
-**Phase A is implemented: publish, gate, promote, verify, roll back.** Phase B
-(generation from `Site` content) and Phase C (health checks and redeploy on
-change) are not.
+**Phase A is implemented and proven against a real host: publish, gate, promote,
+verify, roll back.** Phase B (generation from `Site` content) and Phase C
+(scheduled health checks) are not.
+
+## Proven end to end, 2026-08-04
+
+Run against a real remote server, not a mock. `infra/phase_a_proof.py` reproduces
+it; `infra/atlas-sites.Caddyfile` is the serving config.
+
+| # | Criterion | Evidence |
+|---|---|---|
+| 1 | Atlas builds an artifact | fingerprint `7515fdcebd8f79a5` |
+| 2 | Atlas stores it permanently | read back from Postgres in a fresh repository |
+| 3 | Atlas deploys it | version `d78c9b1791d9589f` on the remote box |
+| 4 | Atlas promotes it | fetched over verified TLS, correct content |
+| 5 | Atlas can redeploy | second build live, content changed |
+| 6 | Atlas rolls back from its own artifact | **the old version was deleted from the server first** |
+
+Criterion 6 is the one that matters. The previous version was removed from the
+host before the rollback, so a rollback leaning on provider history would have
+failed. Atlas republished from its own stored build and promoted it.
+
+### How the environment was set up, and what was refused
+
+The box runs 49 production containers behind a **single bind-mounted Caddyfile**.
+Adding a vhost there means restarting the proxy in front of live businesses, so
+that was not done to prove a pipeline. Instead:
+
+- A **separate Caddy container** on a spare port with its own config, sharing
+  nothing with the production proxy.
+- **Bound to loopback and reached over an SSH tunnel**, so no firewall rule was
+  opened on a production server.
+- **Real TLS with real verification** — Caddy's internal CA, with the root
+  fetched and passed to the client. Not `verify=False`; the gate checking a
+  connection it did not validate would be theatre.
+
+Three things went wrong on the way, each worth keeping:
+
+**`auto_https off` disables certificate provisioning entirely**, so the first
+attempt served a TLS handshake with no certificate to offer. `local_certs` is the
+option that means "internal CA", not that one.
+
+**A client connecting by IP sends no SNI**, so Caddy had no site to match and
+aborted the handshake. `default_sni` names the site to assume.
+
+**The web server must serve `<slug>/current/`, not `<slug>/`.** The first run
+deployed, promoted and rolled back correctly at the file level — the `current`
+symlink pointed exactly where it should — while every HTTP check failed, because
+Caddy was serving the directory holding `versions/` and the link rather than the
+link itself. The adapter moves files and swaps a symlink; deciding that `current`
+is the document root is the server's half of the arrangement, and it is now in
+`infra/atlas-sites.Caddyfile`.
 
 ---
 
