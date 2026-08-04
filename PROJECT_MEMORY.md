@@ -234,6 +234,56 @@ Two related configuration traps, both of which look like the code failing:
 - **A client connecting to an IP sends no SNI**, so a name-based server has no
   site to match and aborts the handshake. `default_sni` names the site to assume.
 
+### Operational features need something to operate
+
+M015 Phase C — uptime checks, alerting, failure surfacing — was scoped, reviewed
+and **frozen before a line of it was written**, because the sites it would watch
+have no customers on them.
+
+**The rule: do not build monitoring, alerting, dashboards or operational
+features before there is something real to operate.** A monitor watching a site
+nobody can reach measures nothing. Worse, it produces a green dashboard, which
+reads as evidence that something is working.
+
+#### Why this one is harder to catch than the usual violation
+
+Most SHIP-1 violations feel like fun engineering — a nicer abstraction, a
+cleverer pipeline — and the rule catches them because the pleasure is a tell.
+
+This one feels like **diligence**. Adding monitoring reads as the responsible
+thing to do, the professional finish, the part a serious person would not skip.
+That is exactly what makes it dangerous: the instinct being satisfied is a good
+one, pointed at the wrong moment. Operational maturity is worth having *for
+something in operation*, and building it earlier is architecture wearing an ops
+costume.
+
+The question that settles it: **if this were finished tonight, what would be
+different tomorrow?** For a monitor over zero customer sites, the answer is a
+dashboard.
+
+#### A milestone is complete when its first criterion is true, not when its
+#### phases are ticked off
+
+M015's phases were nearly done and its actual success criterion — *one site
+deployed on a real domain and paid for* — was still false, blocked entirely on
+things that were not code. Phase C would have moved the phase list and not the
+criterion.
+
+So the milestone is now marked **waiting on external business inputs** rather
+than in progress. That is a more honest state than "one phase remaining", and it
+puts attention on the two decisions that actually matter instead of on work that
+would feel like progress.
+
+#### Re-check the phase list against what shipped, before planning the next phase
+
+The review found that one of Phase C's three items — redeploy on content change —
+had been delivered back in Phase A. A new build plus a deploy *is* a redeploy; it
+was proven as a Phase A criterion and never struck off the Phase C list.
+
+Cheap to catch and worth catching: a stale phase list overstates what remains,
+and the failure mode is not just a wrong estimate — it is rebuilding something
+that already works.
+
 ### Publishing on someone else's behalf
 
 Learned building M015 Phase B, where Atlas started writing pages that go out
