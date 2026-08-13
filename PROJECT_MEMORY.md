@@ -284,6 +284,36 @@ Cheap to catch and worth catching: a stale phase list overstates what remains,
 and the failure mode is not just a wrong estimate — it is rebuilding something
 that already works.
 
+### Schema bootstrap is only tested by building from nothing
+
+`init_db()` could not create the schema on an empty database. An
+`ALTER TABLE atlas_scene_renders` sat before that table's `CREATE TABLE`, and
+since the whole function runs in one transaction, the failure rolled back
+everything and left **zero tables**.
+
+It had worked for months. Every database anyone touched already had the table,
+so the ALTER always found its target and the ordering never mattered. The bug was
+waiting for the first person to build from scratch — a new machine, a new
+contributor, a restored backup, a CI runner.
+
+**The rule: a migration that has only ever run against an existing database has
+not been tested.** Build the schema from nothing periodically, and treat "works
+on my database" as the specific claim it is.
+
+Two related habits from the same incident, both cheap:
+
+- **Run it twice.** Idempotency is half the contract and is trivially checkable.
+- **Check ALTER/CREATE ordering mechanically.** A short script comparing the
+  line of every `ALTER TABLE x` against the line of its `CREATE TABLE x` found
+  this in seconds, and distinguished it from the guarded `DO $$ ... IF EXISTS`
+  renames that only *look* like the same problem.
+
+Worth noting what the failure looked like from outside: "PostgreSQL is
+unavailable". It was running fine. The role and database did not exist, and the
+resulting `role "atlas" does not exist` was read as an outage for days —
+**a connection error names the first thing that failed, not the thing that is
+wrong.**
+
 ### Publishing on someone else's behalf
 
 Learned building M015 Phase B, where Atlas started writing pages that go out

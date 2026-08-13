@@ -757,15 +757,6 @@ def init_db() -> None:
             END IF;
         END $$;
         """))
-        # Provenance arrived after the first M013 tables. Additive, so plain
-        # ADD COLUMN IF NOT EXISTS rather than a guarded block.
-        conn.execute(text("""
-        ALTER TABLE atlas_scene_renders
-        ADD COLUMN IF NOT EXISTS provider_handle TEXT,
-        ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}',
-        ADD COLUMN IF NOT EXISTS render_ms INTEGER,
-        ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION
-        """))
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS atlas_episodes (
             id TEXT PRIMARY KEY,
@@ -849,6 +840,23 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             UNIQUE (rendition_id, scene_id)
         )
+        """))
+        # Provenance arrived after the first M013 tables, so databases created
+        # before it need the columns added. Additive, hence ADD COLUMN IF NOT
+        # EXISTS rather than a guarded block.
+        #
+        # It must sit *after* the CREATE above, and previously did not. On any
+        # database that already had the table this was invisible; on a fresh one
+        # it aborted the whole of init_db() -- a single transaction -- leaving
+        # zero tables. Nobody noticed because nobody had built this schema from
+        # nothing in a long time, which is exactly the class of bug that waits
+        # for a new machine or a new contributor.
+        conn.execute(text("""
+        ALTER TABLE atlas_scene_renders
+        ADD COLUMN IF NOT EXISTS provider_handle TEXT,
+        ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS render_ms INTEGER,
+        ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION
         """))
         # Generic, and deliberately so. The kernel records "this node was last
         # built with this effective fingerprint" and knows nothing about what a

@@ -17,14 +17,23 @@ Reported by Claude:
 - Secrets were kept outside the repository and logging was hardened.
 
 ## Test state
-Latest report:
-- 461 tests passing.
-- 64 Gmail/credential/YouTube tests included in the passing set.
-- Full suite is NOT green.
-- PostgreSQL was unavailable on port 5432.
-- 20 failures + 87 collection errors were attributed to PostgreSQL availability.
+**Full suite is GREEN as of 2026-08-13.**
+- 1044 passed, 0 failed. Coverage 92.46% (gate is 90%).
+- Verified twice; the second run shows 1040 passed + 4 skipped, which are
+  demo-installer tests that skip once demos exist ("already installed by an
+  earlier run"). Benign and expected.
+- ruff, tsc, oxlint, rustfmt and clippy all clean.
 
-Do not call the full suite green until PostgreSQL is running and the complete suite passes.
+PostgreSQL was not actually down. The server was running; the role `atlas` and
+database `atlas` did not exist, so every connection failed with
+`role "atlas" does not exist`. Both were created.
+
+Creating them then exposed a real bug: `init_db()` could not build the schema
+from nothing. An `ALTER TABLE atlas_scene_renders` ran before that table's
+`CREATE TABLE`, and because the whole of `init_db()` is one transaction, the
+failure rolled everything back and left zero tables. Invisible on any database
+that already had the table — which was every database anyone had used. Fixed by
+moving the ALTER after the CREATE.
 
 ## Google credentials
 Desktop/installed OAuth client.
@@ -36,8 +45,8 @@ First scope:
 Google app remains in Testing.
 
 ## Immediate priorities
-1. Restore PostgreSQL and run the complete test suite.
-2. Decide niche + geography + offer.
+1. ~~Restore PostgreSQL and run the complete test suite.~~ **Done 2026-08-13.**
+2. Decide niche + geography + offer. **← now the blocker**
 3. Run a small, manually approved Opportunity Factory pilot.
 4. Set up OpenClaw on a dedicated P520 operator machine.
 5. Keep project documentation in Git.

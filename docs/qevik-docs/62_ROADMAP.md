@@ -9,10 +9,10 @@
 - Google Desktop OAuth [done]
 - Gmail send [done]
 - M014 safety path [done]
-- restore PostgreSQL [next]
-- full suite green [next]
+- restore PostgreSQL [done]
+- full suite green [done]
 
-## Phase 2 — Opportunity Factory pilot
+## Phase 2 — Opportunity Factory pilot [next]
 - niche
 - geography
 - offer
