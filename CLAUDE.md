@@ -139,3 +139,61 @@ Explicitly deferred or dissolved:
 Atlas is a **true greenfield** build. No code is copied from the Naml ops dashboard.
 Hard-won operational knowledge is carried over as documentation only —
 see `docs/LESSONS_FROM_NAML.md`. Read it before writing provider or deploy code.
+
+---
+
+# QEVIK PROJECT CONTEXT
+
+Qevik is the current project/business direction being developed within the Atlas system.
+
+The detailed Qevik project context is maintained in:
+
+`docs/qevik-docs/`
+
+Before doing substantial work specifically related to Qevik, read the relevant Qevik documentation.
+
+## Required Qevik context
+
+For understanding the current state and priorities, read:
+
+- `docs/qevik-docs/00_PROJECT_STATE.md`
+- `docs/qevik-docs/90_DECISIONS.md`
+- `docs/qevik-docs/91_OPEN_QUESTIONS.md`
+- `docs/qevik-docs/62_ROADMAP.md`
+
+Then read the specific document(s) relevant to the task.
+
+## Qevik documentation rules
+
+- Treat `00_PROJECT_STATE.md` as the current state of the project.
+- Treat `90_DECISIONS.md` as the record of decisions already made.
+- Treat `91_OPEN_QUESTIONS.md` as unresolved questions. Do not silently invent answers where an explicit decision is required.
+- Treat `62_ROADMAP.md` as the current planned direction, not as permission to implement unrelated work.
+- When a meaningful architectural or product decision changes, update the appropriate Qevik documentation.
+- When a significant milestone is completed, update `00_PROJECT_STATE.md`.
+- Keep documentation consistent with the actual repository state.
+- Never put secrets, OAuth tokens, API keys, client secrets, refresh tokens, passwords, or other credentials into the Qevik documentation or Git.
+- Prefer existing architecture and decisions over introducing new abstractions.
+- Before implementing a new subsystem, inspect the relevant existing code and documentation first.
+
+## Working relationship between Atlas and Qevik
+
+Atlas remains the underlying system and codebase.
+
+Qevik is the project/business context being developed on top of or within Atlas.
+
+Do not replace Atlas architecture or existing instructions merely because a Qevik document describes a desired future state.
+
+When the current implementation and a planning document differ, identify the difference explicitly and determine whether the documentation or implementation should change before proceeding.
+
+## Execution
+
+When asked to implement work:
+
+1. Inspect the repository and relevant Qevik documentation.
+2. Determine the smallest correct implementation that advances the current roadmap.
+3. Implement it.
+4. Run appropriate tests/checks.
+5. Inspect the resulting diff.
+6. Update relevant documentation when the project state or a decision has changed.
+7. Do not claim work is complete until the repository state supports that claim.
