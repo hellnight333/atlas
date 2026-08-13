@@ -176,13 +176,63 @@ class TestFailuresAreDistinguishable:
         with pytest.raises(NotAuthorised, match="Authorise Qevik again"):
             channel.deliver(_message())
 
-    def test_403_names_the_two_real_causes(self) -> None:
+    def test_403_names_the_causes_that_actually_produce_it(self) -> None:
         channel, _ = _channel(lambda r: self._fails_with(403))
         with pytest.raises(GmailSendError) as raised:
             channel.deliver(_message())
         message = str(raised.value)
+        assert "Gmail API is not enabled" in message
         assert GMAIL_SEND_SCOPE in message
         assert "test user" in message
+
+    def test_403_surfaces_googles_structured_reason(self) -> None:
+        """The first real send failed exactly this way, and the two causes the
+        message named were both wrong -- the scope was granted and the account
+        was a test user. The real reason was sitting in a structured field the
+        code was discarding."""
+        body = {
+            "error": {
+                "status": "PERMISSION_DENIED",
+                "message": "Gmail API has not been used in project 930669101081 before",
+                "details": [
+                    {
+                        "reason": "SERVICE_DISABLED",
+                        "metadata": {"activationUrl": "https://console.example/enable"},
+                    }
+                ],
+            }
+        }
+        channel, _ = _channel(lambda r: httpx.Response(403, json=body))
+        with pytest.raises(GmailSendError) as raised:
+            channel.deliver(_message())
+        message = str(raised.value)
+        assert "PERMISSION_DENIED" in message
+        assert "SERVICE_DISABLED" in message
+        assert "https://console.example/enable" in message
+
+    def test_the_free_text_message_is_still_never_surfaced(self) -> None:
+        """Structured fields yes, free text no. Google echoes request content
+        into error.message, which here is a real person's address."""
+        body = {
+            "error": {
+                "status": "INVALID_ARGUMENT",
+                "message": "Invalid To header: hello@alnoor.test says ...",
+                "details": [{"reason": "BAD_REQUEST"}],
+            }
+        }
+        channel, _ = _channel(lambda r: httpx.Response(400, json=body))
+        with pytest.raises(GmailSendError) as raised:
+            channel.deliver(_message())
+        message = str(raised.value)
+        assert "INVALID_ARGUMENT" in message and "BAD_REQUEST" in message
+        assert "hello@alnoor.test" not in message
+        assert "Invalid To header" not in message
+
+    def test_a_body_that_is_not_json_does_not_crash_the_error_path(self) -> None:
+        """An error while building an error message is the worst kind."""
+        channel, _ = _channel(lambda r: httpx.Response(502, text="<html>gateway</html>"))
+        with pytest.raises(GmailSendError, match="502"):
+            channel.deliver(_message())
 
     def test_429_says_to_back_off(self) -> None:
         channel, _ = _channel(lambda r: self._fails_with(429))

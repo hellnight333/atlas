@@ -267,8 +267,8 @@ def _handler(capture: _Capture) -> type[BaseHTTPRequestHandler]:
 
             body = (
                 b"<html><body style='font-family:system-ui;padding:3rem'>"
-                b"<h2>Atlas is connected.</h2>"
-                b"<p>You can close this tab and go back to Atlas.</p>"
+                b"<h2>Qevik is connected.</h2>"
+                b"<p>You can close this tab and go back to Qevik.</p>"
                 b"</body></html>"
             )
             self.send_response(200)

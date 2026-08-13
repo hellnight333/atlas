@@ -48,6 +48,42 @@ SEND_ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 REQUEST_TIMEOUT_SECONDS = 30.0
 
 
+def google_reason(response: httpx.Response) -> str:
+    """Google's own structured diagnosis, never the echoed request.
+
+    The distinction matters and was learned the hard way. A blanket "never
+    surface the body" rule is right about free text -- Google echoes request
+    content into ``error.message``, which for this channel is a real person's
+    address and the message being sent to them. But it also threw away
+    ``error.status`` and ``details[].reason``, which are enum-like fields that
+    cannot contain a payload and which say exactly what is wrong.
+
+    The first real send failed with a 403, and the two causes this module named
+    in its error text were both wrong: the scope *was* granted and the account
+    *was* a test user. The actual reason was ``SERVICE_DISABLED`` -- the Gmail
+    API had never been enabled on the project -- and it was sitting in a
+    structured field this code was deliberately discarding.
+
+    So: structured fields yes, free text no.
+    """
+    try:
+        error = (response.json() or {}).get("error", {})
+    except ValueError:
+        return ""
+    parts: list[str] = []
+    if status := error.get("status"):
+        parts.append(str(status))
+    for detail in error.get("details", []) or []:
+        if reason := detail.get("reason"):
+            parts.append(str(reason))
+        # A console URL and a project number. Neither is secret, and it is the
+        # difference between an actionable error and a puzzle.
+        if url := (detail.get("metadata") or {}).get("activationUrl"):
+            parts.append(f"enable it at {url}")
+    # dict.fromkeys keeps first-seen order while dropping duplicates.
+    return " · ".join(dict.fromkeys(parts))
+
+
 class GmailSendError(RuntimeError):
     """Gmail refused the message.
 
@@ -131,18 +167,23 @@ class GmailChannel:
             # retrying the send cannot fix it.
             raise NotAuthorised("Gmail rejected the credentials (401). Authorise Qevik again.")
         if response.status_code == 403:
+            reason = google_reason(response)
             raise GmailSendError(
-                "Gmail refused the send (403). The usual cause is that the "
+                f"Gmail refused the send (403){f': {reason}' if reason else ''}. "
+                "Common causes: the Gmail API is not enabled on the project, the "
                 f"connected account was not granted {GMAIL_SEND_SCOPE}, or the "
                 "OAuth app is in Testing and this account is not a test user."
             )
         if response.status_code == 429:
             raise GmailSendError("Gmail rate-limited the send (429). Back off and retry later.")
         if response.status_code >= 400:
-            # Google's error body can echo request content. Only the status and
-            # a short reason are surfaced -- never the body, which contains the
-            # message that was being sent.
-            raise GmailSendError(f"Gmail refused the send ({response.status_code}).")
+            # Structured fields only. Google's free-text ``error.message`` can
+            # echo request content -- which here is a real person's address and
+            # the message being sent to them.
+            reason = google_reason(response)
+            raise GmailSendError(
+                f"Gmail refused the send ({response.status_code}){f': {reason}' if reason else ''}."
+            )
 
         body = response.json() if response.content else {}
         return SendResult(
