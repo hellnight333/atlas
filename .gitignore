@@ -18,13 +18,36 @@ node_modules/
 dist/
 .turbo/
 
-# Secrets — never commit
+# Secrets — never commit.
+#
+# Credentials belong OUTSIDE this tree, in ~/.qevik/credentials/. These patterns
+# are the second line of defence: if one is ever dropped in here by mistake, it
+# must not be one `git add -A` from being published.
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+*.p12
+*.pfx
 secrets/
+credentials/
+.qevik/
+
+# Google OAuth — the file Google Cloud issues, under every name it is given.
+# Google's own download is `client_secret_<numbers>.apps.googleusercontent.com.json`.
+client_secret*.json
+*client_secret*.json
+*oauth*credential*.json
+*credentials*.json
+service-account*.json
+*.apps.googleusercontent.com.json
+
+# Tokens produced by an OAuth flow — a refresh token is a durable credential and
+# is worth as much as the client secret it came from.
+token.json
+*token.json
+*.token.json
 
 # Models & weights — these live on the NAS, not in git
 *.safetensors

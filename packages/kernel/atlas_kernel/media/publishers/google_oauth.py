@@ -47,6 +47,38 @@ YOUTUBE_SCOPES = (
 #: flight fails the whole upload, and the clock is not perfectly synchronised.
 EXPIRY_MARGIN = timedelta(seconds=120)
 
+#: Where credentials live by default — **outside the working tree**, and not
+#: configurable to somewhere inside it by accident. A secret stored in the repo
+#: is one ``git add -A`` from being published, and that command is run by tired
+#: people at the end of long days.
+CREDENTIALS_DIR = Path.home() / ".qevik" / "credentials"
+
+#: Owner-only. Google's download lands world-readable in ~/Downloads, and moving
+#: it without tightening the mode carries that across.
+SECRET_FILE_MODE = 0o600
+
+#: Preferred prefix after the rename; the old one still resolves so nothing that
+#: already works stops working.
+_ENV_PREFIXES = ("QEVIK_", "ATLAS_")
+
+
+def _env(name: str) -> str | None:
+    """First non-empty value across the accepted prefixes.
+
+    Empty strings are treated as unset. An exported-but-blank variable is the
+    usual result of a half-finished shell profile, and honouring it produces an
+    authentication error that points at Google rather than at the shell.
+    """
+    for prefix in _ENV_PREFIXES:
+        value = os.environ.get(f"{prefix}{name}")
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def default_client_secrets_path() -> Path:
+    return CREDENTIALS_DIR / "google_client_secret.json"
+
 
 class OAuthError(RuntimeError):
     """The authorisation flow could not complete."""
@@ -91,6 +123,59 @@ class ClientSecrets:
             return cls(client_id=section["client_id"], client_secret=section["client_secret"])
         except KeyError as error:
             raise OAuthError(f"{path} is missing {error}") from error
+
+    @classmethod
+    def from_environment(cls) -> ClientSecrets:
+        """Resolve credentials without a path being written into the codebase.
+
+        Three sources, in order, and the order is the point: the most explicit
+        wins, and the default is a location **outside the repository**.
+
+        1. ``QEVIK_GOOGLE_CLIENT_ID`` + ``QEVIK_GOOGLE_CLIENT_SECRET`` — direct
+           values, for CI and containers where mounting a file is the awkward
+           option.
+        2. ``QEVIK_GOOGLE_CLIENT_SECRETS_FILE`` — a path to the JSON Google
+           issued.
+        3. ``~/.qevik/credentials/google_client_secret.json`` — the default,
+           deliberately not inside the working tree. A credential that lives in
+           the repository is a credential one ``git add -A`` away from being
+           published, and that command gets run by tired people.
+
+        ``ATLAS_``-prefixed names are still accepted so nothing that already
+        works stops working.
+
+        Raises rather than returning ``None``: a missing credential should stop
+        the caller with an actionable message, not surface three frames later as
+        an authentication failure.
+        """
+        client_id = _env("GOOGLE_CLIENT_ID")
+        client_secret = _env("GOOGLE_CLIENT_SECRET")
+        if client_id and client_secret:
+            return cls(client_id=client_id, client_secret=client_secret)
+
+        configured = _env("GOOGLE_CLIENT_SECRETS_FILE")
+        path = Path(configured).expanduser() if configured else default_client_secrets_path()
+        if not path.is_file():
+            raise OAuthError(
+                "no Google client secrets configured. Either set "
+                "QEVIK_GOOGLE_CLIENT_ID and QEVIK_GOOGLE_CLIENT_SECRET, or point "
+                "QEVIK_GOOGLE_CLIENT_SECRETS_FILE at the JSON Google issued, or "
+                f"place that file at {default_client_secrets_path()}. "
+                "Do not put it inside the repository."
+            )
+        return cls.from_file(path)
+
+    def __repr__(self) -> str:
+        """Never render the secret.
+
+        A dataclass prints its fields, so the default repr puts a live client
+        secret into every traceback, log line and debugger session that touches
+        one of these. That is not a hypothetical: exception text is the most
+        common way a secret escapes.
+        """
+        return f"ClientSecrets(client_id={self.client_id!r}, client_secret='***')"
+
+    __str__ = __repr__
 
 
 @dataclass
@@ -357,8 +442,7 @@ class GoogleCredentials:
 
         if not token.refresh_token:
             raise NotAuthorised(
-                "the stored credentials have expired and carry no refresh token. "
-                "Authorise again."
+                "the stored credentials have expired and carry no refresh token. Authorise again."
             )
         refreshed = self.flow.refresh(token.refresh_token)
         self.store.save(refreshed)
