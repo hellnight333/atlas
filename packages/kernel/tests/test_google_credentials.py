@@ -90,13 +90,32 @@ class TestResolutionOrder:
         assert ClientSecrets.from_environment().client_id == "id-new"
 
     def test_an_exported_but_blank_variable_counts_as_unset(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The usual result of a half-finished shell profile. Honouring it
         produces an authentication error that points at Google rather than at
-        the shell, which is a long afternoon."""
+        the shell, which is a long afternoon.
+
+        The file path is pinned so this asserts the blank values are skipped
+        rather than asserting something about the developer's home directory.
+        The first version of this test checked for the not-configured error and
+        passed only while no real credential existed at the default path —
+        it started failing the day one was installed, which is a property of
+        the machine and not of the code.
+        """
+        path = tmp_path / "client_secret.json"
+        path.write_text(json.dumps(INSTALLED))
+        monkeypatch.setenv("QEVIK_GOOGLE_CLIENT_SECRETS_FILE", str(path))
         monkeypatch.setenv("QEVIK_GOOGLE_CLIENT_ID", "  ")
         monkeypatch.setenv("QEVIK_GOOGLE_CLIENT_SECRET", "")
+
+        # Blank values are skipped, so resolution falls through to the file.
+        assert ClientSecrets.from_environment().client_id == "id-from-file"
+
+    def test_nothing_configured_at_all_reports_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("QEVIK_GOOGLE_CLIENT_SECRETS_FILE", str(tmp_path / "absent.json"))
         with pytest.raises(OAuthError, match="no Google client secrets configured"):
             ClientSecrets.from_environment()
 
