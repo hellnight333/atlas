@@ -104,9 +104,11 @@ class PlaywrightSession:
         # "the page loaded" from "the page works".
         self._page.on(
             "console",
-            lambda msg: self._console.append(f"{msg.type}: {msg.text}"[:300])
-            if msg.type in ("error", "warning")
-            else None,
+            lambda msg: (
+                self._console.append(f"{msg.type}: {msg.text}"[:300])
+                if msg.type in ("error", "warning")
+                else None
+            ),
         )
         return self
 
