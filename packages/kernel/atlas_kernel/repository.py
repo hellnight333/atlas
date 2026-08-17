@@ -309,7 +309,8 @@ class AtlasRepository:
     def list_chat_conversations(self, project_id: str | None = None) -> list[ChatConversation]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(text("""
+                rows = session.execute(
+                    text("""
                     SELECT id, project_id, title, pinned, prompt_version, response_version,
                            provider_name, execution_time_ms, tokens, workflow_id,
                            parent_conversation_id, prompt_asset_id, response_asset_id,
@@ -317,7 +318,8 @@ class AtlasRepository:
                     FROM atlas_chat_conversations
                     WHERE deleted_at IS NULL
                     ORDER BY pinned DESC, updated_at DESC
-                    """)).fetchall()
+                    """)
+                ).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -462,13 +464,15 @@ class AtlasRepository:
     def list_research_sessions(self, project_id: str | None = None) -> list[ResearchSession]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(text("""
+                rows = session.execute(
+                    text("""
                     SELECT id, project_id, title, question, status, conversation_id,
                            collection_asset_id, report_asset_id, metadata, created_at, updated_at
                     FROM atlas_research_sessions
                     WHERE deleted_at IS NULL
                     ORDER BY updated_at DESC
-                    """)).fetchall()
+                    """)
+                ).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -622,13 +626,15 @@ class AtlasRepository:
     def list_review_sessions(self, project_id: str | None = None) -> list[ReviewSession]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(text("""
+                rows = session.execute(
+                    text("""
                     SELECT id, project_id, title, status, asset_id, published_asset_id,
                            workflow_id, metadata, created_at, updated_at
                     FROM atlas_review_sessions
                     WHERE deleted_at IS NULL
                     ORDER BY updated_at DESC
-                    """)).fetchall()
+                    """)
+                ).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -1278,14 +1284,16 @@ class AtlasRepository:
     def list_agents(self, project_id: str | None = None) -> list[Agent]:
         with SessionLocal() as session:
             if project_id is None:
-                rows = session.execute(text("""
+                rows = session.execute(
+                    text("""
                     SELECT id, name, description, role, workspace_id, project_id,
                            capabilities, status, memory_id, permission_set,
                            created_at, updated_at
                     FROM atlas_agents
                     WHERE deleted_at IS NULL
                     ORDER BY created_at DESC
-                    """)).fetchall()
+                    """)
+                ).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -1891,11 +1899,13 @@ class AtlasRepository:
     def list_schedules(self, agent_id: str | None = None) -> list[ExecutionSchedule]:
         with SessionLocal() as session:
             if agent_id is None:
-                rows = session.execute(text("""
+                rows = session.execute(
+                    text("""
                         SELECT schedule_id
                         FROM atlas_schedules
                         ORDER BY created_at DESC
-                        """)).fetchall()
+                        """)
+                ).fetchall()
             else:
                 rows = session.execute(
                     text("""
@@ -2083,7 +2093,8 @@ class AtlasRepository:
 
     def list_runtime_executions(self) -> list[RuntimeExecutionRecord]:
         with SessionLocal() as session:
-            rows = session.execute(text("""
+            rows = session.execute(
+                text("""
                 SELECT execution_id, schedule_id, entry_id, agent_id, plan_id, action,
                        payload, status, attempts, retry_policy, created_at, updated_at,
                        started_at, heartbeat_at, deadline_at, completed_at, timeout_reason,
@@ -2092,7 +2103,8 @@ class AtlasRepository:
                        cancellation_requested, timeline
                 FROM atlas_runtime_executions
                 ORDER BY created_at DESC
-                """)).fetchall()
+                """)
+            ).fetchall()
         return [self._row_to_runtime_execution(row) for row in rows]
 
     def list_running_runtime_executions(self) -> list[RuntimeExecutionRecord]:
@@ -2549,7 +2561,9 @@ class AtlasRepository:
             current_ids = (
                 current[0]
                 if current and isinstance(current[0], list)
-                else json.loads(current[0]) if current and current[0] else []
+                else json.loads(current[0])
+                if current and current[0]
+                else []
             )
             if asset_id not in current_ids:
                 current_ids.append(asset_id)
@@ -2570,7 +2584,9 @@ class AtlasRepository:
             current_ids = (
                 current[0]
                 if current and isinstance(current[0], list)
-                else json.loads(current[0]) if current and current[0] else []
+                else json.loads(current[0])
+                if current and current[0]
+                else []
             )
             if asset_id not in current_ids:
                 current_ids.append(asset_id)
@@ -4123,13 +4139,15 @@ class AtlasRepository:
 
     def list_approval_policies(self) -> list[ApprovalPolicy]:
         with SessionLocal() as session:
-            rows = session.execute(text("""
+            rows = session.execute(
+                text("""
                 SELECT id, name, description, mode, scopes, cost_threshold, conditions,
                        required_approvers, approvals_required, expires_after_seconds,
                        project_id, workspace_id, priority, enabled, metadata, created_at, updated_at
                 FROM atlas_approval_policies
                 ORDER BY priority DESC, created_at ASC, id ASC
-                """)).fetchall()
+                """)
+            ).fetchall()
         return [
             ApprovalPolicy(
                 id=row[0],

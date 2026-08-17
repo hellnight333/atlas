@@ -29,7 +29,7 @@ import csv
 import io
 from collections.abc import Iterable
 
-from .models import Business, NicheProfile
+from ..models import Business, NicheProfile
 
 
 class SeedListSource:

@@ -169,9 +169,9 @@ def test_keyboard_shortcut_documentation_matches_the_code() -> None:
     documented = set(
         re.findall(r"Ctrl \+ (\w)", (DOCS / "KEYBOARD_SHORTCUTS.md").read_text(encoding="utf-8"))
     )
-    assert {
-        b.upper() for b in bound
-    } == documented, f"shortcuts bound in code {bound} do not match those documented {documented}"
+    assert {b.upper() for b in bound} == documented, (
+        f"shortcuts bound in code {bound} do not match those documented {documented}"
+    )
 
 
 def test_no_document_promises_an_unbuilt_studio_as_present() -> None:
@@ -194,9 +194,9 @@ def test_the_website_does_not_claim_atlas_is_open_source() -> None:
     for page in WEBSITE.glob("*.html"):
         body = page.read_text(encoding="utf-8").lower()
         if "open source" in body:
-            assert (
-                "not open source" in body or "source-available" in body
-            ), f"{page.name} calls Atlas open source without qualification"
+            assert "not open source" in body or "source-available" in body, (
+                f"{page.name} calls Atlas open source without qualification"
+            )
 
 
 def test_version_is_consistent_across_the_site_and_the_code() -> None:

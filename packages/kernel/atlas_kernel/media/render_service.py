@@ -317,8 +317,7 @@ class SceneRenderService:
                 return status
             if time.monotonic() > deadline:
                 raise ProviderError(
-                    f"{registration.name} did not finish {handle} within "
-                    f"{self.timeout_seconds}s"
+                    f"{registration.name} did not finish {handle} within {self.timeout_seconds}s"
                 )
             time.sleep(self.poll_interval)
 

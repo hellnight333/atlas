@@ -17,15 +17,18 @@ Base = declarative_base()
 
 def init_db() -> None:
     with engine.begin() as conn:
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_workspaces (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_projects (
             id TEXT PRIMARY KEY,
             workspace_id TEXT,
@@ -33,8 +36,10 @@ def init_db() -> None:
             description TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_chat_conversations (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -54,8 +59,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_chat_messages (
             id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL,
@@ -72,8 +79,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_research_sessions (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -88,16 +97,20 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_research_graphs (
             project_id TEXT PRIMARY KEY,
             nodes JSONB NOT NULL DEFAULT '[]',
             edges JSONB NOT NULL DEFAULT '[]',
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_review_sessions (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -111,8 +124,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_review_items (
             id TEXT PRIMARY KEY,
             review_id TEXT NOT NULL,
@@ -124,8 +139,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_review_comments (
             id TEXT PRIMARY KEY,
             review_id TEXT NOT NULL,
@@ -134,8 +151,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_review_history (
             id TEXT PRIMARY KEY,
             review_id TEXT NOT NULL,
@@ -149,8 +168,10 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_workflows (
             id TEXT PRIMARY KEY,
             project_id TEXT,
@@ -161,8 +182,10 @@ def init_db() -> None:
             capability_req JSONB NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_runs (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -175,8 +198,10 @@ def init_db() -> None:
             status TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_steps (
             id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -186,8 +211,10 @@ def init_db() -> None:
             depends_on JSONB NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_jobs (
             id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -203,8 +230,10 @@ def init_db() -> None:
             produced_asset_ids JSONB NOT NULL DEFAULT '[]',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_execution_decisions (
             decision_id TEXT PRIMARY KEY,
             capability_id TEXT NOT NULL,
@@ -216,8 +245,10 @@ def init_db() -> None:
             confidence DOUBLE PRECISION NOT NULL,
             timestamp TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agents (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -233,8 +264,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_memory_references (
             id TEXT PRIMARY KEY,
             memory_id TEXT NOT NULL,
@@ -243,8 +276,10 @@ def init_db() -> None:
             asset_id TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_schedules (
             schedule_id TEXT PRIMARY KEY,
             plan_id TEXT NOT NULL,
@@ -259,8 +294,10 @@ def init_db() -> None:
             queue_metadata JSONB NOT NULL DEFAULT '{}',
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_runtime_executions (
             execution_id TEXT PRIMARY KEY,
             schedule_id TEXT NOT NULL,
@@ -288,8 +325,10 @@ def init_db() -> None:
             cancellation_requested BOOLEAN NOT NULL DEFAULT FALSE,
             timeline JSONB NOT NULL DEFAULT '[]'
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_teams (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -300,8 +339,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_assignments (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL,
@@ -324,15 +365,19 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_mailboxes (
             agent_id TEXT PRIMARY KEY,
             pending_messages JSONB NOT NULL DEFAULT '[]',
             history JSONB NOT NULL DEFAULT '[]'
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_conversations (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL,
@@ -340,8 +385,10 @@ def init_db() -> None:
             message_ids JSONB NOT NULL DEFAULT '[]',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_agent_messages (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL,
@@ -353,8 +400,10 @@ def init_db() -> None:
             correlation_id TEXT,
             reply_to TEXT
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_graph_nodes (
             id TEXT PRIMARY KEY,
             node_type TEXT NOT NULL,
@@ -366,8 +415,10 @@ def init_db() -> None:
             archived BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_graph_edges (
             id TEXT PRIMARY KEY,
             relationship TEXT NOT NULL,
@@ -376,8 +427,10 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_graph_snapshots (
             id TEXT PRIMARY KEY,
             scope_type TEXT NOT NULL,
@@ -386,8 +439,10 @@ def init_db() -> None:
             edge_ids JSONB NOT NULL DEFAULT '[]',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_assets (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -416,8 +471,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             deleted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_automation_rules (
             id TEXT PRIMARY KEY,
             project_id TEXT,
@@ -435,8 +492,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             disabled_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_automation_runs (
             id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -451,8 +510,10 @@ def init_db() -> None:
             retries INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_automation_logs (
             id TEXT PRIMARY KEY,
             run_id TEXT,
@@ -463,8 +524,10 @@ def init_db() -> None:
             context JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_automation_schedules (
             id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -474,8 +537,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_approval_requests (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -508,8 +573,10 @@ def init_db() -> None:
             expires_at TIMESTAMP WITH TIME ZONE,
             decided_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_approval_history (
             id TEXT PRIMARY KEY,
             approval_id TEXT NOT NULL,
@@ -521,8 +588,10 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_approval_policies (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -542,8 +611,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_workers (
             id TEXT PRIMARY KEY,
             hostname TEXT NOT NULL,
@@ -562,8 +633,10 @@ def init_db() -> None:
             registered_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_worker_heartbeats (
             id TEXT PRIMARY KEY,
             worker_id TEXT NOT NULL,
@@ -572,8 +645,10 @@ def init_db() -> None:
             metrics JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_reservations (
             id TEXT PRIMARY KEY,
             worker_id TEXT NOT NULL,
@@ -588,8 +663,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             released_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_leases (
             id TEXT PRIMARY KEY,
             reservation_id TEXT NOT NULL,
@@ -602,8 +679,10 @@ def init_db() -> None:
             expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
             released_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_organizations (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -619,8 +698,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_teams (
             id TEXT PRIMARY KEY,
             organization_id TEXT NOT NULL,
@@ -635,8 +716,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_roles (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -648,8 +731,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_identities (
             id TEXT PRIMARY KEY,
             subject TEXT NOT NULL UNIQUE,
@@ -662,8 +747,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             last_login_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_memberships (
             id TEXT PRIMARY KEY,
             identity_id TEXT NOT NULL,
@@ -678,8 +765,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_policy_sets (
             id TEXT PRIMARY KEY,
             organization_id TEXT NOT NULL,
@@ -693,8 +782,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_audit_records (
             id TEXT PRIMARY KEY,
             organization_id TEXT,
@@ -709,19 +800,22 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
 
         # Installation-level settings. First-run state lives here rather than in
         # the browser: localStorage forgets on a cache clear and would show setup
         # again in a second window. One row per key; the onboarding row is the
         # only one today.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_app_settings (
             key TEXT PRIMARY KEY,
             value JSONB NOT NULL DEFAULT '{}',
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
 
         # -- Media Factory (M013) ------------------------------------------
         #
@@ -729,7 +823,8 @@ def init_db() -> None:
         # (series, episodes, scripts, scenes) carry no media columns at all,
         # so a future blog or podcast renderer never inherits a field that only
         # video needed. See docs/VIDEO_FACTORY.md.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_series (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -738,7 +833,8 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
         # M013 pre-release rename: Campaign became Series, because Atlas runs
         # media properties for years and a campaign is by definition something
         # that ends. Neither shape was ever released, so this only has to fix
@@ -746,7 +842,8 @@ def init_db() -> None:
         # NOT EXISTS` cannot reshape an existing table, hence the explicit
         # rename. Safe to delete once no such database remains.
         conn.execute(text("DROP TABLE IF EXISTS atlas_campaigns"))
-        conn.execute(text("""
+        conn.execute(
+            text("""
         DO $$
         BEGIN
             IF EXISTS (
@@ -756,8 +853,10 @@ def init_db() -> None:
                 ALTER TABLE atlas_episodes RENAME COLUMN campaign_id TO series_id;
             END IF;
         END $$;
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_episodes (
             id TEXT PRIMARY KEY,
             series_id TEXT NOT NULL,
@@ -769,8 +868,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_scripts (
             id TEXT PRIMARY KEY,
             episode_id TEXT NOT NULL,
@@ -780,8 +881,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             UNIQUE (episode_id, version)
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_scenes (
             id TEXT PRIMARY KEY,
             script_id TEXT NOT NULL,
@@ -793,8 +896,10 @@ def init_db() -> None:
             metadata JSONB NOT NULL DEFAULT '{}',
             UNIQUE (script_id, index_in_script)
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_renditions (
             id TEXT PRIMARY KEY,
             episode_id TEXT NOT NULL,
@@ -808,8 +913,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_scene_renders (
             id TEXT PRIMARY KEY,
             rendition_id TEXT NOT NULL,
@@ -840,7 +947,8 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             UNIQUE (rendition_id, scene_id)
         )
-        """))
+        """)
+        )
         # Provenance arrived after the first M013 tables, so databases created
         # before it need the columns added. Additive, hence ADD COLUMN IF NOT
         # EXISTS rather than a guarded block.
@@ -851,18 +959,21 @@ def init_db() -> None:
         # zero tables. Nobody noticed because nobody had built this schema from
         # nothing in a long time, which is exactly the class of bug that waits
         # for a new machine or a new contributor.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         ALTER TABLE atlas_scene_renders
         ADD COLUMN IF NOT EXISTS provider_handle TEXT,
         ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS render_ms INTEGER,
         ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION
-        """))
+        """)
+        )
         # Generic, and deliberately so. The kernel records "this node was last
         # built with this effective fingerprint" and knows nothing about what a
         # node is. Video uses it today; a podcast, a blog post or a listing will
         # use the same table without a migration.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_dependency_fingerprints (
             scope TEXT NOT NULL,
             node_id TEXT NOT NULL,
@@ -870,8 +981,10 @@ def init_db() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
             PRIMARY KEY (scope, node_id)
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_publications (
             id TEXT PRIMARY KEY,
             rendition_id TEXT NOT NULL,
@@ -889,7 +1002,8 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
         # -- Opportunity Factory (M014) ------------------------------------
         #
         # Business is the permanent customer record: one row per company, for
@@ -907,7 +1021,8 @@ def init_db() -> None:
         # own duplicate of the same customer. Nothing was ever released, so this
         # only has to fix development databases created the same day. Safe to
         # delete once none remain.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.tables
@@ -917,8 +1032,10 @@ def init_db() -> None:
                 ALTER TABLE atlas_prospects RENAME TO atlas_businesses;
             END IF;
         END $$;
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         DO $$
         DECLARE t text;
         BEGIN
@@ -931,8 +1048,10 @@ def init_db() -> None:
                 END IF;
             END LOOP;
         END $$;
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_businesses (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -946,9 +1065,11 @@ def init_db() -> None:
             first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
             last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
         # Additive columns for databases that predate identity resolution.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         ALTER TABLE atlas_businesses
         ADD COLUMN IF NOT EXISTS identity_keys JSONB NOT NULL DEFAULT '[]',
         ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '[]',
@@ -956,22 +1077,26 @@ def init_db() -> None:
             NOT NULL DEFAULT now(),
         ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE
             NOT NULL DEFAULT now()
-        """))
+        """)
+        )
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS niche"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS source"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS discovered_at"))
         # GIN over the identity keys: resolution runs once per discovered
         # business, and a sequential scan per candidate is the difference
         # between discovery scaling and not.
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_businesses_identity_idx "
-            "ON atlas_businesses USING GIN (identity_keys jsonb_path_ops)"
-        ))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_businesses_identity_idx "
+                "ON atlas_businesses USING GIN (identity_keys jsonb_path_ops)"
+            )
+        )
         # Evidence is NOT NULL and the application refuses an empty list. A
         # claim Atlas cannot substantiate must be impossible to store, not
         # merely discouraged. Confidence records how much the observation is
         # worth trusting -- not every detector is equally reliable.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_findings (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -982,12 +1107,16 @@ def init_db() -> None:
             confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0,
             detected_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text(
-            "ALTER TABLE atlas_findings ADD COLUMN IF NOT EXISTS confidence "
-            "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
-        ))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE atlas_findings ADD COLUMN IF NOT EXISTS confidence "
+                "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            )
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_opportunities (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -1000,8 +1129,10 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_proposals (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -1016,8 +1147,10 @@ def init_db() -> None:
             generator TEXT NOT NULL DEFAULT 'unknown',
             generated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_outreach_messages (
             id TEXT PRIMARY KEY,
             proposal_id TEXT NOT NULL,
@@ -1034,7 +1167,8 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             sent_at TIMESTAMP WITH TIME ZONE
         )
-        """))
+        """)
+        )
         # Atlas's permanent memory of a company. Append-only, keyed on the
         # business, and **shared across factories**: outreach today; a website
         # deployed, a listing updated, a video published, a support ticket
@@ -1050,7 +1184,8 @@ def init_db() -> None:
         # Pre-release rename from atlas_pipeline_events: "pipeline" named it
         # after the first factory to write to it. Safe to delete once no
         # development database created earlier remains.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.tables
@@ -1060,8 +1195,10 @@ def init_db() -> None:
                 ALTER TABLE atlas_pipeline_events RENAME TO atlas_business_events;
             END IF;
         END $$;
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_business_events (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -1072,24 +1209,31 @@ def init_db() -> None:
             detail JSONB NOT NULL DEFAULT '{}',
             at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text(
-            "ALTER TABLE atlas_business_events ADD COLUMN IF NOT EXISTS factory TEXT "
-            "NOT NULL DEFAULT 'opportunity'"
-        ))
-        conn.execute(text(
-            "ALTER TABLE atlas_business_events ALTER COLUMN opportunity_id DROP NOT NULL"
-        ))
+        """)
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE atlas_business_events ADD COLUMN IF NOT EXISTS factory TEXT "
+                "NOT NULL DEFAULT 'opportunity'"
+            )
+        )
+        conn.execute(
+            text("ALTER TABLE atlas_business_events ALTER COLUMN opportunity_id DROP NOT NULL")
+        )
         # Reading one company's whole history is the common query, so the index
         # leads with the business and orders by time.
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_business_events_timeline_idx "
-            "ON atlas_business_events (business_id, at)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_business_events_factory_idx "
-            "ON atlas_business_events (factory, kind)"
-        ))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_business_events_timeline_idx "
+                "ON atlas_business_events (business_id, at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_business_events_factory_idx "
+                "ON atlas_business_events (factory, kind)"
+            )
+        )
         # -- Website Factory (M015) ----------------------------------------
         #
         # Same layering as Media and Opportunity: a site is content and carries
@@ -1101,7 +1245,8 @@ def init_db() -> None:
         # memory" and behind moving a customer between hosts without a
         # migration. A row pointing at a directory on somebody's laptop would
         # satisfy every type in the package and none of the invariants.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_sites (
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -1111,12 +1256,14 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
         # `fingerprint` is written once and recomputed on read. The redundancy
         # is deliberate: it is what lets a rebuild be checked rather than
         # trusted, and it catches both an altered record and non-deterministic
         # rendering.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_site_builds (
             id TEXT PRIMARY KEY,
             site_id TEXT NOT NULL,
@@ -1128,13 +1275,15 @@ def init_db() -> None:
             provenance JSONB NOT NULL DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
+        """)
+        )
         # Atlas's record of what is live and where -- never read back from a
         # provider's API, which depends on an account that can be closed. One
         # build may have many deployments: the same artifact on Cloudflare and
         # on Hetzner is two rows, and moving a customer promotes a different one
         # rather than rebuilding anything.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_site_deployments (
             id TEXT PRIMARY KEY,
             build_id TEXT NOT NULL,
@@ -1151,47 +1300,61 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             promoted_at TIMESTAMP WITH TIME ZONE
         )
-        """))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_site_deployments_live_idx "
-            "ON atlas_site_deployments (site_id, target, status)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS atlas_site_builds_site_idx "
-            "ON atlas_site_builds (site_id, created_at)"
-        ))
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_site_deployments_live_idx "
+                "ON atlas_site_deployments (site_id, target, status)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_site_builds_site_idx "
+                "ON atlas_site_builds (site_id, created_at)"
+            )
+        )
         # Durable so that "never contact me again" survives a restart. A
         # suppression list that lives only in memory is not a suppression list.
-        conn.execute(text("""
+        conn.execute(
+            text("""
         CREATE TABLE IF NOT EXISTS atlas_outreach_suppressions (
             entry TEXT PRIMARY KEY,
             reason TEXT NOT NULL DEFAULT '',
             created_at TIMESTAMP WITH TIME ZONE NOT NULL
         )
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_runtime_executions
         ADD COLUMN IF NOT EXISTS approval_id TEXT,
         ADD COLUMN IF NOT EXISTS worker_id TEXT,
         ADD COLUMN IF NOT EXISTS lease_id TEXT,
         ADD COLUMN IF NOT EXISTS reservation_id TEXT,
         ADD COLUMN IF NOT EXISTS placement_reason TEXT
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_runs
         ADD COLUMN IF NOT EXISTS workspace_id TEXT,
         ADD COLUMN IF NOT EXISTS project_id TEXT,
         ADD COLUMN IF NOT EXISTS workflow_id TEXT,
         ADD COLUMN IF NOT EXISTS produced_asset_ids JSONB NOT NULL DEFAULT '[]'
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_jobs
         ADD COLUMN IF NOT EXISTS execution_decision_id TEXT,
         ADD COLUMN IF NOT EXISTS provider_name TEXT,
         ADD COLUMN IF NOT EXISTS output JSONB NOT NULL DEFAULT '{}',
         ADD COLUMN IF NOT EXISTS produced_asset_ids JSONB NOT NULL DEFAULT '[]'
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_assets
         ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT 'project-unassigned',
         ADD COLUMN IF NOT EXISTS workflow_id TEXT,
@@ -1212,23 +1375,31 @@ def init_db() -> None:
         ADD COLUMN IF NOT EXISTS ai_summary TEXT,
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE,
         ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_assets
         ALTER COLUMN run_id DROP NOT NULL,
         ALTER COLUMN job_id DROP NOT NULL
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         UPDATE atlas_assets
         SET project_id = 'project-unassigned'
         WHERE project_id IS NULL
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         UPDATE atlas_assets
         SET updated_at = created_at
         WHERE updated_at IS NULL
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_chat_conversations
         ALTER COLUMN project_id SET DEFAULT 'project-unassigned',
         ALTER COLUMN title SET DEFAULT 'Conversation',
@@ -1236,37 +1407,50 @@ def init_db() -> None:
         ALTER COLUMN prompt_version SET DEFAULT 0,
         ALTER COLUMN response_version SET DEFAULT 0,
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_chat_messages
         ALTER COLUMN version SET DEFAULT 1,
         ALTER COLUMN role SET DEFAULT 'assistant',
         ALTER COLUMN content SET DEFAULT '',
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_research_sessions
         ALTER COLUMN status SET DEFAULT 'active',
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_review_sessions
         ALTER COLUMN status SET DEFAULT 'pending',
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_review_items
         ALTER COLUMN decision SET DEFAULT 'pending',
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_review_comments
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
         ALTER TABLE atlas_review_history
         ALTER COLUMN metadata SET DEFAULT '{}'::jsonb
-        """))
+        """)
+        )
         _create_indexes(conn)
 
 
