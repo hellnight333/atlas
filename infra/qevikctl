@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""qevikctl — start jobs that survive a dropped connection, and read them back.
+
+    qevikctl status                     what the machine and its jobs are doing
+    qevikctl start --kind e2e -- pytest -m e2e -q
+    qevikctl list
+    qevikctl show <job_id>
+    qevikctl logs <job_id> [--stderr] [--tail 40]
+    qevikctl wait <job_id> [--timeout 600]
+    qevikctl stop <job_id>
+
+Every long operation goes through this. Running one directly over SSH ties its
+survival to a link that demonstrably does not survive, and loses both the work
+and the record of it when the link drops.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+for candidate in (
+    Path("/opt/qevik/atlas/packages/kernel"),
+    Path(__file__).resolve().parents[1] / "packages" / "kernel",
+):
+    if candidate.is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+
+from atlas_kernel.jobs import JobError, JobRunner, collect  # noqa: E402
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="qevikctl", description=__doc__)
+    parser.add_argument("--root", default=None, help="job directory (default /var/lib/qevik/jobs)")
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("status", help="host and job status, for after reconnecting")
+
+    start = sub.add_parser("start", help="run a command detached")
+    start.add_argument("--kind", default="command")
+    start.add_argument("--cwd", default="/opt/qevik/atlas")
+    start.add_argument("--note", default="")
+    start.add_argument(
+        "--slice",
+        dest="slice_name",
+        default=None,
+        help="run inside a systemd slice (e.g. qevik-jobs.slice) so the kernel "
+        "bounds its memory, tasks and CPU",
+    )
+    start.add_argument("cmd", nargs=argparse.REMAINDER, help="-- then the command")
+
+    listing = sub.add_parser("list", help="recent jobs, newest first")
+    listing.add_argument("--limit", type=int, default=20)
+
+    for name in ("show", "stop"):
+        p = sub.add_parser(name)
+        p.add_argument("job_id")
+
+    logs = sub.add_parser("logs", help="the end of a job's output")
+    logs.add_argument("job_id")
+    logs.add_argument("--stderr", action="store_true")
+    logs.add_argument("--tail", type=int, default=40)
+
+    waiting = sub.add_parser("wait", help="block until a job finishes")
+    waiting.add_argument("job_id")
+    waiting.add_argument("--timeout", type=float, default=1800.0)
+
+    args = parser.parse_args(argv)
+    runner = JobRunner(args.root)
+
+    try:
+        return _dispatch(args, runner)
+    except JobError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+def _emit(args, payload, text: str) -> None:
+    print(json.dumps(payload, indent=2, default=str) if args.json else text)
+
+
+def _dispatch(args, runner: JobRunner) -> int:
+    if args.command == "status":
+        report = collect(runner)
+        _emit(args, report.model_dump(mode="json"), report.render())
+        # Exit code carries the verdict, so a caller can react without parsing.
+        return 0 if report.healthy else 1
+
+    if args.command == "start":
+        command = [a for a in args.cmd if a != "--"]
+        if not command:
+            print("nothing to run — put the command after --", file=sys.stderr)
+            return 2
+        if args.slice_name:
+            # systemd-run puts the work in the slice's cgroup, so the limits are
+            # enforced by the kernel rather than by the job's own good
+            # behaviour. --scope runs it as a child of this call rather than as
+            # a transient service, which keeps the exit code on our shell.
+            command = [
+                "systemd-run",
+                "--scope",
+                "--quiet",
+                f"--slice={args.slice_name}",
+                *command,
+            ]
+        record = runner.start(command, kind=args.kind, cwd=args.cwd, note=args.note)
+        _emit(
+            args,
+            record.model_dump(mode="json"),
+            f"started {record.id}\n  {record.command}\n  logs: {record.stdout_path}",
+        )
+        return 0
+
+    if args.command == "list":
+        jobs = runner.list(limit=args.limit)
+        _emit(
+            args,
+            [j.model_dump(mode="json") for j in jobs],
+            "\n".join(str(j) for j in jobs) or "no jobs",
+        )
+        return 0
+
+    if args.command == "show":
+        record = runner.get(args.job_id)
+        artifacts = runner.artifacts(args.job_id)
+        text = "\n".join(
+            [
+                str(record),
+                f"  command   : {record.command}",
+                f"  cwd       : {record.cwd}",
+                f"  started   : {record.started_at:%Y-%m-%d %H:%M:%S UTC}",
+                f"  ended     : {record.ended_at:%Y-%m-%d %H:%M:%S UTC}"
+                if record.ended_at
+                else "  ended     : —",
+                f"  exit code : {record.exit_code if record.exit_code is not None else '—'}",
+                f"  stdout    : {record.stdout_path}",
+                f"  stderr    : {record.stderr_path}",
+                f"  artifacts : {len(artifacts)} in {record.artifacts_dir}",
+            ]
+        )
+        _emit(args, {**record.model_dump(mode="json"), "artifacts": artifacts}, text)
+        return 0 if record.ok or not record.finished else 1
+
+    if args.command == "logs":
+        stream = "stderr" if args.stderr else "stdout"
+        print(runner.output(args.job_id, stream=stream, tail=args.tail))
+        return 0
+
+    if args.command == "wait":
+        record = runner.wait(args.job_id, timeout=args.timeout)
+        _emit(args, record.model_dump(mode="json"), str(record))
+        return 0 if record.ok else 1
+
+    if args.command == "stop":
+        record = runner.stop(args.job_id)
+        _emit(args, record.model_dump(mode="json"), str(record))
+        return 0
+
+    return 2  # pragma: no cover - argparse rejects unknown commands first
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
