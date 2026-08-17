@@ -279,6 +279,21 @@ def site_deploy(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, Any
     if target is None:
         raise ActionError("site.deploy needs a deployment target in the context")
 
+    # Authorisation is checked before anything is read or written. Refusing
+    # after gathering the files would still be correct, but it does work on
+    # behalf of a request that was never permitted — and it makes the refusal
+    # depend on the workspace being valid, which has nothing to do with it.
+    public = bool(getattr(target, "is_public", False)) or payload.get("public") is True
+    if public:
+        approved = getattr(ctx, "approvals", None) is not None and getattr(
+            ctx.approvals, "approved", False
+        )
+        if not approved:
+            raise PublishNotAuthorised(
+                f"{target.name} is outward-facing. A plan may not publish to it without an "
+                "explicit approval; nothing was sent."
+            )
+
     source = str(payload.get("source_dir") or "dist")
     slug = _slugify(str(payload.get("slug") or ctx.workspace.record.name))
 
@@ -293,15 +308,6 @@ def site_deploy(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, Any
     }
     if not files:
         raise ActionError(f"nothing to deploy: no publishable files under {source!r}")
-
-    public = bool(getattr(target, "is_public", False)) or payload.get("public") is True
-    if public:
-        approved = ctx.approvals is not None and getattr(ctx.approvals, "approved", False)
-        if not approved:
-            raise PublishNotAuthorised(
-                f"{target.name} is outward-facing. A plan may not publish to it without an "
-                "explicit approval; nothing was sent."
-            )
 
     version = target.publish(slug, files)
     url = target.promote(slug, version.id) if payload.get("promote", True) else ""

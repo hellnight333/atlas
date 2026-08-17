@@ -1,0 +1,64 @@
+# Qevik Website Factory — the public static host.
+#
+# Distinct from `atlas-sites.Caddyfile`, which is bound to loopback and exists
+# to prove the pipeline over an SSH tunnel. This one is reachable from the
+# internet, which is the whole point and also the reason it serves exactly one
+# thing.
+#
+# **It never proxies the control plane.** The Qevik API listens on
+# 127.0.0.1:8080 and stays there until authentication exists. A `reverse_proxy`
+# line added here would publish an unauthenticated control plane that can deploy
+# sites and send email, so there is deliberately no such line to edit by
+# accident.
+
+{
+	admin off
+	# Where Let's Encrypt sends expiry warnings once a domain exists.
+	email qevikos@gmail.com
+}
+
+# --- Reachable today, by IP -------------------------------------------------
+#
+# No domain resolves to this host yet, and a certificate authority will not
+# issue for a bare IP — so this is plain HTTP and is labelled as such rather
+# than described as "secure". It is genuinely public: a browser anywhere can
+# open it, which is what makes a deployment verifiable rather than claimed.
+:80 {
+	root * /srv/sites
+
+	# A site directory holds `versions/` and a `current` symlink; the live
+	# document root is the symlink. This is the server-side half of
+	# publish-then-promote — the adapter moves files and swaps the link, and the
+	# web server is what decides which version is live.
+	@site_root path_regexp siteroot ^/([^/]+)/?$
+	rewrite @site_root /{re.siteroot.1}/current/
+
+	file_server
+
+	# Deployment verification reads this to confirm it reached Qevik's host and
+	# not something else answering on the address.
+	header X-Qevik-Host "sites"
+
+	# Logs go to journald, which the unit's hardening permits and the rest of
+	# the stack already uses. A file under /var/log/caddy is blocked by
+	# ProtectSystem=strict and fails the service at boot rather than at write.
+	log {
+		format console
+	}
+}
+
+# --- Domains, when there are any --------------------------------------------
+#
+# Drop a file into /etc/caddy/sites.d/ containing a block like:
+#
+#     sites.example.com {
+#         root * /srv/sites
+#         @site_root path_regexp siteroot ^/([^/]+)/?$
+#         rewrite @site_root /{re.siteroot.1}/current/
+#         file_server
+#     }
+#
+# Caddy then obtains and renews a certificate automatically, and HTTPS works
+# with no further change here. The DNS A record pointing at this host is the
+# only missing piece, and it is not something the server can create for itself.
+import /etc/caddy/sites.d/*.caddy
