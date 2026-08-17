@@ -7,6 +7,9 @@ package require a 300 MB dependency would be a poor trade for one adapter.
 
 from __future__ import annotations
 
+import functools
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -46,6 +49,28 @@ class BrowserSession(Protocol):
     def close(self) -> None: ...
 
 
+def _on_browser_thread(method):
+    """Route a call onto the session's own thread.
+
+    Playwright's sync API refuses to run inside a live asyncio event loop, and
+    the Qevik API is FastAPI — so without this the browser capability works from
+    a script and fails from the server, which is the worst place to find out.
+    Confirmed by running it: `PlaywrightSession` raised "Playwright Sync API
+    inside the asyncio loop" the moment it was called from a coroutine.
+
+    A dedicated thread has no running loop, so the sync API is happy and the
+    interface stays synchronous for every caller. Applied uniformly rather than
+    only when a loop is detected, because a capability that behaves differently
+    under the server than under a test is not one anybody can reason about.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return self._submit(lambda: method(self, *args, **kwargs))
+
+    return wrapper
+
+
 class PlaywrightSession:
     """Playwright/Chromium backend.
 
@@ -53,6 +78,9 @@ class PlaywrightSession:
     Chromium is roughly 400 MB resident per context, and the canonical server
     has 8 GB shared with PostgreSQL and the API — so contexts are created per
     session and closed eagerly rather than pooled.
+
+    Every Playwright call happens on one dedicated thread. See
+    `_on_browser_thread` for why.
     """
 
     def __init__(
@@ -75,10 +103,33 @@ class PlaywrightSession:
         self._context = None
         self._page = None
         self._console: list[str] = []
+        #: One thread, owning every Playwright object. Playwright's sync API is
+        #: not thread-safe, so "one thread" is a correctness requirement rather
+        #: than a throughput choice.
+        self._pool: ThreadPoolExecutor | None = None
+        self._thread_id: int | None = None
+
+    def _submit(self, call):
+        """Run `call` on the browser thread and wait for it.
+
+        Re-entrant: a method already running on that thread calls straight
+        through. Submitting again would queue work behind the task currently
+        waiting for it, on a pool of exactly one thread — a deadlock, not a
+        slowdown.
+        """
+        if self._pool is None or threading.get_ident() == self._thread_id:
+            return call()
+        return self._pool.submit(call).result()
 
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> PlaywrightSession:
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qevik-browser")
+            self._thread_id = self._pool.submit(threading.get_ident).result()
+        return self._submit(self._start_on_thread)
+
+    def _start_on_thread(self) -> PlaywrightSession:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as error:  # pragma: no cover - environment dependent
@@ -113,6 +164,15 @@ class PlaywrightSession:
         return self
 
     def close(self) -> None:
+        if self._pool is not None:
+            self._submit(self._close_on_thread)
+            self._pool.shutdown(wait=True)
+            self._pool = None
+            self._thread_id = None
+        else:
+            self._close_on_thread()
+
+    def _close_on_thread(self) -> None:
         for closer in (self._context, self._browser):
             try:
                 if closer is not None:
@@ -139,6 +199,7 @@ class PlaywrightSession:
 
     # -- actions -----------------------------------------------------------
 
+    @_on_browser_thread
     def open(self, url: str) -> PageSnapshot:
         page = self._require_page()
         self._console.clear()
@@ -148,9 +209,11 @@ class PlaywrightSession:
             raise BrowserError(f"could not open {url}: {str(error)[:200]}") from error
         return self._snapshot(status=response.status if response else None)
 
+    @_on_browser_thread
     def snapshot(self) -> PageSnapshot:
         return self._snapshot(status=None)
 
+    @_on_browser_thread
     def click(self, ref: str) -> PageSnapshot:
         page = self._require_page()
         try:
@@ -159,6 +222,7 @@ class PlaywrightSession:
             raise BrowserError(f"could not click {ref}: {str(error)[:200]}") from error
         return self._snapshot(status=None)
 
+    @_on_browser_thread
     def type(self, ref: str, text: str) -> PageSnapshot:
         page = self._require_page()
         try:
@@ -167,6 +231,7 @@ class PlaywrightSession:
             raise BrowserError(f"could not type into {ref}: {str(error)[:200]}") from error
         return self._snapshot(status=None)
 
+    @_on_browser_thread
     def extract(self, expression: str) -> Any:
         page = self._require_page()
         try:
@@ -174,6 +239,7 @@ class PlaywrightSession:
         except Exception as error:  # noqa: BLE001
             raise BrowserError(f"extraction failed: {str(error)[:200]}") from error
 
+    @_on_browser_thread
     def screenshot(self, path: Path, *, full_page: bool = True) -> Screenshot:
         page = self._require_page()
         path.parent.mkdir(parents=True, exist_ok=True)

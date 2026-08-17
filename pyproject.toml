@@ -45,6 +45,13 @@ include = ["atlas_kernel*"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages/kernel/tests"]
+# Kept separate on purpose. A unit test that quietly needs a browser, a port or
+# a network is the one nobody can reproduce; selecting `-m "not e2e"` must give
+# a run that works on a laptop with nothing installed.
+markers = [
+    "integration: exercises a real subsystem (filesystem, subprocess, database)",
+    "e2e: drives a whole workflow end to end; needs a browser, ports or network",
+]
 addopts = "--cov=packages/kernel/atlas_kernel --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
 
 [tool.black]
