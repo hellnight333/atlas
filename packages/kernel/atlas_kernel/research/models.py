@@ -86,6 +86,18 @@ class SearchResults(BaseModel):
     def __len__(self) -> int:
         return len(self.results)
 
+    def __iter__(self):
+        """Iterate the results, not the model's fields.
+
+        Pydantic's default ``__iter__`` yields ``(field_name, value)`` pairs, so
+        a model carrying ``__len__`` reports five results and then iterates four
+        fields. That mismatch is not a style problem — it silently produced
+        ``'tuple' object has no attribute 'url'`` in a caller that had every
+        reason to believe ``for r in results`` was correct. ``model_dump()``
+        remains the supported serialisation path and is unaffected.
+        """
+        return iter(self.results)
+
     @property
     def urls(self) -> list[str]:
         return [r.url for r in self.results]
