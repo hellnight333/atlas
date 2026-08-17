@@ -37,8 +37,11 @@ Restart=on-failure
 RestartSec=5s
 # Give up rather than restart-loop forever; a service failing 5 times in a
 # minute is broken in a way restarting will not fix, and the log should say so.
-StartLimitBurst=5
-StartLimitIntervalSec=60
+# StartLimitBurst and StartLimitIntervalSec used to sit here, in [Service],
+# where systemd ignores them and says so on every reload — a restart rate limit
+# that silently did nothing while reading as protection. They now live in
+# [Unit], in the resources.conf drop-in, which is also where they survive this
+# unit being redeployed.
 
 # Hardening. None of this is exotic; it is the set that costs nothing and
 # removes whole categories of blast radius on a box that will later run
