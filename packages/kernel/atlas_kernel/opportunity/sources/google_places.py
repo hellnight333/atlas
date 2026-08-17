@@ -153,7 +153,16 @@ class GooglePlacesSource:
 
     def _get_client(self) -> httpx.Client:
         if self._client is None:
-            self._client = httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
+            # Bound to IPv4. A dual-stack host prefers IPv6, so the call leaves
+            # from an address the key's allowlist does not contain and Google
+            # answers API_KEY_IP_ADDRESS_BLOCKED — which reads like a wrong key
+            # and is not. Pinning here keeps the restriction to a single IPv4
+            # address, which is the tightest useful form and the one a person
+            # can actually copy out of a Hetzner console.
+            self._client = httpx.Client(
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+            )
         return self._client
 
     def close(self) -> None:
