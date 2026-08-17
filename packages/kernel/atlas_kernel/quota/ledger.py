@@ -1,0 +1,212 @@
+"""The ledger: reserve before acting, and plan the day from what is left.
+
+Two behaviours matter more than the bookkeeping.
+
+**Refuse rather than fail.** A connector asks before it acts. Discovering a
+limit from a platform's 403 means the work is already half-done, the artifact is
+half-uploaded and nobody can say whether it counted. Asking first turns an
+outage into a decision.
+
+**Never silently do nothing.** The operator's instruction was to set a floor and
+a ceiling and keep producing rather than stopping — so `plan()` returns what is
+achievable *and why it is not more*. A production loop that quietly returns zero
+looks identical to one that is broken, and the difference between "the quota is
+gone" and "the code is wrong" is a day of debugging nobody needed.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from pydantic import BaseModel, ConfigDict
+
+from .models import (
+    LimitKind,
+    QuotaExhausted,
+    QuotaPolicy,
+    QuotaSpend,
+    QuotaStatus,
+    QuotaWindow,
+    window_end,
+    window_start,
+)
+
+
+class Plan(BaseModel):
+    """How much of the day's ambition the quota actually permits."""
+
+    model_config = ConfigDict(frozen=True)
+
+    resource: str
+    #: What to attempt. Never negative, never above the ceiling asked for.
+    count: int
+    #: The ceiling the caller asked for.
+    requested: int
+    #: How many short of the caller's floor, if any. Zero when the floor is met.
+    shortfall: int = 0
+    #: Plain English, for a daily report that a person reads.
+    reason: str = ""
+
+    @property
+    def met_the_floor(self) -> bool:
+        return self.shortfall == 0
+
+    def __str__(self) -> str:
+        return f"{self.resource}: {self.count} of {self.requested} — {self.reason}"
+
+
+class QuotaLedger:
+    """Tracks allowances across windows and answers what may still be done.
+
+    Held in memory. The window logic is deliberately computed from timestamped
+    entries rather than from a counter, so persisting this later is a matter of
+    storing `QuotaSpend` rows and replaying them — no redesign, and rolling
+    windows keep working across a restart, which a counter could never do.
+    """
+
+    def __init__(self, policies: list[QuotaPolicy] | None = None, *, now=None) -> None:
+        self._policies: dict[str, QuotaPolicy] = {}
+        self._spends: list[QuotaSpend] = []
+        #: Injected so windows and rollovers are testable without waiting a day.
+        self._now = now or (lambda: datetime.now(UTC))
+        for policy in policies or []:
+            self.register(policy)
+
+    def register(self, policy: QuotaPolicy) -> None:
+        self._policies[policy.resource] = policy
+
+    def policy(self, resource: str) -> QuotaPolicy:
+        try:
+            return self._policies[resource]
+        except KeyError:
+            raise KeyError(
+                f"no quota policy for {resource!r}. Register one before spending against "
+                "it — an unmetered resource is how a limit gets discovered from a 403."
+            ) from None
+
+    def _in_window(self, policy: QuotaPolicy, now: datetime) -> list[QuotaSpend]:
+        entries = [s for s in self._spends if s.resource == policy.resource]
+        if policy.window is QuotaWindow.ROLLING_24H:
+            cutoff = now - timedelta(hours=24)
+            return [s for s in entries if s.at > cutoff]
+        start = window_start(policy.window, now)
+        return [s for s in entries if start is None or s.at >= start]
+
+    def status(self, resource: str) -> QuotaStatus:
+        policy = self.policy(resource)
+        now = self._now()
+        used = sum(s.amount for s in self._in_window(policy, now))
+        # Ordinary work never sees the floor; essential work does.
+        ordinary = max(0.0, policy.limit - policy.floor - used)
+        essential = max(0.0, policy.limit - used)
+        return QuotaStatus(
+            resource=resource,
+            kind=policy.kind,
+            limit=policy.limit,
+            used=used,
+            remaining=ordinary,
+            remaining_essential=essential,
+            window=policy.window,
+            resets_at=window_end(policy.window, now),
+        )
+
+    def remaining(self, resource: str, *, essential: bool = False) -> float:
+        status = self.status(resource)
+        return status.remaining_essential if essential else status.remaining
+
+    def spend(
+        self,
+        resource: str,
+        amount: float,
+        *,
+        essential: bool = False,
+        note: str = "",
+    ) -> QuotaStatus:
+        """Consume the allowance, or refuse.
+
+        Raises before recording anything. A partially applied spend is worse
+        than a refusal because it is invisible.
+        """
+        if amount < 0:
+            raise ValueError("a spend cannot be negative")
+        policy = self.policy(resource)
+        available = self.remaining(resource, essential=essential)
+        if amount > available:
+            raise QuotaExhausted(resource, policy.kind, available, amount)
+        self._spends.append(
+            QuotaSpend(
+                resource=resource,
+                amount=amount,
+                at=self._now(),
+                essential=essential,
+                note=note,
+            )
+        )
+        return self.status(resource)
+
+    def affords(self, resource: str, amount: float, *, essential: bool = False) -> bool:
+        """Whether a single unit of work fits. Never raises."""
+        try:
+            return self.remaining(resource, essential=essential) >= amount
+        except KeyError:
+            return False
+
+    def plan(
+        self,
+        resource: str,
+        *,
+        unit_cost: float,
+        maximum: int,
+        minimum: int = 0,
+        essential: bool = False,
+    ) -> Plan:
+        """How many items to attempt, given what the quota allows.
+
+        This is the operator's rule made concrete: a limit reduces the day's
+        output, it does not cancel it. If twelve are wanted and six fit, six get
+        made — and the plan says so, rather than returning a number that could
+        equally mean "the code is broken".
+        """
+        if unit_cost <= 0:
+            raise ValueError("unit_cost must be positive — an item that costs nothing to do")
+        if maximum < 0 or minimum < 0:
+            raise ValueError("maximum and minimum must not be negative")
+        if minimum > maximum:
+            raise ValueError(f"minimum {minimum} is above maximum {maximum}")
+
+        status = self.status(resource)
+        available = status.remaining_essential if essential else status.remaining
+        affordable = int(available // unit_cost)
+        count = min(affordable, maximum)
+
+        if count >= maximum:
+            reason = f"quota permits {affordable}, which covers the target"
+        elif count > 0:
+            reason = (
+                f"quota permits {count} of {maximum} — {available:g} of "
+                f"{status.limit:g} {'units' if status.kind is LimitKind.PLATFORM else 'USD'} left"
+            )
+        else:
+            reason = (
+                f"nothing affordable: {available:g} left and each item costs {unit_cost:g}. "
+                + (
+                    "Raise the ceiling if the work is worth it"
+                    if status.kind is LimitKind.SPEND
+                    else f"Resets at {status.resets_at:%Y-%m-%d %H:%M UTC}"
+                    if status.resets_at
+                    else "This is a rolling window; capacity returns gradually"
+                )
+            )
+
+        return Plan(
+            resource=resource,
+            count=count,
+            requested=maximum,
+            shortfall=max(0, minimum - count),
+            reason=reason,
+        )
+
+    def report(self) -> list[QuotaStatus]:
+        """Every allowance, worst first — the shape a daily report needs."""
+        statuses = [self.status(resource) for resource in self._policies]
+        return sorted(statuses, key=lambda s: (s.remaining / s.limit) if s.limit else 0)

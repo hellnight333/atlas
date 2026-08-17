@@ -13,6 +13,50 @@ The gaps fall into three tiers: things that stop the business existing at all,
 things that separate a business from an activity, and things that are cheaper to
 add now than to retrofit.
 
+## Decisions taken (2026-08-17)
+
+Three of the Tier 1 findings now have answers. They are recorded here rather
+than edited into the text below, so the reasoning stays legible.
+
+**1.1 Legal entity — resolved.** Apple and Google developer accounts already
+exist and are active, with a shipped app on them. A **new company with its own
+D-U-N-S** is being registered for the factory's publishing.
+
+That second part matters more than it looks. Publishing a high-volume game
+portfolio from the *existing* accounts would have put the shipped app inside the
+blast radius of §1.3 — Apple's 4.3 rejection text is literally "duplicates the
+content and functionality of other apps submitted by **you**", and Google
+terminates *related* accounts. A separate entity is the isolation boundary, and
+it is worth keeping that way permanently: **the factory never publishes from an
+account that holds something it cannot afford to lose.**
+
+Still outstanding on this item: tax information on file before any payout, and
+US tax info for YouTube specifically, or up to 30% of US earnings is withheld.
+
+**1.3 Anti-spam risk — deferred by decision.** The game factory is to be
+**built but not published**. This removes the account risk entirely for now and
+is the right sequencing: the pipeline can be proven end-to-end against internal
+tracks and TestFlight without ever submitting for review. The circuit breaker
+and rejection-rate monitoring in §1.3 become required only at the point
+publishing is switched on.
+
+**1.2 Quota — accepted, and now built.** The instruction was to treat a limit as
+a budget with a floor and a ceiling and keep producing rather than stopping,
+which is right and is now implemented in `atlas_kernel/quota/`.
+
+One correction was needed on the way: **cheaper language models do not buy
+YouTube quota.** They are separate limits and only one of them responds to
+money —
+
+| Limit | Money raises it? |
+|---|---|
+| Language models, Places, Brave | **Yes.** Routing routine work to Qwen already cut it by roughly 300× |
+| YouTube, Instagram, TikTok allowances | **No.** Audited extension request only, weeks, often refused |
+
+The ledger encodes exactly this distinction as `LimitKind`, so an exhausted
+quota reports whether the remedy is "raise the ceiling" or "wait for the window"
+— and nothing ever tries to spend its way out of a platform limit.
+
 > **On the numbers.** Every threshold quoted here is a platform policy that
 > changes without notice — the same caution doc 11 §36 applies to itself. They
 > are given so the *shape* of the constraint is clear, and every one must be
