@@ -1,6 +1,27 @@
 # Qevik — Current Project State
 
-**Last consolidated: 2026-08-13**
+**Last consolidated: 2026-08-17**
+
+## Canonical execution environment
+
+**`qevik-core-01` — Hetzner, 2.28.62.83.** Ubuntu 26.04 LTS, 4 vCPU AMD EPYC
+Genoa, 8 GB RAM, 150 GB disk. Python 3.14.4.
+
+This is the authoritative server for Qevik Core / control plane / development.
+Personal machines are clients.
+
+- Qevik lives at `/opt/qevik/atlas`, owned by a non-root `qevik` user (§28).
+- PostgreSQL 16 native, loopback only. Role and database `qevik`.
+- Config at `/opt/qevik/atlas.env` (0600, `qevik`). The password exists only
+  there and in `/opt/qevik/.pgpass`; it is not in Git and is never printed.
+- GitHub access is a **read-only deploy key** — the server can pull, not push.
+- `ufw` active, port 22 only.
+
+Reproduce the whole thing with `infra/bootstrap_qevik_server.sh`, which is
+idempotent and has been re-run against a live install to prove it.
+
+**Not** the Naml automation box at 204.168.249.69. That runs 50 production
+containers at load ~12 and is a different system.
 
 ## Current identity
 Working product/brand: **Qevik**.
@@ -17,8 +38,15 @@ Reported by Claude:
 - Secrets were kept outside the repository and logging was hardened.
 
 ## Test state
-**Full suite is GREEN as of 2026-08-13.**
-- 1044 passed, 0 failed. Coverage 92.46% (gate is 90%).
+**Full suite is GREEN on the canonical server as of 2026-08-17.**
+- On `qevik-core-01`: 1040 passed, 4 skipped, coverage 92.16% (gate 90%).
+- On the Mac: 1040 passed, 4 skipped, coverage 92.13%. The two agree.
+- The 4 skips are demo-installer tests that skip once demos exist.
+
+One environment blocker was found and fixed: without `ffmpeg`/`ffprobe`, 85
+media tests skip and coverage falls to 88.22% — a red build caused by a missing
+binary rather than by any code being wrong. `ffmpeg` is now installed and is in
+the bootstrap script.
 - Verified twice; the second run shows 1040 passed + 4 skipped, which are
   demo-installer tests that skip once demos exist ("already installed by an
   earlier run"). Benign and expected.
@@ -45,8 +73,10 @@ First scope:
 Google app remains in Testing.
 
 ## Immediate priorities
-1. ~~Restore PostgreSQL and run the complete test suite.~~ **Done 2026-08-13.**
-2. Decide niche + geography + offer. **← now the blocker**
+1. ~~Restore PostgreSQL and run the complete test suite.~~ **Done.**
+2. ~~Make Hetzner the canonical environment.~~ **Done 2026-08-17 — `qevik-core-01`.**
+3. Decide niche + geography + offer. **← still the blocker, and not a code problem**
+4. Run a small, manually approved Opportunity Factory pilot.
 3. Run a small, manually approved Opportunity Factory pilot.
 4. Set up OpenClaw on a dedicated P520 operator machine.
 5. Keep project documentation in Git.
