@@ -61,12 +61,24 @@ class TestTheInterfaceIsQeviksNotPlaywrights:
         for forbidden in ("do_task", "run_objective", "autonomous", "agent"):
             assert not hasattr(PlaywrightSession(), forbidden)
 
-    def test_a_missing_runtime_is_a_configuration_error(self) -> None:
-        """Distinct from a page failing, because the fix is entirely different."""
+    def test_a_missing_runtime_is_a_configuration_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Distinct from a page failing, because the fix is entirely different.
+
+        The absence is simulated rather than inherited from the machine. An
+        earlier version skipped when playwright was importable, which meant the
+        test asserted nothing on the server — where playwright is installed —
+        and asserted everything on a laptop where it is not. A test whose
+        meaning depends on what happens to be installed is the one nobody
+        investigates when it breaks.
+        """
         import sys
 
-        if "playwright" in sys.modules:
-            pytest.skip("playwright installed in this environment")
+        # `from playwright.sync_api import ...` raises ImportError when the
+        # entry is None, which is exactly what an uninstalled runtime does.
+        monkeypatch.setitem(sys.modules, "playwright", None)
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
         with pytest.raises(BrowserUnavailable, match="playwright install"):
             PlaywrightSession().start()
 
