@@ -8,6 +8,7 @@ package require a 300 MB dependency would be a poor trade for one adapter.
 from __future__ import annotations
 
 import functools
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -47,6 +48,34 @@ class BrowserSession(Protocol):
     def extract(self, expression: str) -> Any: ...
     def screenshot(self, path: Path, *, full_page: bool = True) -> Screenshot: ...
     def close(self) -> None: ...
+
+
+def _max_sessions() -> int:
+    """How many browsers may be alive at once.
+
+    Chromium is roughly 400MB resident and the canonical server has 8GB shared
+    with PostgreSQL and the API. Running the end-to-end suite without a cap took
+    that host down hard enough that sshd could no longer fork a session — the
+    kernel still completed TCP handshakes while nothing in userspace could
+    answer, which looks like a network fault and is not one.
+
+    So this is a survival limit, not a tuning knob.
+    """
+    try:
+        return max(1, int(os.environ.get("QEVIK_MAX_BROWSERS", "2")))
+    except ValueError:
+        return 2
+
+
+#: Acquired for the life of a session. Bounded rather than fair: a queue of
+#: browser jobs waiting politely is still better than a box that stops
+#: responding.
+_SESSION_SLOTS = threading.BoundedSemaphore(_max_sessions())
+
+#: How long to wait for a slot before giving up. A refusal that names the limit
+#: is recoverable; an indefinite wait inside a test suite is the same silent
+#: hang this cap exists to prevent.
+SLOT_TIMEOUT_SECONDS = 120.0
 
 
 def _on_browser_thread(method):
@@ -103,6 +132,7 @@ class PlaywrightSession:
         self._context = None
         self._page = None
         self._console: list[str] = []
+        self._holds_slot = False
         #: One thread, owning every Playwright object. Playwright's sync API is
         #: not thread-safe, so "one thread" is a correctness requirement rather
         #: than a throughput choice.
@@ -124,10 +154,28 @@ class PlaywrightSession:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> PlaywrightSession:
-        if self._pool is None:
-            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qevik-browser")
-            self._thread_id = self._pool.submit(threading.get_ident).result()
-        return self._submit(self._start_on_thread)
+        if self._holds_slot:
+            return self
+        if not _SESSION_SLOTS.acquire(timeout=SLOT_TIMEOUT_SECONDS):
+            raise BrowserUnavailable(
+                f"no browser slot free after {SLOT_TIMEOUT_SECONDS:g}s "
+                f"(limit {_max_sessions()}, set QEVIK_MAX_BROWSERS to change it). "
+                "Something is holding a session open without closing it."
+            )
+        self._holds_slot = True
+
+        try:
+            if self._pool is None:
+                self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qevik-browser")
+                self._thread_id = self._pool.submit(threading.get_ident).result()
+            return self._submit(self._start_on_thread)
+        except BaseException:
+            # Whatever was created before the failure is closed here. Without
+            # this, a launch that succeeds and a context that does not leaves a
+            # Chromium process alive with no reference to it and no __exit__
+            # coming, because __enter__ never returned.
+            self.close()
+            raise
 
     def _start_on_thread(self) -> PlaywrightSession:
         try:
@@ -164,13 +212,23 @@ class PlaywrightSession:
         return self
 
     def close(self) -> None:
-        if self._pool is not None:
-            self._submit(self._close_on_thread)
-            self._pool.shutdown(wait=True)
-            self._pool = None
-            self._thread_id = None
-        else:
-            self._close_on_thread()
+        """Release everything. Safe to call twice, and on a session that never
+        started — cleanup runs on paths where the caller cannot know how far
+        start() got."""
+        try:
+            if self._pool is not None:
+                try:
+                    self._submit(self._close_on_thread)
+                finally:
+                    self._pool.shutdown(wait=True)
+                    self._pool = None
+                    self._thread_id = None
+            else:
+                self._close_on_thread()
+        finally:
+            if self._holds_slot:
+                self._holds_slot = False
+                _SESSION_SLOTS.release()
 
     def _close_on_thread(self) -> None:
         for closer in (self._context, self._browser):

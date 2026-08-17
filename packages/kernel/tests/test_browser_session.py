@@ -154,3 +154,77 @@ class TestJobLifecycle:
     def test_the_capability_is_named_not_the_runtime(self) -> None:
         assert BROWSER_OPERATE == "browser.operate"
         assert "playwright" not in BROWSER_OPERATE
+
+
+class TestItCannotTakeTheHostDown:
+    """Running the end-to-end suite without a cap took the canonical server down
+    hard enough that sshd could no longer fork a session — the kernel still
+    completed TCP handshakes while nothing in userspace could answer, which
+    looks like a network fault and is not one."""
+
+    def test_there_is_a_hard_limit_on_live_sessions(self) -> None:
+        from atlas_kernel.browser import session as module
+
+        assert module._max_sessions() >= 1
+        assert module._SESSION_SLOTS is not None
+
+    def test_the_limit_is_configurable_but_never_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from atlas_kernel.browser.session import _max_sessions
+
+        monkeypatch.setenv("QEVIK_MAX_BROWSERS", "5")
+        assert _max_sessions() == 5
+        monkeypatch.setenv("QEVIK_MAX_BROWSERS", "0")
+        assert _max_sessions() == 1, "zero would deadlock every browser job"
+        monkeypatch.setenv("QEVIK_MAX_BROWSERS", "not-a-number")
+        assert _max_sessions() == 2, "a bad value must not stop the browser working"
+
+    def test_a_failed_start_releases_its_slot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The leak that caused the outage: launch succeeds, the context fails,
+        __enter__ raises so __exit__ never runs, and Chromium stays alive with
+        nothing referencing it."""
+        from atlas_kernel.browser import session as module
+
+        session = PlaywrightSession()
+        monkeypatch.setattr(
+            session, "_start_on_thread", lambda: (_ for _ in ()).throw(RuntimeError("launch died"))
+        )
+
+        before = module._SESSION_SLOTS._value
+        with pytest.raises(RuntimeError, match="launch died"):
+            session.start()
+        assert module._SESSION_SLOTS._value == before, "the slot was never given back"
+        assert session._holds_slot is False
+
+    def test_a_failed_start_shuts_the_thread_down_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session = PlaywrightSession()
+        monkeypatch.setattr(
+            session, "_start_on_thread", lambda: (_ for _ in ()).throw(RuntimeError("nope"))
+        )
+        with pytest.raises(RuntimeError):
+            session.start()
+        assert session._pool is None, "the browser thread outlived the session"
+
+    def test_closing_twice_does_not_release_a_slot_twice(self) -> None:
+        """A double release would raise ValueError on a bounded semaphore and,
+        worse, would quietly raise the real limit."""
+        from atlas_kernel.browser import session as module
+
+        before = module._SESSION_SLOTS._value
+        session = PlaywrightSession()
+        session.close()
+        session.close()
+        assert module._SESSION_SLOTS._value == before
+
+    def test_closing_a_session_that_never_started_is_safe(self) -> None:
+        PlaywrightSession().close()
+
+    def test_waiting_for_a_slot_gives_up_rather_than_hanging(self) -> None:
+        """An indefinite wait inside a test suite is the same silent hang the
+        cap exists to prevent."""
+        from atlas_kernel.browser.session import SLOT_TIMEOUT_SECONDS
+
+        assert 0 < SLOT_TIMEOUT_SECONDS <= 300
