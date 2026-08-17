@@ -92,10 +92,38 @@ Reported by Claude:
 - Suppressed addresses were blocked.
 - Secrets were kept outside the repository and logging was hardened.
 
+## Capabilities added since the Gmail milestone
+
+**Browser operation** — `packages/kernel/atlas_kernel/browser/`. A `BrowserSession`
+interface owned by Qevik with a Playwright backend behind it, so the runtime is
+substitutable. Two profiles are declared: research (isolated, no credentials) and
+operational (authenticated, approval-gated). **The operational profile is deliberately
+unbuilt** — a browser acting inside a signed-in session is the largest blast radius in
+the whole system and nothing needs it yet.
+
+Callers never write CSS selectors; `_elements()` generates refs. Proven live against a
+real Dubai business site: 200, 120 elements, screenshot at 1440x900, 2.5s, 998 MB of
+7740 MB used.
+
+**Multi-provider LLM routing** — `packages/kernel/atlas_kernel/llm/`. Callers state what
+a job needs (context, tools, vision); the registry resolves the cheapest model meeting
+it. Qwen's hosted API (`qwen-turbo`/`plus`/`max`, international DashScope host) is
+registered alongside Claude. A 20k-token draft costs **$0.0018 on qwen-turbo against
+$0.60 on claude-opus-5**, so routine drafting, extraction and classification route to
+Qwen and only harder work reaches Claude. `qwen3-72b` is declared at zero cost per token
+for when the Z8 becomes a worker; local-first ordering will take that traffic with no
+other change.
+
+A provider registers only when its credential is present. Registering one without a key
+would turn a clear `NotConfigured` at call time into a silent selection of a model that
+cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
+**No Qwen key has been supplied yet.**
+
 ## Test state
-**Full suite is GREEN on the canonical server as of 2026-08-17.**
-- On `qevik-core-01`: 1040 passed, 4 skipped, coverage 92.16% (gate 90%).
-- On the Mac: 1040 passed, 4 skipped, coverage 92.13%. The two agree.
+**Full suite is GREEN as of 2026-08-17: 1136 passed, 4 skipped, 91.88% coverage**
+(gate 90%), ruff clean.
+- Earlier in the same day, on `qevik-core-01`: 1040 passed, coverage 92.16%.
+- On the Mac the two agreed to within 0.03%.
 - The 4 skips are demo-installer tests that skip once demos exist.
 
 One environment blocker was found and fixed: without `ffmpeg`/`ffprobe`, 85
@@ -130,12 +158,37 @@ Google app remains in Testing.
 ## Immediate priorities
 1. ~~Restore PostgreSQL and run the complete test suite.~~ **Done.**
 2. ~~Make Hetzner the canonical environment.~~ **Done 2026-08-17 — `qevik-core-01`.**
-3. Decide niche + geography + offer. **← still the blocker, and not a code problem**
-4. Run a small, manually approved Opportunity Factory pilot.
-3. Run a small, manually approved Opportunity Factory pilot.
-4. Set up OpenClaw on a dedicated P520 operator machine.
-5. Keep project documentation in Git.
-6. Keep broad Atlas → Qevik internal refactoring deferred.
+3. ~~Answer niche + geography + offer from data rather than opinion.~~ **Done** — the
+   daily market scan answers it and keeps the answer current. See below.
+4. **Next, and explicitly requested:** review
+   `QEVIK_PENDING_IMPLEMENTATION_DOCS/11_QEVIK_AUTONOMOUS_MEDIA_GROWTH_BUSINESS_ENGINE.md`
+   (1710 lines, 46 sections) for gaps against a real business operation loop. Ayoub
+   named Google Play (§15) and Apple (§16) publishing as needing to be more
+   professional, and asked it to "go far enough into the actual business operation
+   loop". Nothing has been implemented from doc 11.
+5. Build §18/§19 of the browser/publishing architecture — commercial website and
+   subscriptions. **Ayoub has explicitly asked for these** after reading the
+   recommendation to defer them until the first paying customer. That recommendation
+   still stands on the merits; the decision is his and it is made.
+6. Run a small, manually approved Opportunity Factory pilot.
+7. Keep broad Atlas → Qevik internal refactoring deferred.
+
+### What the market scan actually found
+**Contactability, not defect rate, is the binding constraint.** OpenStreetMap yielded
+2–17% reachable businesses across every Dubai niche; Google Places 83–100%. That is the
+whole reason Places costs money and is worth it.
+
+The best market moved car-repair → dental → beauty across runs. That instability is the
+argument for a scheduled daily scan rather than a decision taken once and written down.
+
+### Open, waiting on you
+- **Qwen API key** — set `QEVIK_DASHSCOPE_API_KEY` on the server and Qwen starts taking
+  the routine jobs immediately. Nothing else changes.
+- **Brave search key** — approved, not yet supplied. Blocks general web research;
+  Places finds *businesses* and cannot answer "research these competitors".
+- **Places key rotation** — the current key was shown in a screenshot. It is now IP
+  restricted to `2.28.62.83`, which contains the damage, but rotating it is still the
+  right move.
 
 ## Deferred
 - Broad package/schema/database rename.
