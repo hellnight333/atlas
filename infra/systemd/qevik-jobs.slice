@@ -1,0 +1,43 @@
+# Everything Qevik generates runs in here, and nothing it generates can leave.
+#
+# The incident this exists to prevent: a browser end-to-end run exhausted the
+# host until sshd could no longer fork a session. ICMP answered and TCP
+# handshakes completed on 22 and 80 — the kernel holds the listening sockets
+# whether or not any process is left to accept them — so it looked like a
+# network fault and was not one. A power cycle did not clear it.
+#
+# **Python-level limits were not enough, and could not have been.** A semaphore
+# in the process that spawns work cannot bound what the spawned work does: a
+# subprocess that forks, a Chromium that spawns renderers, a build that runs a
+# compiler. The kernel is the only thing that can say no on behalf of the whole
+# machine, so the limits belong in a cgroup rather than in the code that is
+# trying to be careful.
+#
+# The control plane — qevik-api, PostgreSQL, Caddy, sshd — deliberately sits
+# OUTSIDE this slice. That is the whole design: generated workloads may starve
+# each other, and must never starve the thing that would let an operator log in
+# and stop them.
+
+[Unit]
+Description=Qevik generated workloads (browsers, builds, subprocesses)
+Before=slices.target
+
+[Slice]
+# Roughly half of an 8 GB host. Chosen so that PostgreSQL, the API, Caddy and a
+# login shell all still fit in what remains — the number that matters is not how
+# much jobs get, but how much is left when jobs take everything they are
+# allowed.
+MemoryHigh=3G
+MemoryMax=3500M
+MemorySwapMax=0
+
+# The limit that actually stops the failure seen here. Memory exhaustion
+# eventually summons the OOM killer; PID exhaustion just prevents fork(), which
+# is why sshd stopped answering while the machine looked alive.
+TasksMax=384
+
+# Three of four cores. Leaves one for the control plane, so an operator can
+# still reach a wedged box — which was the missing property during the incident.
+CPUQuota=300%
+CPUWeight=50
+IOWeight=50

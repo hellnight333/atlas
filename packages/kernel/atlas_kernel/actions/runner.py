@@ -46,6 +46,7 @@ from .handlers import (
     site_deploy,
     web_search,
 )
+from .limits import CapacityUnavailable, Deadline, JobLimits, JobSlots
 
 #: ${step_id.key} or ${step_id.key.nested}
 REFERENCE = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
@@ -82,12 +83,24 @@ class PlanReport(BaseModel):
     duration_seconds: float = 0.0
     failed_step: str = ""
     error: str = ""
+    #: Set when the plan was stopped by its own budget rather than by a step
+    #: failing. A different thing from a failure, and a different remedy.
+    timed_out: bool = False
+    #: Set when the work never started because the host was already at capacity.
+    refused: bool = False
     outputs: dict[str, Any] = Field(default_factory=dict)
     records: list[ActionRecord] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
 
     def summary(self) -> str:
-        head = "SUCCEEDED" if self.ok else f"FAILED at {self.failed_step}: {self.error}"
+        if self.refused:
+            head = f"REFUSED: {self.error}"
+        elif self.timed_out:
+            head = f"TIMED OUT: {self.error}"
+        elif self.ok:
+            head = "SUCCEEDED"
+        else:
+            head = f"FAILED at {self.failed_step}: {self.error}"
         lines = [
             f"{head} — {self.steps_succeeded}/{self.steps_total} steps"
             + (f", {self.repairs} repair(s)" if self.repairs else "")
@@ -241,23 +254,88 @@ class ActionRunner:
 
 
 class PlanRunner:
-    """Executes an `ExecutionPlan` against real actions."""
+    """Executes an `ExecutionPlan` against real actions, within bounds.
 
-    def __init__(self, actions: ActionRunner, *, repairer: Repairer | None = None) -> None:
+    The bounds are not decoration. A plan that runs unbounded on a shared host
+    is how the control plane became unreachable: the failure was not an error,
+    it was silence. Everything here is designed to stop with a sentence rather
+    than to keep going quietly.
+    """
+
+    def __init__(
+        self,
+        actions: ActionRunner,
+        *,
+        repairer: Repairer | None = None,
+        limits: JobLimits | None = None,
+        slots: JobSlots | None = None,
+    ) -> None:
         self.actions = actions
         self.repairer = repairer
+        self.limits = limits or (slots.limits if slots else JobLimits.for_host())
+        #: Shared across runners when one is passed in, which is what makes the
+        #: concurrency limit apply to the host rather than to one caller.
+        self.slots = slots or JobSlots(self.limits)
 
     def run(self, plan: ExecutionPlan, ctx: ExecutionContext) -> PlanReport:
         started = time.monotonic()
+        try:
+            slot = self.slots.acquire()
+        except CapacityUnavailable as refusal:
+            # Refused, not failed. The work never ran, so there is nothing to
+            # diagnose and everything to retry later.
+            return PlanReport(
+                plan_id=plan.plan_id,
+                goal=plan.goal,
+                ok=False,
+                refused=True,
+                error=str(refusal),
+                steps_total=len(plan.steps),
+                steps_succeeded=0,
+                steps_failed=0,
+                duration_seconds=round(time.monotonic() - started, 3),
+            )
+        with slot:
+            return self._run_within_budget(plan, ctx, started)
+
+    def _run_within_budget(
+        self, plan: ExecutionPlan, ctx: ExecutionContext, started: float
+    ) -> PlanReport:
         ordered = topological(plan.steps)
+        deadline = Deadline(self.limits.job_timeout_seconds)
         repairs = 0
         failed_step = error = ""
+        timed_out = False
 
         for step in ordered:
+            # Between steps, never mid-step: killing an action halfway leaves a
+            # half-written workspace and a half-finished deployment, which is
+            # worse than a slightly late stop.
+            if deadline.expired:
+                timed_out = True
+                failed_step = step.id
+                error = (
+                    f"the plan ran past its {deadline.seconds:g}s budget before {step.id!r} "
+                    f"({deadline.elapsed:.1f}s elapsed). Stopped rather than left running."
+                )
+                break
+
+            # A step never gets more time than the plan has left, or the plan
+            # overruns by the difference on its final step every time.
+            if step.action == "code.execute" and isinstance(step.payload, dict):
+                ceiling = float(step.payload.get("timeout", self.limits.step_timeout_seconds))
+                step.payload["timeout"] = deadline.step_timeout(ceiling)
+
             record = self.actions.execute(step, ctx)
             attempt = 1
 
-            while not record.ok and self.repairer is not None and attempt < MAX_ATTEMPTS:
+            while (
+                not record.ok
+                and self.repairer is not None
+                and attempt < MAX_ATTEMPTS
+                and repairs < self.limits.max_repairs
+                and not deadline.expired
+            ):
                 if isinstance(record.error, str) and "not authorised" in record.error.lower():
                     break  # a refusal is not repaired; it is escalated
                 fixes = self.repairer.repair(step, record, ctx)
@@ -287,6 +365,7 @@ class PlanRunner:
             duration_seconds=round(time.monotonic() - started, 3),
             failed_step=failed_step,
             error=error,
+            timed_out=timed_out,
             outputs=dict(ctx.outputs),
             records=list(ctx.records),
             evidence=ctx.evidence,
