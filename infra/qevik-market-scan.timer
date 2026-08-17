@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Qevik market scan daily
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+# Runs the scan if the box was asleep at 06:00 rather than skipping a day.
+Persistent=true
+# Overpass and Places are shared services; a jittered start is politeness and
+# also avoids every Qevik install hitting them at the same second.
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

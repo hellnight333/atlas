@@ -1,0 +1,31 @@
+[Unit]
+# The daily market scan. Answers "which niche, which geography" from live data
+# so the answer stays current without anyone being asked for it.
+#
+# Research only: it reads public pages and a maps API. It contacts nobody,
+# writes to nobody, and produces no proposals. Outreach stays behind the
+# approval gate where it belongs.
+Description=Qevik daily market scan
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+# Absent by default, so the scan runs free against OpenStreetMap until a Places
+# key exists. -EnvironmentFile means "use it if present" rather than fail.
+EnvironmentFile=-/opt/qevik/places.env
+ExecStart=/opt/qevik/atlas/.venv/bin/python infra/market_scan.py \
+    --area dubai --sample 10 --json /opt/qevik/market/latest.json
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/qevik
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qevik-market-scan

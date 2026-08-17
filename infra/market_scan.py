@@ -24,7 +24,12 @@ from atlas_kernel.opportunity.detectors.base import DetectorRegistry  # noqa: E4
 from atlas_kernel.opportunity.detectors.website import WebsiteDetector  # noqa: E402
 from atlas_kernel.opportunity.market import MarketScan, render_report  # noqa: E402
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE  # noqa: E402
-from atlas_kernel.opportunity.sources import NICHES, OverpassSource  # noqa: E402
+from atlas_kernel.opportunity.sources import (  # noqa: E402
+    NICHES,
+    GooglePlacesSource,
+    NotConfigured,
+    OverpassSource,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--niches", nargs="*", default=sorted(NICHES))
     parser.add_argument("--sample", type=int, default=12)
     parser.add_argument("--limit", type=int, default=400)
+    parser.add_argument(
+        "--source",
+        choices=("osm", "places"),
+        default="osm",
+        help="osm is free; places costs money and returns phone numbers, which "
+        "is the constraint the market scan measured",
+    )
     parser.add_argument("--json", type=Path, help="also write the raw rows here")
     args = parser.parse_args(argv)
 
@@ -40,13 +52,30 @@ def main(argv: list[str] | None = None) -> int:
     registry.register_detector(WebsiteDetector())
     scan = MarketScan(detectors=registry, sample_size=args.sample, discover_limit=args.limit)
 
+    if args.source == "places":
+        try:
+            from atlas_kernel.opportunity.sources.google_places import api_key
+
+            api_key()
+        except NotConfigured as error:
+            print(error, file=sys.stderr)
+            return 1
+
     results = []
+    spent = 0.0
     for niche in args.niches:
-        source = OverpassSource(area=args.area, niche=niche)
+        if args.source == "places":
+            source = GooglePlacesSource(
+                query=f"{niche.replace('-', ' ')} in {args.area.replace('-', ' ')}",
+                area=args.area,
+            )
+        else:
+            source = OverpassSource(area=args.area, niche=niche)
         try:
             print(f"scanning {args.area}/{niche} ...", file=sys.stderr)
             results.append(scan.measure(source, EXAMPLE_PROFILE, area=args.area, niche=niche))
         finally:
+            spent += getattr(source, "approx_cost_usd", 0.0)
             source.close()
 
     ranked = scan.rank(results)
@@ -64,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
             f"({best.qualified_rate * 100:.0f}% of inspected sites had real defects, "
             f"{best.reachable_rate * 100:.0f}% are contactable)"
         )
+    if spent:
+        # Stated every run. A scan that quietly spends is the failure mode worth
+        # designing against.
+        print(f"\napprox spend this scan: ${spent:.2f}")
+
     if failed:
         # Stated rather than swallowed: a scan that silently covered half the
         # niches would rank the ones it managed and look complete.
