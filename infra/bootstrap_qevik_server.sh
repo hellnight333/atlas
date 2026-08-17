@@ -134,6 +134,20 @@ init_db(); init_db()   # twice: idempotency is half the contract
 print(\"schema initialised, and idempotent on re-run\")
 '"
 
+say "service"
+# Managed rather than nohup-ed: "run my system" means it survives a reboot and
+# returns after a crash, and a backgrounded process does neither.
+if [ -f "${APP}/infra/qevik-api.service" ]; then
+    install -m 0644 "${APP}/infra/qevik-api.service" /etc/systemd/system/qevik-api.service
+    systemctl daemon-reload
+    systemctl enable --now qevik-api >/dev/null 2>&1 || systemctl restart qevik-api
+    for _ in $(seq 1 30); do
+        curl -sf -m 2 http://127.0.0.1:8080/health >/dev/null 2>&1 && break
+        sleep 1
+    done
+    echo "qevik-api: $(systemctl is-active qevik-api), boot: $(systemctl is-enabled qevik-api), health: $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health)"
+fi
+
 say "firewall (§28)"
 # Order matters. Allowing SSH before enabling is the difference between a
 # firewall and a lockout, and this box is reachable only over SSH.
@@ -143,5 +157,8 @@ ufw status | head -6
 
 say "done"
 echo "Qevik installed at ${APP}, owned by ${APP_USER}."
+echo "API on 127.0.0.1:8080 (loopback only — no auth layer yet)."
+echo "Reach it from a laptop with:  ssh -N -L 8080:127.0.0.1:8080 root@HOST"
+echo
 echo "Run the suite:"
 echo "  cd ${APP} && sudo -u ${APP_USER} bash -c 'set -a; . ${ENV_FILE}; set +a; .venv/bin/python -m pytest packages/kernel/tests -q'"

@@ -1,0 +1,62 @@
+[Unit]
+# The Qevik control-plane API.
+#
+# Installed by infra/install_qevik_service.sh. Managed rather than nohup-ed
+# because "run my system" means it survives a reboot and comes back after a
+# crash, and a backgrounded process does neither.
+Description=Qevik Core API
+Documentation=https://github.com/hellnight333/atlas
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+
+# The database URL lives here, 0600, owned by qevik. It is not in Git and not
+# in this unit file — a unit file is world-readable, and a password in one is a
+# password in `systemctl cat`.
+EnvironmentFile=/opt/qevik/atlas.env
+
+# Bound to loopback deliberately. This API has no authentication layer, so it
+# must not be reachable from the internet. Access is over an SSH tunnel until
+# there is a real auth story. Changing this line to 0.0.0.0 publishes an
+# unauthenticated control plane.
+#
+# No --log-config. Passing /dev/null makes uvicorn try to *parse* it as a
+# logging config and die with "is an empty file"; the launcher's log_config=None
+# is a Python value with no command-line equivalent. Default logging goes to
+# stdout, which systemd captures into the journal, which is what was wanted.
+ExecStart=/opt/qevik/atlas/.venv/bin/python -m uvicorn atlas_kernel.api:app \
+    --host 127.0.0.1 --port 8080
+
+Restart=on-failure
+RestartSec=5s
+# Give up rather than restart-loop forever; a service failing 5 times in a
+# minute is broken in a way restarting will not fix, and the log should say so.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening. None of this is exotic; it is the set that costs nothing and
+# removes whole categories of blast radius on a box that will later run
+# generated code.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/qevik
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qevik-api
+
+[Install]
+WantedBy=multi-user.target
