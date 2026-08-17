@@ -21,6 +21,28 @@ Reproduce the whole thing with `infra/bootstrap_qevik_server.sh`, which is
 idempotent and has been re-run against a live install to prove it. It installs
 the service too, so bare server → running system is one script.
 
+### Scheduled, running on their own
+
+- `qevik-market-scan.timer` — 06:00 daily. Answers "which niche, which
+  geography" from live data, so nobody has to be asked. Research only: reads
+  public pages and Places, contacts nobody, produces no proposals.
+- `qevik-backup.timer` — 03:30 daily. Takes a dump **and restores it into a
+  scratch database to prove it works**, per §29: a backup that has never been
+  restored is not a verified backup. Unverified dumps are kept with an
+  `.UNVERIFIED` suffix rather than deleted.
+
+### Google Places
+
+Configured, IP-restricted to the server, key in `/opt/qevik/places.env` (0600,
+outside the repo). The client is pinned to IPv4 — a dual-stack host prefers IPv6
+and Google then answers `API_KEY_IP_ADDRESS_BLOCKED`, which reads like a wrong
+key and is not.
+
+**It was worth paying for, and the numbers say why.** Reachability went from
+2–17% on OpenStreetMap to 83–100% on Places. Reachability, not defect rate, was
+the constraint that made every market unworkable. A full six-niche scan costs
+about $0.58.
+
 ### Running services
 
 - `qevik-api` — systemd, enabled at boot, restarts on failure (verified by
