@@ -89,6 +89,26 @@ belongs behind an approval gate, and there is nothing yet that needs it.
 
 ---
 
+## Durable jobs and connectivity
+
+The operator's link to this host is intermittently unreliable — ICMP passes, TCP
+handshakes complete, and application data does not arrive, for minutes at a
+time. It is a path problem, not a server problem: during one such window the
+journal showed `qevik-api` returning 200s and Caddy serving other clients.
+
+| Capability | State | Evidence |
+|---|---|---|
+| Detached jobs (`qevikctl`) | **IMPLEMENTED** | A workflow ran to completion during a deliberate 95-second disconnection |
+| Job state after reconnect | **IMPLEMENTED** | `show` returned exit code, timestamps, duration from a new process |
+| stdout / stderr / exit code | **IMPLEMENTED** | Kept per job under `/var/lib/qevik/jobs/<id>/` |
+| Artifact retrieval | **IMPLEMENTED** | 2 artifacts retrieved after reconnection, including a screenshot |
+| `LOST` detection | **IMPLEMENTED** | No exit code and no process is reported as lost, not guessed |
+| Health/status after reconnect | **IMPLEMENTED** | `qevikctl status` — services, API, resources, active/failed/last job |
+| cgroup-bounded execution | **IMPLEMENTED** | `--slice qevik-jobs.slice`; e2e ran inside it with 0 browsers left |
+
+**Rule: every long operation goes through `qevikctl`.** Running one directly over
+SSH ties its survival to a link that does not survive.
+
 ## Infrastructure
 
 | Component | State | Detail |
