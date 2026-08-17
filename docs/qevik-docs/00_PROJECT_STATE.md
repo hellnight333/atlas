@@ -18,7 +18,40 @@ Personal machines are clients.
 - `ufw` active, port 22 only.
 
 Reproduce the whole thing with `infra/bootstrap_qevik_server.sh`, which is
-idempotent and has been re-run against a live install to prove it.
+idempotent and has been re-run against a live install to prove it. It installs
+the service too, so bare server → running system is one script.
+
+### Running services
+
+- `qevik-api` — systemd, enabled at boot, restarts on failure (verified by
+  SIGKILL, not by reading the config). `127.0.0.1:8080`, health returns 200.
+- `postgresql` — systemd, enabled at boot.
+- Only port 22 is publicly reachable. `ufw` active.
+
+**The API is bound to loopback because it has no authentication layer.** Reach
+it from a laptop with an SSH tunnel:
+
+```
+ssh -N -L 8080:127.0.0.1:8080 root@2.28.62.83
+# then http://127.0.0.1:8080/health on the laptop
+```
+
+Do not change the bind address without adding auth first — that would publish an
+unauthenticated control plane.
+
+### Proven working on the server (not asserted)
+
+LEVEL 3 and LEVEL 4 of the roadmap were driven against the live API:
+workspace → project → run → auto-created job → worker polled it → executed →
+completed with a provider recorded. Artifacts persist (assets table populated).
+
+This closes these §39 items: Hetzner canonical · Qevik starts reliably ·
+PostgreSQL starts reliably · clean DB init · full suite green · Claude Code can
+work on the repo · a tracked job can be created · an agent can execute a task ·
+logs persisted · artifacts persisted.
+
+**Not yet verified:** survival of an actual reboot. The service is `enabled`, so
+the mechanism is right, but nobody has rebooted the box to watch it come back.
 
 **Not** the Naml automation box at 204.168.249.69. That runs 50 production
 containers at load ~12 and is a different system.
