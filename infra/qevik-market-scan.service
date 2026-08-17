@@ -18,8 +18,11 @@ EnvironmentFile=/opt/qevik/atlas.env
 # Absent by default, so the scan runs free against OpenStreetMap until a Places
 # key exists. -EnvironmentFile means "use it if present" rather than fail.
 EnvironmentFile=-/opt/qevik/places.env
+# --source places because the scan itself measured why: reachability was
+# 2–17% on OpenStreetMap and 83–100% on Places, and an unreachable prospect is
+# not a prospect. A whole run is roughly $0.58.
 ExecStart=/opt/qevik/atlas/.venv/bin/python infra/market_scan.py \
-    --area dubai --sample 10 --json /opt/qevik/market/latest.json
+    --area dubai --source places --sample 10 --json /opt/qevik/market/latest.json
 Nice=10
 NoNewPrivileges=true
 PrivateTmp=true
