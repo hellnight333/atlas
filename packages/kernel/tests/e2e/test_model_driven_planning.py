@@ -37,7 +37,7 @@ from atlas_kernel.actions import (
     default_action_runner,
     plan_website,
 )
-from atlas_kernel.actions.llm_planner import LLMPlanner
+from atlas_kernel.actions.llm_planner import LLMPlanner, PlanRejected, validate
 from atlas_kernel.actions.runner import REFERENCE
 from atlas_kernel.llm.models import Completion, ModelSpec
 from atlas_kernel.llm.registry import ModelRegistry, Registration
@@ -83,7 +83,12 @@ UNUSUAL_PLAN = {
         {
             "id": "make_it",
             "action": "code.generate",
-            "payload": {"title": "Hat Rabbit", "headline": "Hat Rabbit"},
+            # Consumes the search, as any plan that bothers to search must.
+            "payload": {
+                "title": "Hat Rabbit",
+                "headline": "Hat Rabbit",
+                "features": "${look_around.sources}",
+            },
             "dependencies": ["look_around"],
         },
         {
@@ -277,18 +282,6 @@ class TestLiveModelPlanning:
         assert plan.context_snapshot["planner"] == "llm", planner.last_fallback_reason
         assert_plan_is_sane(plan, actions)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "qwen-max chains research inconsistently. It reliably ADDS a search step "
-            "for a research objective and often names the next step 'choose' — so it "
-            "understood the intent — but frequently does not pass ${search.sources} "
-            "into it, producing a plan that researches and then ignores the result. "
-            "Observed both behaviours from the same prompt. Recorded as xfail rather "
-            "than deleted or loosened: this is the specific thing the model cannot yet "
-            "decide reliably, and it should flip to XPASS when that changes."
-        ),
-    )
     def test_a_research_objective_produces_research_that_feeds_the_build(
         self, live_planner
     ) -> None:
@@ -375,3 +368,203 @@ def _stub_search():
             )
 
     return Stub()
+
+
+class TestEvidenceMustReachADecision:
+    """Research that nothing reads is the failure that looks like success.
+
+    A plan may gather evidence and use it, or decide evidence is unnecessary and
+    not gather it. Gathering it and discarding it produces something that reads
+    as researched and is not, which is why it is refused rather than warned
+    about.
+
+    Enforced on actions, never on step names — a model calls its search step
+    whatever it likes, and a rule keyed on "search" would be a hard-coded
+    workflow wearing a validator's clothes.
+    """
+
+    def test_a_plan_that_researches_and_ignores_it_is_refused(self) -> None:
+        actions = default_action_runner()
+        orphaned = {
+            "steps": [
+                {"id": "investigate", "action": "web.search", "payload": {"query": "ideas"}},
+                {
+                    "id": "decide",
+                    "action": "code.generate",
+                    "payload": {"title": "Something"},
+                    "dependencies": ["investigate"],
+                },
+            ]
+        }
+        with pytest.raises(PlanRejected, match="no later step reads"):
+            validate(orphaned, known_actions=set(actions.registered()))
+
+    def test_the_refusal_does_not_depend_on_what_the_steps_are_called(self) -> None:
+        """The same plan with entirely different names is refused identically."""
+        actions = default_action_runner()
+        renamed = {
+            "steps": [
+                {"id": "poke_about", "action": "web.search", "payload": {"query": "x"}},
+                {
+                    "id": "pick_one",
+                    "action": "code.generate",
+                    "payload": {"title": "X"},
+                    "dependencies": ["poke_about"],
+                },
+            ]
+        }
+        with pytest.raises(PlanRejected, match="poke_about"):
+            validate(renamed, known_actions=set(actions.registered()))
+
+    def test_consuming_the_evidence_is_accepted(self) -> None:
+        actions = default_action_runner()
+        wired = {
+            "steps": [
+                {"id": "poke_about", "action": "web.search", "payload": {"query": "x"}},
+                {
+                    "id": "pick_one",
+                    "action": "code.generate",
+                    "payload": {"title": "X", "features": "${poke_about.sources}"},
+                    "dependencies": ["poke_about"],
+                },
+            ]
+        }
+        assert len(validate(wired, known_actions=set(actions.registered()))) == 2
+
+    def test_omitting_research_entirely_is_allowed(self) -> None:
+        """The other acceptable answer: it decided evidence was unnecessary."""
+        actions = default_action_runner()
+        direct = {"steps": [{"id": "g", "action": "code.generate", "payload": {"title": "X"}}]}
+        assert len(validate(direct, known_actions=set(actions.registered()))) == 1
+
+    def test_a_step_referencing_itself_is_refused(self) -> None:
+        """Caught by the earlier rule — a step cannot read output it has not
+        produced yet — which is a stricter and more useful message than
+        complaining about unconsumed evidence."""
+        actions = default_action_runner()
+        selfish = {
+            "steps": [
+                {
+                    "id": "s",
+                    "action": "web.search",
+                    "payload": {"query": "x", "note": "${s.sources}"},
+                }
+            ]
+        }
+        with pytest.raises(PlanRejected, match="has not run by then"):
+            validate(selfish, known_actions=set(actions.registered()))
+
+
+class TestExternalDataIsEvidenceNotCopy:
+    """A search result is something to reason from, not something to publish.
+
+    Observed: given research about children's games, the model titled the
+    generated page "Children's game | Types, Rules & Benefits | Britannica" and
+    every step reported success. That puts another site's branding on a
+    customer's page.
+    """
+
+    def test_a_forwarded_page_title_is_refused(self, tmp_path: Path) -> None:
+        from atlas_kernel.actions.handlers import ActionError, code_generate
+
+        ctx = ExecutionContext(workspace=Workspace.create(tmp_path, "forwarded"))
+        with pytest.raises(ActionError, match="forwarded external content"):
+            code_generate(
+                {"title": "Children's game | Types, Rules & Benefits | Britannica"}, ctx
+            )
+
+    def test_a_url_in_user_facing_copy_is_refused(self, tmp_path: Path) -> None:
+        from atlas_kernel.actions.handlers import ActionError, code_generate
+
+        ctx = ExecutionContext(workspace=Workspace.create(tmp_path, "urly"))
+        with pytest.raises(ActionError, match="forwarded external content"):
+            code_generate({"title": "Games", "headline": "see https://example.com/x"}, ctx)
+
+    def test_a_pasted_snippet_is_refused_for_being_snippet_shaped(
+        self, tmp_path: Path
+    ) -> None:
+        from atlas_kernel.actions.handlers import ActionError, code_generate
+
+        ctx = ExecutionContext(workspace=Workspace.create(tmp_path, "snippet"))
+        with pytest.raises(ActionError, match="longer than written copy"):
+            code_generate({"title": "Games", "tagline": "A " + "very " * 60 + "long thing"}, ctx)
+
+    def test_ordinary_written_copy_passes(self, tmp_path: Path) -> None:
+        """The guard must not block a legitimate page — a false positive here is
+        noticed at once, which is why it is tuned to shapes that only occur in
+        scraped metadata."""
+        from atlas_kernel.actions.handlers import code_generate
+
+        ctx = ExecutionContext(workspace=Workspace.create(tmp_path, "fine"))
+        for title in ("Rabbit Racer", "Children's Game", "Hop & Skip: A Counting Game"):
+            assert "files" in code_generate({"title": title, "headline": title}, ctx)
+
+
+class TestProvenance:
+    def test_it_reports_the_chain_from_source_to_artifact(self, tmp_path: Path) -> None:
+        """The question a customer eventually asks is "why does my page say
+        this?", and it is only answerable if the chain was recorded as it ran."""
+        actions = default_action_runner()
+        plan_dict = {
+            "steps": [
+                {"id": "look", "action": "web.search", "payload": {"query": "kids games"}},
+                {
+                    "id": "decide",
+                    "action": "code.generate",
+                    "payload": {"title": "Hop Along", "features": "${look.sources}"},
+                    "dependencies": ["look"],
+                },
+                {
+                    "id": "save",
+                    "action": "code.write",
+                    "payload": {"files": "${decide.files}"},
+                    "dependencies": ["decide"],
+                },
+            ]
+        }
+        planner, _ = _scripted_planner(plan_dict, actions)
+        plan = planner.plan(RESEARCH_OBJECTIVE)
+        ctx = ExecutionContext(
+            workspace=Workspace.create(tmp_path, "prov"), search_factory=_stub_search
+        )
+        report = PlanRunner(actions).run(plan, ctx)
+        assert report.ok, report.summary()
+
+        prov = report.provenance()
+        assert prov["evidence_consumed"] is True
+        assert prov["researched"][0]["query"] == "kids games"
+        assert prov["researched"][0]["sources"] == ["https://example.com/kids-games"]
+        decision = prov["decisions"][0]
+        assert decision["consumed_from"] == ["look"]
+        assert decision["produced"]["title"] == "Hop Along"
+        assert prov["artifacts"]["files"]
+
+        rendered = report.render_provenance()
+        assert "https://example.com/kids-games" in rendered
+        assert "Hop Along" in rendered
+
+    def test_it_says_plainly_when_nothing_consumed_the_research(
+        self, tmp_path: Path
+    ) -> None:
+        """Belt and braces: validation refuses such a plan, but if one ever
+        reaches execution the report must not describe it as researched."""
+        from atlas_kernel.actions.context import ActionRecord
+        from atlas_kernel.actions.runner import PlanReport
+
+        report = PlanReport(
+            plan_id="p",
+            goal="g",
+            ok=True,
+            steps_total=1,
+            steps_succeeded=1,
+            steps_failed=0,
+            records=[
+                ActionRecord(
+                    step_id="look",
+                    action="web.search",
+                    output={"query": "x", "sources": [{"url": "https://e.test"}]},
+                )
+            ],
+        )
+        assert report.provenance()["evidence_consumed"] is False
+        assert "NOTHING CONSUMED IT" in report.render_provenance()

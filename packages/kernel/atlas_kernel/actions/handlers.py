@@ -79,6 +79,45 @@ def web_search(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, Any]
 
 # -- generation ----------------------------------------------------------
 
+#: Marks of text lifted from somebody else's page rather than written for this
+#: one. Search results are *evidence*; publishing one verbatim puts another
+#: site's branding on a customer's page and is a copyright question as well as
+#: an embarrassing one.
+#:
+#: This happened: given research about children's games, the model titled the
+#: generated page "Children's game | Types, Rules & Benefits | Britannica" and
+#: every step reported success.
+_SOURCE_MARKS = (
+    " | ",  # site-branding separator, near-universal in page titles
+    " - Wikipedia",
+    "http://",
+    "https://",
+    "www.",
+    "…",
+    "...",
+)
+
+#: Longer than any headline a person would write, and typical of a scraped
+#: description pasted whole.
+MAX_CONTENT_CHARS = 160
+
+
+def looks_forwarded(value: str) -> str:
+    """Why this text looks copied rather than written. Empty when it looks fine.
+
+    Deliberately conservative — it flags the shapes that only occur in scraped
+    metadata, not merely long or unusual prose, because a false positive here
+    blocks a legitimate page and is noticed immediately while a false negative
+    is published.
+    """
+    text = value.strip()
+    if len(text) > MAX_CONTENT_CHARS:
+        return f"{len(text)} characters — longer than written copy, typical of a scraped snippet"
+    for mark in _SOURCE_MARKS:
+        if mark in text:
+            return f"contains {mark!r}, which is a mark of a copied page title or URL"
+    return ""
+
 _PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -125,6 +164,39 @@ def code_generate(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, A
     tagline = str(payload.get("tagline") or "").strip()
     features = [str(f) for f in payload.get("features") or []]
 
+    # Evidence has its own slot, and it is not published.
+    #
+    # Asking a planner to "pass the research into the step that decides" while
+    # that step's payload was title/headline/tagline/features gave it nowhere to
+    # put it — so it either dropped the reference, or stuffed a source's title
+    # into `title`, which is how another site's branding reached a customer's
+    # page. A schema that has no place for something is a schema that asks to be
+    # abused.
+    #
+    # What arrives here informs the record of *why* the copy says what it says;
+    # the copy itself is still written by the planner. Kept out of the markup on
+    # purpose: evidence that renders is just forwarding with extra steps.
+    evidence = payload.get("evidence") or []
+    if isinstance(evidence, dict):
+        evidence = [evidence]
+    sources = [
+        str(item.get("url", "")) if isinstance(item, dict) else str(item)
+        for item in (evidence if isinstance(evidence, list) else [])
+    ]
+
+    # Research is evidence to reason from, not copy to publish. A step that
+    # forwards a search result straight into user-facing content has skipped the
+    # deciding it was asked to do, and the result is indistinguishable from
+    # success unless someone reads the page.
+    for field, value in (("title", title), ("headline", headline), ("tagline", tagline)):
+        problem = looks_forwarded(value)
+        if problem:
+            raise ActionError(
+                f"{field} looks like forwarded external content: {problem}. "
+                f"Got {value[:80]!r}. Research is evidence — write the copy from it "
+                "rather than passing a source's own words through."
+            )
+
     rendered = _PAGE.format(
         title=html.escape(title),
         headline=html.escape(headline),
@@ -169,7 +241,13 @@ def code_generate(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, A
         'Path("dist/index.html").write_text(app.render(), encoding="utf-8")\n'
         'print("built dist/index.html")\n'
     )
-    return {"files": {"app.py": module, "test_app.py": tests, "build.py": build}, "title": title}
+    return {
+        "files": {"app.py": module, "test_app.py": tests, "build.py": build},
+        "title": title,
+        # Carried into the report so the chain from source to published page is
+        # answerable later without re-deriving it.
+        "informed_by": [s for s in sources if s],
+    }
 
 
 # -- code ----------------------------------------------------------------

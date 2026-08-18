@@ -38,6 +38,15 @@ from .runner import REFERENCE, ActionError, topological
 #: What the model is told it may use. Generated from the registry rather than
 #: written out, so an action added later is available to the planner without
 #: anyone remembering to update a prompt.
+#: Actions that exist only to inform later steps. They have no effect on the
+#: world, so an unconsumed one is definitionally dead work: the plan paid for
+#: it, waited for it, and then decided without it.
+#:
+#: Keyed by ACTION, never by step id. A model names its steps whatever it likes
+#: — "search", "look_around", "investigate" — and a rule keyed on names would be
+#: a hard-coded workflow wearing a validator's clothes.
+INFORMATIONAL_ACTIONS = frozenset({"web.search"})
+
 SYSTEM = """You plan work for Qevik, an autonomous build system.
 
 Return ONLY a JSON object. No prose, no markdown fence.
@@ -121,8 +130,12 @@ def environment_facts(python: str | None = None) -> str:
 ACTION_HELP = {
     "web.search": '{"query": "...", "count": 5} -> {sources: [{url,title,description}], top_url}',
     "code.generate": (
-        '{"title": "...", "headline": "...", "tagline": "...", "features": ["..."]} '
-        "-> {files: {path: content}}. "
+        '{"title": "...", "headline": "...", "tagline": "...", "features": ["..."], '
+        '"evidence": "${<your web.search step id>.sources}"} '
+        "-> {files: {path: content}, informed_by: [...]}. "
+        "Put research in \"evidence\" — it records what informed the page and is "
+        "NOT published. Write title/headline/tagline yourself FROM that evidence; "
+        "never copy a source's title into them. "
         # The model cannot know the markup of a page it did not write. Without
         # this it invents plausible selectors — "#game-title" for a game — and
         # the verification step fails against a page that is perfectly fine.
@@ -257,7 +270,43 @@ def validate(raw: dict[str, Any], *, known_actions: set[str]) -> list[PlanStep]:
         )
 
     topological(steps)  # refuses a cycle
+    require_evidence_is_used(steps)
     return steps
+
+
+def require_evidence_is_used(steps: list[PlanStep]) -> None:
+    """Refuse a plan that researches and then ignores what it found.
+
+    The model has two acceptable answers to a research objective: gather
+    evidence and use it, or decide the evidence is unnecessary and not gather
+    it. What it may not do is gather evidence, discard it, and produce something
+    that *looks* researched — which is the failure that reads as success and is
+    therefore worth failing loudly on.
+
+    Checked structurally, through references, rather than by looking for a step
+    called "choose". A later step consuming ``${<search step>.…}`` is the only
+    evidence that the research reached a decision, and it is exactly what a
+    hard-coded name check would miss when the model picked different words.
+    """
+    producers = {s.id for s in steps if s.action in INFORMATIONAL_ACTIONS}
+    if not producers:
+        return  # (b): it decided research was unnecessary. Allowed.
+
+    consumed: set[str] = set()
+    for step in steps:
+        for reference in _references(step.payload):
+            target = reference.split(".", 1)[0].split("[", 1)[0]
+            if target in producers and target != step.id:
+                consumed.add(target)
+
+    orphaned = sorted(producers - consumed)
+    if orphaned:
+        raise PlanRejected(
+            f"step(s) {orphaned} gather evidence that no later step reads. "
+            "Either pass their output into the step that decides or generates — "
+            "e.g. \"${" + orphaned[0] + '.sources}" — or drop them. A plan that '
+            "researches and then ignores the result has not done the research."
+        )
 
 
 def _references(value: Any) -> list[str]:
@@ -310,6 +359,10 @@ class LLMPlanner:
         #: Why the last call fell back, if it did. Reported, never swallowed.
         self.last_fallback_reason = ""
         self.last_model = ""
+        #: Rejections the model was asked to fix, in order. Kept because a plan
+        #: that took two attempts is a different fact about the model from one
+        #: that took none, and a silent retry hides exactly that.
+        self.last_corrections: list[str] = []
 
     @property
     def available(self) -> bool:
@@ -340,31 +393,65 @@ class LLMPlanner:
             return self._fall_back(f"no model configured ({error})", request, fallback_kwargs)
 
         self.last_model = registration.spec.id
-        try:
-            completion = registration.provider.complete(
-                self._prompt(request),
-                registration.spec,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-            )
-            steps = validate(
-                extract_json(completion.text), known_actions=set(self.actions.registered())
-            )
-        except PlanRejected as rejected:
-            return self._fall_back(
-                f"the model's plan was rejected: {rejected}", request, fallback_kwargs
-            )
-        except Exception as error:  # noqa: BLE001
-            return self._fall_back(f"the model call failed: {error}", request, fallback_kwargs)
+        self.last_corrections = []
+        messages = self._prompt(request)
+        steps = None
+
+        # One correction round. A model that emits a nearly-right plan usually
+        # fixes it when told precisely what was wrong, and falling straight
+        # through to the deterministic planner throws away a capable model over
+        # a missing reference. Bounded at one because a second identical
+        # rejection means the model cannot do it, not that it needs more turns.
+        for attempt in range(2):
+            try:
+                completion = registration.provider.complete(
+                    messages,
+                    registration.spec,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+            except Exception as error:  # noqa: BLE001
+                return self._fall_back(f"the model call failed: {error}", request, fallback_kwargs)
+
+            try:
+                steps = validate(
+                    extract_json(completion.text), known_actions=set(self.actions.registered())
+                )
+                break
+            except PlanRejected as rejected:
+                self.last_corrections.append(str(rejected))
+                if attempt == 1:
+                    return self._fall_back(
+                        f"the model's plan was rejected twice: {rejected}",
+                        request,
+                        fallback_kwargs,
+                    )
+                messages = [
+                    *messages,
+                    Message(role=Role.ASSISTANT, content=completion.text),
+                    Message(
+                        role=Role.USER,
+                        content=(
+                            f"That plan was rejected: {rejected}\n"
+                            "Return a corrected plan as JSON only."
+                        ),
+                    ),
+                ]
+
+        assert steps is not None  # the loop either breaks with steps or returns
 
         return ExecutionPlan(
             goal=request,
             steps=steps,
             capabilities_required=sorted({s.capability for s in steps}),
             expected_outputs=["Composed by " + registration.spec.id],
-            confidence=0.7,
+            confidence=0.7 if not self.last_corrections else 0.6,
             review_required=any(s.action == "site.deploy" for s in steps),
-            context_snapshot={"planner": "llm", "model": registration.spec.id},
+            context_snapshot={
+                "planner": "llm",
+                "model": registration.spec.id,
+                "corrections": self.last_corrections,
+            },
         )
 
     def _fall_back(self, reason: str, request: str, kwargs: dict[str, Any]) -> ExecutionPlan:

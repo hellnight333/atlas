@@ -49,6 +49,10 @@ class ActionRecord(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     at: datetime = Field(default_factory=_now)
     attempt: int = 1
+    #: Which earlier steps' outputs this one actually read, captured when the
+    #: references were resolved rather than inferred afterwards from the plan.
+    #: The plan says what was *meant* to flow; this says what did.
+    consumed_from: list[str] = Field(default_factory=list)
 
     def __str__(self) -> str:
         state = "ok" if self.ok else f"FAILED ({self.error[:60]})"

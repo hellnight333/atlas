@@ -99,6 +99,83 @@ class PlanReport(BaseModel):
     records: list[ActionRecord] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
 
+    def provenance(self) -> dict[str, Any]:
+        """Where the output came from: evidence, who read it, what it decided.
+
+        Built from what executed rather than from what the plan intended, and
+        keyed on actions rather than step names so it describes any plan a model
+        composes. The question it answers is the one a customer eventually asks
+        — "why does my page say this?" — and it can only be answered if the
+        chain from source URL to published artifact was recorded as it happened.
+        """
+        from .llm_planner import INFORMATIONAL_ACTIONS
+
+        researched = [
+            {
+                "step": r.step_id,
+                "query": r.output.get("query", ""),
+                "sources": [s.get("url", "") for s in (r.output.get("sources") or [])],
+            }
+            for r in self.records
+            if r.action in INFORMATIONAL_ACTIONS and r.ok
+        ]
+        evidence_steps = {entry["step"] for entry in researched}
+
+        decisions = [
+            {
+                "step": r.step_id,
+                "action": r.action,
+                "consumed_from": [s for s in r.consumed_from if s in evidence_steps],
+                # What the decision actually produced, as user-facing copy.
+                "produced": {
+                    k: v
+                    for k, v in r.payload.items()
+                    if k in ("title", "headline", "tagline") and isinstance(v, str)
+                },
+            }
+            for r in self.records
+            if r.ok and any(s in evidence_steps for s in r.consumed_from)
+        ]
+
+        artifacts = {
+            "files": sorted(
+                {f for r in self.records if r.ok for f in (r.output.get("written") or [])}
+            ),
+            "deployed_url": next(
+                (r.output.get("url", "") for r in reversed(self.records)
+                 if r.action == "site.deploy" and r.ok), ""
+            ),
+            "evidence": list(self.evidence),
+        }
+
+        return {
+            "researched": researched,
+            "evidence_consumed": bool(decisions),
+            "decisions": decisions,
+            "artifacts": artifacts,
+        }
+
+    def render_provenance(self) -> str:
+        """The provenance as a person reads it."""
+        p = self.provenance()
+        if not p["researched"]:
+            return "provenance: no external research was used."
+        lines = ["provenance:"]
+        for entry in p["researched"]:
+            lines.append(f"  researched {entry['query']!r} -> {len(entry['sources'])} source(s)")
+            lines.extend(f"    - {url}" for url in entry["sources"][:5])
+        if not p["decisions"]:
+            lines.append("  NOTHING CONSUMED IT — the research did not reach a decision.")
+        for decision in p["decisions"]:
+            lines.append(
+                f"  {decision['step']} ({decision['action']}) read "
+                f"{', '.join(decision['consumed_from'])} and produced:"
+            )
+            lines.extend(f"    {k}: {v}" for k, v in decision["produced"].items())
+        if p["artifacts"]["deployed_url"]:
+            lines.append(f"  deployed: {p['artifacts']['deployed_url']}")
+        return "\n".join(lines)
+
     def summary(self) -> str:
         if self.refused:
             head = f"REFUSED: {self.error}"
@@ -218,6 +295,14 @@ class ActionRunner:
                 )
             )
 
+        # Captured before resolution replaces them, because afterwards the
+        # payload contains values and no record of where they came from.
+        consumed = sorted(
+            {
+                ref.split(".", 1)[0].split("[", 1)[0]
+                for ref in REFERENCE.findall(json.dumps(step.payload, default=str))
+            }
+        )
         try:
             payload = resolve(step.payload, ctx.outputs)
             # Nothing may reach a handler still carrying template syntax. A
@@ -240,6 +325,7 @@ class ActionRunner:
                     attempt=attempt,
                     error=str(error),
                     duration_seconds=round(time.monotonic() - started, 3),
+                    consumed_from=consumed,
                 )
             )
 
@@ -269,6 +355,7 @@ class ActionRunner:
                 attempt=attempt,
                 duration_seconds=round(time.monotonic() - started, 3),
                 evidence=[str(p) for p in (output.get("evidence") or [])],
+                consumed_from=consumed,
             )
         )
 
