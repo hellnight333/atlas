@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qevik Control</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --fg: #e6edf3;
+    --muted: #8b949e; --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem;
+           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 1rem; margin: 0; letter-spacing: .02em; }
+  header .who { margin-left: auto; color: var(--muted); font-size: .85rem; }
+  button { font: inherit; background: var(--accent); color: #fff; border: 0;
+           padding: .5rem .9rem; border-radius: 6px; cursor: pointer; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--fg); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  main { max-width: 1100px; margin: 0 auto; padding: 1rem; display: grid; gap: 1rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+  .panel h2 { margin: 0 0 .75rem; font-size: .8rem; text-transform: uppercase;
+              letter-spacing: .08em; color: var(--muted); }
+  textarea, input { width: 100%; font: inherit; background: var(--bg); color: var(--fg);
+                    border: 1px solid var(--line); border-radius: 6px; padding: .6rem; }
+  textarea { min-height: 5.5rem; resize: vertical; }
+  label.check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .9rem; }
+  label.check input { width: auto; }
+  .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .75rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: .4rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .8rem; }
+  td { padding: .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.job { cursor: pointer; }
+  tr.job:hover td { background: #1c2333; }
+  .pill { display: inline-block; padding: .1rem .5rem; border-radius: 99px; font-size: .75rem;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.completed { color: var(--ok); border-color: var(--ok); }
+  .pill.failed, .pill.lost { color: var(--bad); border-color: var(--bad); }
+  .pill.running, .pill.planning, .pill.researching, .pill.generating,
+  .pill.testing, .pill.repairing, .pill.deploying, .pill.verifying { color: var(--accent); border-color: var(--accent); }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .75rem;
+        overflow-x: auto; font-family: var(--mono); font-size: .8rem; margin: 0; max-height: 22rem; }
+  a { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; }
+  .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .5rem .7rem; }
+  .stat b { display: block; font-size: 1.1rem; }
+  .stat span { color: var(--muted); font-size: .75rem; }
+  .err { color: var(--bad); font-size: .9rem; min-height: 1.2rem; }
+  #login { max-width: 22rem; margin: 12vh auto; }
+  .hidden { display: none; }
+  dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; font-size: .9rem; }
+  dt { color: var(--muted); }
+  dd { margin: 0; word-break: break-word; }
+  @media (max-width: 640px) { main { padding: .5rem; } header h1 { font-size: .9rem; } }
+</style>
+</head>
+<body>
+
+<div id="login" class="panel">
+  <h2>Qevik Control</h2>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0">
+    Sign in. This console can deploy websites and spend money.
+  </p>
+  <input id="u" placeholder="username" autocomplete="username">
+  <div style="height:.5rem"></div>
+  <input id="p" type="password" placeholder="password" autocomplete="current-password">
+  <div class="row"><button id="signin">Sign in</button><span id="loginerr" class="err"></span></div>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <h1>QEVIK CONTROL</h1>
+  <span id="health" class="pill">checking…</span>
+  <span class="who"><span id="me"></span> <button id="signout" class="ghost">Sign out</button></span>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Objective</h2>
+    <textarea id="objective" placeholder="Create a simple children's browser game about a rabbit wearing a hat. Build it, test it, deploy it, verify the public deployment, and report the result."></textarea>
+    <div class="row">
+      <button id="run">Run objective</button>
+      <label class="check"><input type="checkbox" id="pub"> Authorise publishing to the public site host</label>
+      <span id="runerr" class="err"></span>
+    </div>
+    <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0">
+      Qevik decides the steps. Publishing is refused unless authorised above and your account holds the publish scope.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Jobs</h2>
+    <table><thead><tr><th>Job</th><th>Phase</th><th>Kind</th><th>Duration</th><th>Note</th></tr></thead>
+      <tbody id="jobs"><tr><td colspan="5" style="color:var(--muted)">loading…</td></tr></tbody></table>
+  </section>
+
+  <section class="panel hidden" id="detail">
+    <h2>Job detail</h2>
+    <dl id="meta"></dl>
+    <div class="row"><button class="ghost" id="refresh">Refresh</button><button class="ghost" id="close">Close</button></div>
+    <div id="deployed" style="margin-top:.75rem"></div>
+    <h2 style="margin-top:1rem">Plan</h2><pre id="plan">—</pre>
+    <h2 style="margin-top:1rem">Provenance</h2><pre id="prov">—</pre>
+    <h2 style="margin-top:1rem">Artifacts</h2><div id="arts" style="font-size:.9rem;color:var(--muted)">—</div>
+    <h2 style="margin-top:1rem">Log</h2><pre id="log">—</pre>
+  </section>
+
+  <section class="panel">
+    <h2>System</h2>
+    <div class="grid" id="stats"></div>
+  </section>
+</main>
+</div>
+
+<script>
+const API = location.origin.replace(/\/$/, "");
+let current = null, timer = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    ...opts,
+  });
+  if (res.status === 401) { show(false); throw new Error("not signed in"); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+function show(authed) {
+  $("app").classList.toggle("hidden", !authed);
+  $("login").classList.toggle("hidden", authed);
+  if (!authed && timer) { clearInterval(timer); timer = null; }
+}
+
+$("signin").onclick = async () => {
+  $("loginerr").textContent = "";
+  try {
+    const r = await api("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: $("u").value, password: $("p").value }),
+    });
+    $("me").textContent = r.user.username + " (" + r.user.scopes.join(", ") + ")";
+    $("p").value = "";
+    show(true); start();
+  } catch (e) { $("loginerr").textContent = e.message; }
+};
+
+$("signout").onclick = async () => {
+  try { await api("/auth/logout", { method: "POST" }); } catch {}
+  show(false);
+};
+
+$("run").onclick = async () => {
+  const objective = $("objective").value.trim();
+  $("runerr").textContent = "";
+  if (objective.length < 8) { $("runerr").textContent = "describe what you want done"; return; }
+  $("run").disabled = true;
+  try {
+    const r = await api("/control/objectives", {
+      method: "POST",
+      body: JSON.stringify({ objective, authorise_publish: $("pub").checked }),
+    });
+    $("objective").value = "";
+    await jobs(); open_(r.job_id);
+  } catch (e) { $("runerr").textContent = e.message; }
+  finally { $("run").disabled = false; }
+};
+
+async function jobs() {
+  try {
+    const list = await api("/control/jobs?limit=25");
+    $("jobs").innerHTML = list.length ? list.map(j => `
+      <tr class="job" data-id="${esc(j.id)}">
+        <td style="font-family:var(--mono);font-size:.8rem">${esc(j.id)}</td>
+        <td><span class="pill ${esc(j.phase)}">${esc(j.phase)}</span></td>
+        <td>${esc(j.kind)}</td>
+        <td>${Math.round(j.duration_seconds)}s</td>
+        <td style="color:var(--muted)">${esc((j.note || "").slice(0, 70))}</td>
+      </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">no jobs yet</td></tr>`;
+    document.querySelectorAll("tr.job").forEach(tr => tr.onclick = () => open_(tr.dataset.id));
+  } catch (e) { /* transient; the next tick retries */ }
+}
+
+async function open_(id) { current = id; $("detail").classList.remove("hidden"); await detail(); }
+$("close").onclick = () => { current = null; $("detail").classList.add("hidden"); };
+$("refresh").onclick = detail;
+
+async function detail() {
+  if (!current) return;
+  try {
+    const j = await api("/control/jobs/" + current);
+    const o = j.outcome || {};
+    $("meta").innerHTML = [
+      ["Job", j.id], ["State", j.state], ["Phase", j.phase],
+      ["Objective", (j.note || "").replace(/^[^:]*:\s*/, "")],
+      ["Planner", o.planner ? `${o.planner} (${o.model || "—"})` : "—"],
+      ["Exit code", j.exit_code ?? "—"],
+      ["Repairs", o.repairs ?? "—"],
+      ["Started", j.started_at], ["Ended", j.ended_at || "—"],
+      ["Publish authorised", o.publish_authorised === undefined ? "—" : String(o.publish_authorised)],
+      ["Error", j.error || o.error || "—"],
+    ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+
+    $("deployed").innerHTML = o.deployed_url
+      ? `<a href="${esc(o.deployed_url)}" target="_blank" rel="noopener">${esc(o.deployed_url)}</a>
+         <span class="pill ${o.verified_status === 200 ? "completed" : "failed"}">verified ${esc(o.verified_status ?? "—")}</span>`
+      : `<span style="color:var(--muted)">nothing deployed</span>`;
+
+    $("plan").textContent = j.plan
+      ? j.plan.steps.map(s => {
+          const refs = (JSON.stringify(s.payload).match(/\$\{([\w.\-\[\]]+)\}/g) || []).join(", ");
+          return `${s.id.padEnd(22)} ${s.action.padEnd(16)} ${refs ? "<- " + refs : ""}`;
+        }).join("\n")
+      : "—";
+
+    const p = j.provenance;
+    $("prov").textContent = p
+      ? (p.researched.length
+          ? p.researched.map(r =>
+              `researched ${JSON.stringify(r.query)} -> ${r.sources.length} source(s)\n` +
+              r.sources.map(u => "  - " + u).join("\n")).join("\n") +
+            "\n" + (p.decisions.length
+              ? p.decisions.map(d =>
+                  `${d.step} read ${d.consumed_from.join(", ")} and wrote:\n` +
+                  Object.entries(d.produced).map(([k, v]) => `  ${k}: ${v}`).join("\n")).join("\n")
+              : "NOTHING CONSUMED IT")
+          : "no external research was used")
+      : "—";
+
+    $("arts").innerHTML = (j.artifacts || []).length
+      ? j.artifacts.map(a => `${esc(a.name)} <span style="opacity:.6">(${a.bytes} bytes)</span>`).join(" · ")
+      : "—";
+
+    const l = await api(`/control/jobs/${current}/logs?tail=200`);
+    $("log").textContent = l.text || "—";
+    $("log").scrollTop = $("log").scrollHeight;
+  } catch (e) { $("log").textContent = "could not load: " + e.message; }
+}
+
+async function health() {
+  try {
+    const h = await api("/control/health");
+    $("health").textContent = h.healthy ? "healthy" : "degraded";
+    $("health").className = "pill " + (h.healthy ? "completed" : "failed");
+    $("stats").innerHTML = [
+      ["Memory", `${h.memory_used_mb}/${h.memory_total_mb} MB`],
+      ["Load", h.load_1min], ["Disk", h.disk_used_percent + "%"],
+      ["Processes", h.process_count], ["Browsers", h.browser_count],
+      ["Running jobs", (h.active_jobs || []).length],
+      ["API", h.api_healthy ? "ok" : "down"],
+      ["Site host", h.site_host_status || "—"],
+    ].map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("");
+  } catch (e) { $("health").textContent = "unknown"; }
+}
+
+function start() {
+  jobs(); health(); detail();
+  if (timer) clearInterval(timer);
+  // Polled rather than streamed: a dropped connection must never be able to
+  // stall the view, and this control plane's network is demonstrably unreliable.
+  timer = setInterval(() => { jobs(); health(); detail(); }, 4000);
+}
+
+api("/auth/me").then(u => {
+  $("me").textContent = u.username + " (" + u.scopes.join(", ") + ")";
+  show(true); start();
+}).catch(() => show(false));
+</script>
+</body>
+</html>

@@ -51,6 +51,7 @@ testpaths = ["packages/kernel/tests"]
 markers = [
     "integration: exercises a real subsystem (filesystem, subprocess, database)",
     "e2e: drives a whole workflow end to end; needs a browser, ports or network",
+    "real_auth: exercises real authentication; opts out of the test session fixture",
 ]
 addopts = "--cov=packages/kernel/atlas_kernel --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
 
@@ -73,6 +74,8 @@ ignore = ["E501"]
 # FastAPI's dependency-injection defaults (File, Form, Depends) are the
 # framework's documented idiom, not a mutable-default bug.
 "packages/kernel/atlas_kernel/api.py" = ["B008"]
+"packages/kernel/atlas_kernel/auth/api.py" = ["B008"]
+"packages/kernel/atlas_kernel/control/api.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"

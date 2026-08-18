@@ -15,6 +15,18 @@
 	admin off
 	# Where Let's Encrypt sends expiry warnings once a domain exists.
 	email qevikos@gmail.com
+	# A client reaching the control console by IP sends no SNI, so Caddy has no
+	# site to match and aborts the handshake. This names the site to assume.
+	default_sni 2.28.62.83
+
+	# Caddy adds an HTTP->HTTPS redirect for every hostname it serves over TLS.
+	# Defining the control console as https://2.28.62.83:8443 therefore made it
+	# redirect http://2.28.62.83/<site>/ to https://2.28.62.83/ — port 443, which
+	# is not open — and every published customer site started answering 308 to a
+	# dead address. The sites are deliberately plain HTTP until a domain exists,
+	# so the redirect is wrong for them and is disabled here rather than worked
+	# around per site.
+	auto_https disable_redirects
 }
 
 # --- Reachable today, by IP -------------------------------------------------

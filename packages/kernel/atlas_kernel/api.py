@@ -91,6 +91,52 @@ from .workflow_engine import (
 
 app = FastAPI(title="Atlas Kernel")
 
+# Authentication first, so its middleware sees every request — including routes
+# registered after this point. Deny by default: see auth/api.py PUBLIC_PATHS for
+# the short list of endpoints that answer without a session.
+#
+# Wrapped because the kernel is imported in contexts with no database (tests,
+# tooling) and an import-time connection failure there would break things that
+# have nothing to do with the control plane. A control plane that cannot
+# authenticate must refuse requests, not fail to start — so the failure is
+# recorded and every route stays unreachable rather than becoming open.
+AUTH_READY = False
+AUTH_ERROR = ""
+try:
+    from .auth import bootstrap_admin, init_auth
+    from .auth import install as install_auth
+
+    init_auth()
+    bootstrap_admin()
+    install_auth(app)
+    AUTH_READY = True
+except Exception as _auth_error:  # noqa: BLE001 - recorded, never swallowed
+    AUTH_ERROR = f"{type(_auth_error).__name__}: {_auth_error}"
+
+    @app.middleware("http")
+    async def _refuse_without_auth(request, call_next):
+        """Authentication did not initialise, so nothing is authorised.
+
+        Failing closed. The alternative — serving an unauthenticated control
+        plane because its auth tables were missing — is the exact outcome the
+        loopback binding existed to prevent.
+        """
+        from fastapi.responses import JSONResponse
+
+        if request.url.path == "/health":
+            return await call_next(request)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": f"authentication unavailable: {AUTH_ERROR}"},
+        )
+
+try:
+    from .control import install as install_control
+
+    install_control(app)
+except Exception:  # noqa: BLE001 - the control router is additive
+    pass
+
 
 @app.middleware("http")
 async def accept_api_prefix(request: Request, call_next):  # type: ignore[no-untyped-def]
