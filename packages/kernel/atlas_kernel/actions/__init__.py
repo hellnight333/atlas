@@ -21,7 +21,13 @@ from .handlers import (
     ActionError,
     PublishNotAuthorised,
 )
-from .planning import RegenerateRepairer, plan_website, title_from_request
+from .llm_planner import LLMPlanner, PlanRejected
+from .planning import (
+    RegenerateRepairer,
+    default_planner,
+    plan_website,
+    title_from_request,
+)
 from .runner import (
     ActionRunner,
     PlanReport,
@@ -46,7 +52,10 @@ __all__ = [
     "PlanReport",
     "PlanRunner",
     "PublishNotAuthorised",
+    "LLMPlanner",
+    "PlanRejected",
     "RegenerateRepairer",
+    "default_planner",
     "Repairer",
     "default_action_runner",
     "plan_website",

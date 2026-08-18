@@ -31,6 +31,7 @@ from .handlers import (
     SITE_DEPLOY,
     WEB_SEARCH,
 )
+from .llm_planner import LLMPlanner
 
 PYTEST = ["python3", "-m", "pytest", "-q", "test_app.py", "-p", "no:cacheprovider"]
 
@@ -216,7 +217,19 @@ class RegenerateRepairer:
         # failure means something outside the workspace is wrong.
         if step.action != CODE_EXECUTE or self.attempts >= 1:
             return []
-        generated = ctx.outputs.get("generate", {}).get("files")
+
+        # Found by what the step *did*, never by what it was called. Looking up
+        # a step named "generate" worked only for the deterministic planner,
+        # which names it that; a model composing its own plan calls it whatever
+        # it likes, and the repairer silently found nothing and gave up. The
+        # failure was invisible — the plan simply stopped being repairable the
+        # moment a model wrote it.
+        generated = None
+        for record in reversed(ctx.records):
+            if record.action == CODE_GENERATE and record.ok:
+                generated = record.output.get("files")
+                if generated:
+                    break
         if not generated:
             return []
         self.attempts += 1
@@ -230,3 +243,27 @@ class RegenerateRepairer:
                 expected_output="The generated files restored",
             )
         ]
+
+
+def default_planner(actions=None, registry=None) -> LLMPlanner:
+    """The planner Qevik uses. Model-driven when a credential exists.
+
+    The model is the primary path, not an enhancement: the point of the whole
+    action layer is that an open-ended objective decides its own steps, and a
+    deterministic planner can only ever replay a shape someone wrote down.
+
+    The deterministic planner stays wired as the fallback rather than being
+    removed, for two reasons. It keeps the system working when a credential is
+    absent, rate-limited or returning nonsense — and it makes the tests that
+    must not touch the network possible at all. `ExecutionPlan.context_snapshot`
+    always records which one composed a plan, so a fallback can never be
+    mistaken later for a decision the model made.
+    """
+    from ..llm.registry import default_registry
+    from .runner import default_action_runner
+
+    return LLMPlanner(
+        registry if registry is not None else default_registry(),
+        actions=actions if actions is not None else default_action_runner(),
+        fallback=plan_website,
+    )
