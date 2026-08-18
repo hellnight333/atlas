@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -95,6 +96,13 @@ class PlanReport(BaseModel):
     timed_out: bool = False
     #: Set when the work never started because the host was already at capacity.
     refused: bool = False
+    #: Set when the plan stopped at an action a human must decide on. Not a
+    #: failure and not a success — the work is intact and will continue from
+    #: exactly this step once someone answers.
+    waiting_approval: bool = False
+    approval_id: str = ""
+    #: Where the run was paused, so a resume knows what to do next.
+    paused_at_step: str = ""
     outputs: dict[str, Any] = Field(default_factory=dict)
     records: list[ActionRecord] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
@@ -177,7 +185,12 @@ class PlanReport(BaseModel):
         return "\n".join(lines)
 
     def summary(self) -> str:
-        if self.refused:
+        if self.waiting_approval:
+            head = (
+                f"WAITING FOR APPROVAL at {self.paused_at_step} "
+                f"({self.approval_id}): {self.error}"
+            )
+        elif self.refused:
             head = f"REFUSED: {self.error}"
         elif self.timed_out:
             head = f"TIMED OUT: {self.error}"
@@ -376,9 +389,16 @@ class PlanRunner:
         repairer: Repairer | None = None,
         limits: JobLimits | None = None,
         slots: JobSlots | None = None,
+        gate=None,
+        job_id: str = "",
     ) -> None:
         self.actions = actions
         self.repairer = repairer
+        #: Consulted before any action that can affect the world outside this
+        #: machine. Absent means no gating, which is correct for a unit test and
+        #: wrong for the server — the server always supplies one.
+        self.gate = gate
+        self.job_id = job_id
         self.limits = limits or (slots.limits if slots else JobLimits.for_host())
         #: Shared across runners when one is passed in, which is what makes the
         #: concurrency limit apply to the host rather than to one caller.
@@ -405,6 +425,54 @@ class PlanRunner:
         with slot:
             return self._run_within_budget(plan, ctx, started)
 
+    def _paused(self, plan, ctx, step, verdict, started: float) -> PlanReport:
+        """Stop at a step awaiting a decision, keeping everything needed to go on.
+
+        Resources are released by returning: the process ends, so the browser,
+        the job slot and the cgroup's memory all go with it. What survives is a
+        row in PostgreSQL and a state file — which is the correct amount of
+        machinery to keep alive while waiting for a person.
+        """
+        import json as _json
+        import os
+
+        artifacts = os.environ.get("QEVIK_JOB_ARTIFACTS")
+        if artifacts:
+            state = PlanState(
+                plan=plan.model_dump(mode="json"),
+                outputs=dict(ctx.outputs),
+                records=[r.model_dump(mode="json") for r in ctx.records],
+                completed=[r.step_id for r in ctx.records if r.ok],
+                paused_at_step=step.id,
+                approval_id=verdict.approval_id,
+                job_id=self.job_id,
+                workspace_root=str(ctx.workspace.root),
+            )
+            try:
+                state_path(artifacts).write_text(
+                    _json.dumps(state.model_dump(mode="json"), indent=2, default=str),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # the approval row is the durable part; this is a convenience
+
+        return PlanReport(
+            plan_id=plan.plan_id,
+            goal=plan.goal,
+            ok=False,
+            waiting_approval=True,
+            approval_id=verdict.approval_id,
+            paused_at_step=step.id,
+            error=verdict.reason,
+            steps_total=len(plan.steps),
+            steps_succeeded=sum(1 for r in ctx.records if r.ok),
+            steps_failed=sum(1 for r in ctx.records if not r.ok),
+            duration_seconds=round(time.monotonic() - started, 3),
+            outputs=dict(ctx.outputs),
+            records=list(ctx.records),
+            evidence=ctx.evidence,
+        )
+
     def _run_within_budget(
         self, plan: ExecutionPlan, ctx: ExecutionContext, started: float
     ) -> PlanReport:
@@ -426,6 +494,40 @@ class PlanRunner:
                     f"({deadline.elapsed:.1f}s elapsed). Stopped rather than left running."
                 )
                 break
+
+            # Ask the gate before doing anything outward-facing. Checked here,
+            # after earlier steps have run, because the payload is only
+            # meaningful once its references resolve: fingerprinting
+            # "${deploy.url}" would bind a decision to a template rather than to
+            # the URL a customer will actually receive.
+            if self.gate is not None:
+                from .approval_gate import ApprovalOutcome
+
+                try:
+                    resolved = resolve(step.payload, ctx.outputs)
+                except ActionError:
+                    resolved = step.payload
+                verdict = self.gate.check(
+                    job_id=self.job_id or plan.plan_id,
+                    step_id=step.id,
+                    action=step.action,
+                    payload=resolved if isinstance(resolved, dict) else {},
+                    evidence=list(ctx.evidence),
+                    provenance=_partial_provenance(ctx),
+                )
+                if verdict.outcome is ApprovalOutcome.WAITING:
+                    # Stop cleanly rather than polling. A job that spins waiting
+                    # for a human holds a browser, a slot and a cgroup's memory
+                    # for hours; one that exits holds a row in a table.
+                    return self._paused(plan, ctx, step, verdict, started)
+                if verdict.outcome in (ApprovalOutcome.REJECTED, ApprovalOutcome.EXPIRED):
+                    failed_step, error = step.id, verdict.reason
+                    break
+                if verdict.approval_id:
+                    # Spent before the action runs. If execution dies midway the
+                    # approval is already consumed, so a retry needs a fresh
+                    # decision rather than silently repeating an approved act.
+                    self.gate.consume(verdict.approval_id)
 
             # A step never gets more time than the plan has left, or the plan
             # overruns by the difference on its final step every time.
@@ -477,6 +579,57 @@ class PlanRunner:
             records=list(ctx.records),
             evidence=ctx.evidence,
         )
+
+
+def _partial_provenance(ctx: ExecutionContext) -> dict[str, Any]:
+    """Provenance so far, for a reviewer deciding mid-run.
+
+    Assembled from the records already made rather than from a finished report,
+    because the whole point is that the run is not finished — and "what evidence
+    led here" is precisely what a person needs before allowing a publish.
+    """
+    from .approval_gate import INTERNAL_ACTIONS  # noqa: F401 - kept for symmetry
+
+    researched = [
+        {"step": r.step_id, "query": r.output.get("query", ""),
+         "sources": [s.get("url", "") for s in (r.output.get("sources") or [])]}
+        for r in ctx.records
+        if r.ok and r.action == "web.search"
+    ]
+    produced = [
+        {"step": r.step_id, "consumed_from": r.consumed_from,
+         "copy": {k: v for k, v in r.payload.items()
+                  if k in ("title", "headline", "tagline") and isinstance(v, str)}}
+        for r in ctx.records
+        if r.ok and r.action == "code.generate"
+    ]
+    return {"researched": researched, "produced": produced}
+
+
+class PlanState(BaseModel):
+    """Everything needed to continue a paused plan in a different process.
+
+    Written to disk when a run pauses. A resume happens after an approval that
+    may be hours later and on the other side of a restart, so nothing may be
+    held in memory — the outputs earlier steps produced are exactly what later
+    ``${...}`` references need, and losing them would mean re-running work that
+    has already had effects.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    plan: dict[str, Any]
+    outputs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    completed: list[str] = Field(default_factory=list)
+    paused_at_step: str = ""
+    approval_id: str = ""
+    job_id: str = ""
+    workspace_root: str = ""
+
+
+def state_path(artifacts_dir: str | Path) -> Path:
+    return Path(artifacts_dir) / "resume_state.json"
 
 
 def default_action_runner() -> ActionRunner:

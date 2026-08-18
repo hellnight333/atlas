@@ -30,6 +30,7 @@ from atlas_kernel.actions import (  # noqa: E402
     default_action_runner,
     default_planner,
 )
+from atlas_kernel.actions.approval_gate import ApprovalGate, init_approvals  # noqa: E402
 from atlas_kernel.browser import PlaywrightSession  # noqa: E402
 from atlas_kernel.research import BraveSearch  # noqa: E402
 from atlas_kernel.website.targets.public_host import PublicHostTarget  # noqa: E402
@@ -89,12 +90,44 @@ def main() -> int:
         browser_factory=lambda: PlaywrightSession(headless=True),
         search_factory=BraveSearch,
         deploy_target=target,
-        # Absent authorisation is not "no object" but an object saying no, so
-        # the refusal message names the boundary rather than a missing argument.
+        # Kept for the deploy handler's own check. The gate above is the real
+        # boundary now; this remains so a plan cannot publish when the operator
+        # did not even ask to.
         approvals=Authorised(publish),
     )
 
-    report = PlanRunner(actions, repairer=RegenerateRepairer()).run(plan, ctx)
+    # The gate is always present on the server. Outward-facing steps stop here
+    # for a human rather than inheriting a blanket permission granted before
+    # anyone knew what would be published.
+    init_approvals()
+    job_id = os.environ.get("QEVIK_JOB_ID", "")
+    gate = ApprovalGate(requested_by="qevik")
+    report = PlanRunner(
+        actions, repairer=RegenerateRepairer(), gate=gate, job_id=job_id
+    ).run(plan, ctx)
+
+    if report.waiting_approval:
+        print()
+        print(f"PAUSED: {report.error}")
+        print(f"APPROVAL: {report.approval_id}  (step {report.paused_at_step})")
+        (artifacts / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "ok": False,
+                    "waiting_approval": True,
+                    "approval_id": report.approval_id,
+                    "paused_at_step": report.paused_at_step,
+                    "objective": objective,
+                    "planner": snapshot.get("planner"),
+                    "model": snapshot.get("model"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        # Exit 0: pausing for a decision is not a failure, and marking it one
+        # would put every waiting job in the failed list.
+        return 0
     print()
     print(report.summary())
     print()

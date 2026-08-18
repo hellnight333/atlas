@@ -43,6 +43,7 @@
   .pill.failed, .pill.lost { color: var(--bad); border-color: var(--bad); }
   .pill.running, .pill.planning, .pill.researching, .pill.generating,
   .pill.testing, .pill.repairing, .pill.deploying, .pill.verifying { color: var(--accent); border-color: var(--accent); }
+  .pill.waiting_approval { color: var(--warn); border-color: var(--warn); }
   pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .75rem;
         overflow-x: auto; font-family: var(--mono); font-size: .8rem; margin: 0; max-height: 22rem; }
   a { color: var(--accent); }
@@ -53,6 +54,14 @@
   .err { color: var(--bad); font-size: .9rem; min-height: 1.2rem; }
   #login { max-width: 22rem; margin: 12vh auto; }
   .hidden { display: none; }
+  .appr { border: 1px solid var(--line); border-radius: 6px; padding: .8rem; margin-bottom: .8rem;
+          background: var(--bg); }
+  .appr h3 { margin: 0 0 .3rem; font-size: 1rem; }
+  .appr .risk { float: right; }
+  .appr dl { margin: .5rem 0; }
+  .appr pre { max-height: 12rem; margin: .4rem 0; }
+  .pill.public, .pill.outbound { color: var(--warn); border-color: var(--warn); }
+  .pill.financial, .pill.destructive { color: var(--bad); border-color: var(--bad); }
   dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; font-size: .9rem; }
   dt { color: var(--muted); }
   dd { margin: 0; word-break: break-word; }
@@ -91,6 +100,11 @@
     <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0">
       Qevik decides the steps. Publishing is refused unless authorised above and your account holds the publish scope.
     </p>
+  </section>
+
+  <section class="panel" id="approvals-panel">
+    <h2>Approvals required</h2>
+    <div id="approvals" style="color:var(--muted);font-size:.9rem">none pending</div>
   </section>
 
   <section class="panel">
@@ -247,6 +261,64 @@ async function detail() {
   } catch (e) { $("log").textContent = "could not load: " + e.message; }
 }
 
+async function approvals() {
+  try {
+    const list = await api("/control/approvals");
+    if (!list.length) { $("approvals").innerHTML = "none pending"; return; }
+    $("approvals").innerHTML = list.map(a => {
+      // Everything material is shown. "Approve action" with the details hidden
+      // is how a reviewer ends up allowing a publish to the wrong place.
+      const rows = [
+        ["Job", a.job_id], ["Step", a.step_id], ["Action", a.action],
+        ["Exact target", a.target || "—"], ["Required scope", a.required_scope],
+        ["Requested", a.created_at], ["Expires", a.expires_at || "—"],
+        ["Estimated cost", a.estimated_cost ? a.estimated_cost + " USD" : "none"],
+      ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+
+      const prov = a.provenance || {};
+      const sources = (prov.researched || []).flatMap(r => r.sources || []);
+      const evidence = sources.length
+        ? `<h2 style="margin-top:.6rem">Evidence it used</h2><pre>${esc(sources.join("\n"))}</pre>` : "";
+
+      return `<div class="appr" data-id="${esc(a.approval_id)}">
+        <span class="pill risk ${esc(a.risk)}">${esc(a.risk)}</span>
+        <h3>${esc(a.what)}</h3>
+        <dl>${rows}</dl>
+        <h2 style="margin-top:.6rem">Exact proposed operation</h2>
+        <pre>${esc(JSON.stringify(a.proposed, null, 2))}</pre>
+        ${evidence}
+        <div class="row">
+          <button data-approve="1">Approve</button>
+          <button class="ghost" data-approve="0">Reject</button>
+          <input placeholder="reason (optional)" style="max-width:18rem">
+          <span class="err"></span>
+        </div>
+      </div>`;
+    }).join("");
+
+    document.querySelectorAll(".appr").forEach(card => {
+      card.querySelectorAll("button[data-approve]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = card.dataset.id;
+          const approve = btn.dataset.approve === "1";
+          const reason = card.querySelector("input").value;
+          card.querySelectorAll("button").forEach(b => b.disabled = true);
+          try {
+            const r = await api("/control/approvals/" + id, {
+              method: "POST", body: JSON.stringify({ approve, reason }),
+            });
+            await approvals(); await jobs();
+            if (r.resumed_job) open_(r.resumed_job);
+          } catch (e) {
+            card.querySelector(".err").textContent = e.message;
+            card.querySelectorAll("button").forEach(b => b.disabled = false);
+          }
+        };
+      });
+    });
+  } catch (e) { /* transient; the next tick retries */ }
+}
+
 async function health() {
   try {
     const h = await api("/control/health");
@@ -264,11 +336,11 @@ async function health() {
 }
 
 function start() {
-  jobs(); health(); detail();
+  jobs(); health(); detail(); approvals();
   if (timer) clearInterval(timer);
   // Polled rather than streamed: a dropped connection must never be able to
   // stall the view, and this control plane's network is demonstrably unreliable.
-  timer = setInterval(() => { jobs(); health(); detail(); }, 4000);
+  timer = setInterval(() => { jobs(); health(); detail(); approvals(); }, 4000);
 }
 
 api("/auth/me").then(u => {
