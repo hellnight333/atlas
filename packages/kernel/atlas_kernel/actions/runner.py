@@ -21,6 +21,7 @@ test stops, and this fixes it and runs the test again.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any, Protocol
@@ -48,8 +49,14 @@ from .handlers import (
 )
 from .limits import CapacityUnavailable, Deadline, JobLimits, JobSlots
 
-#: ${step_id.key} or ${step_id.key.nested}
-REFERENCE = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
+#: ${step_id.key}, ${step_id.key.nested} or ${step_id.list[0].key}
+#:
+#: Bracket indexing is included because models write it — it is the obvious
+#: syntax for "the first search result" — and the earlier pattern silently did
+#: not match it. An unmatched reference was left in place as a literal, so
+#: "${search.sources[0].title}" was rendered onto a published page as those
+#: exact characters and every step reported success.
+REFERENCE = re.compile(r"\$\{([A-Za-z0-9_.\-\[\]]+)\}")
 
 #: How many times a step may be repaired before the plan gives up. A repairer
 #: that cannot fix something in two attempts is looping, not converging.
@@ -134,6 +141,9 @@ def resolve(value: Any, outputs: dict[str, dict[str, Any]]) -> Any:
 
 
 def _lookup(path: str, outputs: dict[str, dict[str, Any]]) -> Any:
+    # list[0] and list.0 mean the same thing. Accepting both costs one line and
+    # saves a class of silent failure, because a model will write either.
+    path = path.replace("[", ".").replace("]", "")
     step_id, _, rest = path.partition(".")
     if step_id not in outputs:
         raise ActionError(
@@ -210,6 +220,16 @@ class ActionRunner:
 
         try:
             payload = resolve(step.payload, ctx.outputs)
+            # Nothing may reach a handler still carrying template syntax. A
+            # reference that survives resolution is a bug in the plan or in the
+            # resolver, and passing it through publishes "${...}" to a customer
+            # while every step reports success.
+            leftover = REFERENCE.findall(json.dumps(payload, default=str))
+            if leftover:
+                raise ActionError(
+                    f"unresolved reference(s) {leftover} in step {step.id!r}. "
+                    "The step they name produced no such value."
+                )
         except ActionError as error:
             return ctx.record(
                 ActionRecord(

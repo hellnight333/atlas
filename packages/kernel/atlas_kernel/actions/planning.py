@@ -19,6 +19,7 @@ such rather than papered over.
 
 from __future__ import annotations
 
+import os
 import re
 
 from ..agents.plan_models import ExecutionPlan, PlanStep
@@ -266,4 +267,8 @@ def default_planner(actions=None, registry=None) -> LLMPlanner:
         registry if registry is not None else default_registry(),
         actions=actions if actions is not None else default_action_runner(),
         fallback=plan_website,
+        # See LLMPlanner.preferred: the strongest model available, because a
+        # plan is chosen once and everything downstream obeys it. Falls back to
+        # cheapest-capable when this one is not registered.
+        preferred=os.environ.get("QEVIK_PLANNER_MODEL", "qwen-max").strip() or None,
     )

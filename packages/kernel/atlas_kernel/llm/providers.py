@@ -22,10 +22,35 @@ from .models import Completion, LLMError, Message, ModelSpec, NotConfigured, Rat
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 
-#: Qwen's OpenAI-compatible endpoint. The international one — the mainland host
-#: differs, and picking the wrong one fails as an auth error rather than as a
-#: routing error, which is a confusing afternoon.
-QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+#: Qwen's OpenAI-compatible endpoint.
+#:
+#: The shared international host is the default; the mainland host differs, and
+#: picking the wrong one fails as an auth error rather than as a routing error,
+#: which is a confusing afternoon.
+#:
+#: **Overridable, because a Model Studio workspace gets its own host** — a
+#: dedicated endpoint like ``ws-<id>.<region>.maas.aliyuncs.com`` serves that
+#: workspace's key and rejects it anywhere else. Hard-coding the shared host
+#: turns a correct key into a 401 that reads exactly like a wrong one, and that
+#: mistake has now cost time twice.
+DEFAULT_QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+
+def qwen_base_url() -> str:
+    """The Qwen endpoint, from the environment when a workspace host is set.
+
+    Reads the environment directly rather than through ``_env``, which is
+    defined further down this module: this runs at import time, and a helper
+    that does not exist yet is a NameError rather than a default.
+    """
+    for prefix in ("QEVIK_", "ATLAS_", ""):
+        value = os.environ.get(f"{prefix}DASHSCOPE_BASE_URL", "")
+        if value.strip():
+            return value.strip().rstrip("/")
+    return DEFAULT_QWEN_BASE_URL
+
+
+QWEN_BASE_URL = qwen_base_url()
 ANTHROPIC_VERSION = "2023-06-01"
 REQUEST_TIMEOUT_SECONDS = 180.0
 

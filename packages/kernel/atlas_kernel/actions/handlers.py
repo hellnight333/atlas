@@ -134,22 +134,33 @@ def code_generate(payload: dict[str, Any], ctx: ExecutionContext) -> dict[str, A
         features="\n".join(f"    <li>{html.escape(f)}</li>" for f in features),
     )
 
+    # The escaped forms are what actually appear in the markup, so they are what
+    # the generated tests must assert on. Emitting the raw title and comparing it
+    # to rendered output means any title containing an apostrophe or ampersand
+    # fails its own test suite — which is exactly what happened the first time a
+    # model chose "Children's Game", and it looked like a broken pipeline rather
+    # than a quoting bug.
+    escaped_title = html.escape(title)
+    escaped_headline = html.escape(headline)
+
     module = (
         '"""Generated site. Reproducible from the same inputs."""\n\n'
         f"TITLE = {title!r}\n"
-        f"HEADLINE = {headline!r}\n\n"
+        f"HEADLINE = {headline!r}\n"
+        f"TITLE_IN_MARKUP = {escaped_title!r}\n"
+        f"HEADLINE_IN_MARKUP = {escaped_headline!r}\n\n"
         "HTML = " + repr(rendered) + "\n\n\n"
         "def render() -> str:\n"
         "    return HTML\n"
     )
     tests = (
-        "from app import HEADLINE, TITLE, render\n\n\n"
+        "from app import HEADLINE_IN_MARKUP, TITLE_IN_MARKUP, render\n\n\n"
         "def test_the_page_has_a_headline():\n"
         "    assert 'id=\"headline\"' in render()\n\n\n"
         "def test_the_headline_is_the_one_we_asked_for():\n"
-        "    assert HEADLINE in render()\n\n\n"
+        "    assert HEADLINE_IN_MARKUP in render()\n\n\n"
         "def test_the_title_is_set():\n"
-        '    assert f"<title>{TITLE}</title>" in render()\n'
+        '    assert f"<title>{TITLE_IN_MARKUP}</title>" in render()\n'
     )
     build = (
         "from pathlib import Path\n\n"

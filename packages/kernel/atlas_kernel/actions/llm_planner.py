@@ -53,6 +53,9 @@ Return ONLY a JSON object. No prose, no markdown fence.
 Available actions and their payloads:
 {actions}
 
+The machine you are planning for:
+{environment}
+
 Referencing earlier steps: a payload value may be "${{step_id.key}}" and will be
 replaced with that step's output when the step runs. Example: after a deploy
 step called "deploy", use "${{deploy.url}}" to get the deployed URL.
@@ -64,13 +67,67 @@ Rules you must follow:
 - After generating code, always write it, then run its tests before building.
 - After deploying, always verify the deployed URL with browser.operate.
 - Never skip verification. A build that was not opened in a browser is not done.
+
+Steps must consume each other's output. A step that produces something and a
+later step that ignores it is two scripts, not a plan:
+- code.write MUST take the generated files:
+    {{"files": "${{<your code.generate step id>.files}}"}}
+- browser.operate on a deployment MUST take the deployed URL:
+    {{"url": "${{<your site.deploy step id>.url}}"}}
+- If you search, a later step MUST use what you found — pass
+    "${{<your web.search step id>.sources}}" into the step that decides or
+    generates. Searching and then ignoring the result is not research.
+
+Worked example of the reference style, using your own step ids:
+
+{{
+  "steps": [
+    {{"id": "make", "action": "code.generate", "payload": {{"title": "..."}}}},
+    {{"id": "save", "action": "code.write",
+      "payload": {{"files": "${{make.files}}"}}, "dependencies": ["make"]}}
+  ]
+}}
 """
+
+#: Facts about the host, given to the model because it cannot see one.
+#:
+#: Without this, a model plans for the project it imagines rather than the one
+#: that exists. Measured: asked to build a browser game, qwen-max produced an
+#: otherwise correct plan whose test step ran `npm test` — reasonable for a web
+#: game, and impossible here, because node is not installed and `code.generate`
+#: emits Python. The plan was well-formed and unrunnable, which is the failure
+#: mode that wastes the most time.
+def environment_facts(python: str | None = None) -> str:
+    import shutil
+    import sys as _sys
+
+    interpreter = python or _sys.executable
+    available = [name for name in ("python3", "git", "ffmpeg") if shutil.which(name)]
+    missing = [name for name in ("node", "npm", "yarn", "go", "cargo") if not shutil.which(name)]
+    return "\n".join(
+        [
+            f"- Python interpreter: {interpreter}",
+            f"- Installed: {', '.join(available) or 'python only'}",
+            f"- NOT installed, do not plan to use: {', '.join(missing)}",
+            "- code.generate emits a PYTHON project: app.py, test_app.py, build.py.",
+            f"- Run its tests with argv: [\"{interpreter}\", \"-m\", \"pytest\", \"-q\", "
+            '"test_app.py"]',
+            f'- Build it with argv: ["{interpreter}", "build.py"] which writes dist/index.html.',
+            '- site.deploy publishes from "dist".',
+        ]
+    )
+
 
 ACTION_HELP = {
     "web.search": '{"query": "...", "count": 5} -> {sources: [{url,title,description}], top_url}',
     "code.generate": (
         '{"title": "...", "headline": "...", "tagline": "...", "features": ["..."]} '
-        "-> {files: {path: content}}"
+        "-> {files: {path: content}}. "
+        # The model cannot know the markup of a page it did not write. Without
+        # this it invents plausible selectors — "#game-title" for a game — and
+        # the verification step fails against a page that is perfectly fine.
+        "The page it emits has exactly these ids: #headline, #tagline, #features. "
+        "There are no others, so verify against those and no others."
     ),
     "code.write": '{"files": {"path": "content"}} -> {written: [...]}',
     "code.execute": (
@@ -79,7 +136,10 @@ ACTION_HELP = {
     ),
     "browser.operate": (
         '{"url": "...", "expect_title": "...", "expect_text": {"#id": "text"}, '
-        '"screenshot": "name.png"} -> {status, title, verified, problems, extracted}'
+        '"screenshot": "name.png"} -> {status, title, verified, problems, extracted}. '
+        "expect_text keys must be ids the page actually has — for a page from "
+        "code.generate that means #headline, #tagline or #features. A selector "
+        "that does not exist fails the step against a working page."
     ),
     "site.deploy": ('{"slug": "...", "source_dir": "dist", "promote": true} -> {url, version_id}'),
 }
@@ -225,12 +285,24 @@ class LLMPlanner:
         *,
         actions,
         fallback=None,
+        preferred: str | None = None,
         max_tokens: int = 2000,
         temperature: float = 0.0,
     ) -> None:
         self.registry = registry
         self.actions = actions
         self.fallback = fallback
+        #: Which model to plan with, when one is asked for.
+        #:
+        #: Planning is the one job worth paying more for. It happens once per
+        #: objective, and every action that follows is chosen by it — a cheap
+        #: model that composes a nearly-right plan wastes far more than the
+        #: price difference. Measured, not assumed: given "research concepts,
+        #: choose the strongest, then build it", qwen-turbo and qwen-plus both
+        #: emitted a search step whose result nothing ever read, while qwen-max
+        #: added a step that consumed it. All three were otherwise valid, which
+        #: is what makes the difference easy to miss.
+        self.preferred = preferred
         self.max_tokens = max_tokens
         # Zero by default: a plan is a structured artifact, not prose, and
         # sampling variety here buys nothing and costs reproducibility.
@@ -253,14 +325,17 @@ class LLMPlanner:
             for name in sorted(self.actions.registered())
         )
         return [
-            Message(role=Role.SYSTEM, content=SYSTEM.format(actions=catalogue)),
+            Message(
+                role=Role.SYSTEM,
+                content=SYSTEM.format(actions=catalogue, environment=environment_facts()),
+            ),
             Message(role=Role.USER, content=request),
         ]
 
     def plan(self, request: str, **fallback_kwargs) -> ExecutionPlan:
         self.last_fallback_reason = ""
         try:
-            registration = self.registry.resolve(needs_json=True)
+            registration = self.registry.resolve(needs_json=True, preferred=self.preferred)
         except Exception as error:  # noqa: BLE001
             return self._fall_back(f"no model configured ({error})", request, fallback_kwargs)
 

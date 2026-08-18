@@ -40,7 +40,7 @@ from atlas_kernel.actions import (
 from atlas_kernel.actions.llm_planner import LLMPlanner
 from atlas_kernel.actions.runner import REFERENCE
 from atlas_kernel.llm.models import Completion, ModelSpec
-from atlas_kernel.llm.registry import ModelRegistry, Registration, default_registry
+from atlas_kernel.llm.registry import ModelRegistry, Registration
 from atlas_kernel.workspace import Workspace
 
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
@@ -139,8 +139,13 @@ def _scripted_planner(plan: dict, actions):
 @pytest.fixture
 def live_planner():
     """A planner backed by a real, configured model. Skips when none exists."""
+    # default_planner() rather than a hand-built one, so the acceptance run
+    # exercises the configuration Qevik actually uses — including which model
+    # it chooses to plan with.
+    from atlas_kernel.actions import default_planner
+
     actions = default_action_runner()
-    planner = LLMPlanner(default_registry(), actions=actions, fallback=plan_website)
+    planner = default_planner(actions=actions)
     if not planner.available:
         pytest.skip(
             "no model credential configured — set QEVIK_DASHSCOPE_API_KEY or "
