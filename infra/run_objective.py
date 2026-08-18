@@ -18,7 +18,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, "/opt/qevik/atlas/packages/kernel")
@@ -36,6 +35,14 @@ from atlas_kernel.research import BraveSearch  # noqa: E402
 from atlas_kernel.website.targets.public_host import PublicHostTarget  # noqa: E402
 from atlas_kernel.workspace import Workspace  # noqa: E402
 
+#: Where a job builds. Durable on purpose: the first version used
+#: tempfile.mkdtemp(), and systemd's PrivateTmp gives each service invocation
+#: its own /tmp — so restarting the API between a pause and an approval deleted
+#: the generated files while the plan state survived. The approval was intact,
+#: the site it referred to was gone, and the resume failed on a missing
+#: directory. Work that a human is being asked to approve has to outlive the
+#: process that made it.
+WORKSPACES = Path(os.environ.get("QEVIK_WORKSPACES", "/var/lib/qevik/workspaces"))
 SITES_ROOT = os.environ.get("QEVIK_SITES_ROOT", "/srv/sites")
 PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "http://2.28.62.83")
 
@@ -59,7 +66,7 @@ def main() -> int:
         print("no objective given", file=sys.stderr)
         return 2
 
-    artifacts = Path(os.environ.get("QEVIK_JOB_ARTIFACTS", tempfile.mkdtemp()))
+    artifacts = Path(os.environ.get("QEVIK_JOB_ARTIFACTS", "."))
     artifacts.mkdir(parents=True, exist_ok=True)
 
     print("OBJECTIVE:", objective)
@@ -83,7 +90,9 @@ def main() -> int:
         print(f"  {step.id:<22} {step.action:<16} {('<- ' + ', '.join(refs)) if refs else ''}")
     (artifacts / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
 
-    workspace = Workspace.create(Path(tempfile.mkdtemp()), slug or "objective")
+    WORKSPACES.mkdir(parents=True, exist_ok=True)
+    job_name = os.environ.get("QEVIK_JOB_ID", "objective")
+    workspace = Workspace.create(WORKSPACES, job_name)
     target = PublicHostTarget(SITES_ROOT, base_url=PUBLIC_BASE)
     ctx = ExecutionContext(
         workspace=workspace,
