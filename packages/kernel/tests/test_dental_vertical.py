@@ -1,0 +1,148 @@
+"""The template that gets sold.
+
+Two things are defended here, and they are commercial rather than technical.
+
+**Nothing is invented about a real business.** A dentist who finds a made-up
+principal, a made-up founding year or a made-up testimonial on a page about
+their own clinic stops reading, and the sale is over. Those are the first things
+anybody checks.
+
+**The call-to-action actually works.** In the UAE an enquiry arrives by phone or
+WhatsApp, so a tel: link that will not dial is not a cosmetic flaw — it is the
+whole page failing for the one visitor who most wanted to get in touch.
+"""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from atlas_kernel.website.verticals import dental
+
+REAL = {
+    "name": "NOA Dental Clinic",
+    "phone": "04 398 7075",
+    "address": "Unit 109, Al Hanaa Centre Mall, Mankhool Road, Dubai",
+    "area": "Mankhool",
+}
+
+
+@pytest.fixture
+def page() -> str:
+    return dental.render(**REAL)
+
+
+class TestNothingIsInvented:
+    def test_no_fabricated_credentials(self, page: str) -> None:
+        """The claims a prospect would immediately know to be false."""
+        for phrase in (
+            "years of experience",
+            "award-winning",
+            "voted best",
+            "founded in",
+            "since 19",
+            "since 20",
+            "board certified",
+            "our team of specialists",
+        ):
+            assert phrase not in page.lower(), f"invented claim: {phrase}"
+
+    def test_no_invented_people(self, page: str) -> None:
+        """A named dentist who does not work there is the fastest possible way
+        to lose the room."""
+        assert not re.search(r"\bDr\.?\s+[A-Z][a-z]+", page.replace(REAL["name"], ""))
+
+    def test_no_testimonials_or_ratings(self, page: str) -> None:
+        for phrase in ("testimonial", "★", "5 stars", "patients say", "reviews say"):
+            assert phrase not in page.lower()
+
+    def test_no_placeholder_text_reaches_a_prospect(self, page: str) -> None:
+        for phrase in ("lorem", "example.com", "123 main", "your name here", "tbd", "xxx"):
+            assert phrase not in page.lower()
+
+    def test_absent_facts_are_omitted_not_faked(self) -> None:
+        """A clinic whose listing has no address gets no address block — not an
+        invented one."""
+        sparse = dental.render(name="Some Clinic", phone="04 111 2222")
+        assert "Address" not in sparse
+        assert "Directions" not in sparse, "a map link with nothing to point at"
+
+    def test_hours_are_never_guessed(self, page: str) -> None:
+        """Guessing opening hours sends a patient to a locked door."""
+        assert "Opening hours" not in page
+        with_hours = dental.render(**REAL, hours=[("Sat-Thu", "9:00 - 21:00")])
+        assert "Opening hours" in with_hours
+
+
+class TestTheCallToActionWorks:
+    def test_the_phone_number_dials(self, page: str) -> None:
+        """Spaces in a tel: href silently fail to dial on some Android
+        browsers."""
+        assert 'href="tel:043987075"' in page
+        assert 'href="tel:04 398 7075"' not in page
+
+    def test_whatsapp_uses_digits_only(self, page: str) -> None:
+        assert "https://wa.me/043987075" in page
+
+    def test_a_clinic_without_a_phone_gets_no_dead_buttons(self) -> None:
+        """A 'Call now' that dials nothing is worse than no button."""
+        page = dental.render(name="No Phone Clinic", address="Al Barsha, Dubai")
+        assert "tel:" not in page
+        assert "wa.me" not in page
+        assert "Get in touch" in page, "it should still say how to proceed"
+
+    def test_an_international_format_number_is_normalised(self) -> None:
+        page = dental.render(name="C", phone="00971 4 398 7075")
+        assert 'href="tel:+97143987075"' in page
+        assert "wa.me/97143987075" in page
+
+
+class TestItIsFindable:
+    def test_structured_data_describes_a_dentist(self, page: str) -> None:
+        """What puts a small clinic into a local search at all."""
+        assert '"@type": "Dentist"' in page
+        assert '"telephone"' in page
+        assert '"areaServed": "Dubai"' in page
+
+    def test_the_title_and_description_carry_the_area(self, page: str) -> None:
+        assert "Mankhool" in page
+        assert '<meta name="description"' in page
+
+    def test_structured_data_cannot_break_out_of_its_script_block(self) -> None:
+        """JSON encoding does not escape </script>."""
+        page = dental.render(name="Evil</script><script>alert(1)</script> Clinic", phone="0412345")
+        assert "</script><script>alert(1)" not in page
+
+    def test_the_clinic_name_is_escaped_everywhere(self) -> None:
+        page = dental.render(name='Smile & "Care" <Clinic>', phone="0412345")
+        assert "<Clinic>" not in page
+        assert "&lt;Clinic&gt;" in page
+
+
+class TestItIsClientReady:
+    def test_it_has_the_sections_a_paid_site_has(self, page: str) -> None:
+        for marker in ("Our services", "Why patients choose us", "Visit us", "Book an appointment"):
+            assert marker in page, marker
+
+    def test_it_works_on_a_phone(self, page: str) -> None:
+        assert "@media (max-width:760px)" in page
+        assert 'name="viewport"' in page
+
+    def test_it_makes_no_third_party_requests(self, page: str) -> None:
+        """No fonts, no analytics, no CDN: it loads instantly on a Dubai mobile
+        connection, survives the host's strict CSP, and gives a prospect's IT
+        person nothing to object to."""
+        external = re.findall(r'(?:src|href)="(https?://[^"]+)"', page)
+        allowed = ("https://wa.me/", "https://www.google.com/maps")
+        assert all(u.startswith(allowed) for u in external), external
+
+    def test_icons_are_drawn_not_emoji(self, page: str) -> None:
+        """Emoji render differently on every platform and read as placeholder."""
+        assert "<svg" in page
+        assert not re.search(r"[\U0001F300-\U0001FAFF]", page)
+
+    def test_it_is_substantially_more_than_a_stub(self, page: str) -> None:
+        """The placeholder this replaced was 800 bytes: one headline, one line
+        and three bullets. Nobody pays for that."""
+        assert len(page) > 8000
