@@ -184,3 +184,58 @@ class TestBusinessIndex:
         resolved, _ = BusinessIndex().resolve(_business())
         assert "domain:alnoor.ae" in resolved.identity_keys
         assert with_identity(resolved).identity_keys == resolved.identity_keys
+
+
+class TestBranchesAreNotOneCompany:
+    """Two branches of a clinic share a domain and a switchboard number.
+
+    The original strong-key rule assumed "two companies do not share these",
+    which is true of unrelated companies and false of branches — and it merged
+    twenty audited Dubai clinics into fifteen businesses. Dr. Joy's three
+    locations became one record, both Crossroads locations became one, and the
+    evidence gathered on one branch's website was attached to another's.
+
+    That is the misdirected-proposal failure this module exists to prevent,
+    arriving through the front door.
+    """
+
+    def _branch(self, name: str, place: str) -> Business:
+        return Business(
+            name=name,
+            geography="Dubai",
+            website="https://drjoydental.com",
+            phone="800 732757",
+            metadata={"place_id": place},
+        )
+
+    def test_a_differing_place_id_beats_a_shared_domain_and_phone(self) -> None:
+        palm = self._branch("Dr. Joy Dental Clinic, Palm Jumeirah", "ChIJ_palm")
+        burjuman = self._branch("Dr. Joy Dental Clinic, BurJuman Mall", "ChIJ_burjuman")
+        assert not is_same_business(palm, burjuman)
+
+    def test_the_same_place_seen_twice_is_still_one_company(self) -> None:
+        """The veto must not break the case resolution exists for."""
+        first = self._branch("Dr Joy Dental — Palm", "ChIJ_palm")
+        again = self._branch("Dr. Joy Dental Clinic, Palm Jumeirah", "ChIJ_palm")
+        assert is_same_business(first, again)
+
+    def test_without_place_ids_the_old_behaviour_is_unchanged(self) -> None:
+        """A veto only applies when both records name a place. Sources that do
+        not supply one must still resolve on domain as before."""
+        left = Business(name="Clinic A", website="https://same-domain.ae")
+        right = Business(name="Clinic A Dubai", website="https://same-domain.ae")
+        assert is_same_business(left, right)
+
+    def test_one_missing_place_id_does_not_veto(self) -> None:
+        """A directory listing without a place id should still merge into the
+        Places record — refusing would defeat resolution for every second
+        source."""
+        with_place = self._branch("Dr. Joy Dental, Palm", "ChIJ_palm")
+        without = Business(name="Dr Joy Dental", website="https://drjoydental.com")
+        assert is_same_business(with_place, without)
+
+    def test_the_place_key_is_treated_as_strong(self) -> None:
+        from atlas_kernel.opportunity.identity import identity_keys, strong_keys
+
+        keys = identity_keys(self._branch("X", "ChIJ_x"))
+        assert "place:ChIJ_x" in strong_keys(set(keys))

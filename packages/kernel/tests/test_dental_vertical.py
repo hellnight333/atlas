@@ -82,8 +82,28 @@ class TestTheCallToActionWorks:
         assert 'href="tel:043987075"' in page
         assert 'href="tel:04 398 7075"' not in page
 
-    def test_whatsapp_uses_digits_only(self, page: str) -> None:
-        assert "https://wa.me/043987075" in page
+    def test_a_landline_gets_no_whatsapp_link(self, page: str) -> None:
+        """This test previously asserted the opposite and was wrong. The fixture
+        number is an 04 landline, and WhatsApp runs on mobiles — generating
+        wa.me/043987075 put a dead button on the one channel UAE patients
+        actually use, on seventeen of twenty demos."""
+        assert "wa.me" not in page
+
+    def test_a_mobile_number_does_get_one(self) -> None:
+        page = dental.render(name="Mobile Clinic", phone="054 475 2767", address="Dubai")
+        assert "https://wa.me/971544752767" in page
+
+    def test_a_toll_free_number_gets_none(self) -> None:
+        page = dental.render(name="Toll Free Clinic", phone="800 732757", address="Dubai")
+        assert "wa.me" not in page
+        assert 'href="tel:800732757"' in page, "it can still be phoned"
+
+    def test_capability_is_reported_as_three_states(self) -> None:
+        """Never a guess: a number we cannot classify is unverified, not absent."""
+        assert dental.whatsapp_status("054 475 2767").startswith("CONFIRMED_PRESENT")
+        assert dental.whatsapp_status("04 398 7075").startswith("CONFIRMED_ABSENT")
+        assert dental.whatsapp_status("").startswith("NOT_VERIFIED")
+        assert dental.whatsapp_status("+44 20 7946 0000").startswith("NOT_VERIFIED")
 
     def test_a_clinic_without_a_phone_gets_no_dead_buttons(self) -> None:
         """A 'Call now' that dials nothing is worse than no button."""
@@ -92,10 +112,10 @@ class TestTheCallToActionWorks:
         assert "wa.me" not in page
         assert "Get in touch" in page, "it should still say how to proceed"
 
-    def test_an_international_format_number_is_normalised(self) -> None:
+    def test_an_international_format_number_is_normalised_for_dialling(self) -> None:
         page = dental.render(name="C", phone="00971 4 398 7075")
         assert 'href="tel:+97143987075"' in page
-        assert "wa.me/97143987075" in page
+        assert "wa.me" not in page, "still a landline, however it is written"
 
 
 class TestItIsFindable:

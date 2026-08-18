@@ -214,6 +214,20 @@ class FindingKind(StrEnum):
     MISSING_H1 = "missing_h1"
     NO_STRUCTURED_DATA = "no_structured_data"
     THIN_CONTENT = "thin_content"
+    # Added by the website auditor. Each one is a *confirmed absence* observed
+    # on the homepage — never an inference, and never a feature the audit simply
+    # could not see. Unverified observations do not become findings at all; they
+    # live in the audit event, so a pitch can never rest on one.
+    NO_CLICK_TO_CALL = "no_click_to_call"
+    NO_WHATSAPP = "no_whatsapp"
+    NO_BOOKING_PATH = "no_booking_path"
+    NO_MAP_OR_DIRECTIONS = "no_map_or_directions"
+    NO_OPENING_HOURS = "no_opening_hours"
+    NO_CONTACT_FORM = "no_contact_form"
+    NO_ARABIC = "no_arabic"
+    NO_H1 = "no_h1"
+    POOR_IMAGE_ALT_TEXT = "poor_image_alt_text"
+    NO_SERVICES_NAVIGATION = "no_services_navigation"
 
 
 class Severity(StrEnum):

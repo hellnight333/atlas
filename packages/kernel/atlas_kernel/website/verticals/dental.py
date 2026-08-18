@@ -91,14 +91,49 @@ def tel_href(phone: str) -> str:
     return digits
 
 
-def whatsapp_href(phone: str) -> str:
-    """WhatsApp expects digits only, no plus.
+#: UAE mobile prefixes, in local form. WhatsApp runs on a mobile number; a
+#: landline or a toll-free line cannot receive it.
+_UAE_MOBILE = re.compile(r"^0?5[024568]\d{7}$")
 
-    Worth having: in the UAE a business enquiry is far more likely to arrive on
-    WhatsApp than through a contact form, and a form that emails into a void is
-    worse than no form at all.
+
+def whatsapp_href(phone: str) -> str:
+    """A WhatsApp link, but only for a number that can actually receive one.
+
+    Empty when the number cannot, and that emptiness is the point. Generated
+    naively from a business listing, this produced ``wa.me/043987075`` for a
+    landline and ``wa.me/800732757`` for a toll-free line — dead buttons on
+    seventeen of twenty demos, on the one channel UAE patients actually use.
+
+    A dead WhatsApp button is worse than no button: it is discovered by the
+    visitor who most wanted to make contact, and on a proposal it is discovered
+    by the owner deciding whether we know what we are doing.
     """
-    return re.sub(r"\D", "", tel_href(phone))
+    digits = re.sub(r"\D", "", tel_href(phone))
+    if digits.startswith("971"):
+        digits = "0" + digits[3:]
+    if not _UAE_MOBILE.match(digits):
+        return ""
+    return "971" + digits.lstrip("0")
+
+
+def whatsapp_status(phone: str) -> str:
+    """Why WhatsApp is or is not offered, for the audit and the brief.
+
+    Never guesses. A landline is a confirmed *no*; anything unrecognised is
+    unverified rather than absent, because a number we cannot classify is not
+    evidence that the clinic lacks WhatsApp.
+    """
+    digits = re.sub(r"\D", "", tel_href(phone))
+    if not digits:
+        return "NOT_VERIFIED: no phone number on the listing"
+    local = "0" + digits[3:] if digits.startswith("971") else digits
+    if _UAE_MOBILE.match(local):
+        return "CONFIRMED_PRESENT: listing number is a UAE mobile"
+    if local.startswith("800"):
+        return "CONFIRMED_ABSENT: toll-free numbers cannot receive WhatsApp"
+    if re.match(r"^0?[2-4679]\d{7}$", local):
+        return "CONFIRMED_ABSENT: landline numbers cannot receive WhatsApp"
+    return "NOT_VERIFIED: number format not recognised"
 
 
 def _fact(content: SiteContent, name: str) -> str:

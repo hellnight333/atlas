@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 from ..db import SessionLocal
-from .identity import strong_keys, with_identity
+from .identity import place_id, strong_keys, with_identity
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -86,6 +86,24 @@ class OpportunityRepository:
                     .mappings()
                     .all()
                 )
+            # A differing place id means a different physical location, and it
+            # overrides every other agreement. Branches of one clinic share a
+            # domain and a switchboard number, so strong-key matching alone
+            # merged twenty audited Dubai clinics into fifteen businesses --
+            # Dr. Joy's three branches became one record, and the evidence
+            # gathered on one branch's website was attached to another's.
+            #
+            # Filtered here rather than in `is_same_business` because this is
+            # where the decision is actually taken; the pure function is not on
+            # this path.
+            incoming_place = place_id(stamped)
+            if incoming_place:
+                rows = [
+                    row
+                    for row in rows
+                    if (row.get("metadata") or {}).get("place_id") in (None, "", incoming_place)
+                ]
+
             if rows:
                 # A sighting can match more than one stored record -- a shared
                 # switchboard number, or a new record that turns out to bridge

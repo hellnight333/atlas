@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from .models import Business
 
-STRONG_PREFIXES = ("domain:", "email:", "phone:")
+STRONG_PREFIXES = ("place:", "domain:", "email:", "phone:")
 WEAK_PREFIXES = ("name:",)
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -95,9 +95,22 @@ def normalise_name(name: str, geography: str = "") -> str:
     return f"{'-'.join(words)}|{place}"
 
 
+def place_id(business: Business) -> str | None:
+    """The mapping provider's id for this physical location, if known.
+
+    Stronger than a domain or a phone number, because it identifies a *place*
+    rather than an organisation — and the difference between those two is
+    exactly what broke when twenty clinics became fifteen.
+    """
+    value = (business.metadata or {}).get("place_id")
+    return str(value).strip() or None if value else None
+
+
 def identity_keys(business: Business) -> list[str]:
     """Every key this business can be recognised by, strongest first."""
     keys: list[str] = []
+    if place := place_id(business):
+        keys.append(f"place:{place}")
     if domain := normalise_domain(business.website):
         keys.append(f"domain:{domain}")
     if email := normalise_email(business.email):
@@ -122,10 +135,26 @@ def with_identity(business: Business) -> Business:
 
 
 def is_same_business(left: Business, right: Business) -> bool:
-    """True only on a strong key match.
+    """True only on a strong key match, and never across two known locations.
 
     A shared name and city is not enough, however plausible it looks.
+
+    **A differing place id vetoes everything else.** The original rule assumed
+    that two companies do not share a domain, an email or a phone number. Branches
+    of one clinic do — and that assumption merged twenty audited Dubai clinics
+    into fifteen businesses: Dr. Joy's three branches became one, both Crossroads
+    locations became one, and the evidence gathered on one branch's website was
+    attached to another's record.
+
+    That is precisely the failure this module exists to prevent, arriving through
+    the front door: a proposal citing findings about somebody else's site. So
+    when both records name a place and the places differ, they are different
+    locations regardless of what else agrees — the conservative answer, and the
+    one whose cost is a duplicate row rather than a misdirected pitch.
     """
+    left_place, right_place = place_id(left), place_id(right)
+    if left_place and right_place and left_place != right_place:
+        return False
     return bool(strong_keys(identity_keys(left)) & strong_keys(identity_keys(right)))
 
 
