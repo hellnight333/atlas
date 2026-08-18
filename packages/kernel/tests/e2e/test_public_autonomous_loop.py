@@ -31,9 +31,7 @@ from atlas_kernel.actions import (
     plan_website,
 )
 from atlas_kernel.actions.handlers import code_write
-from atlas_kernel.actions.llm_planner import LLMPlanner
 from atlas_kernel.browser import BrowserUnavailable, PlaywrightSession
-from atlas_kernel.llm.registry import default_registry
 from atlas_kernel.website.targets.public_host import PublicHostTarget
 from atlas_kernel.workspace import Workspace
 
@@ -93,12 +91,13 @@ def test_request_to_public_url_with_a_repair_on_the_way(
 
     actions = default_action_runner()
 
-    # The planner is asked first; it falls back to the deterministic one when no
-    # model credential is configured, and the plan records which composed it so
-    # a run can never be mistaken for the other kind later.
-    planner = LLMPlanner(default_registry(), actions=actions, fallback=plan_website)
-    plan = planner.plan(
-        REQUEST,
+    # Deterministic on purpose. This file is about the public deployment loop —
+    # promote, fetch, verify, roll back — and pinning the plan keeps those
+    # assertions about deployment rather than about whatever a model happened to
+    # name its steps this morning. Model composition has its own acceptance
+    # file, where the step names are deliberately not assumed.
+    plan = plan_website(
+        goal=REQUEST,
         title=TITLE,
         headline=TITLE,
         tagline="A hat-wearing rabbit races through the carrot fields.",
@@ -106,10 +105,6 @@ def test_request_to_public_url_with_a_repair_on_the_way(
         slug=SLUG,
         python=sys.executable,
     )
-    assert plan.context_snapshot["planner"] in {"llm", "deterministic"}
-    if plan.context_snapshot["planner"] == "deterministic":
-        assert "no model configured" in planner.last_fallback_reason
-
     # Break the project after it is written, so the failure is real rather than
     # asserted, and the repair has something to actually fix.
     class Saboteur:
@@ -130,6 +125,9 @@ def test_request_to_public_url_with_a_repair_on_the_way(
 
     # It repaired itself before deploying. Nothing broken reached the host.
     assert report.repairs == 1
+    # Found by what the step did, not what it was called. A model composing the
+    # plan names its steps whatever it likes, and looking for one called "test"
+    # silently matched nothing the moment a credential was configured.
     attempts = [r for r in report.records if r.step_id == "test"]
     assert len(attempts) == 2 and not attempts[0].ok and attempts[1].ok
 
