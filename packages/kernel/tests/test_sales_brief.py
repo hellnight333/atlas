@@ -135,3 +135,25 @@ def test_an_unreachable_site_is_the_finding_not_the_absence_of_one() -> None:
 
     # And it is still bounded by what one fetch can prove.
     assert any(d["reason"] == "NOT_VERIFIED" for d in brief["do_not_say"])
+
+
+def test_whatsapp_is_promised_only_to_clinics_whose_number_can_receive_it() -> None:
+    """The one capability that varies per prospect.
+
+    The demo renders a WhatsApp button only for a UAE mobile, because wa.me on a
+    landline is a dead link. A blanket False suppressed a genuine weight-5 point
+    for the clinics that *do* have a mobile; a blanket True would promise a dead
+    button to the sixteen that do not.
+    """
+    gap = audit(whatsapp="not_found")
+
+    mobile = brief_for(gap, {"phone": "052 151 4300"})
+    assert [p["feature"] for p in mobile["talking_points"]] == ["whatsapp"]
+    assert mobile["score"] == 5
+
+    landline = brief_for(gap, {"phone": "04 355 8808"})
+    assert landline["talking_points"] == []
+    assert landline["do_not_say"][0]["reason"] == "DEMO_DOES_NOT_HAVE_IT"
+
+    # No record at all is treated as unable to receive, not as able.
+    assert brief_for(gap, None)["talking_points"] == []

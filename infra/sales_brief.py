@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 AUDITS = Path(os.environ.get("QEVIK_AUDITS", "/var/lib/qevik/audits"))
@@ -61,7 +62,8 @@ DEMO_PROVIDES: dict[str, bool] = {
     "image_alt_text": True,  # no images at all; nothing lacking alt text
     "page_weight": True,
     "contact_form": True,
-    # Present only where the clinic publishes a WhatsApp-capable mobile.
+    # Conditional per prospect — see `demo_provides`. Listed False so that a
+    # clinic whose number cannot receive WhatsApp never has it promised.
     "whatsapp": False,
     # The form renders and states plainly that it does not submit.
     "booking_link": False,
@@ -132,6 +134,25 @@ def latest(directory: Path, prefix: str) -> Path:
 #: place.
 NOT_A_CLAIM = frozenset({"page_weight"})
 
+#: The only number WhatsApp can deliver to.
+_UAE_MOBILE = re.compile(r"^(?:971)?0?5[024568]\d{7}$")
+
+
+def demo_provides(feature: str, record: dict | None) -> bool:
+    """What the demo does *for this clinic*, not in general.
+
+    WhatsApp is the one capability that varies by prospect: the button is
+    rendered only when the clinic publishes a UAE mobile, because `wa.me/` on a
+    landline is a dead link. Treating it as a blanket False suppressed a real,
+    high-value talking point for the four clinics that do have a mobile — their
+    site has no WhatsApp, the demo gives them one, and the brief was silently
+    refusing to say so.
+    """
+    if feature == "whatsapp":
+        digits = re.sub(r"\D", "", (record or {}).get("phone", ""))
+        return bool(_UAE_MOBILE.match(digits))
+    return DEMO_PROVIDES.get(feature, False)
+
 
 #: A site that does not answer within the audit's timeout outranks every feature
 #: gap combined. It is also the one finding a prospect can check in five seconds
@@ -186,7 +207,7 @@ def brief_for(audit: dict, record: dict | None) -> dict:
             continue
         status = finding["status"]
         label = LABEL.get(feature, feature)
-        demo_has = DEMO_PROVIDES.get(feature, False)
+        demo_has = demo_provides(feature, record)
 
         if status == "present":
             do_not_say.append(
