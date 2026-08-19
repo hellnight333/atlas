@@ -65,7 +65,12 @@ def contact_method(record: dict, audit: dict) -> tuple[str, str]:
         # of these wrap the clinic's landline, which WhatsApp cannot deliver to
         # — the identical dead-link fault the demo refuses to reproduce. Only
         # recommend the channel when the number behind it can actually receive.
-        wa_number = digits(target)
+        # The evidence is a raw href, and these carry a ?text= query full of
+        # percent-encoded digits. Stripping non-digits from the whole string
+        # produced 9714347433920220272020202020202020 — the number plus the
+        # encoded greeting. Take only the wa.me path segment.
+        match = re.search(r"wa\.me/\+?(\d+)", target)
+        wa_number = match.group(1) if match else ""
         if UAE_MOBILE.match(wa_number.removeprefix("00")):
             return (
                 "WhatsApp — the number on their own site",
