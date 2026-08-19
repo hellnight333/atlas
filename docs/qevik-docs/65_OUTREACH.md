@@ -141,7 +141,81 @@ Every email carries the placeholder disclosure, and a test asserts it:
 Regenerate with `infra/outreach_drafts.py`. It has no send capability; sending
 requires an approved, separate step that does not yet exist.
 
-**Known hygiene issue:** `atlas_outreach_messages` also contains rows on a
-`recording` channel addressed to `b@clinic.test` — test fixtures written into
-the production database by suite runs. None touch the twenty clinics, but any
-"how many have we sent" query must be scoped by channel until that is cleaned up.
+---
+
+## Test contamination — fixed 2026-08-19
+
+The suite had **no database isolation**. It wrote to whatever
+`ATLAS_DATABASE_URL` pointed at, which on this server is production, and every
+run left rows behind: **108 outreach rows** on a `recording` channel addressed to
+reserved test domains, plus **81 events referencing businesses that were never
+saved**. None touched the twenty audited clinics, but the contamination made
+"how many businesses have we contacted" unanswerable without knowing which rows
+to ignore.
+
+**Isolation.** `packages/kernel/tests/conftest.py` redirects `ATLAS_DATABASE_URL`
+to `<database>_test` before `atlas_kernel.db` builds its engine — which is why it
+sits above the other imports and must stay there. Redirecting rather than asking
+each test to opt in is deliberate: an opt-in is what a new test forgets, and that
+failure is silent.
+
+**Quarantine, not deletion.** `infra/quarantine_fixtures.py` copies each row
+whole into `atlas_quarantined_fixtures` with its source table and the reason,
+then removes it from production. Reversing it is a SELECT. It refuses to run if
+any candidate belongs to one of the twenty, and rolls back in the same
+transaction if their row count moves.
+
+**The guard.** `test_production_is_not_a_test_fixture.py` opens the *production*
+database read-only and asserts it stays clean: no test-only channel, no reserved
+test domain, no orphaned event, twenty businesses with a demo, every demo backed
+by an audit, and nothing on the email or WhatsApp channels that is no longer an
+unsent draft. It lives outside the redirect on purpose — a guard inside the thing
+it guards verifies nothing. It skips, rather than fails, where production is
+unreachable.
+
+**Re-drafting** used to add five rows per run. It now replaces prior drafts,
+scoped to rows that are still a draft *and* carry no approval, no fingerprint and
+no send time — anything approved or sent is history and is never touched.
+
+---
+
+## Measuring the experiment
+
+`atlas_kernel/outreach/experiment.py` records the commercial test as events on
+the timeline each business already has. No new table, and no mutable `stage`
+column — a funnel computed from current state cannot show that a prospect
+replied, took a meeting, and then went quiet.
+
+| Stage | Captures |
+|---|---|
+| `experiment_prepared` | prospect, channel, message version, demo URL |
+| `experiment_sent` | sent timestamp (timezone required), channel, version |
+| `experiment_response` | response type **and their words, unsummarised** |
+| `experiment_meeting` | whether it happened |
+| `experiment_objection` | one per event, so the same objection is countable |
+| `experiment_price_discussed` | amount, currency, recurring, accepted-or-not |
+| `experiment_outcome` | won / lost / no_reply / disqualified, and why |
+
+`fold()` derives the current state. Two distinctions it protects:
+
+- **`not_contacted` is not `no_reply`.** A prospect nobody messaged is not a
+  result — counting it as one puts a zero in the numerator and a one in the
+  denominator of the only ratio this exercise produces.
+- **`accepted: None` is not `accepted: False`.** A price named and unanswered is
+  not a price refused.
+
+`message_version` is a digest of the exact wording sent, so "which version got
+replies" is answerable a week later.
+
+Record by hand — the first contact is made from a phone:
+
+```
+infra/experiment.py prepare
+infra/experiment.py sent --slug demo-x --at 2026-08-19T14:30+04:00
+infra/experiment.py response --slug demo-x --type interested --says "..."
+infra/experiment.py objection --slug demo-x --says "already pay someone"
+infra/experiment.py status
+```
+
+A naive timestamp is refused: the operator is at +04:00 and the server records
+UTC, and the one thing this measures is how long a reply took.
