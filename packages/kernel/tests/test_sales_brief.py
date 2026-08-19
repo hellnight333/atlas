@@ -115,3 +115,23 @@ def test_score_counts_only_verified_closeable_gaps() -> None:
         None,
     )
     assert brief["score"] == 5
+
+
+def test_an_unreachable_site_is_the_finding_not_the_absence_of_one() -> None:
+    """Their site timing out must not produce an empty brief.
+
+    An audit with no findings and an audit of a site that would not load are
+    opposite situations, and collapsing them reports the strongest available
+    finding as nothing at all.
+    """
+    down = audit()
+    down["reachable"] = False
+    down["error"] = "BrowserError: Timeout 30000ms exceeded"
+
+    brief = brief_for(down, None)
+    assert brief["talking_points"], "a site that will not load is a finding"
+    assert brief["talking_points"][0]["feature"] == "reachable"
+    assert brief["score"] >= 20, "it should outrank any combination of feature gaps"
+
+    # And it is still bounded by what one fetch can prove.
+    assert any(d["reason"] == "NOT_VERIFIED" for d in brief["do_not_say"])

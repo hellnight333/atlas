@@ -133,11 +133,42 @@ def latest(directory: Path, prefix: str) -> Path:
 NOT_A_CLAIM = frozenset({"page_weight"})
 
 
+#: A site that does not load outranks every feature gap combined. It is also
+#: the one finding a prospect can check in five seconds while you are speaking,
+#: which cuts both ways — hence the caveat attached to it below.
+UNREACHABLE_WEIGHT = 20
+
+
 def brief_for(audit: dict, record: dict | None) -> dict:
     findings = {f["feature"]: f for f in audit.get("findings", [])}
 
     talking_points: list[dict] = []
     do_not_say: list[dict] = []
+
+    if not audit.get("reachable"):
+        # Producing an empty brief here would report the strongest finding
+        # available — their website does not load — as no finding at all.
+        talking_points.append(
+            {
+                "feature": "reachable",
+                "label": "Site loads at all",
+                "weight": UNREACHABLE_WEIGHT,
+                "their_site": "NOT_FOUND",
+                "demo": "PRESENT",
+                "evidence": (audit.get("error") or "did not respond").split("\n")[0][:120],
+                "why": "A patient who cannot open the site phones a different clinic.",
+            }
+        )
+        do_not_say.append(
+            {
+                "claim": "Their website is permanently down / they have no website",
+                "reason": "NOT_VERIFIED",
+                "evidence": (
+                    "one fetch, at one moment, from one network. A timeout is not proof "
+                    "of a dead site — say what was measured, not what it implies."
+                ),
+            }
+        )
 
     for feature, finding in sorted(findings.items()):
         if feature in NOT_A_CLAIM:
