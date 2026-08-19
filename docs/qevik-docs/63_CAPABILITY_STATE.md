@@ -1,7 +1,7 @@
 # Qevik — Capability State
 
 What is genuinely operational, what is a seam waiting on something external, and
-what does not exist. Updated 2026-08-17.
+what does not exist. Updated 2026-08-19.
 
 **The rule for this document: a capability is `IMPLEMENTED` only if it has been
 executed end to end on `qevik-core-01` and observed to do the thing.** An
@@ -120,8 +120,9 @@ SSH ties its survival to a link that does not survive.
 | Backups | **IMPLEMENTED** | Daily timer, proven by a real restore |
 | Quota ledger | **IMPLEMENTED** | Platform limits vs spend limits distinguished |
 | Worker abstraction | **INTEGRATED** | Capability strings and dispatcher exist; no remote worker has attached |
-| **Authenticated API** | **NOT IMPLEMENTED** | The reason the API is still loopback |
-| **Control UI** | **NOT IMPLEMENTED** | Depends on authentication |
+| **Authenticated API** | **IMPLEMENTED** | Deny-by-default middleware, scrypt hashes, hashed session tokens |
+| **Control UI** | **IMPLEMENTED** | `app.qevik.ai`, HTTPS via Cloudflare |
+| Cloudflare DNS maintenance | **BLOCKED** | Client, policy and tests complete. **No token yet** — needs one created in the dashboard |
 | GPU worker (Z8 / P520) | **BLOCKED** | Hardware not attached |
 | Iran worker | **BLOCKED** | Hardware not attached |
 
@@ -150,7 +151,8 @@ SSH ties its survival to a link that does not survive.
 | `ATLAS_DATABASE_URL` | PostgreSQL | Yes |
 | `QEVIK_GOOGLE_PLACES_API_KEY` | Business discovery | Yes |
 | `QEVIK_BRAVE_API_KEY` | Web search | Yes |
-| `QEVIK_DASHSCOPE_API_KEY` *or* `QEVIK_ANTHROPIC_API_KEY` | Model-driven planning | **No — this is the live blocker** |
+| `QEVIK_DASHSCOPE_API_KEY` *or* `QEVIK_ANTHROPIC_API_KEY` | Model-driven planning | Yes |
+| `QEVIK_CLOUDFLARE_API_TOKEN` | Zone reads + gated DNS writes | **No — see `infra/cloudflare_token.md`** |
 
 All live in `0600` files under `/opt/qevik/`, one per concern, referenced with
 `EnvironmentFile=-` so a missing key never fails a unit. **None are in Git**, and
@@ -166,7 +168,21 @@ All live in `0600` files under `/opt/qevik/`, one per concern, referenced with
   dangerous single change available in this project.
 - The public site host serves static files from `/srv/sites` and has no
   `reverse_proxy` line, so exposing the API cannot happen by editing one file.
-- `ufw` allows 22 and 80 only.
+- `ufw` allows **22, 80 and 443** only. `8443` was removed on 2026-08-19: the
+  control plane it served is now on `app.qevik.ai` behind a real certificate,
+  and in fourteen days of journal the port's only external visitor was a
+  scanner. Caddy still serves it, bound to `127.0.0.1`, reachable through
+  `ssh -L 8443:127.0.0.1:8443` — so the break-glass route survives DNS failure,
+  a Cloudflare misconfiguration and a lapsed domain exactly as before, none of
+  which affect SSH.
+  Verified closed from an independent network vantage point, because `nc` from
+  the operator's own ISP reports *every* port open, including `1.1.1.1:9999`.
+- **Cloudflare DNS** is reachable in code but held shut: reads are free, and the
+  only permitted write is creating or reclaiming an `A` record for a new
+  subdomain pointing at this server. The four production records, `NS`, `MX`,
+  `SOA`, DNSSEC and deletion of anything are refused below the token, whatever
+  the token allows — and a permitted write still needs an approval bound to the
+  record name. See `infra/cloudflare_token.md`.
 - Outward-facing deployment requires an approval object the plan cannot construct
   for itself, checked before any file is read.
 - A refusal is never retried as a failure — repairing one would mean attempting
