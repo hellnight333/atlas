@@ -67,6 +67,10 @@ GATED_ACTIONS: dict[str, tuple[Scope, Risk]] = {
     "domain.purchase": (Scope.FINANCIAL, Risk.FINANCIAL),
     "account.create": (Scope.COMMUNICATE, Risk.OUTBOUND),
     "site.remove": (Scope.DESTRUCTIVE, Risk.DESTRUCTIVE),
+    # A DNS write is public in the widest sense available here: it changes
+    # where a hostname resolves for everyone at once, and unlike a bad deploy
+    # there is no single URL to roll back.
+    "dns.point": (Scope.PUBLISH, Risk.PUBLIC),
     "publish.upload": (Scope.PUBLISH, Risk.PUBLIC),
 }
 
@@ -90,6 +94,8 @@ DEFAULT_TTL = timedelta(hours=48)
 MATERIAL_KEYS = frozenset(
     {
         "slug",
+        "record",
+        "hostname",
         "source_dir",
         "url",
         "to",

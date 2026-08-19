@@ -51,16 +51,25 @@ if [[ ! -f "$CADDYFILE" ]]; then
     exit 1
 fi
 
-if ! grep -q '^https://2\.28\.62\.83:8443 {' "$CADDYFILE"; then
-    echo "the public :8443 block is not present — already applied, or the file changed" >&2
+if ! grep -qE '^https://(2\.28\.62\.83|127\.0\.0\.1):8443 \{' "$CADDYFILE"; then
+    echo "no :8443 block found — the file changed since this was written" >&2
     exit 1
 fi
 
 cp -a "$CADDYFILE" "$BACKUP"
 echo "backed up to $BACKUP"
 
-# One line. The block's contents are already correct; only its address is wrong.
+# Two changes, and the second is the one that actually does the work.
+#
+# The site address is what Caddy matches a request against — its Host header and
+# SNI — not what it binds. Rewriting it to 127.0.0.1 alone leaves the listener on
+# *:8443, reachable from every interface, which is precisely what this script
+# exists to stop. `bind` is the directive that chooses the interface.
 sed -i 's|^https://2\.28\.62\.83:8443 {|https://127.0.0.1:8443 {|' "$CADDYFILE"
+
+if ! awk '/^https:\/\/127\.0\.0\.1:8443 \{/,/^}/' "$CADDYFILE" | grep -q 'bind 127.0.0.1'; then
+    sed -i '/^https:\/\/127\.0\.0\.1:8443 {/a\\tbind 127.0.0.1' "$CADDYFILE"
+fi
 
 # Validate before restarting. A malformed Caddyfile has taken this server down
 # once already, and `caddy reload` cannot be used here because the admin API is
@@ -77,9 +86,22 @@ echo "ufw rule removed"
 
 echo
 echo "--- verification ---"
-ss -lntp | grep ':8443' || echo "  nothing listening on 8443 (unexpected)"
+
+listener=$(ss -lntH "sport = :8443" | awk '{print $4}')
+echo "  listener  : ${listener:-none}"
+case "$listener" in
+    127.0.0.1:8443) echo "            bound to loopback only" ;;
+    *)              echo "            NOT loopback-only — restore $BACKUP" >&2; exit 1 ;;
+esac
+
 printf '  loopback  : '; curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8443/health
 printf '  app.qevik : '; curl -s  -o /dev/null -w '%{http_code}\n' https://app.qevik.ai/health
+
+echo "  ufw       :"; ufw status | grep -E '^(22|80|443|8443)/tcp' | sed 's/^/            /'
+
 echo
 echo "Now confirm from OUTSIDE the server that :8443 no longer answers:"
 echo "  curl -sk --max-time 10 https://2.28.62.83:8443/health   # expect a timeout"
+echo "and that the tunnel does:"
+echo "  ssh -i ~/.ssh/naml_hetzner -L 8443:127.0.0.1:8443 -N root@2.28.62.83 &"
+echo "  curl -sk https://127.0.0.1:8443/health                  # expect 200"

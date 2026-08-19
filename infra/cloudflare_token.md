@@ -1,99 +1,146 @@
-# Cloudflare API token — proposal
+# Cloudflare API token — scope, storage, and what Qevik may change
 
-**Status: NOT REQUESTED YET.** This document exists so the exact permissions can
-be approved before a token is created. No token has been asked for, issued or
-stored.
+**Token status: NOT YET CREATED.** Creating it requires the Cloudflare dashboard,
+which only the operator can reach. This document specifies exactly what to create
+and what the code is permitted to do with it, written *before* any token exists so
+the boundary is agreed rather than discovered.
 
-## Why a token at all
+Updated 2026-08-19.
 
-Three things are currently unverifiable from the server, and each has already
-cost time:
+---
 
-1. **Which SSL/TLS mode the zone is in.** Whether the origin should serve HTTP
-   or HTTPS behind the proxy is determined entirely by this setting, and today
-   the only way to know it is for the operator to read it in the dashboard.
-2. **Whether a DNS record is proxied.** A record flipped to DNS-only exposes the
-   origin IP and bypasses every protection in front of it; a record flipped to
-   proxied makes TLS-ALPN-01 impossible. Both have concrete failure signatures
-   that are cheap to detect and expensive to guess at.
-3. **Whether the records still point here.** A silent change is the single most
-   likely cause of a future "the site is down" that is not the server's fault —
-   the misdiagnosis this project has already paid for once.
+## 1. Permissions to grant
 
-All three are **reads**. None of them require the ability to change anything.
+*My Profile → API Tokens → Create Token → Custom token.*
 
-## Exact permissions requested
-
-Created at *My Profile → API Tokens → Create Token → Custom token*.
-
-| Permission | Level | Why |
+| Permission | Level | Why it is needed |
 |---|---|---|
-| **Zone → Zone → Read** | Read | Confirm the zone exists, is active, and which nameservers it uses |
-| **Zone → DNS → Read** | Read | Confirm the four records still point at `2.28.62.83` and which are proxied |
-| **Zone → Zone Settings → Read** | Read | Read the SSL/TLS mode, so the origin's HTTP-vs-HTTPS question is answered by observation |
+| **Zone → Zone** | **Read** | Resolve the zone id, confirm the zone is active, read its nameservers to detect delegation drift |
+| **Zone → DNS** | **Edit** | Create and update the records for new customer and demo hostnames — the infrastructure maintenance this token exists for |
 
-**Zone Resources:** `Include → Specific zone → qevik.ai` — this zone only, not
-"all zones from an account".
+**Zone Resources:** `Include → Specific zone → qevik.ai`. This zone only. Never
+"All zones from an account".
 
-**Client IP Address Filtering:** `Is in → 2.28.62.83/32`. The token is used from
-the server, so a token leaked from the server is useless from anywhere else.
+**Client IP Address Filtering:** `Is in → 2.28.62.83/32`.
 
-**TTL:** set an expiry — 90 days. A token that never expires is a permanent
-liability for a capability that is only occasionally useful.
+This restriction is compatible with how the token is used. Every call originates
+from `qevik-core-01` itself — the code runs on the server, under systemd, reading
+the credential from the server's own filesystem. There is no path where the token
+is used from a laptop, a CI runner, or a browser. A copy of this token taken from
+anywhere else is inert.
 
-### Deliberately excluded
+**Expiry:** 90 days.
 
-- **Every write permission.** Nothing in the current or planned work changes a
-  Cloudflare record. DNS was left manual on purpose: an agent that can create
-  DNS records can also repoint an existing production hostname, and that
-  belongs behind an approval gate, not inside a convenience token.
-- **Cache Purge.** Measured rather than assumed: every response from
-  `qevik.ai`, `app.qevik.ai` and `sites.qevik.ai` returns
-  `cf-cache-status: DYNAMIC`, so Cloudflare is caching none of the HTML. There
-  is nothing to purge, and the permission would be power held for no reason.
-- **Account-level permissions of any kind.**
+### Deliberately not granted
 
-## What the token can and cannot do
+- **Zone Settings → Edit.** The directive allows it "only if a later Qevik
+  operation genuinely requires it". None does today: the SSL/TLS mode is set
+  correctly and nothing in the roadmap changes it. Adding it now would be power
+  held on speculation. If an operation later needs it, that is a separate
+  request with a stated reason.
+- **Zone Settings → Read.** Dropped from the earlier read-only proposal. With
+  DNS Edit present, the marginal value of reading the SSL mode does not justify
+  another permission; the mode is observable from the outside by whether the
+  origin handshake succeeds.
+- **Cache Purge.** Measured, not assumed: every response from `qevik.ai`,
+  `app.qevik.ai` and `sites.qevik.ai` returns `cf-cache-status: DYNAMIC`.
+  Cloudflare caches none of this HTML, so there is nothing to purge.
+- **Workers, Account Admin, Billing, User, Memberships, Load Balancing,
+  Firewall, Page Rules, SSL certificates** — all excluded, as directed.
 
-**Can:** read the zone's status, its DNS records, and its settings — the same
-information the dashboard shows on three read-only pages.
+---
 
-**Cannot:** create, edit or delete a DNS record; change the SSL/TLS mode; alter
-a firewall or WAF rule; purge cache; touch any other zone; touch account
-settings, billing or members; be used from any IP other than the server.
+## 2. What Qevik is allowed to change
 
-The worst case if it leaks is that someone learns `qevik.ai` points at
-`2.28.62.83` — which is public information, recoverable with `dig`.
+The token *technically* permits any DNS edit in the zone. The code narrows that
+much further, because a permission is a ceiling and not a policy.
 
-## Storage
+### Allowed, and only as part of an approved operation
+
+- **Create** an `A` record for a new subdomain of `qevik.ai` pointing at
+  `2.28.62.83`, proxied.
+- **Update** an existing `A` record's target **only** when it already points at
+  `2.28.62.83` — i.e. reclaiming a record Qevik itself created.
+
+### Refused by the code, regardless of what the token allows
+
+| Refused | Why |
+|---|---|
+| `qevik.ai`, `www`, `app`, `sites` | The four records serving production. An agent editing these can take the whole business offline, and did not need to. |
+| Any `NS` record | Nameserver changes are delegation changes. Explicitly out of scope. |
+| Any `MX` record | Mail delivery. Nothing here sends or receives on this domain, and a wrong `MX` silently loses mail. |
+| `SOA`, `DNSKEY`, `DS` | Zone authority and DNSSEC. |
+| **Deleting any record** | There is no operation that needs it. A delete is the one DNS mistake with no partial recovery. |
+| Any record outside `qevik.ai` | Enforced by the token's zone scope *and* by the code. |
+| Registrar or delegation settings | Not reachable by this token at all — those live in the account/registrar API, which is not granted. |
+
+### Nothing happens automatically
+
+A DNS write is an **outward-facing action** and goes through the same approval
+gate as publishing a site: it requires an approval object bound to the exact
+resolved parameters — record name, type, and target — which the plan cannot
+construct for itself. An approval authorises *one* change to *one* record and is
+consumed when used.
+
+There is no scheduled job, timer, or autonomous loop that writes DNS. Every write
+traces to an operation the operator approved.
+
+---
+
+## 3. Storage
 
 ```
 /opt/qevik/cloudflare.env      # 0600, root:root
 ```
 
-containing one line, `QEVIK_CLOUDFLARE_API_TOKEN=...`, referenced by the unit as
+One line: `QEVIK_CLOUDFLARE_API_TOKEN=...`, referenced by the unit as
 `EnvironmentFile=-/opt/qevik/cloudflare.env`. The leading `-` means a missing
-file never fails the service, which is how every other credential on this host
-already works.
+file never fails the service — the same pattern as every other credential here.
 
-- **Not in Git.** `/opt/qevik/` is outside the repository, and `.gitignore`
-  already covers `*.env`.
-- **Not in logs.** The client sends it as an `Authorization` header and never
-  writes it to output; the failure path prints the HTTP status, not the request.
-- **Not in this document, or any other.**
+- **Not in Git.** `/opt/qevik/` is outside the repository; `.gitignore` covers `*.env`.
+- **Not in logs.** Sent as an `Authorization` header; the client never logs the
+  header, and failure paths print the HTTP status and Cloudflare error code only.
+- **Not in reports, generated pages, or chat output.**
+- **Not in this file.**
 
-## What I need from you
+### Placing it
 
-Create the token with exactly the three read permissions above, scoped to
-`qevik.ai`, IP-filtered to `2.28.62.83/32`, with a 90-day expiry — then place it
-on the server yourself:
+Do this yourself, so the token never passes through a transcript:
 
 ```
 ssh -i ~/.ssh/naml_hetzner root@2.28.62.83
 umask 077
-printf 'QEVIK_CLOUDFLARE_API_TOKEN=%s\n' 'PASTE_HERE' > /opt/qevik/cloudflare.env
+printf 'QEVIK_CLOUDFLARE_API_TOKEN=%s\n' 'PASTE_TOKEN_HERE' > /opt/qevik/cloudflare.env
+chmod 600 /opt/qevik/cloudflare.env
 ```
 
-Doing it that way means the token never passes through a chat transcript.
-Cloudflare's own *Verify* button on the token page confirms it works before it
-goes anywhere.
+Cloudflare's *Verify* button on the token page confirms it works before it is
+placed anywhere.
+
+---
+
+## 4. Rotation
+
+- **Expiry:** 90 days, set at creation. First expiry falls on **2026-11-17**.
+- **Rotation:** create the replacement first, place it, confirm
+  `cloudflare_status.py` still reports the zone, then delete the old token in
+  the dashboard. Overlapping rather than gapped, so a failed rotation is not an
+  outage.
+- **On suspected exposure:** delete the token in the dashboard immediately —
+  that is the revocation, and it is instant. Then rotate. Because the token is
+  IP-filtered and read/DNS-scoped, the exposure window's worst case is a DNS
+  change from `2.28.62.83`, which is the server the operator controls.
+- **A token that never expires is not a convenience**, it is a permanent
+  liability for an occasional capability.
+
+---
+
+## 5. Verifying, once it exists
+
+```
+.venv/bin/python infra/cloudflare_status.py
+```
+
+Reports the zone status, its nameservers, and every record with its proxy state
+— all reads. It prints no secret. If the token is absent it says so and exits 0,
+because a missing optional credential is not a failure.
