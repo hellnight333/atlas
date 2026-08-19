@@ -54,30 +54,38 @@ SAMPLE_AR = "https://sites.qevik.ai/sample/ar/"
 SAMPLES = (
     ("Fitness app", "sample-pulse", "sample-pulse-m.png",
      "A product interface, not a page: sidebar, live charts, training log.",
-     "Web application"),
+     "Web application", False),
     ("Fine dining", "sample-nar", "sample-nar-m.png",
      "Editorial and chromeless. Full-bleed opening, menu as a priced list.",
-     "Restaurant"),
+     "Restaurant", False),
     ("Detailing", "sample-apex", "sample-apex-m.png",
      "A four-step quote configurator that prices as you choose.",
-     "AutoDetailing"),
+     "AutoDetailing", False),
     ("Plant shop", "sample-verdant", "sample-verdant-m.png",
      "Filterable catalogue, search and a working basket drawer.",
-     "Store"),
+     "Store", False),
     ("Café", "sample-cafe", "sample-cafe.png",
-     "Drinks list, beans to take home, one-line hours.", "CafeOrCoffeeShop"),
+     "Drinks list, beans to take home, one-line hours.", "CafeOrCoffeeShop", True),
     ("Salon", "sample-salon", "sample-salon.png",
-     "Treatments with durations, appointment request.", "BeautySalon"),
+     "Treatments with durations, appointment request.", "BeautySalon", True),
     ("Property", "sample-property", "sample-property.png",
-     "Service groups, FAQ, call-back request.", "RealEstateAgent"),
+     "Service groups, FAQ, call-back request.", "RealEstateAgent", True),
     ("Clinic", "sample", "sample_mobile_en.png",
-     "Services, verified hours, tap-to-call, map.", "Dentist"),
+     "Services, verified hours, tap-to-call, map.", "Dentist", True),
 )
 
 
 def sample_cards() -> str:
     cards = ""
-    for label, slug, shot, detail, schema in SAMPLES:
+    # The four hand-built samples are single English files. Offering an Arabic
+    # link that 404s is a broken promise on the page whose whole argument is
+    # that these are real and working.
+    for label, slug, shot, detail, schema, bilingual in SAMPLES:
+        arabic = (
+            f'<a href="https://sites.qevik.ai/{slug}/ar/" rel="noopener">العربية</a> ·'
+            if bilingual
+            else '<span title="English only">EN</span> ·'
+        )
         cards += f"""
       <article class="sample">
         <a href="https://sites.qevik.ai/{slug}/" rel="noopener">
@@ -89,7 +97,7 @@ def sample_cards() -> str:
           <p class="sample-detail">{detail}</p>
           <p class="sample-links">
             <a href="https://sites.qevik.ai/{slug}/" rel="noopener">Open</a> ·
-            <a href="https://sites.qevik.ai/{slug}/ar/" rel="noopener">العربية</a> ·
+            {arabic}
             <code>{schema}</code>
           </p>
         </div>
