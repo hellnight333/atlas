@@ -96,3 +96,6 @@ apps/desktop/src-tauri/gen/
 infra/packaging/build/
 infra/packaging/dist/
 dist-release/
+
+# Built output of the public site — regenerate with apps/public/build.py
+apps/public/dist/
