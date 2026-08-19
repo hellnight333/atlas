@@ -119,6 +119,20 @@ sites.qevik.ai {
 	@site_root path_regexp siteroot ^/([^/]+)/?$
 	rewrite @site_root /{re.siteroot.1}/current/
 
+	# Anything deeper than the site root goes through `current/` too. Without
+	# this only the homepage resolved: /slug/ar/, /slug/robots.txt and
+	# /slug/sitemap.xml were looked up beside the `current` symlink rather than
+	# through it, so a bilingual site served its English page and 404'd on
+	# everything else.
+	#
+	# Expressed as a matcher set because Go's RE2 has no negative lookahead, and
+	# a path already containing /current/ must not be rewritten twice.
+	@site_deep {
+		path_regexp deep ^/([^/]+)/(.+)$
+		not path /*/current/*
+	}
+	rewrite @site_deep /{re.deep.1}/current/{re.deep.2}
+
 	file_server
 	header X-Qevik-Host "sites"
 	log {
@@ -160,6 +174,20 @@ https://2.28.62.83:8443 {
 	root * /srv/sites
 	@site_root path_regexp siteroot ^/([^/]+)/?$
 	rewrite @site_root /{re.siteroot.1}/current/
+
+	# Anything deeper than the site root goes through `current/` too. Without
+	# this only the homepage resolved: /slug/ar/, /slug/robots.txt and
+	# /slug/sitemap.xml were looked up beside the `current` symlink rather than
+	# through it, so a bilingual site served its English page and 404'd on
+	# everything else.
+	#
+	# Expressed as a matcher set because Go's RE2 has no negative lookahead, and
+	# a path already containing /current/ must not be rewritten twice.
+	@site_deep {
+		path_regexp deep ^/([^/]+)/(.+)$
+		not path /*/current/*
+	}
+	rewrite @site_deep /{re.deep.1}/current/{re.deep.2}
 	file_server
 	header X-Qevik-Host "sites-origin"
 }

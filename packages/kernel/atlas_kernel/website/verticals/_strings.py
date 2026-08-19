@@ -51,6 +51,16 @@ class Strings(NamedTuple):
     lead_plain: str
     description_template: str
     contact_tbc: str
+    request_heading: str
+    request_sub: str
+    field_name: str
+    field_phone: str
+    field_when: str
+    field_service: str
+    field_message: str
+    request_submit: str
+    request_notice: str
+    request_not_implemented: str
 
 
 EN = Strings(
@@ -92,6 +102,24 @@ EN = Strings(
         "braces, implants and emergency care."
     ),
     contact_tbc="Details to be confirmed",
+    request_heading="Request an appointment",
+    request_sub="Tell us when suits you and we will confirm by phone.",
+    field_name="Your name",
+    field_phone="Phone number",
+    field_when="Preferred day and time",
+    field_service="Treatment",
+    field_message="Anything we should know",
+    request_submit="Send request",
+    # Stated up front, before anyone types. Letting someone fill in a form and
+    # only then admitting it goes nowhere is worse than saying so at the top.
+    request_notice=(
+        "This request form is part of a demonstration and is not yet connected. "
+        "Please call or message the clinic directly."
+    ),
+    request_not_implemented=(
+        "Not sent — this demonstration form has no backend connected yet. "
+        "Please call the clinic directly."
+    ),
 )
 
 AR = Strings(
@@ -131,6 +159,22 @@ AR = Strings(
         "{name} — عيادة أسنان{area_clause}. فحص وتنظيف وتبييض وتقويم وزراعة الأسنان ورعاية الطوارئ."
     ),
     contact_tbc="سيتم تأكيد التفاصيل",
+    request_heading="اطلب موعداً",
+    request_sub="أخبرنا بالوقت المناسب لك وسنؤكد الموعد هاتفياً.",
+    field_name="الاسم",
+    field_phone="رقم الهاتف",
+    field_when="اليوم والوقت المفضل",
+    field_service="نوع العلاج",
+    field_message="أي ملاحظات",
+    request_submit="إرسال الطلب",
+    request_notice=(
+        "نموذج الطلب هذا جزء من عرض توضيحي وغير مفعّل بعد. "
+        "يرجى الاتصال بالعيادة مباشرة."
+    ),
+    request_not_implemented=(
+        "لم يتم الإرسال — هذا النموذج التوضيحي غير متصل بعد. "
+        "يرجى الاتصال بالعيادة مباشرة."
+    ),
 )
 
 #: Service labels per language. Same six services, same order, so the two pages

@@ -29,6 +29,7 @@ import re
 from urllib.parse import quote
 
 from ..content import Fact, SiteContent
+from . import _strings
 
 NAME = "dental"
 
@@ -75,6 +76,11 @@ DEFAULT_ASSURANCES: tuple[tuple[str, str], ...] = (
 )
 
 _SAFE = re.compile(r"[^A-Za-z0-9+\-() ]")
+_ARABIC_CHARS = re.compile(r"[\u0600-\u06ff]")
+
+
+def _has_arabic(value: str) -> bool:
+    return bool(_ARABIC_CHARS.search(value))
 
 
 def tel_href(phone: str) -> str:
@@ -151,7 +157,9 @@ def _fact(content: SiteContent, name: str) -> str:
     return ""
 
 
-def _structured_data(*, name: str, phone: str, address: str, url: str) -> str:
+def _structured_data(
+    *, name: str, phone: str, address: str, url: str, hours: list[tuple[str, str]] | None = None
+) -> str:
     """Schema.org for a dental practice.
 
     The reason a small clinic's site shows up in a local search at all. Only
@@ -169,6 +177,11 @@ def _structured_data(*, name: str, phone: str, address: str, url: str) -> str:
         data["address"] = {"@type": "PostalAddress", "streetAddress": address}
     if url:
         data["url"] = url
+    if hours:
+        # Emitted verbatim from the listing. Search engines accept a plain
+        # string here, and rewriting "Sat-Thu 9:00 - 21:00" into a structured
+        # day range would mean deciding what the clinic meant.
+        data["openingHours"] = [f"{day} {time}" for day, time in hours]
     data["areaServed"] = "Dubai"
     # JSON encoding does not escape </script>, so a name containing it would
     # close the block and execute what follows.
@@ -210,15 +223,20 @@ HERO_ART = """<svg class="hero-art" viewBox="0 0 420 320" role="img"
 </svg>"""
 
 PAGE = """<!doctype html>
-<html lang="en">
+<html lang="{lang}" dir="{dir}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{description}">
+<link rel="canonical" href="{canonical}">
+<link rel="alternate" hreflang="en" href="{href_en}">
+<link rel="alternate" hreflang="ar" href="{href_ar}">
+<link rel="alternate" hreflang="x-default" href="{href_en}">
 <meta property="og:title" content="{og_title}">
 <meta property="og:description" content="{description}">
 <meta property="og:type" content="website">
+<meta property="og:url" content="{canonical}">
 <style>
   :root {{
     --ink:#12212e; --muted:#5a6b7a; --line:#e3e9ee; --bg:#ffffff; --soft:#f5f9fc;
@@ -283,10 +301,49 @@ PAGE = """<!doctype html>
   .final p {{ color:#cfe6ea; max-width:48ch; margin:0 auto 1.6rem; }}
   .final .btn-primary {{ background:var(--accent); color:#12212e; }}
 
+  .lang {{ margin-inline-start:.9rem; font-size:.85rem; text-decoration:none; color:var(--muted);
+           border:1px solid var(--line); border-radius:99px; padding:.35rem .7rem; white-space:nowrap; }}
+  .lang:hover {{ border-color:var(--brand); color:var(--brand-dark); }}
+
+  form.request {{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:1.4rem; }}
+  .fields {{ display:grid; gap:.9rem; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }}
+  form.request label {{ display:block; font-size:.88rem; color:var(--muted); }}
+  form.request label.wide {{ margin-top:.9rem; }}
+  form.request input, form.request select, form.request textarea {{
+    width:100%; margin-top:.35rem; padding:.65rem .7rem; font:inherit; color:var(--ink);
+    border:1px solid var(--line); border-radius:9px; background:#fff; }}
+  form.request button {{ margin-top:1rem; background:var(--brand); color:#fff; border:0;
+    padding:.8rem 1.6rem; border-radius:10px; font:inherit; font-weight:600; cursor:pointer; }}
+  form.request button:hover {{ background:var(--brand-dark); }}
+  .notice {{ margin:.9rem 0 0; font-size:.88rem; color:var(--muted); }}
+  .notice.shown {{ color:var(--ink); background:#fff8e8; border:1px solid var(--accent);
+                   border-radius:9px; padding:.7rem .8rem; }}
+
+  /* Right-to-left. Logical properties do most of the work; these are the few
+     places a physical direction was assumed. */
+  [dir="rtl"] .hours li {{ flex-direction:row-reverse; }}
+  [dir="rtl"] .info dl {{ direction:rtl; }}
+  [dir="rtl"] ul {{ padding-left:0; padding-right:1.2rem; }}
+
   footer {{ padding:2rem 0; border-top:1px solid var(--line); color:var(--muted); font-size:.88rem; }}
   footer .wrap {{ display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between; }}
 
+  /* Sticky action bar. On a phone the important actions must stay reachable
+     without scrolling back to the top — a patient in pain does not hunt for a
+     number. Hidden on desktop, where the header CTA is always visible. */
+  .sticky {{ display:none; }}
   @media (max-width:760px) {{
+    .sticky {{ display:flex; position:fixed; inset:auto 0 0 0; z-index:40;
+               background:#fff; border-top:1px solid var(--line);
+               padding:.55rem .6rem; gap:.5rem;
+               box-shadow:0 -6px 18px rgba(18,33,46,.08); }}
+    .sticky a {{ flex:1; text-align:center; padding:.7rem .3rem; border-radius:10px;
+                 text-decoration:none; font-weight:600; font-size:.85rem; }}
+    .sticky .s-call {{ background:var(--brand); color:#fff; }}
+    .sticky .s-wa {{ background:#25d366; color:#fff; }}
+    .sticky .s-book {{ background:var(--accent); color:#12212e; }}
+    .sticky .s-map {{ border:1.5px solid var(--line); color:var(--ink); }}
+    body {{ padding-bottom:4.5rem; }}
     header nav {{ display:none; }}
     .split {{ grid-template-columns:1fr; }}
     .hero {{ padding:3rem 0 2.5rem; }}
@@ -306,10 +363,11 @@ PAGE = """<!doctype html>
   <div class="wrap">
     <div class="brand">{name}<small>{tagline_short}</small></div>
     <nav>
-      <a href="#services">Services</a>
-      <a href="#visit">Visit us</a>
-      <a href="#contact">Contact</a>
+      <a href="#services">{nav_services}</a>
+      <a href="#visit">{nav_visit}</a>
+      <a href="#contact">{nav_contact}</a>
     </nav>
+    <a class="lang" href="{other_href}" hreflang="{other_lang}">{other_language}</a>
     {header_cta}
   </div>
 </header>
@@ -327,24 +385,24 @@ PAGE = """<!doctype html>
 
 <section id="services">
   <div class="wrap">
-    <h2>Our services</h2>
-    <p class="sub">Comprehensive dental care for adults and children.</p>
+    <h2>{services_heading}</h2>
+    <p class="sub">{services_sub}</p>
     <div class="grid" id="features">{services}</div>
   </div>
 </section>
 
 <section class="alt" id="why">
   <div class="wrap">
-    <h2>Why patients choose us</h2>
-    <p class="sub">Careful, unhurried treatment with the details explained.</p>
+    <h2>{why_heading}</h2>
+    <p class="sub">{why_sub}</p>
     <div class="grid">{assurances}</div>
   </div>
 </section>
 
 <section id="visit">
   <div class="wrap">
-    <h2>Visit us</h2>
-    <p class="sub">Find us, call us, or message us on WhatsApp.</p>
+    <h2>{visit_heading}</h2>
+    <p class="sub">{visit_sub}</p>
     <div class="split">
       <div class="info">
         <dl>{contact_rows}</dl>
@@ -354,9 +412,29 @@ PAGE = """<!doctype html>
   </div>
 </section>
 
+<section class="alt" id="request">
+  <div class="wrap">
+    <h2>{request_heading}</h2>
+    <p class="sub">{request_sub}</p>
+    <form class="request" id="appointment-form" novalidate>
+      <div class="fields">
+        <label>{field_name}<input name="name" autocomplete="name" required></label>
+        <label>{field_phone}<input name="phone" type="tel" autocomplete="tel" required></label>
+        <label>{field_when}<input name="preferred" type="datetime-local"></label>
+        <label>{field_service}
+          <select name="service">{service_options}</select>
+        </label>
+      </div>
+      <label class="wide">{field_message}<textarea name="message" rows="3"></textarea></label>
+      <button type="submit">{request_submit}</button>
+      <p class="notice" id="form-notice" role="status">{request_notice}</p>
+    </form>
+  </div>
+</section>
+
 <div class="final" id="contact">
   <div class="wrap">
-    <h2>Book an appointment</h2>
+    <h2>{book_heading}</h2>
     <p>{closing}</p>
     <div class="cta-row" style="justify-content:center">{final_ctas}</div>
   </div>
@@ -369,7 +447,20 @@ PAGE = """<!doctype html>
   </div>
 </footer>
 
+<div class="sticky">{sticky}</div>
+
 <script type="application/ld+json">{structured}</script>
+<script>
+// The appointment backend does not exist yet. Rather than pretend, the form
+// states that plainly and points the visitor at a channel that does work.
+// A fake success message here would be the one lie that reaches a patient.
+document.getElementById('appointment-form').addEventListener('submit', function (e) {{
+  e.preventDefault();
+  var notice = document.getElementById('form-notice');
+  notice.textContent = {not_implemented_js};
+  notice.className = 'notice shown';
+}});
+</script>
 </body>
 </html>
 """
@@ -383,51 +474,81 @@ def render(
     area: str = "Dubai",
     url: str = "",
     hours: list[tuple[str, str]] | None = None,
-    services: tuple[tuple[str, str, str], ...] = DEFAULT_SERVICES,
-    assurances: tuple[tuple[str, str], ...] = DEFAULT_ASSURANCES,
+    booking_url: str = "",
     year: int = 2026,
+    lang: str = "en",
+    base_url: str = "",
 ) -> str:
-    """Render a client-ready page.
+    """Render one language of a clinic page.
 
-    Every argument except the copy defaults is a fact about a real business.
-    Anything absent is *omitted* rather than filled with an example — a proposal
-    showing "123 Example Street" to a dentist who knows their own address is a
-    proposal that ends the conversation.
+    Every argument except the copy defaults is a fact about a real business, and
+    anything absent is *omitted* rather than filled with an example — a proposal
+    showing "123 Example Street" to a dentist who knows their own address ends
+    the conversation.
     """
+    strings = _strings.AR if lang == "ar" else _strings.EN
+    services = _strings.SERVICES_AR if lang == "ar" else _strings.SERVICES_EN
+    assurances = _strings.ASSURANCES_AR if lang == "ar" else _strings.ASSURANCES_EN
+
     e = html.escape
     name_x = e(name.strip() or "Dental Clinic")
     area_x = e(area.strip())
     dial = tel_href(phone)
     wa = whatsapp_href(phone)
 
-    headline = f"Gentle, modern dentistry in {area_x}" if area_x else "Gentle, modern dentistry"
-    tagline = (
-        f"{name_x} provides routine and specialist dental care"
-        + (f" in {area_x}." if area_x else ".")
-        + " Same-day appointments available for urgent problems."
+    canonical = url or (f"{base_url}/" if base_url else "")
+    href_en = canonical
+    href_ar = f"{canonical}ar/" if canonical else "ar/"
+    other_href = href_ar if lang == "en" else canonical or "../"
+
+    # A Latin district name inside an Arabic sentence is reordered by the bidi
+    # algorithm and lands on its own line, reading as though it were pasted in —
+    # "طب أسنان حديث ولطيف في Mankhool". The area names come from a Google
+    # listing in English, and inventing an Arabic rendering of a Dubai district
+    # would be exactly the fabrication this template refuses elsewhere. So the
+    # Arabic headline drops the area unless the area itself is Arabic; the
+    # address block still shows the real location either way.
+    use_area = bool(area_x) and (lang != "ar" or _has_arabic(area_x))
+    headline = strings.headline_template.format(area=area_x) if use_area else strings.headline_plain
+    lead_area = area_x if use_area else ""
+    lead = (
+        strings.lead_template.format(name=name_x, area=lead_area)
+        if lead_area
+        else strings.lead_plain.format(name=name_x)
     )
-    description = (
-        f"{name_x} — dental clinic"
-        + (f" in {area_x}" if area_x else "")
-        + ". Check-ups, cleaning, whitening, braces, implants and emergency care."
+    description = strings.description_template.format(
+        name=name_x, area_clause=f" — {area_x}" if area_x else ""
     )
 
-    # Buttons only exist when there is a real number behind them. A "Call now"
-    # that dials nothing is worse than no button, because it is discovered by
-    # the one visitor who most wanted to get in touch.
-    header_cta = f'<a class="call" href="tel:{e(dial)}">Call {e(phone.strip())}</a>' if dial else ""
-    hero_ctas = ""
-    final_ctas = ""
+    # Buttons exist only when there is something real behind them. A "Call now"
+    # that dials nothing is discovered by the visitor who most wanted to use it.
+    header_cta = f'<a class="call" href="tel:{e(dial)}">{strings.call} {e(phone.strip())}</a>' if dial else ""
+    maps_url = (
+        "https://www.google.com/maps/search/?api=1&query=" + quote(f"{name} {address}")
+        if address
+        else ""
+    )
+
+    ctas = ""
     if dial:
-        hero_ctas += f'<a class="btn btn-primary" href="tel:{e(dial)}">Call {e(phone.strip())}</a>'
-        final_ctas += f'<a class="btn btn-primary" href="tel:{e(dial)}">Call {e(phone.strip())}</a>'
+        ctas += f'<a class="btn btn-primary" href="tel:{e(dial)}">{strings.call} {e(phone.strip())}</a>'
+    if booking_url:
+        ctas += f'<a class="btn btn-ghost" href="{e(booking_url)}" rel="noopener">{strings.book_heading}</a>'
+    else:
+        ctas += f'<a class="btn btn-ghost" href="#request">{strings.book_heading}</a>'
     if wa:
-        link = f"https://wa.me/{e(wa)}"
-        hero_ctas += f'<a class="btn btn-ghost" href="{link}" rel="noopener">WhatsApp</a>'
-        final_ctas += f'<a class="btn btn-ghost" href="{link}" rel="noopener">WhatsApp</a>'
-    if address:
-        maps = "https://www.google.com/maps/search/?api=1&query=" + quote(f"{name} {address}")
-        hero_ctas += f'<a class="btn btn-ghost" href="{maps}" rel="noopener">Directions</a>'
+        ctas += f'<a class="btn btn-ghost" href="https://wa.me/{e(wa)}" rel="noopener">{strings.whatsapp}</a>'
+    if maps_url:
+        ctas += f'<a class="btn btn-ghost" href="{maps_url}" rel="noopener">{strings.directions}</a>'
+
+    sticky = ""
+    if dial:
+        sticky += f'<a class="s-call" href="tel:{e(dial)}">{strings.call}</a>'
+    sticky += f'<a class="s-book" href="{e(booking_url) if booking_url else "#request"}">{strings.book_heading}</a>'
+    if wa:
+        sticky += f'<a class="s-wa" href="https://wa.me/{e(wa)}" rel="noopener">{strings.whatsapp}</a>'
+    if maps_url:
+        sticky += f'<a class="s-map" href="{maps_url}" rel="noopener">{strings.directions}</a>'
 
     service_cards = "".join(
         f'<div class="card"><div class="ico">{_ICON.format(ICONS.get(icon, ICONS["tooth"]))}</div>'
@@ -435,70 +556,137 @@ def render(
         for title, icon, blurb in services
     )
     assurance_cards = "".join(
-        f'<div class="card"><h3>{e(title)}</h3><p>{e(blurb)}</p></div>'
-        for title, blurb in assurances
+        f'<div class="card"><h3>{e(title)}</h3><p>{e(blurb)}</p></div>' for title, blurb in assurances
     )
 
     rows = ""
     if address:
-        rows += f"<dt>Address</dt><dd>{e(address)}</dd>"
+        rows += f"<dt>{strings.address}</dt><dd>{e(address)}</dd>"
     if phone:
-        rows += f'<dt>Phone</dt><dd><a href="tel:{e(dial)}">{e(phone.strip())}</a></dd>'
+        rows += f'<dt>{strings.phone_label}</dt><dd><a href="tel:{e(dial)}">{e(phone.strip())}</a></dd>'
     if wa:
-        rows += f'<dt>WhatsApp</dt><dd><a href="https://wa.me/{e(wa)}" rel="noopener">Message us</a></dd>'
+        rows += f'<dt>{strings.whatsapp}</dt><dd><a href="https://wa.me/{e(wa)}" rel="noopener">{strings.whatsapp}</a></dd>'
     if area_x:
-        rows += f"<dt>Area</dt><dd>{area_x}</dd>"
+        rows += f"<dt>{strings.area}</dt><dd>{area_x}</dd>"
     if not rows:
-        rows = "<dt>Contact</dt><dd>Details to be confirmed</dd>"
+        rows = f"<dt>{strings.nav_contact}</dt><dd>{strings.contact_tbc}</dd>"
 
-    # Opening hours are asserted or absent. Guessing them is the fastest way to
-    # have a patient arrive at a locked door.
+    # Hours are stated or absent. Guessing them sends a patient to a locked door.
     hours_block = ""
     if hours:
         items = "".join(
-            f"<li><span>{e(day)}</span><span>{e(time)}</span></li>" for day, time in hours
+            f"<li><span>{e(_localise_day(day, lang))}</span><span>{e(time)}</span></li>"
+            for day, time in hours
         )
         hours_block = (
-            f'<div class="info"><h3 style="margin-top:0">Opening hours</h3>'
+            f'<div class="info"><h3 style="margin-top:0">{strings.hours_heading}</h3>'
             f'<ul class="plain hours">{items}</ul></div>'
         )
 
-    closing = (
-        "Call us and we will find a time that suits you."
-        if dial
-        else "Get in touch and we will find a time that suits you."
-    )
-
     return PAGE.format(
-        title=f"{name_x} | Dental Clinic{f' in {area_x}' if area_x else ''}",
+        lang=strings.lang,
+        dir=strings.direction,
+        title=f"{name_x} | {strings.clinic_label}{f' — {area_x}' if area_x else ''}",
         og_title=name_x,
         description=e(description),
+        canonical=e(canonical),
+        href_en=e(href_en),
+        href_ar=e(href_ar),
+        other_href=e(other_href),
+        other_lang="ar" if lang == "en" else "en",
+        other_language=strings.other_language,
         name=name_x,
-        tagline_short=e(f"Dental clinic{f' · {area}' if area else ''}"),
+        tagline_short=e(f"{strings.clinic_label}{f' · {area}' if area else ''}"),
         headline=headline,
-        tagline=tagline,
+        tagline=lead,
         header_cta=header_cta,
-        hero_ctas=hero_ctas,
-        final_ctas=final_ctas,
+        hero_ctas=ctas,
+        final_ctas=ctas,
+        sticky=sticky,
+        hero_art=HERO_ART,
         services=service_cards,
         assurances=assurance_cards,
         contact_rows=rows,
         hours_block=hours_block,
-        hero_art=HERO_ART,
-        closing=closing,
+        closing=strings.book_sub_with_phone if dial else strings.book_sub_without_phone,
+        nav_services=strings.nav_services,
+        nav_visit=strings.nav_visit,
+        nav_contact=strings.nav_contact,
+        services_heading=strings.services_heading,
+        services_sub=strings.services_sub,
+        why_heading=strings.why_heading,
+        why_sub=strings.why_sub,
+        visit_heading=strings.visit_heading,
+        visit_sub=strings.visit_sub,
+        book_heading=strings.book_heading,
+        request_heading=strings.request_heading,
+        request_sub=strings.request_sub,
+        field_name=strings.field_name,
+        field_phone=strings.field_phone,
+        field_when=strings.field_when,
+        field_service=strings.field_service,
+        field_message=strings.field_message,
+        request_submit=strings.request_submit,
+        request_notice=strings.request_notice,
+        service_options="".join(f"<option>{e(s[0])}</option>" for s in services),
+        not_implemented_js=json.dumps(strings.request_not_implemented),
         year=year,
         footer_location=e(address or area or ""),
-        structured=_structured_data(name=name, phone=dial, address=address, url=url),
+        structured=_structured_data(
+            name=name, phone=dial, address=address, url=canonical, hours=hours
+        ),
     )
 
 
-def from_content(content: SiteContent, *, year: int = 2026) -> str:
-    """Render from a `SiteContent`, taking only what is actually stated."""
-    contact = getattr(content, "contact", None)
-    return render(
-        name=_fact(content, "business_name") or getattr(content, "title", "") or "Dental Clinic",
-        phone=getattr(contact, "phone", "") if contact else "",
-        address=getattr(contact, "address", "") if contact else "",
-        area=_fact(content, "area") or "Dubai",
-        year=year,
+def _localise_day(day: str, lang: str) -> str:
+    """Translate a day label only when it is one we recognise.
+
+    An unrecognised label is passed through untouched. The hours came from the
+    clinic's own listing, and mangling "Sat-Thu" into something plausible-looking
+    would be inventing information about when they are open.
+    """
+    if lang != "ar":
+        return day
+    return _strings.DAYS_AR.get(day.strip().lower(), day)
+
+
+def render_site(
+    *,
+    name: str,
+    phone: str = "",
+    address: str = "",
+    area: str = "Dubai",
+    base_url: str = "",
+    hours: list[tuple[str, str]] | None = None,
+    booking_url: str = "",
+    year: int = 2026,
+) -> dict[str, str]:
+    """Every file the published site consists of.
+
+    Two languages as separate URLs rather than a client-side toggle: a search
+    engine can index both, `hreflang` can point at them, and a visitor who lands
+    on the Arabic page from a search result stays there.
+    """
+    canonical = f"{base_url.rstrip('/')}/" if base_url else ""
+    common = dict(
+        name=name, phone=phone, address=address, area=area, hours=hours,
+        booking_url=booking_url, year=year, base_url=base_url,
     )
+    files = {
+        "index.html": render(**common, url=canonical, lang="en"),
+        "ar/index.html": render(**common, url=canonical, lang="ar"),
+    }
+    if canonical:
+        files["robots.txt"] = f"User-agent: *\nAllow: /\nSitemap: {canonical}sitemap.xml\n"
+        files["sitemap.xml"] = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+            'xmlns:xhtml="http://www.w3.org/1999/xhtml">\n'
+            f"  <url><loc>{canonical}</loc>\n"
+            f'    <xhtml:link rel="alternate" hreflang="en" href="{canonical}"/>\n'
+            f'    <xhtml:link rel="alternate" hreflang="ar" href="{canonical}ar/"/>\n'
+            "  </url>\n"
+            f"  <url><loc>{canonical}ar/</loc></url>\n"
+            "</urlset>\n"
+        )
+    return files

@@ -112,12 +112,14 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         slug = f"{args.prefix}-{slugify(business.name)}"
-        page = dental.render(
+        # A site, not a page: English and Arabic as separate URLs so both can be
+        # indexed and linked with hreflang, plus robots.txt and a sitemap.
+        files = dental.render_site(
             name=business.name,
             phone=business.phone,
             address=address,
             area=area_of(address, business.name),
-            url=f"{PUBLIC_BASE}/{slug}/",
+            base_url=f"{PUBLIC_BASE}/{slug}",
             year=year,
         )
 
@@ -137,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         if target is not None:
-            version = target.publish(slug, {"index.html": page})
+            version = target.publish(slug, files)
             record["demo_url"] = target.promote(slug, version.id)
             record["status"] = "demo_live"
             record["version_id"] = version.id
