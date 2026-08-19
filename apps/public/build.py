@@ -52,16 +52,24 @@ SAMPLE_AR = "https://sites.qevik.ai/sample/ar/"
 #: public listings, none of those businesses are customers, and showing them as
 #: portfolio would invent a relationship that does not exist.
 SAMPLES = (
-    ("Restaurant", "sample-restaurant", "sample-restaurant.png",
-     "Menu by category, table request, hours, directions.", "Restaurant"),
-    ("Café / roastery", "sample-cafe", "sample-cafe.png",
+    ("Fitness app", "sample-pulse", "sample-pulse-m.png",
+     "A product interface, not a page: sidebar, live charts, training log.",
+     "Web application"),
+    ("Fine dining", "sample-nar", "sample-nar-m.png",
+     "Editorial and chromeless. Full-bleed opening, menu as a priced list.",
+     "Restaurant"),
+    ("Detailing", "sample-apex", "sample-apex-m.png",
+     "A four-step quote configurator that prices as you choose.",
+     "AutoDetailing"),
+    ("Plant shop", "sample-verdant", "sample-verdant-m.png",
+     "Filterable catalogue, search and a working basket drawer.",
+     "Store"),
+    ("Café", "sample-cafe", "sample-cafe.png",
      "Drinks list, beans to take home, one-line hours.", "CafeOrCoffeeShop"),
-    ("Mobile service", "sample-detailing", "sample-detailing.png",
-     "Services, service area, FAQ, quote request.", "AutoWash"),
-    ("Salon / beauty", "sample-salon", "sample-salon.png",
+    ("Salon", "sample-salon", "sample-salon.png",
      "Treatments with durations, appointment request.", "BeautySalon"),
-    ("Professional services", "sample-property", "sample-property.png",
-     "Service pages, FAQ, call-back request.", "RealEstateAgent"),
+    ("Property", "sample-property", "sample-property.png",
+     "Service groups, FAQ, call-back request.", "RealEstateAgent"),
     ("Clinic", "sample", "sample_mobile_en.png",
      "Services, verified hours, tap-to-call, map.", "Dentist"),
 )
@@ -298,8 +306,8 @@ def home() -> str:
         pages, FAQ, call-back requests.</p></div>
       <div><h3>Retail &amp; local trade</h3><p>Shops, showrooms, workshops — what you stock,
         where you are, and a reason to visit.</p></div>
-      <div><h3>Internal tools</h3><p>Dashboards and web apps where the work is real. Ask —
-        these are scoped individually, not generated.</p></div>
+      <div><h3>Internal tools</h3><p>Dashboards and web applications — see the fitness app in
+        the samples. Scoped individually, not generated.</p></div>
     </div>
     <p class="micro">Not on the list does not mean not possible. The template is composed from
       parts, so a new kind of business is a new arrangement rather than a new product.</p>
@@ -403,9 +411,9 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>See it working</h2>
-    <p class="stand">Six sample sites, one per kind of business. These are real pages on the real
-      internet — open one and press the buttons. They are ours, clearly marked as samples, and
-      they use our own number so the call and WhatsApp buttons genuinely work.</p>
+    <p class="stand">Eight sample sites, deliberately built as eight different things. Real pages
+      on the real internet — open one and press the buttons. They are ours, clearly marked as
+      samples, and they use our own number so the call and WhatsApp buttons genuinely work.</p>
     <div class="samples">{sample_cards()}</div>
   </div>
 </section>
@@ -539,20 +547,23 @@ def work() -> str:
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Work</p>
-    <h1>Sites you can open right now</h1>
-    <p class="lead">Six sample businesses, six live sites. Not mockups — open one on your phone,
-      press the buttons, switch it to Arabic. Each behaves exactly as a real customer site would,
+    <h1>Eight things we built</h1>
+    <p class="lead">Not mockups and not one template reskinned. Open one on your phone, press the
+      buttons, filter the shop, build a quote. Each behaves exactly as a real customer site would,
       because it is one.</p>
   </div>
 </section>
 
 <section class="band">
   <div class="wrap">
-    <h2>Six samples, six kinds of business</h2>
-    <p class="stand">Each is a complete site: English and Arabic pages, the offering laid out the
-      way that industry expects it, hours, address, map, tap-to-call, WhatsApp where the number can
-      receive it, and a request form. Each declares the right schema.org type, which is what puts a
-      business into the correct local search results.</p>
+    <h2>Eight samples, eight different problems</h2>
+    <p class="stand">Not one template in eight colours. A restaurant that opens full-bleed with no
+      navigation at all, a detailing workshop built around a four-step quote configurator, a plant
+      shop with filters and a basket, and a fitness application with a sidebar and live charts —
+      each is a different structure because each business needs a different one.</p>
+    <p class="stand">A structural check compares every pair on navigation, hero, section order,
+      type, layout devices, call-to-action placement, footer and interaction model, and refuses any
+      two that are the same page in different colours.</p>
     <div class="samples">{sample_cards()}</div>
     <p class="micro">All six are Qevik samples, not client work, and each says so on the page. The
       contact details are ours, so every button works — the call button dials Qevik.</p>
@@ -855,6 +866,10 @@ def main(argv: list[str] | None = None) -> int:
         "sample_desktop.png",
         "sample-restaurant.png",
         "sample-restaurant-ar.png",
+        "sample-pulse-m.png",
+        "sample-nar-m.png",
+        "sample-apex-m.png",
+        "sample-verdant-m.png",
         "sample-cafe.png",
         "sample-detailing.png",
         "sample-property.png",

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verdant — plants for Dubai homes</title>
+<meta name="description" content="Sample retail storefront built by Qevik: filterable catalogue, product detail and cart interface. A demonstration; nothing is for sale.">
+<meta name="theme-color" content="#F7F5EF">
+<style>
+/* Verdant — a storefront.
+ *
+ * The shape is a catalogue: a filter rail, a dense product grid, and a cart
+ * that slides over the page. There is no hero, no "our services", no enquiry
+ * form — a shop's job is to get someone from browsing to a basket, so the
+ * products start above the fold and the filters never leave the screen.
+ *
+ * Light, warm and roomy, against Pulse's dark density and APEX's hard technical
+ * grid. Type is a humanist sans throughout with no serif and no mono, so the
+ * three do not share a voice either.
+ *
+ * Product images are CSS — a photograph of a plant that no shop stocks would be
+ * a fabricated product. */
+:root{
+  --paper:#F7F5EF; --card:#FFFFFF; --edge:#E4E0D5; --edge-2:#D3CDBE;
+  --ink:#23261F; --ink-2:#5A6152; --dim:#8A9080;
+  --leaf:#3F6B47; --leaf-2:#2E5134; --clay:#C46E45; --sun:#E8C547;
+  --sans:"Avenir Next","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15.5px;
+  line-height:1.55;-webkit-font-smoothing:antialiased}
+.hold{max-width:1240px;margin:0 auto;padding:0 clamp(1rem,3vw,2rem)}
+h1,h2,h3{margin:0;letter-spacing:-.015em;font-weight:600}
+
+/* shop bar — logo, search, cart count. Not a nav of pages. */
+.bar{position:sticky;top:0;z-index:20;background:rgba(247,245,239,.94);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--edge)}
+.bar .hold{display:flex;align-items:center;gap:1rem;padding:.8rem 0}
+.logo{font-size:1.22rem;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:.45rem}
+.logo i{width:9px;height:9px;border-radius:50%;background:var(--leaf);font-style:normal}
+.seek{flex:1 1 auto;max-width:380px;position:relative}
+.seek input{width:100%;border:1px solid var(--edge-2);background:var(--card);border-radius:999px;
+  padding:.52rem 1rem;font:inherit;font-size:.9rem;color:var(--ink)}
+.seek input:focus{outline:0;border-color:var(--leaf)}
+.cart-btn{margin-left:auto;background:var(--ink);color:var(--paper);border:0;border-radius:999px;
+  padding:.55rem 1.1rem;font:inherit;font-size:.88rem;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;gap:.5rem}
+.cart-btn b{background:var(--sun);color:var(--ink);border-radius:999px;min-width:20px;height:20px;
+  display:grid;place-items:center;font-size:.75rem}
+.cart-btn:focus-visible,.chip:focus-visible,.add:focus-visible{outline:2px solid var(--leaf);outline-offset:2px}
+
+/* shop layout: filter rail + grid */
+.shop{display:grid;gap:2rem;padding:1.8rem 0 4rem}
+@media(min-width:900px){.shop{grid-template-columns:212px 1fr;align-items:start}}
+.rail{position:sticky;top:76px}
+.rail h3{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  margin:0 0 .7rem}
+.rail .set{margin:0 0 1.6rem}
+.chip{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink-2);
+  font:inherit;font-size:.9rem;padding:.32rem 0;cursor:pointer}
+.chip[aria-pressed=true]{color:var(--leaf);font-weight:650}
+.chip[aria-pressed=true]::before{content:"● ";font-size:.6rem;vertical-align:.15em}
+.chip span{float:right;color:var(--dim);font-size:.82rem}
+.rail-scroll{display:flex;gap:.5rem;overflow-x:auto;padding-bottom:.5rem}
+@media(min-width:900px){.rail-scroll{display:block}}
+
+.headline{display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;margin-bottom:1.2rem}
+.headline h1{font-size:1.55rem}
+.headline .count{color:var(--dim);font-size:.9rem;margin-left:auto}
+
+.grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.prod{background:var(--card);border:1px solid var(--edge);border-radius:14px;overflow:hidden;
+  display:flex;flex-direction:column}
+.prod .pic{aspect-ratio:1/1;position:relative;background:linear-gradient(160deg,#EFEEE4,#E2E5D8)}
+.prod .pic::after{content:"";position:absolute;inset:22%;border-radius:50% 50% 46% 54%/ 55% 48% 52% 45%;
+  background:radial-gradient(circle at 38% 32%, var(--leaf) 0%, var(--leaf-2) 62%, #22381F 100%);
+  opacity:.9}
+.prod.clay .pic::after{background:radial-gradient(circle at 38% 32%,#D98A5E,var(--clay) 60%,#8E4A28);
+  border-radius:44% 56% 40% 60%/ 50% 42% 58% 50%}
+.prod.small .pic::after{inset:32%}
+.prod .body{padding:.85rem .95rem 1rem;display:flex;flex-direction:column;gap:.3rem;flex:1 1 auto}
+.prod h3{font-size:1rem}
+.prod .care{font-size:.82rem;color:var(--dim)}
+.prod .foot{display:flex;align-items:center;gap:.6rem;margin-top:auto;padding-top:.7rem}
+.prod .price{font-weight:700;font-size:1.02rem}
+.add{margin-left:auto;background:var(--leaf);border:0;color:#fff;border-radius:8px;
+  padding:.45rem .85rem;font:inherit;font-size:.84rem;font-weight:600;cursor:pointer}
+.add:hover{background:var(--leaf-2)}
+.tagrow{display:flex;gap:.35rem;flex-wrap:wrap}
+.t{font-size:.7rem;padding:.1em .45em;border-radius:5px;background:#EDEFE6;color:var(--ink-2)}
+.t.sun{background:#FBF2D3} .t.easy{background:#E3F0E5;color:var(--leaf-2)}
+.empty{grid-column:1/-1;padding:3rem 1rem;text-align:center;color:var(--dim);
+  border:1px dashed var(--edge-2);border-radius:14px}
+
+/* cart drawer — an overlay, which nothing else in the portfolio uses */
+.scrim{position:fixed;inset:0;background:rgba(35,38,31,.42);opacity:0;pointer-events:none;
+  transition:opacity .18s;z-index:30}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(400px,92vw);background:var(--card);
+  border-left:1px solid var(--edge);transform:translateX(100%);transition:transform .22s ease;
+  z-index:31;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer header{display:flex;align-items:center;padding:1.1rem 1.2rem;border-bottom:1px solid var(--edge)}
+.drawer header h2{font-size:1.05rem}
+.drawer header button{margin-left:auto;background:none;border:0;font-size:1.4rem;line-height:1;
+  cursor:pointer;color:var(--ink-2)}
+.lines{flex:1 1 auto;overflow-y:auto;padding:.6rem 1.2rem}
+.line{display:grid;grid-template-columns:44px 1fr auto;gap:.8rem;align-items:center;
+  padding:.75rem 0;border-bottom:1px solid var(--edge)}
+.line .sw{width:44px;height:44px;border-radius:9px;background:linear-gradient(150deg,#EFEEE4,#DDE2D4)}
+.line b{display:block;font-size:.92rem;font-weight:600}
+.line small{color:var(--dim);font-size:.8rem}
+.line .rm{background:none;border:0;color:var(--dim);cursor:pointer;font-size:.82rem;text-decoration:underline}
+.drawer footer{border-top:1px solid var(--edge);padding:1.1rem 1.2rem;display:grid;gap:.7rem}
+.sum{display:flex;justify-content:space-between;font-weight:700}
+.checkout{background:var(--ink);color:var(--paper);border:0;border-radius:10px;padding:.85rem;
+  font:inherit;font-weight:650;cursor:pointer}
+.said{display:none;background:#FBF2D3;border:1px solid #E8DBA4;border-radius:8px;padding:.7rem .85rem;
+  font-size:.85rem;color:#6B5615}
+.said.on{display:block}
+.hint{font-size:.8rem;color:var(--dim)}
+.flag{background:#EDEBE2;border-top:1px solid var(--edge);padding:1.2rem 0;font-size:.86rem;
+  color:var(--ink-2)}
+.flag b{color:var(--ink)}
+@media(prefers-reduced-motion:reduce){.drawer,.scrim{transition:none}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Store","name":"Verdant",
+"url":"https://sites.qevik.ai/sample-verdant/","telephone":"+971501029104",
+"address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Deiram, Dubai","addressCountry":"AE"}}
+</script>
+</head>
+<body>
+
+<div class="bar"><div class="hold">
+  <div class="logo"><i></i>Verdant</div>
+  <div class="seek"><input id="seek" type="search" placeholder="Search plants and pots" aria-label="Search"></div>
+  <button class="cart-btn" id="open-cart">Basket <b id="count">0</b></button>
+</div></div>
+
+<div class="hold">
+<div class="shop">
+
+  <aside class="rail" aria-label="Filters">
+    <div class="set">
+      <h3>Light</h3>
+      <div class="rail-scroll">
+        <button class="chip" data-filter="light" data-value="bright">Bright, indirect <span>6</span></button>
+        <button class="chip" data-filter="light" data-value="low">Low light <span>3</span></button>
+        <button class="chip" data-filter="light" data-value="direct">Direct sun <span>2</span></button>
+      </div>
+    </div>
+    <div class="set">
+      <h3>Care</h3>
+      <div class="rail-scroll">
+        <button class="chip" data-filter="care" data-value="easy">Hard to kill <span>5</span></button>
+        <button class="chip" data-filter="care" data-value="some">Some attention <span>4</span></button>
+      </div>
+    </div>
+    <div class="set">
+      <h3>Size</h3>
+      <div class="rail-scroll">
+        <button class="chip" data-filter="size" data-value="desk">Desk <span>4</span></button>
+        <button class="chip" data-filter="size" data-value="floor">Floor <span>5</span></button>
+      </div>
+    </div>
+    <button class="chip" id="clear" style="color:var(--clay)">Clear filters</button>
+  </aside>
+
+  <section>
+    <div class="headline">
+      <h1>Plants for Dubai homes</h1>
+      <span class="count" id="showing">11 products</span>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+</div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Basket" aria-hidden="true">
+  <header><h2>Your basket</h2><button id="close-cart" aria-label="Close">×</button></header>
+  <div class="lines" id="lines"><p class="hint" style="padding:1.4rem 0">Nothing in the basket yet.</p></div>
+  <footer>
+    <div class="sum"><span>Subtotal</span><span id="subtotal">AED 0</span></div>
+    <p class="hint">Delivery across Dubai, calculated at the next step.</p>
+    <button class="checkout" id="checkout">Checkout</button>
+    <p class="said" id="said"></p>
+  </footer>
+</aside>
+
+<div class="flag"><div class="hold">
+  <b>Sample storefront built by Qevik.</b> Verdant is not a real shop. The plants, prices and stock
+  are illustrative, nothing can be bought, and checkout is not connected to any payment provider —
+  pressing it says so. The telephone number is Qevik's own.
+</div></div>
+
+<script>
+// A storefront where the filters and basket did not work would demonstrate the
+// opposite of what it is here to demonstrate. Everything below runs in the
+// browser; nothing is sent anywhere and nothing can be bought.
+var CATALOGUE = [
+  {id:1, name:"Zanzibar gem",    latin:"Zamioculcas zamiifolia", price:145, light:"low",    care:"easy", size:"floor", pot:false},
+  {id:2, name:"Snake plant",     latin:"Dracaena trifasciata",   price:120, light:"low",    care:"easy", size:"floor", pot:false},
+  {id:3, name:"Fiddle leaf fig", latin:"Ficus lyrata",           price:320, light:"bright", care:"some", size:"floor", pot:false},
+  {id:4, name:"Rubber plant",    latin:"Ficus elastica",         price:185, light:"bright", care:"easy", size:"floor", pot:false},
+  {id:5, name:"Monstera",        latin:"Monstera deliciosa",     price:260, light:"bright", care:"some", size:"floor", pot:false},
+  {id:6, name:"Pothos",          latin:"Epipremnum aureum",      price:65,  light:"low",    care:"easy", size:"desk",  pot:false},
+  {id:7, name:"Aloe vera",       latin:"Aloe barbadensis",       price:55,  light:"direct", care:"easy", size:"desk",  pot:false},
+  {id:8, name:"Desert cactus",   latin:"Echinocactus grusonii",  price:80,  light:"direct", care:"easy", size:"desk",  pot:false},
+  {id:9, name:"Calathea",        latin:"Calathea orbifolia",     price:150, light:"bright", care:"some", size:"desk",  pot:false},
+  {id:10,name:"Terracotta pot",  latin:"Hand thrown, 24cm",      price:95,  light:"bright", care:"easy", size:"floor", pot:true},
+  {id:11,name:"Glazed pot",      latin:"Stoneware, 18cm",        price:70,  light:"bright", care:"some", size:"desk",  pot:true}
+];
+var LIGHT = {bright:"Bright, indirect", low:"Low light", direct:"Direct sun"};
+var filters = {light:null, care:null, size:null};
+var query = "";
+var basket = [];
+
+function matching(){
+  return CATALOGUE.filter(function(p){
+    if (filters.light && p.light !== filters.light) return false;
+    if (filters.care  && p.care  !== filters.care)  return false;
+    if (filters.size  && p.size  !== filters.size)  return false;
+    if (query && (p.name + " " + p.latin).toLowerCase().indexOf(query) === -1) return false;
+    return true;
+  });
+}
+
+function drawGrid(){
+  var found = matching();
+  var grid = document.getElementById('grid');
+  document.getElementById('showing').textContent =
+    found.length + (found.length === 1 ? " product" : " products");
+  if (!found.length){
+    grid.innerHTML = '<p class="empty">Nothing matches those filters. Try clearing one.</p>';
+    return;
+  }
+  grid.innerHTML = found.map(function(p){
+    return '<article class="prod' + (p.pot ? ' clay' : '') + (p.size === 'desk' ? ' small' : '') + '">'
+      + '<div class="pic"></div><div class="body">'
+      + '<h3>' + p.name + '</h3>'
+      + '<p class="care">' + p.latin + '</p>'
+      + '<div class="tagrow"><span class="t' + (p.light === 'direct' ? ' sun' : '') + '">'
+      + LIGHT[p.light] + '</span>'
+      + (p.care === 'easy' ? '<span class="t easy">Hard to kill</span>' : '') + '</div>'
+      + '<div class="foot"><span class="price">AED ' + p.price + '</span>'
+      + '<button class="add" data-id="' + p.id + '">Add</button></div>'
+      + '</div></article>';
+  }).join('');
+}
+
+function drawBasket(){
+  var lines = document.getElementById('lines');
+  document.getElementById('count').textContent = basket.reduce(function(n,l){return n+l.qty;},0);
+  var total = basket.reduce(function(n,l){return n + l.qty * l.price;}, 0);
+  document.getElementById('subtotal').textContent = 'AED ' + total.toLocaleString('en-AE');
+  if (!basket.length){
+    lines.innerHTML = '<p class="hint" style="padding:1.4rem 0">Nothing in the basket yet.</p>';
+    return;
+  }
+  lines.innerHTML = basket.map(function(l){
+    return '<div class="line"><div class="sw"></div><div><b>' + l.name + '</b>'
+      + '<small>' + l.qty + ' × AED ' + l.price + '</small></div>'
+      + '<button class="rm" data-id="' + l.id + '">Remove</button></div>';
+  }).join('');
+}
+
+document.getElementById('grid').addEventListener('click', function(event){
+  var button = event.target.closest('.add');
+  if (!button) return;
+  var item = CATALOGUE.find(function(p){ return p.id === Number(button.dataset.id); });
+  var line = basket.find(function(l){ return l.id === item.id; });
+  if (line) { line.qty += 1; } else { basket.push({id:item.id, name:item.name, price:item.price, qty:1}); }
+  drawBasket(); openCart();
+});
+
+document.getElementById('lines').addEventListener('click', function(event){
+  var button = event.target.closest('.rm');
+  if (!button) return;
+  basket = basket.filter(function(l){ return l.id !== Number(button.dataset.id); });
+  drawBasket();
+});
+
+document.querySelectorAll('.chip[data-filter]').forEach(function(chip){
+  chip.addEventListener('click', function(){
+    var key = chip.dataset.filter, value = chip.dataset.value;
+    var already = filters[key] === value;
+    document.querySelectorAll('.chip[data-filter="' + key + '"]').forEach(function(c){
+      c.setAttribute('aria-pressed','false');
+    });
+    filters[key] = already ? null : value;
+    if (!already) chip.setAttribute('aria-pressed','true');
+    drawGrid();
+  });
+});
+document.getElementById('clear').addEventListener('click', function(){
+  filters = {light:null, care:null, size:null};
+  document.querySelectorAll('.chip[data-filter]').forEach(function(c){ c.setAttribute('aria-pressed','false'); });
+  document.getElementById('seek').value = ''; query = '';
+  drawGrid();
+});
+document.getElementById('seek').addEventListener('input', function(event){
+  query = event.target.value.trim().toLowerCase(); drawGrid();
+});
+
+function openCart(){
+  document.getElementById('drawer').classList.add('on');
+  document.getElementById('drawer').setAttribute('aria-hidden','false');
+  document.getElementById('scrim').classList.add('on');
+}
+function shutCart(){
+  document.getElementById('drawer').classList.remove('on');
+  document.getElementById('drawer').setAttribute('aria-hidden','true');
+  document.getElementById('scrim').classList.remove('on');
+}
+document.getElementById('open-cart').addEventListener('click', openCart);
+document.getElementById('close-cart').addEventListener('click', shutCart);
+document.getElementById('scrim').addEventListener('click', shutCart);
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') shutCart(); });
+
+document.getElementById('checkout').addEventListener('click', function(){
+  var said = document.getElementById('said');
+  said.textContent = 'This is a demonstration storefront. There is no payment provider connected, '
+    + 'nothing has been ordered and no card details are collected anywhere on this page.';
+  said.className = 'said on';
+});
+
+drawGrid(); drawBasket();
+</script>
+</body>
+</html>

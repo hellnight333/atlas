@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse — training log</title>
+<meta name="description" content="Sample fitness tracking application built by Qevik. Demonstration data.">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0B0F14">
+<style>
+/* Pulse — a product UI, not a marketing page.
+ *
+ * Deliberately shares nothing structural with the business sites: no hero, no
+ * card grid of services, no sticky call bar, no footer. A sidebar, a dense stat
+ * row, a chart and a log — the shape of something you use rather than read.
+ *
+ * Type is sans for prose and mono for every number, because in a training log
+ * the numbers are the content and they need to align in columns. */
+:root{
+  --bg:#0B0F14; --panel:#131A22; --panel-2:#1A232D; --line:#242F3B;
+  --ink:#E8EEF4; --ink-2:#9FB0C0; --dim:#6B7E90;
+  --lime:#B8F14B; --cyan:#4BD6E8; --violet:#9B8CFF; --warn:#FFB454;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+
+/* sidebar */
+.side{background:var(--panel);border-right:1px solid var(--line);padding:1.1rem .9rem;
+  display:flex;flex-direction:column;gap:.15rem}
+.logo{display:flex;align-items:center;gap:.6rem;padding:.3rem .5rem 1.3rem;font-weight:700;
+  font-size:1.05rem;letter-spacing:-.02em}
+.logo i{width:26px;height:26px;border-radius:7px;background:var(--lime);display:grid;
+  place-items:center;font-style:normal;color:#0B0F14;font-size:.85rem;font-weight:800}
+.side a{display:flex;align-items:center;gap:.65rem;padding:.55rem .6rem;border-radius:7px;
+  color:var(--ink-2);text-decoration:none;font-size:.9rem}
+.side a:hover{background:var(--panel-2);color:var(--ink)}
+.side a.on{background:var(--panel-2);color:var(--ink);font-weight:600}
+.side a.on::before{content:"";width:3px;height:16px;background:var(--lime);border-radius:2px;
+  margin-left:-.6rem;margin-right:.35rem}
+.side .grp{font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  padding:1.2rem .6rem .4rem}
+.side .me{margin-top:auto;display:flex;align-items:center;gap:.6rem;padding:.7rem .6rem;
+  border-top:1px solid var(--line);font-size:.85rem;color:var(--ink-2)}
+.side .me b{width:28px;height:28px;border-radius:50%;background:var(--violet);color:#0B0F14;
+  display:grid;place-items:center;font-size:.78rem}
+
+/* main */
+main{padding:1.4rem clamp(1rem,3vw,2rem) 3rem;min-width:0}
+.bar{display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;margin-bottom:1.4rem}
+h1{margin:0;font-size:1.5rem;letter-spacing:-.02em;font-weight:650}
+.bar .when{font-family:var(--mono);font-size:.8rem;color:var(--dim);margin-left:auto}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.8rem;margin-bottom:1.4rem}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem}
+.stat .k{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.stat .v{font-family:var(--mono);font-size:1.75rem;font-weight:600;line-height:1.15;
+  margin-top:.3rem;font-variant-numeric:tabular-nums}
+.stat .d{font-family:var(--mono);font-size:.76rem;margin-top:.15rem}
+.up{color:var(--lime)} .down{color:var(--warn)} .flat{color:var(--dim)}
+
+.split{display:grid;grid-template-columns:1fr;gap:1rem}
+@media(min-width:1000px){.split{grid-template-columns:1.55fr 1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1.05rem 1.15rem}
+.panel h2{margin:0 0 .2rem;font-size:.98rem;font-weight:650}
+.panel .note{font-size:.8rem;color:var(--dim);margin:0 0 1rem}
+
+/* tabs */
+.tabs{display:flex;gap:.3rem;margin:0 0 1rem;border-bottom:1px solid var(--line)}
+.tabs button{background:none;border:0;color:var(--ink-2);font:inherit;font-size:.85rem;
+  padding:.45rem .7rem;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--lime);font-weight:600}
+.tabs button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:4px}
+
+/* chart */
+.chart{width:100%;height:190px;display:block}
+.chart .grid line{stroke:var(--line);stroke-width:1}
+.chart .axis{fill:var(--dim);font-family:var(--mono);font-size:10px}
+.chart polyline{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.chart .area{opacity:.14}
+.chart circle{stroke:var(--bg);stroke-width:2}
+.legend{display:flex;gap:1rem;font-size:.78rem;color:var(--ink-2);margin-top:.6rem}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:.35rem}
+
+/* log table */
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--line)}
+th{font-size:.7rem;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;color:var(--ink-2)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--panel-2)}
+.tag{font-family:var(--mono);font-size:.7rem;padding:.12em .45em;border-radius:4px;
+  background:var(--panel-2);color:var(--ink-2);border:1px solid var(--line)}
+.tag.push{color:var(--cyan);border-color:#1D4A52}
+.tag.pull{color:var(--violet);border-color:#3A3363}
+.tag.legs{color:var(--lime);border-color:#42561C}
+
+/* goals */
+.goal{margin:0 0 1rem}
+.goal .row{display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:.35rem}
+.goal .row b{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums}
+.track{height:7px;border-radius:4px;background:var(--panel-2);overflow:hidden}
+.track i{display:block;height:100%;border-radius:4px}
+.demo{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--warn);
+  border-radius:8px;padding:.7rem .9rem;font-size:.82rem;color:var(--ink-2);margin-top:1.4rem}
+
+/* mobile: the sidebar becomes a bottom rail, which is what a real app does */
+@media(max-width:820px){
+  .app{grid-template-columns:1fr;padding-bottom:62px}
+  .side{position:fixed;bottom:0;left:0;right:0;flex-direction:row;border-right:0;
+    border-top:1px solid var(--line);padding:.4rem .5rem;gap:.2rem;z-index:9}
+  .logo,.side .grp,.side .me{display:none}
+  .side a{flex:1 1 0;flex-direction:column;gap:.15rem;font-size:.68rem;padding:.4rem .2rem;text-align:center}
+  .side a.on::before{display:none}
+  .side a.on{background:transparent;color:var(--lime)}
+  main{padding-top:1rem}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+
+<nav class="side" aria-label="Sections">
+  <div class="logo"><i>P</i>Pulse</div>
+  <a class="on" href="#" aria-current="page"><span>◧</span>Dashboard</a>
+  <a href="#"><span>⌗</span>Workouts</a>
+  <a href="#"><span>◔</span>Progress</a>
+  <a href="#"><span>◇</span>Exercises</a>
+  <div class="grp">Plan</div>
+  <a href="#"><span>▤</span>Programme</a>
+  <a href="#"><span>◎</span>Goals</a>
+  <div class="me"><b>AS</b><span>Ayoub S.<br><small style="color:var(--dim)">Free plan</small></span></div>
+</nav>
+
+<main>
+  <div class="bar">
+    <h1>This week</h1>
+    <span class="when">Mon 17 – Sun 23 Aug 2026</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Sessions</div><div class="v">4</div><div class="d up">+1 vs last week</div></div>
+    <div class="stat"><div class="k">Volume</div><div class="v">18,240<span style="font-size:.85rem;color:var(--dim)"> kg</span></div><div class="d up">+6.2%</div></div>
+    <div class="stat"><div class="k">Time</div><div class="v">4:12</div><div class="d flat">about the same</div></div>
+    <div class="stat"><div class="k">Body weight</div><div class="v">78.4<span style="font-size:.85rem;color:var(--dim)"> kg</span></div><div class="d down">−0.6 kg</div></div>
+  </div>
+
+  <div class="split">
+    <section class="panel">
+      <h2>Volume by week</h2>
+      <p class="note">Total kilograms moved, last eight weeks.</p>
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="volume">Volume</button>
+        <button role="tab" aria-selected="false" data-tab="sessions">Sessions</button>
+      </div>
+      <svg class="chart" viewBox="0 0 560 190" role="img" aria-label="Weekly training volume, trending upward from 12,900 to 18,240 kilograms">
+        <g class="grid">
+          <line x1="42" y1="20" x2="548" y2="20"/><line x1="42" y1="60" x2="548" y2="60"/>
+          <line x1="42" y1="100" x2="548" y2="100"/><line x1="42" y1="140" x2="548" y2="140"/>
+        </g>
+        <text class="axis" x="0" y="24">20k</text><text class="axis" x="0" y="64">17k</text>
+        <text class="axis" x="0" y="104">14k</text><text class="axis" x="0" y="144">11k</text>
+        <polygon class="area" fill="#B8F14B" points="60,145 130,132 200,138 270,110 340,96 410,88 480,72 540,54 540,160 60,160"/>
+        <polyline stroke="#B8F14B" points="60,145 130,132 200,138 270,110 340,96 410,88 480,72 540,54"/>
+        <circle cx="540" cy="54" r="4.5" fill="#B8F14B"/>
+        <text class="axis" x="46" y="180">wk 1</text><text class="axis" x="255" y="180">wk 4</text>
+        <text class="axis" x="512" y="180">wk 8</text>
+      </svg>
+      <div class="legend"><span><i style="background:#B8F14B"></i>Volume (kg)</span><span style="color:var(--dim)">Sample data</span></div>
+    </section>
+
+    <section class="panel">
+      <h2>Goals</h2>
+      <p class="note">Progress against what you set in July.</p>
+      <div class="goal">
+        <div class="row"><span>Squat 140 kg</span><b>132 / 140</b></div>
+        <div class="track"><i style="width:94%;background:var(--lime)"></i></div>
+      </div>
+      <div class="goal">
+        <div class="row"><span>4 sessions a week</span><b>4 / 4</b></div>
+        <div class="track"><i style="width:100%;background:var(--cyan)"></i></div>
+      </div>
+      <div class="goal">
+        <div class="row"><span>Body weight 76 kg</span><b>78.4 / 76</b></div>
+        <div class="track"><i style="width:62%;background:var(--violet)"></i></div>
+      </div>
+      <div class="goal">
+        <div class="row"><span>Pull-ups × 12</span><b>9 / 12</b></div>
+        <div class="track"><i style="width:75%;background:var(--warn)"></i></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:1rem">
+    <h2>Recent sessions</h2>
+    <p class="note">Last five logged workouts.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Date</th><th>Session</th><th>Split</th><th class="n" style="text-align:right">Sets</th><th class="n" style="text-align:right">Volume</th><th class="n" style="text-align:right">Time</th></tr></thead>
+      <tbody>
+        <tr><td>Sat 22 Aug</td><td>Lower A</td><td><span class="tag legs">Legs</span></td><td class="n">18</td><td class="n">5,420 kg</td><td class="n">1:08</td></tr>
+        <tr><td>Thu 20 Aug</td><td>Upper pull</td><td><span class="tag pull">Pull</span></td><td class="n">16</td><td class="n">4,110 kg</td><td class="n">0:58</td></tr>
+        <tr><td>Wed 19 Aug</td><td>Upper push</td><td><span class="tag push">Push</span></td><td class="n">17</td><td class="n">4,380 kg</td><td class="n">1:02</td></tr>
+        <tr><td>Mon 17 Aug</td><td>Lower B</td><td><span class="tag legs">Legs</span></td><td class="n">18</td><td class="n">4,330 kg</td><td class="n">1:04</td></tr>
+        <tr><td>Sat 15 Aug</td><td>Upper pull</td><td><span class="tag pull">Pull</span></td><td class="n">15</td><td class="n">3,890 kg</td><td class="n">0:55</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <p class="demo"><strong>Sample application built by Qevik.</strong> Every figure on this page is
+  demonstration data for a person who does not exist. There is no account, no sign-in and no server
+  behind it — this is a product interface, shown to demonstrate that Qevik builds applications and
+  not only marketing websites.</p>
+</main>
+</div>
+
+<script>
+// The tabs are real: they change the chart rather than only the underline. An
+// interaction that looks live and is not is worse than none, because a visitor
+// clicks it to find out.
+var series = {
+  volume: {points:"60,145 130,132 200,138 270,110 340,96 410,88 480,72 540,54",
+           area:"60,145 130,132 200,138 270,110 340,96 410,88 480,72 540,54 540,160 60,160",
+           colour:"#B8F14B", label:"Volume (kg)", cy:54,
+           axis:["20k","17k","14k","11k"], heading:"Volume by week",
+           note:"Total kilograms moved, last eight weeks."},
+  sessions:{points:"60,120 130,148 200,120 270,120 340,92 410,120 480,92 540,92",
+            area:"60,120 130,148 200,120 270,120 340,92 410,120 480,92 540,92 540,160 60,160",
+            colour:"#4BD6E8", label:"Sessions", cy:92,
+            axis:["6","5","4","3"], heading:"Sessions by week",
+            note:"Workouts logged, last eight weeks."}
+};
+var svg = document.querySelector('.chart');
+document.querySelectorAll('.tabs button').forEach(function (button) {
+  button.addEventListener('click', function () {
+    document.querySelectorAll('.tabs button').forEach(function (b) {
+      b.setAttribute('aria-selected', String(b === button));
+    });
+    var s = series[button.dataset.tab];
+    svg.querySelector('polyline').setAttribute('points', s.points);
+    svg.querySelector('polyline').setAttribute('stroke', s.colour);
+    svg.querySelector('polygon').setAttribute('points', s.area);
+    svg.querySelector('polygon').setAttribute('fill', s.colour);
+    var dot = svg.querySelector('circle');
+    dot.setAttribute('cy', s.cy); dot.setAttribute('fill', s.colour);
+    var labels = svg.querySelectorAll('text.axis');
+    for (var i = 0; i < 4; i++) { labels[i].textContent = s.axis[i]; }
+    document.querySelector('.legend i').style.background = s.colour;
+    document.querySelector('.legend span').lastChild.textContent = s.label;
+    var panel = svg.closest('.panel');
+    panel.querySelector('h2').textContent = s.heading;
+    panel.querySelector('.note').textContent = s.note;
+  });
+});
+</script>
+</body>
+</html>

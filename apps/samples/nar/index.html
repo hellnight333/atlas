@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NAR — fire kitchen, Dubai</title>
+<meta name="description" content="Sample fine-dining restaurant site built by Qevik. A demonstration; not a real restaurant.">
+<meta name="theme-color" content="#0A0908">
+<style>
+/* NAR — an editorial restaurant page.
+ *
+ * Everything a service business site does, this deliberately does not: no top
+ * navigation bar, no grid of equal cards, no button in the header, no sticky
+ * call rail. It opens full-bleed and dark, sets one enormous line of type, and
+ * lets a reader fall down the page. The only recurring device is a two-column
+ * split where one side is always wider than the other, so nothing lines up in
+ * the tidy way a services page does.
+ *
+ * Imagery is CSS gradient and blend, not photography: a stock photo of a
+ * restaurant that does not exist would be a fabricated premises. */
+:root{
+  --void:#0A0908; --coal:#141210; --ash:#1E1A17; --line:#2C2723;
+  --bone:#EDE6DC; --sand:#B9AD9C; --dim:#7C7166;
+  --ember:#C4542A; --gold:#C9A227;
+  --serif:"Hoefler Text","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--void);color:var(--bone);font-family:var(--serif);
+  font-size:17px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.hold{max-width:1180px;margin:0 auto;padding:0 clamp(1.4rem,5vw,4rem)}
+
+/* --- opening --- */
+.open{min-height:100vh;display:flex;flex-direction:column;justify-content:space-between;
+  padding:2rem 0 3rem;position:relative;overflow:hidden}
+.open::before{content:"";position:absolute;inset:0;z-index:0;
+  background:
+    radial-gradient(70% 55% at 22% 8%, rgba(196,84,42,.34), transparent 62%),
+    radial-gradient(50% 45% at 88% 78%, rgba(201,162,39,.16), transparent 60%),
+    linear-gradient(175deg,#171310 0%,#0A0908 68%)}
+.open>*{position:relative;z-index:1}
+.mark{font-family:var(--sans);font-size:.74rem;letter-spacing:.42em;text-transform:uppercase;
+  color:var(--sand)}
+.open h1{font-size:clamp(3.4rem,13vw,9.5rem);line-height:.86;letter-spacing:-.045em;
+  margin:0;font-weight:400}
+.open h1 em{font-style:italic;color:var(--ember)}
+.open .under{display:flex;gap:clamp(1.5rem,5vw,5rem);align-items:flex-end;flex-wrap:wrap}
+.open .under p{max-width:32ch;color:var(--sand);margin:0;font-size:1.02rem}
+.open .under .meta{font-family:var(--sans);font-size:.76rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--dim);line-height:2}
+.scroll-cue{font-family:var(--sans);font-size:.7rem;letter-spacing:.3em;color:var(--dim);
+  text-transform:uppercase}
+
+/* --- asymmetric splits: never 50/50 --- */
+.split{display:grid;gap:clamp(2rem,5vw,4.5rem);padding:clamp(4rem,10vw,8rem) 0;
+  border-top:1px solid var(--line)}
+@media(min-width:900px){
+  .split.wide-left{grid-template-columns:1.75fr 1fr}
+  .split.wide-right{grid-template-columns:1fr 1.9fr}
+}
+.split h2{font-size:clamp(1.9rem,4.6vw,3.1rem);line-height:1.06;letter-spacing:-.03em;
+  margin:0 0 1.2rem;font-weight:400;max-width:16ch}
+.split p{color:var(--sand);max-width:46ch}
+.side-note{font-family:var(--sans);font-size:.82rem;color:var(--dim);line-height:1.75;
+  border-left:1px solid var(--line);padding-left:1.4rem}
+.side-note b{display:block;color:var(--bone);font-size:.72rem;letter-spacing:.2em;
+  text-transform:uppercase;margin-bottom:.6rem;font-weight:600}
+
+/* --- the menu: a list, priced right, not cards --- */
+.menu{padding:clamp(4rem,10vw,8rem) 0;border-top:1px solid var(--line);background:var(--coal)}
+.course{margin:0 0 3.2rem}
+.course>h3{font-family:var(--sans);font-size:.72rem;letter-spacing:.32em;text-transform:uppercase;
+  color:var(--ember);margin:0 0 1.4rem;font-weight:600}
+.dish{display:grid;grid-template-columns:1fr auto;gap:.4rem 1.5rem;align-items:baseline;
+  padding:1rem 0;border-bottom:1px solid var(--line)}
+.dish:last-child{border-bottom:0}
+.dish h4{margin:0;font-size:1.28rem;font-weight:400;letter-spacing:-.015em}
+.dish .cost{font-family:var(--sans);font-size:.86rem;color:var(--gold);letter-spacing:.04em}
+.dish p{grid-column:1/-1;margin:0;font-size:.94rem;color:var(--dim);max-width:52ch}
+
+/* --- experience strip: horizontal, snapping --- */
+.strip{padding:clamp(3.5rem,8vw,6rem) 0;border-top:1px solid var(--line)}
+.rail{display:flex;gap:1.4rem;overflow-x:auto;scroll-snap-type:x mandatory;
+  padding-bottom:1.2rem;margin-top:2rem;scrollbar-width:thin}
+.rail figure{flex:0 0 min(78vw,340px);scroll-snap-align:start;margin:0}
+.rail .plate{aspect-ratio:4/5;border-radius:2px;border:1px solid var(--line);
+  background:linear-gradient(150deg,var(--ash),var(--coal));position:relative;overflow:hidden}
+.rail .plate::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(60% 45% at 50% 35%,rgba(196,84,42,.22),transparent 70%)}
+.rail figcaption{margin-top:.9rem;font-family:var(--sans);font-size:.78rem;color:var(--sand);
+  letter-spacing:.06em}
+.rail figcaption b{display:block;font-family:var(--serif);font-size:1.12rem;color:var(--bone);
+  letter-spacing:-.01em;margin-bottom:.2rem;font-weight:400}
+
+/* --- reserve: a full-width band, form on the right --- */
+.reserve{padding:clamp(4rem,10vw,7rem) 0;border-top:1px solid var(--line);
+  background:linear-gradient(180deg,var(--coal),var(--void))}
+.reserve .hold{display:grid;gap:clamp(2rem,5vw,4rem)}
+@media(min-width:900px){.reserve .hold{grid-template-columns:1fr 1.25fr;align-items:start}}
+.reserve h2{font-size:clamp(1.9rem,4.4vw,3rem);line-height:1.06;margin:0 0 1rem;font-weight:400;
+  letter-spacing:-.03em}
+form{display:grid;gap:.9rem}
+.pair{display:grid;gap:.9rem}
+@media(min-width:560px){.pair{grid-template-columns:1fr 1fr}}
+label{font-family:var(--sans);font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);display:block;margin-bottom:.4rem}
+input,select,textarea{width:100%;background:transparent;border:0;border-bottom:1px solid var(--line);
+  color:var(--bone);font:inherit;font-size:1rem;padding:.55rem 0;border-radius:0}
+input:focus,select,textarea:focus{outline:0;border-bottom-color:var(--ember)}
+select{font-family:var(--serif)}
+option{background:var(--coal)}
+button{justify-self:start;margin-top:.8rem;background:var(--ember);border:0;color:#fff;
+  font-family:var(--sans);font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;
+  padding:1rem 2.2rem;cursor:pointer}
+button:hover{background:#A8451F}
+button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.said{display:none;font-family:var(--sans);font-size:.88rem;color:var(--gold);
+  border-left:2px solid var(--gold);padding-left:1rem;line-height:1.6}
+.said.on{display:block}
+.fineprint{font-family:var(--sans);font-size:.78rem;color:var(--dim);max-width:44ch;line-height:1.7}
+
+/* --- foot: one line, no columns --- */
+footer{border-top:1px solid var(--line);padding:2.5rem 0 3.5rem;font-family:var(--sans);
+  font-size:.78rem;color:var(--dim);letter-spacing:.06em}
+footer a{color:var(--sand)}
+.flag{background:var(--ash);border-top:1px solid var(--line);padding:1.1rem 0;
+  font-family:var(--sans);font-size:.8rem;color:var(--sand)}
+.flag b{color:var(--bone)}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Restaurant","name":"NAR","servesCuisine":"Levantine",
+"priceRange":"$$$","url":"https://sites.qevik.ai/sample-nar/","telephone":"+971501029104",
+"address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Deiram, Dubai","addressCountry":"AE"},
+"openingHours":["Tu-Su 18:00-23:30"],"acceptsReservations":"https://sites.qevik.ai/sample-nar/#reserve"}
+</script>
+</head>
+<body>
+
+<section class="open">
+  <div class="hold"><p class="mark">Dubai · Fire kitchen</p></div>
+  <div class="hold">
+    <h1>Cooked<br>over <em>fire</em>.</h1>
+  </div>
+  <div class="hold">
+    <div class="under">
+      <p>Eighteen seats around an open hearth. One menu, changed when the produce
+        changes, cooked entirely over charcoal and wood.</p>
+      <div class="meta">
+        Tuesday – Sunday<br>
+        Dinner from 6pm<br>
+        <a href="tel:+971501029104" style="color:var(--gold);text-decoration:none">+971 50 102 9104</a>
+      </div>
+      <p class="scroll-cue">Scroll</p>
+    </div>
+  </div>
+</section>
+
+<section class="split wide-left">
+  <div class="hold" style="padding:0">
+    <h2>The fire is the whole kitchen.</h2>
+    <p>There is no gas line. Everything that reaches a table has been cooked over
+      burning wood — the vegetables in the embers, the fish on the grate, the bread
+      against the wall of the oven.</p>
+    <p>It makes the kitchen slower and the cooking less forgiving, which is the point.
+      A cook who cannot turn a dial has to pay attention.</p>
+  </div>
+  <div class="side-note">
+    <b>Format</b>
+    Eighteen seats<br>
+    One set menu, seven courses<br>
+    Two seatings each evening<br><br>
+    <b>Dietary</b>
+    Vegetarian menu with notice<br>
+    Allergens on request
+  </div>
+</section>
+
+<section class="menu">
+  <div class="hold">
+    <div class="course">
+      <h3>To begin</h3>
+      <div class="dish"><h4>Flatbread, oven wall</h4><span class="cost">included</span>
+        <p>Baked against the side of the oven, served with cultured butter and burnt onion.</p></div>
+      <div class="dish"><h4>Embered leeks</h4><span class="cost">included</span>
+        <p>Buried in ash until soft, dressed with hazelnut and aged vinegar.</p></div>
+    </div>
+    <div class="course">
+      <h3>From the hearth</h3>
+      <div class="dish"><h4>Whole hammour</h4><span class="cost">included</span>
+        <p>Grilled over vine wood, lemon, olive oil pressed this season.</p></div>
+      <div class="dish"><h4>Lamb shoulder, four hours</h4><span class="cost">included</span>
+        <p>Cooked beside the fire rather than over it. Served with its own fat and flatbread.</p></div>
+      <div class="dish"><h4>Charred greens</h4><span class="cost">included</span>
+        <p>Whatever arrived that morning, cooked hard and dressed simply.</p></div>
+    </div>
+    <div class="course">
+      <h3>To end</h3>
+      <div class="dish"><h4>Burnt honey, sheep's yoghurt</h4><span class="cost">included</span>
+        <p>Honey taken to the edge of bitter, cold yoghurt, toasted seeds.</p></div>
+    </div>
+    <p style="font-family:var(--sans);font-size:.84rem;color:var(--dim);margin-top:2rem">
+      Seven courses · AED 420 per person · sample menu, sample prices</p>
+  </div>
+</section>
+
+<section class="strip">
+  <div class="hold">
+    <h2 style="font-size:clamp(1.6rem,3.6vw,2.4rem);font-weight:400;letter-spacing:-.02em;margin:0">
+      The room</h2>
+    <div class="rail">
+      <figure><div class="plate"></div><figcaption><b>The hearth</b>Open on three sides, eighteen seats around it</figcaption></figure>
+      <figure><div class="plate"></div><figcaption><b>The oven</b>Wood-fired, lit at two each afternoon</figcaption></figure>
+      <figure><div class="plate"></div><figcaption><b>The table</b>One long piece of oak, no separate tables</figcaption></figure>
+      <figure><div class="plate"></div><figcaption><b>Private dining</b>Ten seats in the back room, by arrangement</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="reserve" id="reserve">
+  <div class="hold">
+    <div>
+      <h2>Request a table</h2>
+      <p class="fineprint">Two seatings each evening, at six and at nine. Tell us when you would
+        like to come and we will confirm by telephone — a request here is not a confirmed table.</p>
+      <p class="fineprint" style="margin-top:1.4rem">
+        <a href="tel:+971501029104" style="color:var(--gold)">+971 50 102 9104</a><br>
+        Office 301, Al Othman Building, Deiram, Dubai
+      </p>
+    </div>
+    <form id="reserve-form">
+      <div class="pair">
+        <div><label for="r-name">Name</label><input id="r-name" required></div>
+        <div><label for="r-phone">Telephone</label><input id="r-phone" type="tel" required></div>
+      </div>
+      <div class="pair">
+        <div><label for="r-date">Date</label><input id="r-date" type="date"></div>
+        <div><label for="r-seat">Seating</label>
+          <select id="r-seat"><option>Six o'clock</option><option>Nine o'clock</option></select></div>
+      </div>
+      <div><label for="r-guests">Guests</label><input id="r-guests" type="number" min="1" max="10" value="2"></div>
+      <div><label for="r-note">Anything we should know</label><textarea id="r-note" rows="2"></textarea></div>
+      <p class="said" id="r-said"></p>
+      <button type="submit">Send request</button>
+    </form>
+  </div>
+</section>
+
+<footer>
+  <div class="hold">NAR · Deiram, Dubai · Tuesday to Sunday, dinner only · +971 50 102 9104</div>
+</footer>
+
+<div class="flag"><div class="hold">
+  <b>Sample site built by Qevik.</b> NAR is not a real restaurant. The menu, prices and room are
+  illustrative; the telephone number is Qevik's own, so the link works. Nothing here is a booking.
+</div></div>
+
+<script>
+document.getElementById('reserve-form').addEventListener('submit', function (event) {
+  event.preventDefault();
+  var said = document.getElementById('r-said');
+  said.textContent = 'Not sent — this is a demonstration and the form is not connected. '
+    + 'A real request would be confirmed by telephone before a table was held.';
+  said.className = 'said on';
+});
+</script>
+</body>
+</html>

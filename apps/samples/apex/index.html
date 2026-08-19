@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX Detailing — build your quote</title>
+<meta name="description" content="Sample automotive detailing site built by Qevik, with a working four-step quote configurator. A demonstration.">
+<meta name="theme-color" content="#0D1117">
+<style>
+/* APEX — a conversion flow, not a brochure.
+ *
+ * The page exists to move one person through four decisions: what they drive,
+ * what they want done, which package, and how to reach them. So the configurator
+ * is the page — it sits directly under the headline rather than at the bottom
+ * behind a "contact us", and the running total is visible the whole way.
+ *
+ * Structurally the opposite of NAR: a hard technical grid, condensed uppercase
+ * sans throughout, no serif anywhere, tight rows, and progress shown as numbered
+ * steps. Where NAR wants you to slow down, this wants you finished in ninety
+ * seconds. */
+:root{
+  --bg:#0D1117; --card:#151B23; --card-2:#1C242E; --line:#28323E;
+  --ink:#E6EDF3; --ink-2:#9AA9B8; --dim:#6A7A8A;
+  --volt:#FF4D1C; --steel:#4A9EFF; --ok:#3FB950;
+  --sans:system-ui,-apple-system,"Segoe UI Variable","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;
+  line-height:1.5;-webkit-font-smoothing:antialiased}
+.hold{max-width:1120px;margin:0 auto;padding:0 clamp(1rem,4vw,2rem)}
+h1,h2,h3{letter-spacing:-.02em;margin:0}
+
+/* header: logo + phone only. No nav — there is nowhere else to go. */
+.head{border-bottom:1px solid var(--line);background:#0A0E13}
+.head .hold{display:flex;align-items:center;justify-content:space-between;padding:.85rem 0;gap:1rem}
+.brand{font-weight:800;font-size:1.1rem;letter-spacing:.16em}
+.brand span{color:var(--volt)}
+.head a{color:var(--ink);text-decoration:none;font-family:var(--mono);font-size:.86rem;
+  border:1px solid var(--line);padding:.45rem .9rem;border-radius:5px}
+.head a:hover{border-color:var(--volt);color:var(--volt)}
+
+/* opening: headline + the configurator, immediately */
+.top{padding:clamp(2rem,6vw,3.4rem) 0 1rem}
+.top h1{font-size:clamp(1.9rem,5.5vw,3.2rem);line-height:1.02;text-transform:uppercase;
+  font-weight:800;max-width:14ch}
+.top h1 em{font-style:normal;color:var(--volt)}
+.top p{color:var(--ink-2);max-width:48ch;margin:.9rem 0 0}
+.facts{display:flex;gap:2rem;flex-wrap:wrap;margin-top:1.4rem;font-family:var(--mono);font-size:.8rem;
+  color:var(--dim)}
+.facts b{display:block;color:var(--ink);font-size:1.4rem;font-weight:700}
+
+/* configurator */
+.build{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  margin:2rem 0 3rem}
+.steps{display:flex;border-bottom:1px solid var(--line);background:#111820;overflow-x:auto}
+.steps div{flex:1 1 0;min-width:112px;padding:.75rem .9rem;font-size:.74rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-right:1px solid var(--line);white-space:nowrap}
+.steps div:last-child{border-right:0}
+.steps div.on{color:var(--ink);background:var(--card)}
+.steps div.on b{color:var(--volt)}
+.steps div.done{color:var(--ok)}
+.steps b{font-family:var(--mono);margin-right:.45rem}
+.stage{padding:1.4rem clamp(1rem,3vw,1.6rem)}
+.stage[hidden]{display:none}
+.stage h2{font-size:1.05rem;margin-bottom:.25rem}
+.stage .hint{color:var(--dim);font-size:.86rem;margin:0 0 1.2rem}
+.choices{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(158px,1fr))}
+.choice{background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:.85rem .95rem;
+  cursor:pointer;text-align:left;color:var(--ink);font:inherit;transition:border-color .12s}
+.choice:hover{border-color:var(--steel)}
+.choice[aria-pressed=true]{border-color:var(--volt);background:#231A16}
+.choice b{display:block;font-size:.95rem;margin-bottom:.15rem}
+.choice span{font-size:.8rem;color:var(--dim)}
+.choice .add{font-family:var(--mono);font-size:.78rem;color:var(--volt);float:right}
+.rowbtn{display:flex;gap:.6rem;margin-top:1.4rem;flex-wrap:wrap;align-items:center}
+.go{background:var(--volt);border:0;color:#fff;font:inherit;font-weight:700;font-size:.86rem;
+  letter-spacing:.08em;text-transform:uppercase;padding:.8rem 1.6rem;border-radius:6px;cursor:pointer}
+.go:disabled{background:var(--card-2);color:var(--dim);cursor:not-allowed}
+.back{background:none;border:1px solid var(--line);color:var(--ink-2);font:inherit;font-size:.84rem;
+  padding:.8rem 1.2rem;border-radius:6px;cursor:pointer}
+.go:focus-visible,.back:focus-visible,.choice:focus-visible{outline:2px solid var(--steel);outline-offset:2px}
+.running{margin-left:auto;font-family:var(--mono);font-size:.9rem;color:var(--ink-2)}
+.running b{color:var(--volt);font-size:1.15rem}
+.field{display:grid;gap:.9rem;grid-template-columns:1fr}
+@media(min-width:620px){.field{grid-template-columns:1fr 1fr}}
+label{font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:block;
+  margin-bottom:.35rem}
+input{width:100%;background:#0F151C;border:1px solid var(--line);border-radius:6px;color:var(--ink);
+  font:inherit;padding:.65rem .8rem}
+input:focus{outline:0;border-color:var(--steel)}
+.summary{background:#0F151C;border:1px solid var(--line);border-radius:8px;padding:.9rem 1rem;
+  font-family:var(--mono);font-size:.85rem;color:var(--ink-2);margin-bottom:1.2rem}
+.summary div{display:flex;justify-content:space-between;padding:.2rem 0}
+.summary .tot{border-top:1px solid var(--line);margin-top:.5rem;padding-top:.5rem;color:var(--ink)}
+.said{display:none;background:#231A16;border:1px solid #4A2A1C;border-left:3px solid var(--volt);
+  border-radius:6px;padding:.85rem 1rem;font-size:.87rem;color:var(--ink-2);margin-top:1rem}
+.said.on{display:block}
+
+/* comparison table — a device NAR and Pulse do not use */
+.compare{padding:1rem 0 3rem}
+.compare h2{font-size:1.3rem;text-transform:uppercase;margin-bottom:1rem}
+table{width:100%;border-collapse:collapse;font-size:.88rem;min-width:520px}
+th,td{text-align:left;padding:.7rem .8rem;border-bottom:1px solid var(--line)}
+thead th{background:var(--card);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dim)}
+td.y{color:var(--ok)} td.n{color:var(--dim)}
+.scroller{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+.area{padding:0 0 3rem;color:var(--ink-2);font-size:.9rem}
+.area b{color:var(--ink)}
+.flag{background:var(--card);border-top:1px solid var(--line);padding:1.2rem 0;font-size:.85rem;
+  color:var(--ink-2)}
+.flag b{color:var(--ink)}
+footer{border-top:1px solid var(--line);padding:1.6rem 0;font-family:var(--mono);font-size:.78rem;
+  color:var(--dim)}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"AutoDetailing","name":"APEX Detailing",
+"url":"https://sites.qevik.ai/sample-apex/","telephone":"+971501029104",
+"areaServed":"Dubai","address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Deiram, Dubai","addressCountry":"AE"}}
+</script>
+</head>
+<body>
+
+<header class="head"><div class="hold">
+  <div class="brand">APEX<span>·</span>DETAILING</div>
+  <a href="tel:+971501029104">+971 50 102 9104</a>
+</div></header>
+
+<section class="top"><div class="hold">
+  <h1>Build your <em>quote</em> in ninety seconds.</h1>
+  <p>Mobile detailing across Dubai. Pick what you drive and what you want done — the price appears
+    as you go, before you speak to anyone.</p>
+  <div class="facts">
+    <span><b>2h</b>typical job</span>
+    <span><b>0</b>drop-off required</span>
+    <span><b>Dubai</b>service area</span>
+  </div>
+</div></section>
+
+<div class="hold">
+<div class="build">
+  <div class="steps">
+    <div class="on" data-s="1"><b>01</b>Vehicle</div>
+    <div data-s="2"><b>02</b>Service</div>
+    <div data-s="3"><b>03</b>Package</div>
+    <div data-s="4"><b>04</b>Contact</div>
+  </div>
+
+  <div class="stage" data-stage="1">
+    <h2>What do you drive?</h2>
+    <p class="hint">Size changes the time and the price.</p>
+    <div class="choices" data-group="vehicle">
+      <button class="choice" data-value="Hatchback / sedan" data-price="0"><b>Hatchback / sedan</b><span>Corolla, Civic, 3 Series</span></button>
+      <button class="choice" data-value="SUV / 4x4" data-price="120"><b>SUV / 4×4</b><span>Patrol, X5, Land Cruiser</span><span class="add">+120</span></button>
+      <button class="choice" data-value="Large SUV / van" data-price="220"><b>Large SUV / van</b><span>Escalade, Hiace</span><span class="add">+220</span></button>
+      <button class="choice" data-value="Sports / low clearance" data-price="180"><b>Sports</b><span>911, F-Type, GT-R</span><span class="add">+180</span></button>
+    </div>
+    <div class="rowbtn"><button class="go" data-next="2" disabled>Continue</button>
+      <span class="running">Estimate <b id="total">—</b></span></div>
+  </div>
+
+  <div class="stage" data-stage="2" hidden>
+    <h2>What needs doing?</h2>
+    <p class="hint">Choose as many as you like.</p>
+    <div class="choices" data-group="service" data-multi="1">
+      <button class="choice" data-value="Exterior wash &amp; wax" data-price="280"><b>Exterior wash &amp; wax</b><span>Hand wash, clay, spray wax</span><span class="add">280</span></button>
+      <button class="choice" data-value="Interior deep clean" data-price="340"><b>Interior deep clean</b><span>Vacuum, steam, trim, glass</span><span class="add">340</span></button>
+      <button class="choice" data-value="Paint correction" data-price="900"><b>Paint correction</b><span>Machine polish, swirl removal</span><span class="add">900</span></button>
+      <button class="choice" data-value="Ceramic coating" data-price="1600"><b>Ceramic coating</b><span>Applied after correction</span><span class="add">1600</span></button>
+      <button class="choice" data-value="Engine bay" data-price="180"><b>Engine bay</b><span>Degrease and dress</span><span class="add">180</span></button>
+      <button class="choice" data-value="Headlight restoration" data-price="220"><b>Headlights</b><span>Sand, polish, seal</span><span class="add">220</span></button>
+    </div>
+    <div class="rowbtn"><button class="back" data-next="1">Back</button>
+      <button class="go" data-next="3" disabled>Continue</button>
+      <span class="running">Estimate <b id="total2">—</b></span></div>
+  </div>
+
+  <div class="stage" data-stage="3" hidden>
+    <h2>How often?</h2>
+    <p class="hint">A plan reduces the per-visit price. Cancel whenever.</p>
+    <div class="choices" data-group="plan">
+      <button class="choice" data-value="One-off" data-mult="1"><b>One-off</b><span>Single visit</span></button>
+      <button class="choice" data-value="Monthly" data-mult="0.9"><b>Monthly</b><span>Every 4 weeks</span><span class="add">−10%</span></button>
+      <button class="choice" data-value="Fortnightly" data-mult="0.82"><b>Fortnightly</b><span>Every 2 weeks</span><span class="add">−18%</span></button>
+    </div>
+    <div class="rowbtn"><button class="back" data-next="2">Back</button>
+      <button class="go" data-next="4" disabled>Continue</button>
+      <span class="running">Estimate <b id="total3">—</b></span></div>
+  </div>
+
+  <div class="stage" data-stage="4" hidden>
+    <h2>Where and when?</h2>
+    <p class="hint">We come to you. Nothing is charged from this page.</p>
+    <div class="summary" id="summary"></div>
+    <div class="field">
+      <div><label for="c-name">Name</label><input id="c-name"></div>
+      <div><label for="c-phone">Mobile</label><input id="c-phone" type="tel"></div>
+      <div><label for="c-area">Area in Dubai</label><input id="c-area" placeholder="Marina, JLT, Business Bay…"></div>
+      <div><label for="c-when">Preferred day</label><input id="c-when" type="date"></div>
+    </div>
+    <div class="rowbtn"><button class="back" data-next="3">Back</button>
+      <button class="go" id="send">Request this quote</button></div>
+    <p class="said" id="said"></p>
+  </div>
+</div>
+</div>
+
+<section class="compare"><div class="hold">
+  <h2>What is in each service</h2>
+  <div class="scroller"><table>
+    <thead><tr><th>Included</th><th>Wash &amp; wax</th><th>Interior</th><th>Correction</th><th>Ceramic</th></tr></thead>
+    <tbody>
+      <tr><td>Hand wash, two bucket</td><td class="y">Yes</td><td class="n">—</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+      <tr><td>Clay bar decontamination</td><td class="y">Yes</td><td class="n">—</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+      <tr><td>Machine polish</td><td class="n">—</td><td class="n">—</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+      <tr><td>Interior steam clean</td><td class="n">—</td><td class="y">Yes</td><td class="n">—</td><td class="n">—</td></tr>
+      <tr><td>Leather condition</td><td class="n">—</td><td class="y">Yes</td><td class="n">—</td><td class="n">—</td></tr>
+      <tr><td>Coating, 12 month</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">Yes</td></tr>
+      <tr><td>Typical time on site</td><td>2h</td><td>2h</td><td>6h</td><td>Full day</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section class="area"><div class="hold">
+  <b>Where we work.</b> Anywhere in Dubai — home, office or building parking. We bring our own water
+  and power, so nothing is needed from your building. Sharjah by arrangement.
+</div></section>
+
+<footer><div class="hold">APEX Detailing · Dubai · +971 50 102 9104 · Sat–Thu 8am–8pm, Fri 2pm–8pm</div></footer>
+
+<div class="flag"><div class="hold">
+  <b>Sample site built by Qevik.</b> APEX is not a real business. Prices are illustrative and the
+  quote form is not connected to anything — no quote is sent and nothing is charged. The telephone
+  number is Qevik's own, so the link works.
+</div></div>
+
+<script>
+// A configurator that only looked interactive would be worse than a static
+// price list: a visitor clicks it precisely to find out whether it is real.
+var pick = {vehicle:null, vehiclePrice:0, services:[], servicePrice:0, plan:null, mult:1};
+
+function money(n){ return 'AED ' + Math.round(n).toLocaleString('en-AE'); }
+
+function total(){ return (pick.vehiclePrice + pick.servicePrice) * pick.mult; }
+
+function paint(){
+  var value = pick.services.length ? money(total()) : '—';
+  ['total','total2','total3'].forEach(function(id){
+    var el = document.getElementById(id); if (el) el.textContent = value;
+  });
+  var lines = '';
+  if (pick.vehicle) lines += '<div><span>' + pick.vehicle + '</span><span>' +
+    (pick.vehiclePrice ? '+' + pick.vehiclePrice : 'base') + '</span></div>';
+  pick.services.forEach(function(s){
+    lines += '<div><span>' + s.value + '</span><span>' + s.price + '</span></div>';
+  });
+  if (pick.plan && pick.mult < 1) lines += '<div><span>' + pick.plan + ' plan</span><span>−' +
+    Math.round((1 - pick.mult) * 100) + '%</span></div>';
+  lines += '<div class="tot"><span>Estimate</span><span>' + money(total()) + '</span></div>';
+  document.getElementById('summary').innerHTML = lines;
+}
+
+function gate(){
+  document.querySelector('[data-stage="1"] .go').disabled = !pick.vehicle;
+  document.querySelector('[data-stage="2"] .go').disabled = pick.services.length === 0;
+  document.querySelector('[data-stage="3"] .go').disabled = !pick.plan;
+}
+
+document.querySelectorAll('.choice').forEach(function(button){
+  button.addEventListener('click', function(){
+    var group = button.closest('.choices');
+    var multi = group.dataset.multi === '1';
+    if (!multi) {
+      group.querySelectorAll('.choice').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
+      button.setAttribute('aria-pressed','true');
+    } else {
+      button.setAttribute('aria-pressed', button.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+    }
+    if (group.dataset.group === 'vehicle') {
+      pick.vehicle = button.dataset.value; pick.vehiclePrice = Number(button.dataset.price);
+    } else if (group.dataset.group === 'service') {
+      pick.services = Array.from(group.querySelectorAll('[aria-pressed="true"]')).map(function(b){
+        return {value: b.dataset.value, price: Number(b.dataset.price)};
+      });
+      pick.servicePrice = pick.services.reduce(function(sum, s){ return sum + s.price; }, 0);
+    } else {
+      pick.plan = button.dataset.value; pick.mult = Number(button.dataset.mult);
+    }
+    gate(); paint();
+  });
+});
+
+function show(step){
+  document.querySelectorAll('.stage').forEach(function(stage){
+    stage.hidden = stage.dataset.stage !== String(step);
+  });
+  document.querySelectorAll('.steps div').forEach(function(tab){
+    var n = Number(tab.dataset.s);
+    tab.className = n === step ? 'on' : (n < step ? 'done' : '');
+  });
+  window.scrollTo({top: document.querySelector('.build').offsetTop - 20, behavior: 'smooth'});
+}
+document.querySelectorAll('[data-next]').forEach(function(button){
+  button.addEventListener('click', function(){ show(Number(button.dataset.next)); });
+});
+
+document.getElementById('send').addEventListener('click', function(){
+  var said = document.getElementById('said');
+  said.textContent = 'Not sent — this is a demonstration and the form is not connected to '
+    + 'anything. Your estimate of ' + money(total()) + ' was calculated in your browser and went '
+    + 'nowhere. On a real site this would reach the workshop.';
+  said.className = 'said on';
+});
+
+gate(); paint();
+</script>
+</body>
+</html>
