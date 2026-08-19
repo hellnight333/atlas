@@ -1,0 +1,165 @@
+# Qevik in production, behind Cloudflare.
+#
+# Cloudflare proxies all four hostnames, and its SSL/TLS mode is Full or Full
+# (strict) — established by observation rather than assumption: HTTPS through
+# Cloudflare returned 522 (timeout to origin) while plain HTTP returned a 404
+# from this origin's :80. A Flexible zone would have served both from :80, so
+# Cloudflare is dialling origin **port 443** and the origin must answer there
+# with a real certificate.
+#
+# Certificates come from Let's Encrypt over HTTP-01. TLS-ALPN-01 cannot work
+# through a proxied record — Cloudflare terminates TLS, so the challenge never
+# reaches this server — and Caddy tries it first by default. It is disabled
+# explicitly below rather than left to fail and retry.
+
+{
+	# The admin API is a control surface that can rewrite this server's entire
+	# configuration over HTTP. It listens on localhost only, but this host runs
+	# a control plane, and "localhost only" is one container escape or one
+	# careless bind from being wrong. The cost of turning it off is that config
+	# changes need `systemctl restart` rather than `reload` — a few seconds of
+	# downtime on a deploy, which is cheaper than the alternative.
+	admin off
+	email qevikos@gmail.com
+
+	servers {
+		# Behind a proxy every request arrives from a Cloudflare address. Without
+		# this, the login rate limiter and the audit trail record Cloudflare as
+		# the client: one attacker would consume the limit for everybody, and
+		# "who signed in" would answer with a datacentre. Declaring the ranges
+		# lets Caddy trust CF-Connecting-IP and recover the real client.
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 \
+			103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 \
+			188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 \
+			104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 \
+			2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 \
+			2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+}
+
+(security) {
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+(le) {
+	tls {
+		issuer acme {
+			# See the header: TLS-ALPN cannot complete through a proxied record.
+			disable_tlsalpn_challenge
+		}
+	}
+}
+
+# --- public marketing site --------------------------------------------------
+qevik.ai {
+	import le
+	import security
+	root * /srv/qevik-public
+	try_files {path} /index.html
+	file_server
+	log {
+		format console
+	}
+}
+
+# --- www redirects to the bare domain ---------------------------------------
+www.qevik.ai {
+	import le
+	redir https://qevik.ai{uri} permanent
+}
+
+# --- operator control application -------------------------------------------
+app.qevik.ai {
+	import le
+	import security
+
+	# The API stays bound to 127.0.0.1:8080 and is never published directly.
+	# Caddy is the only thing that talks to it, so there is exactly one door and
+	# it is authenticated on the other side.
+	handle /auth/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /control/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		root * /srv/qevik-control
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		# The console loads nothing third-party, so the strictest policy that
+		# works is the right one.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
+	}
+	log {
+		format console
+	}
+}
+
+# --- customer and demo sites ------------------------------------------------
+sites.qevik.ai {
+	import le
+	import security
+	root * /srv/sites
+
+	# A site directory holds `versions/` and a `current` symlink; the live
+	# document root is the symlink. This is the server-side half of
+	# publish-then-promote — the adapter moves files and swaps the link, and the
+	# web server decides which version is served.
+	@site_root path_regexp siteroot ^/([^/]+)/?$
+	rewrite @site_root /{re.siteroot.1}/current/
+
+	file_server
+	header X-Qevik-Host "sites"
+	log {
+		format console
+	}
+}
+
+# --- the operator's way back in, if DNS or Cloudflare breaks ----------------
+#
+# Self-signed and deliberately kept. If a DNS record is wrong, a Cloudflare
+# setting is changed, or the domain lapses, app.qevik.ai stops resolving and the
+# only route to the control plane would be SSH. A second door on the raw IP is
+# worth one browser warning; the warning is on a page only the operator sees.
+https://2.28.62.83:8443 {
+	tls internal
+
+	handle /auth/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /control/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		root * /srv/qevik-control
+		try_files {path} /index.html
+		file_server
+	}
+	import security
+}
+
+# --- the bare IP stays available as development infrastructure --------------
+#
+# Not customer-facing. It keeps working so a broken DNS or Cloudflare change
+# never locks the operator out of their own control plane.
+:80 {
+	root * /srv/sites
+	@site_root path_regexp siteroot ^/([^/]+)/?$
+	rewrite @site_root /{re.siteroot.1}/current/
+	file_server
+	header X-Qevik-Host "sites-origin"
+}
