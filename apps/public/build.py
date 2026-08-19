@@ -506,7 +506,7 @@ def work() -> str:
       </div>
       <figure class="showcase-shot">
         <img src="/assets/{fingerprinted("sample_desktop.png")}" width="1280" height="820"
-             alt="The sample clinic site on a laptop, showing the headline, call and appointment buttons, and the services section." loading="lazy">
+             alt="The sample clinic site on a laptop, showing the headline, call and appointment buttons, and the services section." fetchpriority="high">
       </figure>
     </div>
   </div>
