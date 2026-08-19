@@ -384,6 +384,31 @@ class OpportunityRepository:
 
     # -- measurement ------------------------------------------------------
 
+    def delete_unsent_drafts(self, business_id: str, *, channels: tuple[str, ...]) -> int:
+        """Remove drafts that were never sent, so re-drafting replaces rather than accumulates.
+
+        Deliberately narrow. A row is removable only if it is still a draft *and*
+        carries no approval, no fingerprint and no send time — three independent
+        signals, because a status column is one edit away from lying and the
+        thing being protected is commercial history that cannot be rebuilt.
+
+        Anything approved or sent is left exactly where it is.
+        """
+        with SessionLocal() as session:
+            result = session.execute(
+                text(
+                    "DELETE FROM atlas_outreach_messages"
+                    " WHERE business_id = :b AND channel = ANY(:c)"
+                    "   AND status = 'draft'"
+                    "   AND sent_at IS NULL"
+                    "   AND approval_id IS NULL"
+                    "   AND approved_fingerprint IS NULL"
+                ),
+                {"b": business_id, "c": list(channels)},
+            )
+            session.commit()
+            return result.rowcount or 0
+
     def record_event(self, event: BusinessEvent) -> BusinessEvent:
         """Append to a business's permanent history.
 

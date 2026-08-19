@@ -14,7 +14,31 @@ email.
 
 from __future__ import annotations
 
-import pytest
+import os
+
+# --- database isolation ------------------------------------------------------
+#
+# This must run before anything imports `atlas_kernel.db`, which builds its
+# engine from this variable at import time. It is placed above the other imports
+# for that reason and must stay there.
+#
+# The suite had no isolation at all: it wrote to whatever ATLAS_DATABASE_URL
+# pointed at, and on the canonical server that is production. Every run left
+# fixtures behind — 108 outreach rows and 81 orphaned events had accumulated,
+# enough that "how many businesses have we contacted" could not be answered
+# without knowing which rows to ignore.
+#
+# Redirecting here rather than asking each test to opt in is deliberate. An
+# opt-in is a thing a new test forgets, and the failure is silent: the test
+# passes, and the damage shows up weeks later in a number nobody trusts.
+_PRODUCTION_URL = os.environ.get("ATLAS_DATABASE_URL", "")
+if _PRODUCTION_URL:
+    # Kept so the guard test can look at production and confirm it stays clean.
+    os.environ.setdefault("QEVIK_PRODUCTION_DATABASE_URL", _PRODUCTION_URL)
+    if not _PRODUCTION_URL.rstrip("/").endswith("_test"):
+        os.environ["ATLAS_DATABASE_URL"] = _PRODUCTION_URL.rstrip("/") + "_test"
+
+import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

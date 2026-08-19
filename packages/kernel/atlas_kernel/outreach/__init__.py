@@ -19,6 +19,23 @@ from .channels import (
     connected,
     registry,
 )
+from .experiment import (
+    FACTORY as EXPERIMENT_FACTORY,
+)
+from .experiment import (
+    Response,
+    Result,
+    Stage,
+    fold,
+    message_version,
+    record_meeting,
+    record_objection,
+    record_outcome,
+    record_prepared,
+    record_price,
+    record_response,
+    record_sent,
+)
 from .identity import (
     ADDRESS_LINE_1,
     ADDRESS_LINE_2,
@@ -34,6 +51,19 @@ from .identity import (
 
 __all__ = [
     "ADDRESS_LINE_1",
+    "EXPERIMENT_FACTORY",
+    "Response",
+    "Result",
+    "Stage",
+    "fold",
+    "message_version",
+    "record_meeting",
+    "record_objection",
+    "record_outcome",
+    "record_prepared",
+    "record_price",
+    "record_response",
+    "record_sent",
     "ADDRESS_LINE_2",
     "BRAND",
     "BRAND_LINE",

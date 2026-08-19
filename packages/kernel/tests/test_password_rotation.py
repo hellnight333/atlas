@@ -10,6 +10,7 @@ one: it is about what the tables actually contain afterwards.
 from __future__ import annotations
 
 import secrets
+from datetime import UTC, datetime
 
 import pytest
 
@@ -85,3 +86,69 @@ def test_scopes_survive_a_rotation(store: AuthStore, user) -> None:
     after = store.get_user(user.username)
     assert after is not None
     assert after.scopes == frozenset({Scope.READ})
+
+
+def test_redrafting_replaces_rather_than_accumulates(store: AuthStore) -> None:
+    """Re-running the drafter must not add another copy each time.
+
+    It did: every run left five more rows, so "how many messages are waiting"
+    grew by five whenever the copy was edited. The delete is scoped to rows that
+    are still a draft *and* carry no approval, no fingerprint and no send time —
+    three independent signals, because a status column is one edit away from
+    lying and what it guards cannot be rebuilt.
+    """
+    import secrets
+
+    from atlas_kernel.opportunity.models import Business, OutreachMessage, OutreachStatus
+    from atlas_kernel.opportunity.repository import OpportunityRepository
+
+    repo = OpportunityRepository()
+    business = repo.save_business(
+        Business(name=f"Redraft Test {secrets.token_hex(4)}", geography="Dubai")
+    )
+
+    def draft() -> None:
+        repo.delete_unsent_drafts(business.id, channels=("whatsapp", "email"))
+        for channel in ("whatsapp", "email"):
+            repo.save_message(
+                OutreachMessage(
+                    proposal_id="",
+                    business_id=business.id,
+                    channel=channel,
+                    recipient="",
+                    subject="",
+                    body="v1",
+                    status=OutreachStatus.DRAFT,
+                )
+            )
+
+    def count() -> int:
+        from sqlalchemy import text
+
+        from atlas_kernel.db import engine
+
+        with engine.connect() as conn:
+            return conn.execute(
+                text("SELECT count(*) FROM atlas_outreach_messages WHERE business_id = :b"),
+                {"b": business.id},
+            ).scalar()
+
+    for _ in range(4):
+        draft()
+    assert count() == 2, "re-drafting accumulated instead of replacing"
+
+    # A sent message is history and must survive the next drafting run.
+    repo.save_message(
+        OutreachMessage(
+            proposal_id="",
+            business_id=business.id,
+            channel="whatsapp",
+            recipient="0501234567",
+            subject="",
+            body="actually sent",
+            status=OutreachStatus.SENT,
+            sent_at=datetime.now(UTC),
+        )
+    )
+    draft()
+    assert count() == 3, "re-drafting deleted a sent message"

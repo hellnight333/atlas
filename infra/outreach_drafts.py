@@ -56,33 +56,60 @@ NEVER = (
 )
 
 
+def clean_name(raw: str) -> str:
+    """The clinic's name as a person would say it.
+
+    Google listings carry SEO tails — "Malabar Dental Clinic | Dubai", "The
+    TopDent: Dental Clinic in Dubai". Pasting that into a message addressed to
+    the owner is the tell that it came out of a database.
+    """
+    for separator in ("|", " - ", ":"):
+        if separator in raw:
+            raw = raw.split(separator)[0]
+    return raw.strip()
+
+
+def short_url(url: str) -> str:
+    return url.replace("https://", "").replace("http://", "").rstrip("/")
+
+
 def whatsapp_message(d: dict) -> str:
-    """Short, and it leads with what they do well. First contact, not a pitch."""
+    """A cold WhatsApp from an unknown number. Short, and human first.
+
+    Deliberately different from the email rather than a trimmed copy of it. The
+    recipient is holding a phone, does not know who this is, and decides in about
+    two seconds — so it opens by saying who is writing, keeps to one claim, and
+    puts the link where a thumb lands. Everything the email says about scope and
+    caveats belongs in the reply, not in the opener.
+    """
+    name = clean_name(d["name"])
     good = d["already_good"]
+
     if good:
-        opener = (
-            f"I had a proper look at {d['existing_website']} — the "
-            f"{good[0].lower()} and {good[1].lower()} are already well handled."
+        looked = (
+            f"I had a look at {short_url(d['existing_website'])} — the "
+            f"{good[0].lower()} and {good[1].lower()} are well done."
             if len(good) > 1
-            else f"I had a proper look at {d['existing_website']}."
+            else f"I had a look at {short_url(d['existing_website'])}."
         )
     else:
-        opener = f"I tried to open {d['existing_website']} a few times today."
+        looked = f"I tried to open {short_url(d['existing_website'])} a few times today."
 
     return "\n".join(
         [
-            f"Hello — this is about {d['name']}.",
+            f"Hello — I'm Ayoub. I build websites for dental clinics in Dubai, "
+            f"and I'm writing about {name}.",
             "",
-            opener,
+            looked,
             "",
             _gap_sentence(d),
             "",
-            "So I built you a working example to look at, using your own name, "
-            "number, address and opening hours — nothing invented:",
+            "So I built you a working example, using only your own details from "
+            "your Google listing — nothing invented:",
             d["demo_url"],
             "",
-            "It has an Arabic version too. No obligation, and no charge for "
-            "looking. If it is useful we can talk; if not, keep the link.",
+            "It has an Arabic version as well. No charge for looking. If it's "
+            "useful we can talk; if not, keep the link.",
             "",
             WHATSAPP_SIGNATURE,
         ]
@@ -152,8 +179,8 @@ def _gap_sentence(d: dict) -> str:
             # "they will not find you at all" is an absolute I cannot support
             # from one homepage fetch. What is defensible is the mechanism: an
             # English-only page gives a search engine no Arabic text to match.
-            "The one thing I could not find is an Arabic version. A large share "
-            "of patients here search in Arabic first, and an English-only page "
+            "The one thing I couldn't find is an Arabic version. A lot of "
+            "patients here search in Arabic first, and an English-only page "
             "gives Google no Arabic text to match them against."
         )
     if gap == "HTTPS":
@@ -232,6 +259,14 @@ def record_draft(dossier_row: dict, draft: dict) -> None:
     # path that arrives later reads from the same place approvals and receipts
     # already live — status, approval_id, approved_fingerprint, sent_at. A
     # parallel store would mean two answers to "was this sent".
+    # Re-drafting replaces the previous draft rather than adding to it. Without
+    # this, every run left another row and the answer to "how many messages are
+    # waiting" grew by five each time the copy was edited.
+    #
+    # Scoped hard to genuinely unsent drafts: anything approved, fingerprinted or
+    # sent is commercial history and is never touched, whatever its status says.
+    repo.delete_unsent_drafts(match.id, channels=("whatsapp", "email"))
+
     for channel, recipient, subject, body in (
         ("whatsapp", draft["phone"], "", draft["whatsapp_body"]),
         ("email", "", draft["email_subject"], draft["email_body"]),
