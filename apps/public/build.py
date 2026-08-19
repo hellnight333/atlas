@@ -46,6 +46,48 @@ ADDRESS_2 = "Deiram, Dubai, UAE"
 SAMPLE = "https://sites.qevik.ai/sample/"
 SAMPLE_AR = "https://sites.qevik.ai/sample/ar/"
 
+#: Qevik's own sample sites. Not clients — every one is flagged as a sample on
+#: the page itself and carries our number, so the buttons genuinely work. The
+#: twenty clinic demos are deliberately absent: they were built unsolicited from
+#: public listings, none of those businesses are customers, and showing them as
+#: portfolio would invent a relationship that does not exist.
+SAMPLES = (
+    ("Restaurant", "sample-restaurant", "sample-restaurant.png",
+     "Menu by category, table request, hours, directions.", "Restaurant"),
+    ("Café / roastery", "sample-cafe", "sample-cafe.png",
+     "Drinks list, beans to take home, one-line hours.", "CafeOrCoffeeShop"),
+    ("Mobile service", "sample-detailing", "sample-detailing.png",
+     "Services, service area, FAQ, quote request.", "AutoWash"),
+    ("Salon / beauty", "sample-salon", "sample-salon.png",
+     "Treatments with durations, appointment request.", "BeautySalon"),
+    ("Professional services", "sample-property", "sample-property.png",
+     "Service pages, FAQ, call-back request.", "RealEstateAgent"),
+    ("Clinic", "sample", "sample_mobile_en.png",
+     "Services, verified hours, tap-to-call, map.", "Dentist"),
+)
+
+
+def sample_cards() -> str:
+    cards = ""
+    for label, slug, shot, detail, schema in SAMPLES:
+        cards += f"""
+      <article class="sample">
+        <a href="https://sites.qevik.ai/{slug}/" rel="noopener">
+          <img src="/assets/{fingerprinted(shot)}" width="390" height="844"
+               alt="The {label.lower()} sample site on a phone." loading="lazy">
+        </a>
+        <div class="sample-body">
+          <p class="sample-kind">{label}</p>
+          <p class="sample-detail">{detail}</p>
+          <p class="sample-links">
+            <a href="https://sites.qevik.ai/{slug}/" rel="noopener">Open</a> ·
+            <a href="https://sites.qevik.ai/{slug}/ar/" rel="noopener">العربية</a> ·
+            <code>{schema}</code>
+          </p>
+        </div>
+      </article>"""
+    return cards
+
 #: path -> (nav label, <title>, meta description)
 PAGES: dict[str, tuple[str, str, str]] = {
     "/": (
@@ -191,10 +233,11 @@ def home() -> str:
   <div class="wrap hero-grid">
    <div>
     <p class="eyebrow">Dubai · English &amp; Arabic</p>
-    <h1>A website your patients can actually use — in English and Arabic.</h1>
-    <p class="lead">Qevik builds the site, tests it, opens it in a real browser to check what a
-      visitor receives, and puts it online with HTTPS. You get a link you can open on your phone
-      before you decide anything.</p>
+    <h1>Websites built from what your business actually does.</h1>
+    <p class="lead">Restaurants, cafés, salons, clinics, garages, agencies. Qevik builds the
+      site, tests it, opens it in a real browser to check what a visitor receives, and puts it
+      online with HTTPS — in English and Arabic. You get a link you can open on your phone before
+      you decide anything.</p>
     <div class="cta-row">
       <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">Ask on WhatsApp</a>
       <a class="btn" href="{SAMPLE}" rel="noopener">See a live example</a>
@@ -213,9 +256,10 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>What Qevik is</h2>
-    <p class="stand">Qevik is a website service for small businesses in Dubai — clinics first.
-      You describe what you need in plain language. The system researches, plans, builds, tests and
-      deploys the site, and a person checks it before anyone sees it.</p>
+    <p class="stand">A website service for small businesses in Dubai. You describe what you need
+      in plain language. The system researches your business, plans the work, builds the site,
+      tests it, deploys it — then opens the live address in a browser and checks what a visitor
+      receives. A person reviews it before anyone else sees it.</p>
     <div class="grid three">
       <div class="card">
         <h3>Built from your own details</h3>
@@ -238,6 +282,31 @@ def home() -> str:
 </section>
 
 <section class="band alt">
+  <div class="wrap">
+    <h2>Who it is for</h2>
+    <p class="stand">The parts every local business needs are the same — who you are, what you
+      offer, where you are, when you are open, and how to reach you. What changes is the shape of
+      the middle. Qevik composes that per industry rather than forcing one template on everyone.</p>
+    <div class="industries">
+      <div><h3>Food &amp; drink</h3><p>Restaurants, cafés, roasteries, bakeries — menus by
+        category, prices, table requests.</p></div>
+      <div><h3>Health &amp; beauty</h3><p>Clinics, salons, spas, gyms — treatments with
+        durations, opening hours, appointment requests.</p></div>
+      <div><h3>Home &amp; automotive</h3><p>Cleaning, detailing, repairs, maintenance — service
+        lists, service areas, FAQ, quote requests.</p></div>
+      <div><h3>Professional services</h3><p>Real estate, accounting, consulting, legal — service
+        pages, FAQ, call-back requests.</p></div>
+      <div><h3>Retail &amp; local trade</h3><p>Shops, showrooms, workshops — what you stock,
+        where you are, and a reason to visit.</p></div>
+      <div><h3>Internal tools</h3><p>Dashboards and web apps where the work is real. Ask —
+        these are scoped individually, not generated.</p></div>
+    </div>
+    <p class="micro">Not on the list does not mean not possible. The template is composed from
+      parts, so a new kind of business is a new arrangement rather than a new product.</p>
+  </div>
+</section>
+
+<section class="band">
   <div class="wrap">
     <h2>How it works</h2>
     <p class="stand">Seven steps. Each one leaves a record, so if something goes wrong it is
@@ -269,7 +338,7 @@ def home() -> str:
   </div>
 </section>
 
-<section class="band">
+<section class="band alt">
   <div class="wrap">
     <h2>Why it is different</h2>
     <div class="grid two">
@@ -298,7 +367,7 @@ def home() -> str:
   </div>
 </section>
 
-<section class="band alt">
+<section class="band">
   <div class="wrap">
     <h2>What you get</h2>
     <div class="grid three tight">
@@ -334,24 +403,10 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>See it working</h2>
-    <p class="stand">This is a real page on the real internet, not a picture of one. Open it on your
-      phone and press the buttons — the call button dials us, because the sample uses our own number.</p>
-    <div class="shots">
-      <figure>
-        <img src="/assets/{fingerprinted("sample_mobile_en.png")}" width="390" height="844"
-             alt="The English sample clinic page on a phone, showing a call button, an appointment request button, WhatsApp and directions." loading="lazy">
-        <figcaption>English, on a phone</figcaption>
-      </figure>
-      <figure>
-        <img src="/assets/{fingerprinted("sample_mobile_ar.png")}" width="390" height="844"
-             alt="The Arabic version of the same page, laid out right to left with Arabic headings and Arabic day names." loading="lazy">
-        <figcaption>Arabic, right to left</figcaption>
-      </figure>
-    </div>
-    <div class="cta-row">
-      <a class="btn primary" href="{SAMPLE}" rel="noopener">Open the live sample</a>
-      <a class="btn" href="{SAMPLE_AR}" rel="noopener">Open it in Arabic</a>
-    </div>
+    <p class="stand">Six sample sites, one per kind of business. These are real pages on the real
+      internet — open one and press the buttons. They are ours, clearly marked as samples, and
+      they use our own number so the call and WhatsApp buttons genuinely work.</p>
+    <div class="samples">{sample_cards()}</div>
   </div>
 </section>
 
@@ -484,31 +539,23 @@ def work() -> str:
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Work</p>
-    <h1>A site you can open right now</h1>
-    <p class="lead">Rather than a gallery of pictures, here is a live page. Open it, press the
-      buttons, switch it to Arabic. It behaves exactly as a real customer site would.</p>
+    <h1>Sites you can open right now</h1>
+    <p class="lead">Six sample businesses, six live sites. Not mockups — open one on your phone,
+      press the buttons, switch it to Arabic. Each behaves exactly as a real customer site would,
+      because it is one.</p>
   </div>
 </section>
 
 <section class="band">
   <div class="wrap">
-    <div class="showcase">
-      <div class="showcase-copy">
-        <h2>Sample Dental Clinic</h2>
-        <p>A complete generated site: English and Arabic pages, services, opening hours, address,
-          map link, tap-to-call, WhatsApp and an appointment request form.</p>
-        <p class="micro">It is a demonstration, not a real clinic. The contact details on it are
-          <strong>ours</strong>, so every button genuinely works — the call button dials Qevik.</p>
-        <div class="cta-row">
-          <a class="btn primary" href="{SAMPLE}" rel="noopener">Open in English</a>
-          <a class="btn" href="{SAMPLE_AR}" rel="noopener">افتح بالعربية</a>
-        </div>
-      </div>
-      <figure class="showcase-shot">
-        <img src="/assets/{fingerprinted("sample_desktop.png")}" width="1280" height="820"
-             alt="The sample clinic site on a laptop, showing the headline, call and appointment buttons, and the services section." fetchpriority="high">
-      </figure>
-    </div>
+    <h2>Six samples, six kinds of business</h2>
+    <p class="stand">Each is a complete site: English and Arabic pages, the offering laid out the
+      way that industry expects it, hours, address, map, tap-to-call, WhatsApp where the number can
+      receive it, and a request form. Each declares the right schema.org type, which is what puts a
+      business into the correct local search results.</p>
+    <div class="samples">{sample_cards()}</div>
+    <p class="micro">All six are Qevik samples, not client work, and each says so on the page. The
+      contact details are ours, so every button works — the call button dials Qevik.</p>
   </div>
 </section>
 
@@ -516,16 +563,18 @@ def work() -> str:
   <div class="wrap">
     <h2>The same site, both languages</h2>
     <p class="stand">Two separate pages rather than a switch that rewrites the text in place. The
-      Arabic page is laid out right to left, with Arabic headings and day names.</p>
+      Arabic page is laid out right to left, with Arabic headings, Arabic day names and ص/م
+      markers. The Arabic is written, not machine-translated at render time — where there is no
+      verified Arabic form of something, it is left out rather than invented.</p>
     <div class="shots">
       <figure>
-        <img src="/assets/{fingerprinted("sample_mobile_en.png")}" width="390" height="844"
-             alt="English version on a phone: headline, call button, appointment request, WhatsApp and directions." loading="lazy">
+        <img src="/assets/{fingerprinted("sample-restaurant.png")}" width="390" height="844"
+             alt="English restaurant sample on a phone: menu, table request, WhatsApp and directions." loading="lazy">
         <figcaption>English</figcaption>
       </figure>
       <figure>
-        <img src="/assets/{fingerprinted("sample_mobile_ar.png")}" width="390" height="844"
-             alt="Arabic version on a phone, laid out right to left with Arabic headings." loading="lazy">
+        <img src="/assets/{fingerprinted("sample-restaurant-ar.png")}" width="390" height="844"
+             alt="The same restaurant page in Arabic, laid out right to left." loading="lazy">
         <figcaption>العربية</figcaption>
       </figure>
     </div>
@@ -804,6 +853,12 @@ def main(argv: list[str] | None = None) -> int:
         "sample_mobile_en.png",
         "sample_mobile_ar.png",
         "sample_desktop.png",
+        "sample-restaurant.png",
+        "sample-restaurant-ar.png",
+        "sample-cafe.png",
+        "sample-detailing.png",
+        "sample-property.png",
+        "sample-salon.png",
         "og.png",
         "icon-180.png",
     ):

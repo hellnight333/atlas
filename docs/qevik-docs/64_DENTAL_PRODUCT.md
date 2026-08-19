@@ -129,3 +129,57 @@ bidi headline, and the appointment form's honesty.
 Two of these tests previously *encoded* the WhatsApp bug and were corrected when
 the bug was found. A test that asserts current behaviour is not evidence that
 the behaviour is right.
+
+---
+
+## Beyond dental — `business.py`
+
+Added 2026-08-19. `dental.py` is unchanged and stays that way: twenty live
+demos and two approved outreach messages point at pages it renders, and the
+sales experiment must not move while the product broadens underneath it.
+
+`website/verticals/business.py` is a second renderer with nothing
+industry-specific in it. A `Business` carries its own sections, its own words in
+both languages, and its own `schema.org` type; the template arranges them and
+adds what every local business needs — address, hours, map, tap-to-call,
+WhatsApp where the number can receive it, sticky call bar.
+
+Every rule from the dental template carries over, because they are about honesty
+rather than dentistry: no invented staff or reviews, WhatsApp only on a mobile
+that can receive it, and nothing books. A restaurant's "request a table" and a
+salon's "request an appointment" are different promises and both are still
+requests — each says so on the page, in that page's language.
+
+### The six samples
+
+`infra/samples.py` builds Qevik's own samples, live at `sites.qevik.ai`:
+
+| Slug | Type | Shape |
+|---|---|---|
+| `sample-restaurant` | `Restaurant` | Menu by category with prices, table request |
+| `sample-cafe` | `CafeOrCoffeeShop` | Drinks, retail beans, single-line hours |
+| `sample-detailing` | `AutoWash` | Services, service area, FAQ, quote request |
+| `sample-salon` | `BeautySalon` | Treatments with durations, appointment request |
+| `sample-property` | `RealEstateAgent` | Service groups, FAQ, call-back request |
+| `sample` | `Dentist` | The original dental template |
+
+They are **ours, not clients.** Each carries Qevik's own phone number — so every
+button genuinely works and no fictional number that might belong to a real
+person is published — and each is flagged on the page in both languages as a
+sample rather than a real business.
+
+The twenty clinic demos are deliberately absent from the public site. They were
+built unsolicited from public listings, none of those businesses are customers,
+and showing them as portfolio would invent a relationship that does not exist.
+They also carry `X-Robots-Tag: noindex`, because twenty pages on our domain
+holding a real clinic's name, address and phone would compete in local search
+with the business they were built for.
+
+### A cross-site scripting hole, found by a test
+
+`json.dumps` escapes quotes but not `</script>`, so a business name containing
+markup closed the JSON-LD block and injected into the page. The names come from
+Google listings — untrusted input. `business.py` now escapes `<` as `<`.
+
+`dental.py` was checked directly rather than assumed safe, and was already
+correct; a regression test now pins that.

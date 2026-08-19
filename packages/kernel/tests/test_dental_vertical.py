@@ -252,3 +252,21 @@ def test_book_is_only_said_when_a_real_provider_is_wired() -> None:
     )
     external = re.findall(r'href="https://provider.example/book"[^>]*>([^<]*)<', wired["index.html"])
     assert external and all("Book" in label for label in external), external
+
+
+def test_a_business_name_cannot_break_out_of_the_structured_data_block() -> None:
+    """Names come from Google listings, which is untrusted input.
+
+    `json.dumps` escapes quotes but not `</script>`, so a name containing markup
+    can close the JSON-LD block and inject into the page. This template was
+    already safe when checked; the test exists so it stays that way, because the
+    sibling renderer in business.py was not.
+    """
+    html = dental.render(
+        name="Bad </script><img src=x onerror=alert(1)> Clinic",
+        phone="0501234567",
+        address="Somewhere",
+        area="Dubai",
+    )
+    assert "</script><img src=x" not in html
+    assert "onerror=alert(1)>" not in html
