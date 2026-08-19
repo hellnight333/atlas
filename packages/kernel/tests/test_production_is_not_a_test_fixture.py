@@ -126,13 +126,52 @@ def test_the_twenty_audited_businesses_are_intact(production) -> None:
 
 
 def test_nothing_has_been_sent_to_a_real_business(production) -> None:
-    """The commercial invariant. No channel is connected; nothing may be sent."""
+    """The commercial invariant, and the one that must not drift.
+
+    This originally asserted that nothing had left `draft` at all, which was
+    right while nothing could be approved. Two messages are now approved for
+    manual sending, so that version would fail for the wrong reason — and
+    loosening it to "some statuses are fine" would quietly stop guarding
+    anything.
+
+    The invariant that actually matters is narrower and does not change: **no
+    channel is connected, so nothing can have been delivered.** Approval is a
+    person authorising words; a send time is a claim that someone received them,
+    and only the operator confirming a real send may produce one.
+    """
     sent = production.execute(
         text(
             "SELECT count(*) FROM atlas_outreach_messages "
             "WHERE channel IN ('email', 'whatsapp') "
-            "AND (status <> 'draft' OR sent_at IS NOT NULL "
-            "     OR approval_id IS NOT NULL OR approved_fingerprint IS NOT NULL)"
+            "AND (status IN ('sent', 'failed') OR sent_at IS NOT NULL "
+            "     OR provider_message_id IS NOT NULL)"
         )
     ).scalar()
-    assert sent == 0, f"{sent} outreach message(s) are no longer an unsent draft"
+    assert sent == 0, f"{sent} message(s) claim delivery, but no channel is connected"
+
+
+def test_approval_did_not_mark_anyone_as_contacted(production) -> None:
+    """Approved is not sent, checked from the other direction.
+
+    If approving a draft had also recorded a send, the reply rate would be
+    computed against messages nobody received — wrong in the flattering
+    direction, which is the kind of wrong that survives review.
+    """
+    approved = production.execute(
+        text(
+            "SELECT count(*) FROM atlas_outreach_messages "
+            "WHERE status = 'approved' AND channel = 'whatsapp'"
+        )
+    ).scalar()
+    assert approved == 2, f"expected 2 approved for manual sending, found {approved}"
+
+    contacted = production.execute(
+        text(
+            "SELECT count(*) FROM atlas_business_events "
+            "WHERE factory = 'sales_experiment' AND kind = 'experiment_sent'"
+        )
+    ).scalar()
+    assert contacted == 0, (
+        f"{contacted} prospect(s) are recorded as contacted, but no send has been "
+        "confirmed by the operator"
+    )

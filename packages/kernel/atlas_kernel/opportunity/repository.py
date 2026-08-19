@@ -384,6 +384,21 @@ class OpportunityRepository:
 
     # -- measurement ------------------------------------------------------
 
+    def messages_for(
+        self, business_id: str, *, channel: str | None = None
+    ) -> list[OutreachMessage]:
+        """Every outreach message for one business, oldest first."""
+        clause = " AND channel = :c" if channel else ""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    "SELECT * FROM atlas_outreach_messages"
+                    f" WHERE business_id = :b{clause} ORDER BY created_at"
+                ),
+                {"b": business_id, **({"c": channel} if channel else {})},
+            ).mappings()
+            return [OutreachMessage(**dict(row)) for row in rows]
+
     def delete_unsent_drafts(self, business_id: str, *, channels: tuple[str, ...]) -> int:
         """Remove drafts that were never sent, so re-drafting replaces rather than accumulates.
 

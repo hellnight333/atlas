@@ -56,7 +56,15 @@ def main(argv: list[str] | None = None) -> int:
         # Only the ones that can actually be sent today. The other three need an
         # email address that Places does not provide, and listing them here as
         # "ready" would be the same overstatement the drafts themselves avoid.
-        drafts = [(s, d) for s, d in drafts if whatsapp.can_reach(d.get("phone", ""))]
+        # Only what has been approved for manual sending. Showing an unapproved
+        # draft on the same screen as an approved one is how the wrong message
+        # gets pasted into the wrong chat.
+        drafts = [
+            (s, d)
+            for s, d in drafts
+            if d.get("status") == "APPROVED_FOR_MANUAL_SEND"
+            and whatsapp.can_reach(d.get("phone", ""))
+        ]
 
     for index, (slug, draft) in enumerate(drafts):  # noqa: B007 - slug is printed below
         if args.text_only:
@@ -89,9 +97,15 @@ def main(argv: list[str] | None = None) -> int:
         for item in draft.get("do_not_say", []):
             if item["reason"] == "DEMO_DOES_NOT_HAVE_IT":
                 print(f"    x {item['claim']}")
-        print("    x anything about price — none has been agreed")
         print("    x that the appointment form books anything — it does not")
+        print("    x the price, unless they ask first")
         print()
+        print("  if they ask, reply with:")
+        for question, answer in (draft.get("playbook") or {}).items():
+            print(f"    [{question}]")
+            for line in answer.splitlines():
+                print(f"      {line}" if line else "")
+            print()
 
     if not args.text_only:
         print("=" * 72)
