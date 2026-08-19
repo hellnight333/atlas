@@ -225,3 +225,30 @@ def test_the_arabic_headline_carries_no_latin_district() -> None:
 
     # The location is not lost, only moved off the headline.
     assert "Mankhool" in files["ar/index.html"]
+
+
+def test_book_is_only_said_when_a_real_provider_is_wired() -> None:
+    """The placeholder form takes a request. It must not be labelled "Book".
+
+    Every call to action pointing at `#request` reaches a form with no backend.
+    Calling that "Book an appointment" promises a booking nothing can make, and
+    the person who believes it is a patient, not a prospect. "Book" becomes
+    truthful the moment a real provider URL is supplied, and only then.
+    """
+    placeholder = dental.render_site(
+        name="Test Dental", phone="0501234567", address="A", area="Dubai",
+        base_url="https://x/y",
+    )
+    for page in ("index.html", "ar/index.html"):
+        html = placeholder[page]
+        labels = re.findall(r'href="#request"[^>]*>([^<]*)<', html)
+        assert labels, "the placeholder form should still be reachable"
+        assert all("Book" not in label for label in labels), labels
+        assert all("احجز" not in label for label in labels), labels
+
+    wired = dental.render_site(
+        name="Test Dental", phone="0501234567", address="A", area="Dubai",
+        base_url="https://x/y", booking_url="https://provider.example/book",
+    )
+    external = re.findall(r'href="https://provider.example/book"[^>]*>([^<]*)<', wired["index.html"])
+    assert external and all("Book" in label for label in external), external

@@ -24,6 +24,7 @@ from atlas_kernel.opportunity.audit_import import (  # noqa: E402
     audit_event,
     business_from_prospect,
     commercial_score,
+    demo_event,
     opportunity_from_audit,
     strongest_opportunity,
 )
@@ -71,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
             repo.save_finding(finding)
         repo.save_opportunity(opportunity)
         repo.record_event(audit_event(resolved.id, audit, opportunity_id=opportunity.id))
+        # The demo is the offer. A prospect history that records the audit but
+        # not what was built from it cannot answer the first question asked when
+        # one of them replies: what did we actually show them?
+        if prospect.get("demo_url"):
+            repo.record_event(demo_event(resolved.id, prospect, opportunity_id=opportunity.id))
 
         best = strongest_opportunity(audit)
         print(

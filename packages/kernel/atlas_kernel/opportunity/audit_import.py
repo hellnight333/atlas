@@ -246,6 +246,44 @@ def audit_event(
     )
 
 
+def demo_event(
+    business_id: str, record: dict, *, opportunity_id: str | None = None
+) -> BusinessEvent:
+    """The demo built for this business, as permanent history.
+
+    Without this the timeline shows that a clinic was audited and then, later,
+    that someone contacted them — with no record of what they were shown. The
+    demo *is* the offer; a prospect history that omits it cannot answer "what
+    did we actually put in front of them", which is the first question asked
+    when one of them replies.
+
+    Records the hours provenance too, so a page missing its opening hours can
+    be traced to CONFIRMED_ABSENT or NOT_VERIFIED rather than looking like a
+    rendering fault.
+    """
+    return BusinessEvent(
+        business_id=business_id,
+        factory=WEBSITE_FACTORY,
+        kind="website_demo_published",
+        opportunity_id=opportunity_id,
+        actor="website_factory/dental",
+        detail={
+            "demo_url": record.get("demo_url", ""),
+            "slug": record.get("slug", ""),
+            "version_id": record.get("version_id", ""),
+            "languages": ["en", "ar"],
+            "published_at": str(record.get("regenerated_at") or record.get("generated_at", "")),
+            # Which facts the page was allowed to state.
+            "hours_status": record.get("hours_status", "NOT_VERIFIED"),
+            "hours_days": len(record.get("opening_hours") or []),
+            "phone_on_file": record.get("phone", ""),
+            "existing_website": record.get("existing_website", ""),
+            # Stated rather than implied: the form is UI only.
+            "appointment_backend": "NOT_IMPLEMENTED",
+        },
+    )
+
+
 def opportunity_from_audit(business_id: str, audit: dict) -> Opportunity:
     """The commercial opportunity, staged by what we have actually done.
 

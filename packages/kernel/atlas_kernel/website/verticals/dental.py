@@ -543,7 +543,12 @@ def render(
     if booking_url:
         ctas += f'<a class="btn btn-ghost" href="{e(booking_url)}" rel="noopener">{strings.book_heading}</a>'
     else:
-        ctas += f'<a class="btn btn-ghost" href="#request">{strings.book_heading}</a>'
+        # "Book" is only truthful when it reaches a real provider (the branch
+        # above). Pointing it at the placeholder form would promise a booking
+        # that no backend can make — the one claim on these pages that would
+        # reach a patient rather than a prospect. The label matches what the
+        # form actually does: it takes a request.
+        ctas += f'<a class="btn btn-ghost" href="#request">{strings.request_heading}</a>'
     if wa:
         ctas += f'<a class="btn btn-ghost" href="https://wa.me/{e(wa)}" rel="noopener">{strings.whatsapp}</a>'
     if maps_url:
@@ -552,7 +557,12 @@ def render(
     sticky = ""
     if dial:
         sticky += f'<a class="s-call" href="tel:{e(dial)}">{strings.call}</a>'
-    sticky += f'<a class="s-book" href="{e(booking_url) if booking_url else "#request"}">{strings.book_heading}</a>'
+    # Same rule as the hero CTA: "Book" only where a real provider is wired.
+    sticky_book = strings.book_heading if booking_url else strings.request_heading
+    sticky += (
+        f'<a class="s-book" href="{e(booking_url) if booking_url else "#request"}">'
+        f"{sticky_book}</a>"
+    )
     if wa:
         sticky += f'<a class="s-wa" href="https://wa.me/{e(wa)}" rel="noopener">{strings.whatsapp}</a>'
     if maps_url:
