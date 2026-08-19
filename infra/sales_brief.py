@@ -133,9 +133,16 @@ def latest(directory: Path, prefix: str) -> Path:
 NOT_A_CLAIM = frozenset({"page_weight"})
 
 
-#: A site that does not load outranks every feature gap combined. It is also
-#: the one finding a prospect can check in five seconds while you are speaking,
-#: which cuts both ways — hence the caveat attached to it below.
+#: A site that does not answer within the audit's timeout outranks every feature
+#: gap combined. It is also the one finding a prospect can check in five seconds
+#: while you are speaking, which cuts both ways — hence the caveats below.
+#:
+#: Worth knowing why the wording is careful. The one clinic this fired for,
+#: Kings, turned out to serve a 301 and then take **30.7 seconds** to complete —
+#: a fraction over the 30-second browser timeout. Their site is not down; it is
+#: catastrophically slow. "Your website doesn't load" would have been a false
+#: claim, refutable on the spot by the person hearing it, and it would have
+#: taken the rest of the pitch down with it.
 UNREACHABLE_WEIGHT = 20
 
 
@@ -146,26 +153,30 @@ def brief_for(audit: dict, record: dict | None) -> dict:
     do_not_say: list[dict] = []
 
     if not audit.get("reachable"):
-        # Producing an empty brief here would report the strongest finding
-        # available — their website does not load — as no finding at all.
+        # Producing an empty brief here would report the strongest available
+        # finding as no finding at all.
         talking_points.append(
             {
                 "feature": "reachable",
-                "label": "Site loads at all",
+                "label": "Loads within 30 seconds",
                 "weight": UNREACHABLE_WEIGHT,
                 "their_site": "NOT_FOUND",
                 "demo": "PRESENT",
                 "evidence": (audit.get("error") or "did not respond").split("\n")[0][:120],
-                "why": "A patient who cannot open the site phones a different clinic.",
+                "why": (
+                    "A patient waiting on a blank screen phones a different clinic. "
+                    "Say it as measured: it did not finish loading in 30 seconds."
+                ),
             }
         )
         do_not_say.append(
             {
-                "claim": "Their website is permanently down / they have no website",
+                "claim": "Their website is down / broken / offline",
                 "reason": "NOT_VERIFIED",
                 "evidence": (
-                    "one fetch, at one moment, from one network. A timeout is not proof "
-                    "of a dead site — say what was measured, not what it implies."
+                    "the audit timed out at 30s; that is slowness, not death. Kings' "
+                    "site completes in ~31s when followed to the end. Claiming 'down' "
+                    "is refutable in one tap by the person you are speaking to."
                 ),
             }
         )
