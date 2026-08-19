@@ -166,3 +166,62 @@ class TestItIsClientReady:
         """The placeholder this replaced was 800 bytes: one headline, one line
         and three bullets. Nobody pays for that."""
         assert len(page) > 8000
+
+
+def test_each_language_page_is_canonical_for_itself() -> None:
+    """The Arabic page must not declare itself a duplicate of the English one.
+
+    A canonical pointing at the other language tells Google the page is a copy,
+    and copies are dropped from the index — which would remove the Arabic page
+    from precisely the searches it exists to win. hreflang is what expresses
+    "these are translations"; canonical is not.
+    """
+    files = dental.render_site(
+        name="NOA Dental Clinic",
+        phone="0501234567",
+        address="Mankhool Road, Dubai",
+        area="Mankhool",
+        base_url="https://sites.qevik.ai/demo-noa",
+    )
+    english = re.search(r'rel="canonical" href="([^"]*)"', files["index.html"]).group(1)
+    arabic = re.search(r'rel="canonical" href="([^"]*)"', files["ar/index.html"]).group(1)
+
+    assert english == "https://sites.qevik.ai/demo-noa/"
+    assert arabic == "https://sites.qevik.ai/demo-noa/ar/"
+
+    # The structured data agrees with the page it is on, rather than pointing
+    # every translation at one URL.
+    assert '"url": "https://sites.qevik.ai/demo-noa/ar/"' in files["ar/index.html"]
+
+    # And they still declare each other as alternates, in both directions.
+    for page in (files["index.html"], files["ar/index.html"]):
+        assert 'hreflang="en" href="https://sites.qevik.ai/demo-noa/"' in page
+        assert 'hreflang="ar" href="https://sites.qevik.ai/demo-noa/ar/"' in page
+
+
+def test_the_arabic_headline_carries_no_latin_district() -> None:
+    """Bidi reorders a Latin district out of an Arabic sentence onto its own line.
+
+    The area names come from an English Google listing. Rendering one inside the
+    Arabic headline reads as pasted-in, and inventing an Arabic spelling of a
+    Dubai district would be the same fabrication this template refuses about
+    doctors and insurers. The address block still carries the real location.
+    """
+    files = dental.render_site(
+        name="NOA Dental Clinic",
+        phone="0501234567",
+        address="Mankhool Road, Dubai",
+        area="Mankhool",
+        base_url="https://sites.qevik.ai/demo-noa",
+    )
+    arabic_h1 = re.search(r'<h1[^>]*>([^<]*)</h1>', files["ar/index.html"]).group(1)
+    assert "Mankhool" not in arabic_h1
+    assert not re.search(r"[A-Za-z]", arabic_h1)
+
+    # The English page is unaffected — it still names the district, which is the
+    # local-SEO term the page is trying to rank for.
+    english_h1 = re.search(r'<h1[^>]*>([^<]*)</h1>', files["index.html"]).group(1)
+    assert "Mankhool" in english_h1
+
+    # The location is not lost, only moved off the headline.
+    assert "Mankhool" in files["ar/index.html"]

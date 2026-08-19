@@ -496,10 +496,16 @@ def render(
     dial = tel_href(phone)
     wa = whatsapp_href(phone)
 
-    canonical = url or (f"{base_url}/" if base_url else "")
-    href_en = canonical
-    href_ar = f"{canonical}ar/" if canonical else "ar/"
-    other_href = href_ar if lang == "en" else canonical or "../"
+    site_root = url or (f"{base_url}/" if base_url else "")
+    href_en = site_root
+    href_ar = f"{site_root}ar/" if site_root else "ar/"
+    # Each language page is canonical for itself. Pointing the Arabic page's
+    # canonical at the English one declares it a duplicate, and Google drops
+    # duplicates from the index — which would remove the Arabic page from
+    # exactly the searches it was written to win. hreflang, not canonical, is
+    # what tells a crawler these two are translations of each other.
+    canonical = href_ar if lang == "ar" else href_en
+    other_href = href_ar if lang == "en" else site_root or "../"
 
     # A Latin district name inside an Arabic sentence is reordered by the bidi
     # algorithm and lands on its own line, reading as though it were pasted in —
