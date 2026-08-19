@@ -77,6 +77,8 @@ DEFAULT_ASSURANCES: tuple[tuple[str, str], ...] = (
 
 _SAFE = re.compile(r"[^A-Za-z0-9+\-() ]")
 _ARABIC_CHARS = re.compile(r"[\u0600-\u06ff]")
+_AM = re.compile(r"\bAM\b", re.IGNORECASE)
+_PM = re.compile(r"\bPM\b", re.IGNORECASE)
 
 
 def _has_arabic(value: str) -> bool:
@@ -581,7 +583,8 @@ def render(
     hours_block = ""
     if hours:
         items = "".join(
-            f"<li><span>{e(_localise_day(day, lang))}</span><span>{e(time)}</span></li>"
+            f"<li><span>{e(_localise_day(day, lang))}</span>"
+            f"<span>{e(_localise_time(time, lang))}</span></li>"
             for day, time in hours
         )
         hours_block = (
@@ -654,6 +657,19 @@ def _localise_day(day: str, lang: str) -> str:
     if lang != "ar":
         return day
     return _strings.DAYS_AR.get(day.strip().lower(), day)
+
+
+def _localise_time(value: str, lang: str) -> str:
+    """Arabic meridiem markers, and nothing else.
+
+    ص / م are the standard Arabic forms of AM / PM. This is a change of
+    notation, not of information: the digits are untouched, so no time can move
+    by this function. Anything it does not recognise is left exactly as the
+    clinic's listing gave it.
+    """
+    if lang != "ar":
+        return value
+    return _AM.sub("ص", _PM.sub("م", value))
 
 
 def render_site(

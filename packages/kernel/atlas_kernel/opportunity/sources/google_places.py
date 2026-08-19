@@ -32,14 +32,27 @@ from ...media.publishers.google_oauth import _env
 from ..models import Business
 
 SEARCH_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
+DETAILS_ENDPOINT = "https://places.googleapis.com/v1/places"
+
+#: A single place, by id. Used to enrich businesses that were already
+#: discovered, so the search does not have to be repeated — repeating it costs
+#: the same money *and* risks returning a different set of businesses than the
+#: one already on file.
+DETAILS_FIELD_MASK = "id,regularOpeningHours"
 
 #: Exactly what a prospect record needs. Every entry costs money, and adding one
 #: can promote the request to a more expensive tier — so this list is short on
 #: purpose and should stay that way.
 #:
-#: Deliberately absent: photos, reviews, ratings, opening hours, geometry,
-#: editorial summaries. None of them change whether a business is worth
-#: contacting about a broken website.
+#: Deliberately absent: photos, reviews, ratings, geometry, editorial summaries.
+#: None of them change whether a business is worth contacting about a broken
+#: website.
+#:
+#: `regularOpeningHours` is present despite that rule, and knowingly costs more —
+#: it promotes the request to Google's Enterprise tier. It earns the money by
+#: being the one local-SEO fact that cannot be recovered any other way: a clinic
+#: page without hours loses the "open now" and "dentist open Friday" searches
+#: outright, and guessing hours would put a wrong time in front of a patient.
 FIELD_MASK = ",".join(
     (
         "places.id",
@@ -47,6 +60,7 @@ FIELD_MASK = ",".join(
         "places.websiteUri",
         "places.nationalPhoneNumber",
         "places.formattedAddress",
+        "places.regularOpeningHours",
         "nextPageToken",
     )
 )
@@ -59,7 +73,28 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 #: Roughly what a scan costs, so a caller can reason about spend without reading
 #: Google's pricing page. Indicative only — the published rate is authoritative
 #: and changes without asking us.
-APPROX_USD_PER_REQUEST = 0.032
+#: Enterprise tier, because the mask includes opening hours. Pro was 0.032.
+APPROX_USD_PER_REQUEST = 0.035
+
+
+def ipv4_client() -> httpx.Client:
+    """An httpx client pinned to IPv4.
+
+    A dual-stack host prefers IPv6, so a call leaves from an address the key's
+    allowlist does not contain and Google answers API_KEY_IP_ADDRESS_BLOCKED —
+    which reads like a wrong key and is not. Pinning keeps the restriction to a
+    single IPv4 address, the tightest useful form and the one a person can copy
+    out of a Hetzner console.
+
+    This is a function rather than a line inside the source because forgetting
+    it is silent until Google refuses: a second call site written later with a
+    plain `httpx.get` looks correct, passes review, and fails only against the
+    live key.
+    """
+    return httpx.Client(
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+    )
 
 
 class PlacesError(RuntimeError):
@@ -92,6 +127,17 @@ def api_key() -> str:
     return key.strip()
 
 
+def _opening_hours(place: dict) -> list[str]:
+    """Google's own weekday descriptions, unedited.
+
+    Returned verbatim rather than parsed into a schedule. Parsing invites
+    normalising, normalising invites filling gaps, and a filled gap here is a
+    patient standing outside a closed clinic.
+    """
+    hours = place.get("regularOpeningHours") or {}
+    return [line for line in (hours.get("weekdayDescriptions") or []) if line]
+
+
 def _business_from_place(place: dict, area: str) -> Business | None:
     name = ((place.get("displayName") or {}).get("text") or "").strip()
     if not name:
@@ -117,6 +163,11 @@ def _business_from_place(place: dict, area: str) -> Business | None:
             # data. The detector's own fetch is what earns the claim that a
             # business has no working website.
             "website_absent_in_places": website is None,
+            # Weekday strings exactly as Google returns them, or an empty list.
+            # An empty list means Google holds no hours for this business — it
+            # is not a claim that the clinic has none, and the renderer keeps
+            # that distinction rather than printing "hours unavailable".
+            "opening_hours": _opening_hours(place),
         },
     )
 
@@ -153,16 +204,7 @@ class GooglePlacesSource:
 
     def _get_client(self) -> httpx.Client:
         if self._client is None:
-            # Bound to IPv4. A dual-stack host prefers IPv6, so the call leaves
-            # from an address the key's allowlist does not contain and Google
-            # answers API_KEY_IP_ADDRESS_BLOCKED — which reads like a wrong key
-            # and is not. Pinning here keeps the restriction to a single IPv4
-            # address, which is the tightest useful form and the one a person
-            # can actually copy out of a Hetzner console.
-            self._client = httpx.Client(
-                timeout=REQUEST_TIMEOUT_SECONDS,
-                transport=httpx.HTTPTransport(local_address="0.0.0.0"),
-            )
+            self._client = ipv4_client()
         return self._client
 
     def close(self) -> None:
@@ -221,3 +263,38 @@ class GooglePlacesSource:
                 break
 
         return found[:limit]
+
+
+def opening_hours_for(place_id: str, *, api_key: str | None = None) -> list[str]:
+    """Google's weekday descriptions for one already-discovered place.
+
+    Returns an empty list when Google holds no hours. The caller must keep that
+    distinct from "not looked up" — an empty list is a verified absence, and a
+    page that prints "hours unavailable" for one and nothing for the other has
+    collapsed two different facts.
+
+    Raises `NotConfigured` if there is no key, so a missing credential is never
+    mistaken for a business with no hours.
+    """
+    key = api_key or _env("QEVIK_GOOGLE_PLACES_API_KEY") or os.environ.get(
+        "QEVIK_GOOGLE_PLACES_API_KEY", ""
+    )
+    if not key:
+        raise NotConfigured("QEVIK_GOOGLE_PLACES_API_KEY is not set")
+
+    with ipv4_client() as client:
+        response = client.get(
+            f"{DETAILS_ENDPOINT}/{place_id}",
+            headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": DETAILS_FIELD_MASK},
+        )
+    if response.status_code != 200:
+        detail = ""
+        try:
+            detail = (response.json().get("error") or {}).get("message", "")
+        except ValueError:
+            pass
+        raise PlacesError(
+            f"place details for {place_id} returned {response.status_code}"
+            + (f" — {detail}" if detail else "")
+        )
+    return _opening_hours(response.json())

@@ -18,7 +18,12 @@ was a module before it was a package, and turning it into one should not have
 been visible to anything that imported it.
 """
 
-from .google_places import GooglePlacesSource, NotConfigured, PlacesError
+from .google_places import (
+    GooglePlacesSource,
+    NotConfigured,
+    PlacesError,
+    opening_hours_for,
+)
 from .overpass import AREAS, NICHES, OverpassError, OverpassSource
 from .seed import SeedListSource
 
@@ -26,6 +31,7 @@ __all__ = [
     "AREAS",
     "NICHES",
     "GooglePlacesSource",
+    "opening_hours_for",
     "NotConfigured",
     "OverpassError",
     "OverpassSource",

@@ -35,6 +35,24 @@ PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "https://sites.qevik.ai")
 PROSPECTS = Path(os.environ.get("QEVIK_PROSPECTS", "/var/lib/qevik/prospects"))
 
 
+def parse_hours(lines: list[str]) -> list[tuple[str, str]] | None:
+    """Google's "Monday: 11:00 AM – 8:00 PM" into (day, time) pairs.
+
+    Splits on the first colon and nothing else. No normalising of times, no
+    merging of identical days into ranges, no filling of a missing day — each of
+    those is a small step from "tidier" to "a time this clinic never gave us",
+    and the reader of that time is a patient deciding when to turn up.
+
+    A line that does not split is dropped rather than guessed at.
+    """
+    pairs: list[tuple[str, str]] = []
+    for line in lines:
+        day, sep, hours = line.partition(":")
+        if sep and day.strip() and hours.strip():
+            pairs.append((day.strip(), hours.strip()))
+    return pairs or None
+
+
 def latest_records() -> Path:
     files = sorted(PROSPECTS.glob("prospects-*.json"))
     if not files:
@@ -61,6 +79,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for record in records:
             slug = record["slug"]
+            # Only hours that were actually confirmed reach the page. A record
+            # marked NOT_VERIFIED has empty hours for a different reason than one
+            # marked CONFIRMED_ABSENT, and neither may be rendered as a schedule.
+            hours = None
+            if record.get("hours_status") == "CONFIRMED_PRESENT":
+                hours = parse_hours(record.get("opening_hours") or [])
+
             files = dental.render_site(
                 name=record["name"],
                 phone=record["phone"],
@@ -68,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
                 area=record["area"],
                 base_url=f"{PUBLIC_BASE}/{slug}",
                 year=year,
+                hours=hours,
             )
 
             # Compare against what is actually live, so a dry run reports a real
