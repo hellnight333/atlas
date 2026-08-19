@@ -126,10 +126,19 @@ def test_a_site_that_never_loaded_gets_different_copy() -> None:
     assert "had a proper look" not in message.lower()
 
 
-def test_the_signature_is_left_for_a_human() -> None:
-    """A generated name is what makes a first email read as a mail-merge."""
+def test_no_placeholder_survives_into_a_draft() -> None:
+    """The signature is now real, so nothing may still be waiting to be filled.
+
+    This test previously asserted the opposite — that "[YOUR NAME]" was present,
+    because no sender details existed. Now that they do, the same line must
+    assert the placeholder is gone: a draft that goes out with a bracketed
+    template marker is worse than one with no signature at all.
+    """
     _, body = email_message(dossier())
-    assert "[YOUR NAME" in body
+    wa = whatsapp_message(dossier())
+    for text in (body, wa):
+        assert "[YOUR NAME" not in text
+        assert "[" not in text.split("Best regards,")[-1], "a placeholder remains"
 
 
 @pytest.mark.parametrize("gap", ["Arabic version", "HTTPS", "Structured data"])
@@ -137,3 +146,37 @@ def test_the_claim_matches_the_measured_gap(gap: str) -> None:
     _, body = email_message(dossier(strongest_weakness=gap))
     assert body.count("The one thing I could not find") <= 1
     assert "Nothing about it is invented" in body
+
+
+def test_no_draft_presents_qevik_as_a_separate_company() -> None:
+    """Qevik is a brand of Asia Link Internet Content Provider LLC.
+
+    Writing "Qevik LLC" to a Dubai business is a false claim about a regulated
+    status, made to someone who can check it in a public register.
+    """
+    from atlas_kernel.outreach import entity_claims
+
+    _, body = email_message(dossier())
+    assert entity_claims(body) == []
+    assert entity_claims(whatsapp_message(dossier())) == []
+
+
+def test_the_guard_refuses_a_draft_that_would_claim_one() -> None:
+    assert check("Regards, Qevik LLC, Dubai", dossier())
+
+
+def test_the_email_carries_the_full_entity_signature() -> None:
+    from atlas_kernel.outreach import EMAIL_SIGNATURE, LEGAL_ENTITY
+
+    _, body = email_message(dossier())
+    assert body.rstrip().endswith(EMAIL_SIGNATURE)
+    assert LEGAL_ENTITY in body
+
+
+def test_the_whatsapp_message_carries_the_short_signature() -> None:
+    from atlas_kernel.outreach import WHATSAPP_SIGNATURE
+
+    message = whatsapp_message(dossier())
+    assert message.rstrip().endswith(WHATSAPP_SIGNATURE)
+    # The postal address belongs in email, not in a phone message.
+    assert "Office 301" not in message

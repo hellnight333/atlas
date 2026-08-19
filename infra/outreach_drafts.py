@@ -33,6 +33,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "kerne
 
 from prospect_dossier import build  # noqa: E402
 
+from atlas_kernel.outreach import (  # noqa: E402
+    EMAIL_SIGNATURE,
+    WHATSAPP_SIGNATURE,
+    WhatsAppChannel,
+    entity_claims,
+)
+
 DRAFTS = Path(os.environ.get("QEVIK_DRAFTS", "/var/lib/qevik/outreach"))
 
 #: Phrases that must never appear in a draft, whatever the evidence says. These
@@ -76,6 +83,8 @@ def whatsapp_message(d: dict) -> str:
             "",
             "It has an Arabic version too. No obligation, and no charge for "
             "looking. If it is useful we can talk; if not, keep the link.",
+            "",
+            WHATSAPP_SIGNATURE,
         ]
     )
 
@@ -124,9 +133,7 @@ def email_message(d: dict) -> tuple[str, str]:
         "follow-up — you can keep the link either way.",
         "",
         "Best regards,",
-        # Left for the sender to fill. A generated name on a first-contact email
-        # is the detail that makes the whole thing read as a mail-merge.
-        "[YOUR NAME / PHONE]",
+        EMAIL_SIGNATURE,
     ]
     return subject, "\n".join(body)
 
@@ -171,6 +178,15 @@ def check(text: str, d: dict) -> list[str]:
         if phrase in lowered:
             problems.append(f"contains {phrase!r} — {why}")
 
+    # Qevik is a brand operated by Asia Link Internet Content Provider LLC, not a
+    # separately licensed company. Claiming otherwise is a false statement about
+    # a regulated status, made to a business that can check it.
+    for claim in entity_claims(text):
+        problems.append(
+            f"presents Qevik as its own legal entity ({claim!r}) — it is a brand "
+            "operated by Asia Link Internet Content Provider LLC"
+        )
+
     for item in d["do_not_say"]:
         if item["reason"] != "THEIR_SITE_HAS_IT":
             continue
@@ -192,7 +208,11 @@ def record_draft(dossier_row: dict, draft: dict) -> None:
     demo, and then either silence or a message with no history behind it, and
     cannot tell whether a decision was taken or simply forgotten.
     """
-    from atlas_kernel.opportunity.models import BusinessEvent
+    from atlas_kernel.opportunity.models import (
+        BusinessEvent,
+        OutreachMessage,
+        OutreachStatus,
+    )
     from atlas_kernel.opportunity.repository import OpportunityRepository
 
     repo = OpportunityRepository()
@@ -207,6 +227,32 @@ def record_draft(dossier_row: dict, draft: dict) -> None:
     if match is None:
         print(f"             (no business record for {dossier_row['name']!r} — not logged)")
         return
+
+    # Stored as a real OutreachMessage, not only as a JSON file, so the send
+    # path that arrives later reads from the same place approvals and receipts
+    # already live — status, approval_id, approved_fingerprint, sent_at. A
+    # parallel store would mean two answers to "was this sent".
+    for channel, recipient, subject, body in (
+        ("whatsapp", draft["phone"], "", draft["whatsapp_body"]),
+        ("email", "", draft["email_subject"], draft["email_body"]),
+    ):
+        repo.save_message(
+            OutreachMessage(
+                proposal_id="",
+                business_id=match.id,
+                channel=channel,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                # DRAFT, never AWAITING_APPROVAL: nobody has been asked yet.
+                # Moving it on is an operator action, not a side effect of
+                # writing the words.
+                status=OutreachStatus.DRAFT,
+                approval_id=None,
+                approved_fingerprint=None,
+                sent_at=None,
+            )
+        )
 
     repo.record_event(
         BusinessEvent(
@@ -235,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     DRAFTS.mkdir(parents=True, exist_ok=True)
+    whatsapp = WhatsAppChannel()
     rows = build(args.top)
     written, refused = 0, 0
 
@@ -243,6 +290,16 @@ def main(argv: list[str] | None = None) -> int:
         wa = whatsapp_message(d)
 
         problems = check(body, d) + check(wa, d)
+
+        # The channel seam earns its keep before any provider exists: if the
+        # dossier recommends WhatsApp, the number must actually be able to
+        # receive one. A WhatsApp message to a landline is not an error the
+        # sender sees — it is silence, and a campaign that reports five sends
+        # and produces three is worse than one that refused up front.
+        if d["contact_method"].startswith("WhatsApp") and not whatsapp.can_reach(d["phone"]):
+            problems.append(
+                f"recommends WhatsApp but {d['phone']!r} cannot receive one"
+            )
         if problems:
             refused += 1
             print(f"  REFUSED  {d['name'][:44]}")
