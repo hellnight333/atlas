@@ -110,6 +110,30 @@ class AuthStore:
             )
         return user
 
+    def set_password(self, username: str, password: str) -> int:
+        """Replace a user's password and end every session they hold.
+
+        The revocation is not a courtesy. A rotation exists because the old
+        secret may be known to someone else, and a live session token is that
+        secret already spent — leaving sessions standing would rotate the front
+        door while the person inside stays inside.
+
+        Returns the number of sessions ended, so a caller can report what the
+        rotation actually did rather than assume it did anything.
+        """
+        username = username.strip().lower()
+        with engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT id FROM qevik_users WHERE username = :u"), {"u": username}
+            ).first()
+            if not row:
+                raise AuthError(f"no user {username!r}")
+            conn.execute(
+                text("UPDATE qevik_users SET password_hash = :p WHERE username = :u"),
+                {"p": hash_password(password), "u": username},
+            )
+        return self.revoke_all(row[0])
+
     def get_user(self, username: str) -> User | None:
         with engine.connect() as conn:
             row = conn.execute(
