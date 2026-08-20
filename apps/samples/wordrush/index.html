@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Word Rush — Arabic ↔ English trainer, a Qevik sample</title>
+<meta name="description" content="A bilingual Arabic-English vocabulary trainer built by Qevik. Sample project — not client work.">
+<meta name="theme-color" content="#16123A">
+<style>
+/* Word Rush — a vocabulary trainer that happens to contain a game.
+ *
+ * The obvious build here was a second arcade screen, and the first draft was
+ * exactly that: full-bleed canvas, no chrome, play and die. It failed the
+ * portfolio's own differentiation check against Carrot Dash at 0.73 — and the
+ * check was right. Two full-screen game surfaces are the same *product* however
+ * different the mechanics underneath, and a prospect scrolling past sees one
+ * idea twice.
+ *
+ * So this is the other kind of thing entirely: an app with screens, persistent
+ * state and a review surface, where the drill is one of three places you can
+ * be. Carrot Dash proves we can write a real-time physics loop. This proves the
+ * unglamorous half — state that survives, progress worth returning to, and a
+ * whole interface that flips language and direction at runtime.
+ *
+ * Portrait-first at 390x844. Nothing that matters lives at the top of the
+ * screen; the drill answers sit in the lower two-thirds, under a thumb. */
+
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* Declared first and forced: a later `display` on a screen class silently
+ * beating the hidden attribute is a bug this codebase has already shipped once. */
+[hidden]{display:none !important}
+
+:root{
+  --void:#16123A; --deep:#1E1950; --card:#272061; --lift:#332B72; --line:#3D3589;
+  --ink:#F4F1FF; --ink-2:#BDB6EC; --dim:#7E77B9;
+  --gold:#FFC94A; --mint:#4FE0A8; --coral:#FF6B8A; --violet:#A78BFA;
+  --sans:"Avenir Next","Segoe UI Variable","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --ar:"Noto Naskh Arabic","Geeza Pro","Al Bayan","Traditional Arabic",serif;
+  --pad:1.05rem;
+}
+html,body{height:100%}
+body{margin:0;background:var(--void);color:var(--ink);font-family:var(--sans);
+  font-size:16px;-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;overflow:hidden}
+h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:3px solid var(--violet);outline-offset:2px;border-radius:6px}
+.num{font-variant-numeric:tabular-nums}
+.ar{font-family:var(--ar);letter-spacing:0}
+
+/* ---------- app shell: title bar + segmented screen switcher ---------- */
+.bar{display:flex;align-items:baseline;gap:.6rem;
+  padding:max(.85rem,env(safe-area-inset-top)) var(--pad) .55rem}
+.bar .mark{font-size:1.02rem;font-weight:800}
+.bar .mark em{font-style:normal;color:var(--violet)}
+.bar .lang{margin-inline-start:auto;background:none;border:1px solid var(--line);
+  color:var(--ink-2);border-radius:999px;padding:.3rem .7rem;font-size:.74rem;font-weight:650}
+
+nav.seg{display:flex;gap:.3rem;padding:0 var(--pad) .7rem}
+nav.seg a{flex:1 1 0;text-align:center;text-decoration:none;color:var(--dim);
+  background:var(--deep);border:1px solid transparent;border-radius:10px;
+  padding:.52rem .3rem;font-size:.82rem;font-weight:700}
+nav.seg a[aria-current=page]{background:var(--lift);border-color:var(--line);color:var(--ink)}
+
+main{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;
+  padding:0 var(--pad) max(1.6rem,env(safe-area-inset-bottom))}
+.screen{display:flex;flex-direction:column;gap:1rem}
+
+/* ---------- practise screen ---------- */
+.hero{background:linear-gradient(160deg,var(--card),var(--deep));
+  border:1px solid var(--line);border-radius:20px;padding:1.3rem 1.15rem}
+.hero .kicker{font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+.hero h1{font-size:1.75rem;margin:.45rem 0 .3rem}
+.hero p{margin:0 0 1.15rem;font-size:.88rem;line-height:1.55;color:var(--ink-2)}
+.stats{display:flex;gap:.5rem;margin-bottom:1.15rem}
+.stat{flex:1 1 0;background:rgba(0,0,0,.22);border-radius:12px;padding:.6rem .5rem;text-align:center}
+.stat b{display:block;font-size:1.4rem;font-weight:800;line-height:1.1}
+.stat span{font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.stat.g b{color:var(--gold)} .stat.m b{color:var(--mint)} .stat.v b{color:var(--violet)}
+.play{display:block;width:100%;background:var(--violet);border:0;color:#1A1040;
+  border-radius:13px;padding:.95rem;font-size:1.02rem;font-weight:800}
+.play:active{transform:translateY(1px)}
+.dirpick{display:flex;gap:.45rem;margin-bottom:.9rem}
+.dirpick button{flex:1 1 0;background:rgba(0,0,0,.22);border:1px solid transparent;
+  color:var(--ink-2);border-radius:11px;padding:.6rem .35rem;font-size:.84rem;font-weight:650}
+.dirpick button[aria-pressed=true]{background:var(--lift);border-color:var(--line);color:var(--ink)}
+
+h2.sec{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+  margin-top:.4rem}
+.weak{display:flex;flex-direction:column;gap:.4rem}
+.weak li{display:flex;align-items:center;gap:.7rem;background:var(--deep);
+  border:1px solid var(--line);border-radius:11px;padding:.6rem .8rem;font-size:.92rem}
+.weak li .a{font-family:var(--ar);font-size:1.1rem;margin-inline-start:auto;color:var(--ink-2)}
+.weak li .miss{font-size:.7rem;color:var(--coral);font-weight:700}
+ul{list-style:none;margin:0;padding:0}
+.empty{background:var(--deep);border:1px dashed var(--line);border-radius:13px;
+  padding:1.05rem;font-size:.85rem;color:var(--dim);line-height:1.55;text-align:center}
+
+/* ---------- words screen ---------- */
+.seek{display:flex;gap:.45rem;align-items:center;background:var(--deep);
+  border:1px solid var(--line);border-radius:12px;padding:.15rem .8rem}
+.seek input{flex:1 1 auto;background:none;border:0;color:var(--ink);font:inherit;
+  font-size:.92rem;padding:.62rem 0;min-width:0}
+.seek input::placeholder{color:var(--dim)}
+.seek input:focus{outline:none}
+.chips{display:flex;gap:.38rem;overflow-x:auto;padding-bottom:.15rem;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.chips::-webkit-scrollbar{display:none}
+.chips button{flex:0 0 auto;background:var(--deep);border:1px solid var(--line);
+  color:var(--ink-2);border-radius:999px;padding:.36rem .78rem;font-size:.78rem;font-weight:650}
+.chips button[aria-pressed=true]{background:var(--violet);border-color:var(--violet);color:#1A1040}
+table{width:100%;border-collapse:collapse;font-size:.94rem}
+table th{text-align:start;font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--dim);font-weight:700;padding:.5rem .55rem;border-bottom:1px solid var(--line)}
+table td{padding:.62rem .55rem;border-bottom:1px solid rgba(61,53,137,.45)}
+table td.arabic{font-family:var(--ar);font-size:1.14rem;color:var(--ink-2)}
+.tag{display:inline-block;border-radius:999px;padding:.16rem .5rem;font-size:.65rem;
+  font-weight:800;letter-spacing:.05em;text-transform:uppercase}
+.tag.new{background:rgba(126,119,185,.22);color:var(--dim)}
+.tag.learning{background:rgba(255,201,74,.15);color:var(--gold)}
+.tag.known{background:rgba(79,224,168,.15);color:var(--mint)}
+.count{font-size:.76rem;color:var(--dim)}
+
+/* ---------- progress screen ---------- */
+.chartcard{background:var(--deep);border:1px solid var(--line);border-radius:16px;padding:1rem}
+.chartcard svg{width:100%;height:110px;display:block;overflow:visible}
+.grid line{stroke:rgba(61,53,137,.6);stroke-width:1}
+.trend{fill:none;stroke:var(--mint);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.fillband{fill:url(#band)}
+.tip{fill:var(--gold)}
+.legend{display:flex;justify-content:space-between;font-size:.7rem;color:var(--dim);margin-top:.5rem}
+.legend:first-child{margin:0 0 .35rem}
+.mastery{height:9px;border-radius:5px;background:var(--card);overflow:hidden;display:flex}
+.mastery i{display:block;height:100%}
+.mastery i.k{background:var(--mint)} .mastery i.s{background:var(--gold)}
+.keyrow{display:flex;gap:1rem;font-size:.74rem;color:var(--ink-2);margin-top:.55rem}
+.keyrow span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;
+  margin-inline-end:.35rem}
+.keyrow .k::before{background:var(--mint)}
+.keyrow .s::before{background:var(--gold)}
+.keyrow .n::before{background:var(--card)}
+
+footer{padding:1.4rem 0 .2rem;font-size:.72rem;color:var(--dim);line-height:1.6;text-align:center}
+footer b{color:var(--ink-2)}
+
+/* ---------- the drill: an overlay, not a screen ---------- */
+.drill{position:fixed;inset:0;z-index:20;background:var(--void);
+  display:flex;flex-direction:column}
+.drill .dtop{display:flex;align-items:center;gap:.6rem;
+  padding:max(.85rem,env(safe-area-inset-top)) var(--pad) .55rem}
+.pill{background:var(--card);border:1px solid var(--line);border-radius:999px;
+  padding:.3rem .78rem;font-size:.77rem;font-weight:750}
+.pill.s{color:var(--gold)} .pill.k{color:var(--mint)}
+.hearts{margin-inline-start:auto;letter-spacing:.12em;font-size:1rem}
+.hearts span{opacity:.2} .hearts span.on{opacity:1}
+.quit{background:none;border:1px solid var(--line);color:var(--dim);border-radius:999px;
+  width:30px;height:30px;line-height:1;padding:0;font-size:1rem}
+.clock{height:4px;background:var(--deep);margin:0 var(--pad);border-radius:2px;overflow:hidden}
+.clock i{display:block;height:100%;background:var(--mint);transform-origin:left center;
+  transition:transform .1s linear,background .25s}
+[dir=rtl] .clock i{transform-origin:right center}
+.clock.warn i{background:var(--coral)}
+.ask{flex:1 1 auto;display:flex;flex-direction:column;
+  padding:1rem var(--pad) 2rem;min-height:0}
+/* auto margins centre the cue in the free space and push the answers down to
+ * the thumb, instead of centring cue+answers as one block near the middle. */
+.ask .cue{margin-block:auto}
+.ask .cue{text-align:center}
+.ask .cue small{font-size:.7rem;letter-spacing:.17em;text-transform:uppercase;color:var(--dim)}
+.ask .cue strong{display:block;font-size:clamp(2.1rem,10.5vw,3.2rem);font-weight:800;
+  line-height:1.15;margin-top:.5rem;word-break:break-word}
+.ask .cue strong.ar{font-weight:700;line-height:1.5}
+.opts{display:grid;gap:.6rem}
+.opt{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:.95rem .85rem;font-size:1.04rem;font-weight:650;min-height:56px;
+  transition:transform .09s,background .15s,border-color .15s,opacity .15s}
+.opt.ar{font-size:1.28rem;font-weight:700}
+.opt:active{transform:scale(.985)}
+.opt.right{background:var(--mint);border-color:var(--mint);color:#053322}
+.opt.wrong{background:var(--coral);border-color:var(--coral);color:#3C0716}
+.opt.mute{opacity:.4}
+
+.veil{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:1.1rem;
+  background:rgba(22,18,58,.9);backdrop-filter:blur(5px)}
+.card{background:var(--deep);border:1px solid var(--line);border-radius:22px;
+  padding:1.5rem 1.2rem;width:100%;max-width:340px;text-align:center;
+  max-height:88vh;overflow-y:auto}
+.card h2{font-size:1.55rem;margin-bottom:.2rem}
+.card .big{font-size:3.1rem;font-weight:800;color:var(--gold);line-height:1}
+.card .note{font-size:.82rem;color:var(--dim);margin:.35rem 0 1.15rem}
+.card .review{text-align:start;margin:0 0 1.15rem;display:flex;flex-direction:column;gap:.35rem}
+.card .review li{display:flex;gap:.6rem;align-items:center;background:var(--card);
+  border-radius:9px;padding:.5rem .7rem;font-size:.88rem}
+.card .review li .a{font-family:var(--ar);font-size:1.08rem;margin-inline-start:auto}
+@media(prefers-reduced-motion:reduce){.opt,.clock i,.play{transition:none}}
+@media(min-width:720px){
+  body{max-width:430px;margin:0 auto;border-inline:1px solid var(--line)}
+  .drill,.veil{max-width:430px;inset-inline:auto;margin:0 auto;left:50%;transform:translateX(-50%)}
+}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Word Rush",
+"applicationCategory":"EducationalApplication","operatingSystem":"Web browser",
+"inLanguage":["en","ar"],"url":"https://sites.qevik.ai/sample-wordrush/",
+"author":{"@type":"Organization","name":"Asia Link Internet Content Provider LLC","alternateName":"Qevik"},
+"description":"A bilingual Arabic-English vocabulary trainer built as a Qevik sample project."}
+</script>
+</head>
+<body>
+
+<div class="bar">
+  <span class="mark">Word<em>Rush</em></span>
+  <button class="lang" id="lang" type="button">عربي</button>
+</div>
+
+<nav class="seg" id="seg" aria-label="Screens">
+  <a href="#practise" data-panel="practise" aria-current="page">Practise</a>
+  <a href="#words"    data-panel="words">Words</a>
+  <a href="#progress" data-panel="progress">Progress</a>
+</nav>
+
+<main>
+  <!-- ---------------- practise ---------------- -->
+  <section class="screen" id="practise">
+    <div class="hero">
+      <p class="kicker" id="k-kicker">44 words · 7 groups</p>
+      <h1 id="k-title">Ten questions. Three lives.</h1>
+      <p id="k-blurb">Match the word before the bar empties. Miss three and the round
+        ends — whatever you got wrong comes back in the next one.</p>
+      <div class="stats">
+        <div class="stat g"><b class="num" id="s-best">0</b><span id="l-best">Best</span></div>
+        <div class="stat m"><b class="num" id="s-known">0</b><span id="l-known">Learned</span></div>
+        <div class="stat v"><b class="num" id="s-runs">0</b><span id="l-runs">Rounds</span></div>
+      </div>
+      <div class="dirpick" id="dirpick">
+        <button type="button" data-dir="en2ar" aria-pressed="true"></button>
+        <button type="button" data-dir="ar2en" aria-pressed="false"></button>
+      </div>
+      <button class="play" id="play" type="button">Start a round</button>
+    </div>
+
+    <h2 class="sec" id="h-weak">Needs work</h2>
+    <ul class="weak" id="weak"></ul>
+  </section>
+
+  <!-- ---------------- words ---------------- -->
+  <section class="screen" id="words" hidden>
+    <label class="seek">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7E77B9" stroke-width="2.4"
+        aria-hidden="true"><circle cx="10.5" cy="10.5" r="7"/><path d="M16 16l5 5"/></svg>
+      <input type="search" id="seek" placeholder="Search English or Arabic" aria-label="Search words">
+    </label>
+    <div class="chips" id="chips"></div>
+    <p class="count" id="count"></p>
+    <table>
+      <thead><tr>
+        <th id="th-en">English</th><th id="th-ar">عربي</th><th id="th-st">Status</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <!-- ---------------- progress ---------------- -->
+  <section class="screen" id="progress" hidden>
+    <h2 class="sec" id="h-scores">Score per round</h2>
+    <div class="chartcard" id="chartcard"></div>
+    <h2 class="sec" id="h-mastery">Vocabulary</h2>
+    <div class="chartcard">
+      <div class="mastery" id="mastery"><i class="k" style="width:0"></i><i class="s" style="width:0"></i></div>
+      <div class="keyrow">
+        <span class="k" id="key-k">Learned 0</span>
+        <span class="s" id="key-s">Learning 0</span>
+        <span class="n" id="key-n">Untouched 44</span>
+      </div>
+    </div>
+  </section>
+
+  <footer id="foot"><b>Qevik sample</b> — a bilingual vocabulary trainer.
+    A demonstration project, not a real product and not client work.</footer>
+</main>
+
+<!-- The drill takes the whole screen: during a question there is nothing else to do. -->
+<div class="drill" id="drill" hidden>
+  <div class="dtop">
+    <span class="pill s num" id="d-score">0</span>
+    <span class="pill k num" id="d-streak" hidden>×2</span>
+    <span class="hearts" id="d-hearts"><span class="on">♥</span><span class="on">♥</span><span class="on">♥</span></span>
+    <button class="quit" id="d-quit" type="button" aria-label="End round">✕</button>
+  </div>
+  <div class="clock" id="clock"><i id="clockfill"></i></div>
+  <div class="ask">
+    <div class="cue"><small id="d-lbl">Tap the Arabic word</small><strong id="d-word">—</strong></div>
+    <div class="opts" id="d-opts"></div>
+  </div>
+</div>
+
+<div class="veil" id="veil" hidden><div class="card" id="card"></div></div>
+
+<script>
+"use strict";
+/* -----------------------------------------------------------------------
+ * Data. Every pair checked by hand — a vocabulary trainer that teaches a
+ * wrong word is worse than no trainer.
+ * --------------------------------------------------------------------- */
+var WORDS = [
+  {en:'House',    ar:'بيت',      g:'home'},   {en:'Door',     ar:'باب',      g:'home'},
+  {en:'Key',      ar:'مفتاح',    g:'home'},   {en:'Window',   ar:'نافذة',    g:'home'},
+  {en:'Kitchen',  ar:'مطبخ',     g:'home'},   {en:'Garden',   ar:'حديقة',    g:'home'},
+
+  {en:'Water',    ar:'ماء',      g:'food'},   {en:'Bread',    ar:'خبز',      g:'food'},
+  {en:'Coffee',   ar:'قهوة',     g:'food'},   {en:'Rice',     ar:'أرز',      g:'food'},
+  {en:'Milk',     ar:'حليب',     g:'food'},   {en:'Fish',     ar:'سمك',      g:'food'},
+  {en:'Chicken',  ar:'دجاج',     g:'food'},
+
+  {en:'Market',   ar:'سوق',      g:'places'}, {en:'School',   ar:'مدرسة',    g:'places'},
+  {en:'City',     ar:'مدينة',    g:'places'}, {en:'Airport',  ar:'مطار',     g:'places'},
+  {en:'Hospital', ar:'مستشفى',   g:'places'}, {en:'Hotel',    ar:'فندق',     g:'places'},
+  {en:'Beach',    ar:'شاطئ',     g:'places'},
+
+  {en:'Friend',   ar:'صديق',     g:'people'}, {en:'Family',   ar:'عائلة',    g:'people'},
+  {en:'Mother',   ar:'أم',       g:'people'}, {en:'Father',   ar:'أب',       g:'people'},
+  {en:'Brother',  ar:'أخ',       g:'people'}, {en:'Sister',   ar:'أخت',      g:'people'},
+
+  {en:'Morning',  ar:'صباح',     g:'time'},   {en:'Night',    ar:'ليل',      g:'time'},
+  {en:'Today',    ar:'اليوم',    g:'time'},   {en:'Tomorrow', ar:'غداً',     g:'time'},
+  {en:'Week',     ar:'أسبوع',    g:'time'},   {en:'Year',     ar:'سنة',      g:'time'},
+
+  {en:'Ticket',   ar:'تذكرة',    g:'travel'}, {en:'Passport', ar:'جواز سفر', g:'travel'},
+  {en:'Suitcase', ar:'حقيبة',    g:'travel'}, {en:'Train',    ar:'قطار',     g:'travel'},
+  {en:'Car',      ar:'سيارة',    g:'travel'}, {en:'Road',     ar:'طريق',     g:'travel'},
+
+  {en:'Sun',      ar:'شمس',      g:'nature'}, {en:'Moon',     ar:'قمر',      g:'nature'},
+  {en:'Sea',      ar:'بحر',      g:'nature'}, {en:'Rain',     ar:'مطر',      g:'nature'},
+  {en:'Tree',     ar:'شجرة',     g:'nature'}, {en:'Sky',      ar:'سماء',     g:'nature'}
+];
+
+var GROUPS = [
+  {id:'all',    en:'All',     ar:'الكل'},
+  {id:'home',   en:'Home',    ar:'البيت'},
+  {id:'food',   en:'Food',    ar:'الطعام'},
+  {id:'places', en:'Places',  ar:'الأماكن'},
+  {id:'people', en:'People',  ar:'الناس'},
+  {id:'time',   en:'Time',    ar:'الوقت'},
+  {id:'travel', en:'Travel',  ar:'السفر'},
+  {id:'nature', en:'Nature',  ar:'الطبيعة'}
+];
+
+/* Interface strings. The app is bilingual at runtime, so no English is
+ * hard-coded into the markup that a reader in Arabic would still see. */
+var T = {
+  en:{
+    nav:['Practise','Words','Progress'], other:'عربي',
+    kicker:'44 words across 7 groups', title:'Ten questions. Three lives.',
+    blurb:'Match the word before the bar empties. Miss three and the round ends — whatever you got wrong comes back in the next one.',
+    best:'Best', known:'Learned', runs:'Rounds', play:'Start a round',
+    dirEn:'English \u2192 <span class="ar">عربي</span>',
+    dirAr:'<span class="ar">عربي</span> \u2192 English',
+    weak:'Needs work', noWeak:'Nothing to review yet. Play a round and anything you miss collects here.',
+    thEn:'English', thAr:'عربي', thSt:'Status', seek:'Search English or Arabic',
+    scores:'Score per round', mastery:'Vocabulary', runsShort:'rounds',
+    keyK:'Learned', keyS:'Learning', keyN:'Untouched',
+    noRuns:'No rounds yet. Your score history appears here after the first one.',
+    cueAr:'Tap the Arabic word', cueEn:'Tap the English word',
+    over:'Out of lives', done:'Round complete', again:'Play again', back:'Back',
+    missed:'Missed this round', words:'words', shown:'showing',
+    stNew:'New', stLearning:'Learning', stKnown:'Learned',
+    foot:'<b>Qevik sample</b> — a bilingual vocabulary trainer. A demonstration project, not a real product and not client work.'
+  },
+  ar:{
+    nav:['تدرّب','الكلمات','التقدّم'], other:'EN',
+    kicker:'٤٤ كلمة في ٧ مجموعات', title:'عشرة أسئلة. ثلاث محاولات.',
+    blurb:'اختر الكلمة الصحيحة قبل أن ينتهي الشريط. بعد ثلاثة أخطاء تنتهي الجولة، وتعود الكلمات التي أخطأت فيها في الجولة التالية.',
+    best:'الأفضل', known:'محفوظة', runs:'الجولات', play:'ابدأ جولة',
+    dirEn:'من الإنجليزية', dirAr:'من العربية',
+    weak:'تحتاج مراجعة', noWeak:'لا يوجد شيء للمراجعة بعد. العب جولة وستظهر هنا الكلمات التي تخطئ فيها.',
+    thEn:'English', thAr:'عربي', thSt:'الحالة', seek:'ابحث بالعربية أو الإنجليزية',
+    scores:'النتيجة لكل جولة', mastery:'المفردات', runsShort:'جولات',
+    keyK:'محفوظة', keyS:'قيد التعلّم', keyN:'لم تُدرَس',
+    noRuns:'لا توجد جولات بعد. سيظهر سجل نتائجك هنا بعد أول جولة.',
+    cueAr:'اختر الكلمة العربية', cueEn:'اختر الكلمة الإنجليزية',
+    over:'انتهت المحاولات', done:'اكتملت الجولة', again:'العب مرة أخرى', back:'رجوع',
+    missed:'أخطأت في هذه الجولة', words:'كلمة', shown:'المعروض',
+    stNew:'جديدة', stLearning:'قيد التعلّم', stKnown:'محفوظة',
+    foot:'<b>نموذج من Qevik</b> — مدرّب مفردات ثنائي اللغة. مشروع عرض، وليس منتجاً حقيقياً ولا عملاً لعميل.'
+  }
+};
+
+/* -----------------------------------------------------------------------
+ * State. Persisted where storage allows, held in memory where it does not —
+ * an embedded frame with storage blocked must still work, just forget.
+ * --------------------------------------------------------------------- */
+var BLANK = {mastery:{}, runs:[], best:0, dir:'en2ar', ui:'en'};
+var state = load();
+
+function load(){
+  try{
+    var raw = window.localStorage.getItem('wordrush.v1');
+    if (raw) return Object.assign({}, BLANK, JSON.parse(raw));
+  }catch(e){ /* storage unavailable — memory only, by design */ }
+  return Object.assign({}, BLANK);
+}
+function save(){
+  try{ window.localStorage.setItem('wordrush.v1', JSON.stringify(state)); }
+  catch(e){ /* nothing to do; the session still works */ }
+}
+
+function ui(){ return T[state.ui]; }
+function record(word){ return state.mastery[word.en] || {right:0, wrong:0}; }
+function status(word){
+  // Three honest buckets. The first draft labelled a word answered correctly on
+  // sight as unreliable, which is a claim about the learner the data does not
+  // support — a browser test caught it as an empty progress bar.
+  var m = record(word);
+  if (!m.right && !m.wrong) return 'new';
+  if (m.right >= m.wrong + 2) return 'known';   // two clean answers past the last miss
+  return 'learning';
+}
+function counts(){
+  var k = 0, s = 0;
+  WORDS.forEach(function(w){
+    var st = status(w);
+    if (st === 'known') k++; else if (st === 'learning') s++;
+  });
+  return {known:k, learning:s, untouched:WORDS.length - k - s};
+}
+
+function shuffled(list){
+  var a = list.slice();
+  for (var i = a.length - 1; i > 0; i--){
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+var $ = function(id){ return document.getElementById(id); };
+
+/* -----------------------------------------------------------------------
+ * Language. Arabic is the interface language, which is separate from the
+ * drill direction — you can practise English→Arabic with an Arabic UI.
+ * --------------------------------------------------------------------- */
+function applyLanguage(){
+  var t = ui();
+  document.documentElement.lang = state.ui;
+  document.documentElement.dir = state.ui === 'ar' ? 'rtl' : 'ltr';
+  $('lang').textContent = t.other;
+
+  var tabs = $('seg').querySelectorAll('a');
+  for (var i = 0; i < tabs.length; i++) tabs[i].textContent = t.nav[i];
+
+  $('k-kicker').textContent = t.kicker;
+  $('k-title').textContent  = t.title;
+  $('k-blurb').textContent  = t.blurb;
+  $('l-best').textContent   = t.best;
+  $('l-known').textContent  = t.known;
+  $('l-runs').textContent   = t.runs;
+  $('play').textContent     = t.play;
+  $('h-weak').textContent   = t.weak;
+  $('th-en').textContent    = t.thEn;
+  $('th-ar').textContent    = t.thAr;
+  $('th-st').textContent    = t.thSt;
+  $('seek').placeholder     = t.seek;
+  $('h-scores').textContent = t.scores;
+  $('h-mastery').textContent= t.mastery;
+  $('foot').innerHTML       = t.foot;
+
+  var picks = $('dirpick').querySelectorAll('button');
+  picks[0].innerHTML = t.dirEn;
+  picks[1].innerHTML = t.dirAr;
+
+  renderChips();
+  renderAll();
+}
+
+/* -----------------------------------------------------------------------
+ * Screens
+ * --------------------------------------------------------------------- */
+function show(panel){
+  ['practise','words','progress'].forEach(function(id){ $(id).hidden = id !== panel; });
+  $('seg').querySelectorAll('a').forEach(function(a){
+    if (a.dataset.panel === panel) a.setAttribute('aria-current','page');
+    else a.removeAttribute('aria-current');
+  });
+  document.querySelector('main').scrollTop = 0;
+}
+$('seg').addEventListener('click', function(event){
+  var link = event.target.closest('a');
+  if (!link) return;
+  event.preventDefault();
+  show(link.dataset.panel);
+});
+
+/* ---- practise ---- */
+function renderPractise(){
+  var t = ui(), c = counts();
+  $('s-best').textContent  = state.best;
+  $('s-known').textContent = c.known;
+  $('s-runs').textContent  = state.runs.length;
+
+  var weak = WORDS.filter(function(w){ return record(w).wrong > 0; })
+                  .sort(function(a,b){ return record(b).wrong - record(a).wrong; })
+                  .slice(0, 6);
+  $('weak').innerHTML = weak.length
+    ? weak.map(function(w){
+        return '<li><span>' + w.en + '</span><span class="a">' + w.ar + '</span>'
+             + '<span class="miss">' + record(w).wrong + '×</span></li>';
+      }).join('')
+    : '<li class="empty" style="display:block">' + t.noWeak + '</li>';
+}
+
+/* ---- words ---- */
+var filterGroup = 'all';
+function renderChips(){
+  $('chips').innerHTML = GROUPS.map(function(g){
+    return '<button type="button" data-group="' + g.id + '" aria-pressed="'
+         + (g.id === filterGroup) + '"' + (state.ui === 'ar' ? ' class="ar"' : '') + '>'
+         + (state.ui === 'ar' ? g.ar : g.en) + '</button>';
+  }).join('');
+}
+$('chips').addEventListener('click', function(event){
+  var button = event.target.closest('button');
+  if (!button) return;
+  filterGroup = button.dataset.group;
+  renderChips();
+  renderWords();
+});
+$('seek').addEventListener('input', renderWords);
+
+function renderWords(){
+  var t = ui();
+  var needle = $('seek').value.trim().toLowerCase();
+  var rows = WORDS.filter(function(w){
+    if (filterGroup !== 'all' && w.g !== filterGroup) return false;
+    if (!needle) return true;
+    return w.en.toLowerCase().indexOf(needle) >= 0 || w.ar.indexOf(needle) >= 0;
+  });
+  var label = {new:t.stNew, learning:t.stLearning, known:t.stKnown};
+  $('count').textContent = t.shown + ' ' + rows.length + ' / ' + WORDS.length + ' ' + t.words;
+  $('rows').innerHTML = rows.map(function(w){
+    var st = status(w);
+    return '<tr><td>' + w.en + '</td><td class="arabic">' + w.ar + '</td>'
+         + '<td><span class="tag ' + st + '">' + label[st] + '</span></td></tr>';
+  }).join('');
+}
+
+/* ---- progress ---- */
+function renderProgress(){
+  var t = ui(), runs = state.runs.slice(-12);
+  if (!runs.length){
+    $('chartcard').innerHTML = '<p class="empty" style="border:0;padding:.4rem">' + t.noRuns + '</p>';
+  } else {
+    var top = Math.max.apply(null, runs.concat([10]));
+    var w = 300, h = 100, step = runs.length > 1 ? w / (runs.length - 1) : 0;
+    var points = runs.map(function(v, i){
+      return (i * step).toFixed(1) + ',' + (h - (v / top) * h).toFixed(1);
+    });
+    var last = points[points.length - 1].split(',');
+    $('chartcard').innerHTML =
+        '<div class="legend"><span class="num">' + top + '</span>'
+      + '<span>' + t.best + ' ' + state.best + '</span></div>'
+      + '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" '
+      + 'aria-label="' + t.scores + '">'
+      + '<defs><linearGradient id="band" x1="0" y1="0" x2="0" y2="1">'
+      + '<stop offset="0%" stop-color="#4FE0A8" stop-opacity=".28"/>'
+      + '<stop offset="100%" stop-color="#4FE0A8" stop-opacity="0"/></linearGradient></defs>'
+      + '<g class="grid"><line x1="0" y1="0" x2="' + w + '" y2="0"/>'
+      + '<line x1="0" y1="' + h / 2 + '" x2="' + w + '" y2="' + h / 2 + '"/>'
+      + '<line x1="0" y1="' + h + '" x2="' + w + '" y2="' + h + '"/></g>'
+      + (runs.length > 1
+          ? '<polygon class="fillband" points="0,' + h + ' ' + points.join(' ') + ' ' + w + ',' + h + '"/>'
+            + '<polyline class="trend" points="' + points.join(' ') + '"/>'
+          : '')
+      + '<circle class="tip" cx="' + last[0] + '" cy="' + last[1] + '" r="4"/></svg>'
+      + '<div class="legend"><span class="num">0</span>'
+      + '<span>' + runs.length + ' ' + t.runsShort + '</span></div>';
+  }
+
+  var c = counts(), total = WORDS.length;
+  var bar = $('mastery').children;
+  bar[0].style.width = (c.known / total * 100) + '%';
+  bar[1].style.width = (c.learning / total * 100) + '%';
+  $('key-k').textContent = t.keyK + ' ' + c.known;
+  $('key-s').textContent = t.keyS + ' ' + c.learning;
+  $('key-n').textContent = t.keyN + ' ' + c.untouched;
+}
+
+function renderAll(){ renderPractise(); renderWords(); renderProgress(); }
+
+/* -----------------------------------------------------------------------
+ * The drill. Turn-based and timed — there is no frame loop anywhere in this
+ * file, deliberately the opposite engineering problem to the runner sample.
+ * --------------------------------------------------------------------- */
+var ROUND = 10;
+var run = null, ticker = null, locked = true;
+
+$('dirpick').addEventListener('click', function(event){
+  var button = event.target.closest('button');
+  if (!button) return;
+  state.dir = button.dataset.dir;
+  $('dirpick').querySelectorAll('button').forEach(function(b){
+    b.setAttribute('aria-pressed', String(b === button));
+  });
+  save();
+});
+
+function queue(){
+  // Anything missed before comes back first — the whole reason to keep state.
+  var missed = shuffled(WORDS.filter(function(w){ return record(w).wrong > 0; }));
+  var rest   = shuffled(WORDS.filter(function(w){ return record(w).wrong === 0; }));
+  return missed.concat(rest).slice(0, ROUND);
+}
+
+function begin(){
+  run = {queue:queue(), at:0, score:0, streak:0, best:0, lives:3, missed:[]};
+  $('d-score').textContent = '0';
+  $('d-streak').hidden = true;
+  hearts(3);
+  $('veil').hidden = true;
+  $('drill').hidden = false;
+  ask();
+}
+
+function hearts(n){
+  $('d-hearts').querySelectorAll('span').forEach(function(h, i){
+    h.className = i < n ? 'on' : '';
+  });
+}
+
+function limit(){ return Math.max(2600, 6000 - run.at * 260); }
+
+function ask(){
+  var t = ui();
+  var word = run.queue[run.at];
+  var toArabic = state.dir === 'en2ar';
+  run.answer = toArabic ? word.ar : word.en;
+  run.word = word;
+  locked = false;
+
+  $('d-lbl').textContent = toArabic ? t.cueAr : t.cueEn;
+  $('d-word').textContent = toArabic ? word.en : word.ar;
+  $('d-word').className = toArabic ? '' : 'ar';
+
+  var decoys = shuffled(WORDS.filter(function(w){ return w.en !== word.en; })).slice(0, 3);
+  var choices = shuffled([word].concat(decoys)).map(function(w){ return toArabic ? w.ar : w.en; });
+  $('d-opts').innerHTML = choices.map(function(c){
+    return '<button type="button" class="opt' + (toArabic ? ' ar' : '') + '">' + c + '</button>';
+  }).join('');
+  $('d-opts').querySelectorAll('.opt').forEach(function(b){
+    b.addEventListener('click', function(){ judge(b); });
+  });
+
+  run.deadline = Date.now() + limit();
+  run.span = limit();
+  $('clock').classList.remove('warn');
+  clearInterval(ticker);
+  ticker = setInterval(count, 60);
+  count();
+}
+
+function count(){
+  var ratio = Math.max(0, (run.deadline - Date.now()) / run.span);
+  $('clockfill').style.transform = 'scaleX(' + ratio + ')';
+  if (ratio < 0.3) $('clock').classList.add('warn');
+  if (ratio <= 0 && !locked) judge(null);
+}
+
+function judge(button){
+  if (locked) return;
+  locked = true;
+  clearInterval(ticker);
+
+  var right = !!button && button.textContent === run.answer;
+  var mark = state.mastery[run.word.en] || {right:0, wrong:0};
+  if (right) mark.right++; else mark.wrong++;
+  state.mastery[run.word.en] = mark;
+
+  $('d-opts').querySelectorAll('.opt').forEach(function(b){
+    if (b.textContent === run.answer) b.classList.add('right');
+    else if (b === button) b.classList.add('wrong');
+    else b.classList.add('mute');
+  });
+
+  if (right){
+    run.streak++;
+    if (run.streak > run.best) run.best = run.streak;
+    run.score += 10 + Math.min(run.streak, 5) * 2;
+    $('d-score').textContent = run.score;
+    $('d-streak').hidden = run.streak < 2;
+    $('d-streak').textContent = '×' + run.streak;
+  } else {
+    run.streak = 0;
+    $('d-streak').hidden = true;
+    run.lives--;
+    run.missed.push(run.word);
+    hearts(run.lives);
+  }
+
+  run.at++;
+  setTimeout(function(){
+    if (run.lives <= 0) return finish(false);
+    if (run.at >= run.queue.length) return finish(true);
+    ask();
+  }, right ? 380 : 900);
+}
+
+function finish(completed){
+  clearInterval(ticker);
+  var t = ui();
+  state.runs.push(run.score);
+  if (run.score > state.best) state.best = run.score;
+  save();
+
+  $('card').innerHTML =
+      '<h2>' + (completed ? t.done : t.over) + '</h2>'
+    + '<div class="big num">' + run.score + '</div>'
+    + '<p class="note num">' + run.at + ' ' + t.words + ' · ' + t.best + ' ×' + run.best + '</p>'
+    + (run.missed.length
+        ? '<h3 class="sec" style="text-align:start;margin-bottom:.45rem">' + t.missed + '</h3>'
+          + '<ul class="review">' + run.missed.map(function(w){
+              return '<li><span>' + w.en + '</span><span class="a">' + w.ar + '</span></li>';
+            }).join('') + '</ul>'
+        : '')
+    + '<button class="play" id="again" type="button">' + t.again + '</button>'
+    + '<button class="play" id="close" type="button" style="background:none;border:1px solid var(--line);color:var(--ink-2);margin-top:.5rem">'
+    + t.back + '</button>';
+
+  $('again').addEventListener('click', begin);
+  $('close').addEventListener('click', function(){
+    $('veil').hidden = true;
+    $('drill').hidden = true;
+    renderAll();
+  });
+  $('veil').hidden = false;
+  renderAll();
+}
+
+$('play').addEventListener('click', begin);
+$('d-quit').addEventListener('click', function(){
+  if (!locked) { locked = true; clearInterval(ticker); }
+  finish(false);
+});
+$('lang').addEventListener('click', function(){
+  state.ui = state.ui === 'en' ? 'ar' : 'en';
+  save();
+  applyLanguage();
+});
+
+// Restore the saved drill direction before first paint.
+$('dirpick').querySelectorAll('button').forEach(function(b){
+  b.setAttribute('aria-pressed', String(b.dataset.dir === state.dir));
+});
+applyLanguage();
+</script>
+</body>
+</html>
