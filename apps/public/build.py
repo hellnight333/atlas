@@ -70,6 +70,25 @@ SHOWCASE = {
         "pitch": "For anyone who says “we need an internal tool, not a website”.",
         "bilingual": False,
     },
+    "kilo": {
+        "slug": "sample-kilo", "name": "Kilo", "industry": "Fitness · mobile app",
+        "shot": "sample-kilo-m.png",
+        "concept": "The other half of a gym's software. Pulse is the log you read afterwards; "
+                   "this is the app you operate. Book a class and a seat disappears. Tick a set "
+                   "and a rest timer starts. Finish and the week's volume moves.",
+        "design": "Paper-white and built like a race clock — heavy tabular numerals, hairline "
+                  "rules, uppercase micro-labels. Bottom tab bar, four screens, and a workout "
+                  "runner that takes the whole screen because mid-set you are not browsing. "
+                  "Deliberately the opposite of Pulse's dark density.",
+        "real": ["Class booking that takes a seat and gives it back on cancel",
+                 "Workout runner with per-set ticks and a rest countdown",
+                 "Every figure derived from what you did, never painted on",
+                 "Bottom tab navigation across four screens"],
+        "needs": ["Accounts and sign-in", "A real class timetable",
+                  "Turnstile check-in — the code on the card scans nothing"],
+        "pitch": "For a gym still taking class bookings over WhatsApp.",
+        "bilingual": False,
+    },
     "nar": {
         "slug": "sample-nar", "name": "NAR", "industry": "Fine dining",
         "shot": "sample-nar-m.png",
@@ -166,6 +185,24 @@ SHOWCASE = {
                  "Keyboard, mouse and touch all drive the same one button"],
         "needs": ["Leaderboards", "Accounts", "App-store packaging — not implemented"],
         "pitch": "Proves the studio makes things you play, not only pages you read.",
+        "bilingual": False,
+    },
+    "wordrush": {
+        "slug": "sample-wordrush", "name": "Word Rush", "industry": "Education · bilingual app",
+        "shot": "sample-wordrush-m.png",
+        "concept": "A vocabulary trainer that contains a game. Forty-four Arabic and English "
+                   "pairs, ten questions a round, three lives — and whatever you miss comes "
+                   "back first in the next round, which is the whole reason it keeps state.",
+        "design": "Where Carrot Dash is one canvas and one button, this is an app with three "
+                  "screens, a searchable word list and a progress history. The entire "
+                  "interface — layout, direction, typography and the puzzle itself — switches "
+                  "between English and Arabic at runtime, not at build time.",
+        "real": ["Timed drill with lives, streaks and re-queued misses",
+                 "Searchable, filterable word list with per-word mastery",
+                 "Score history and a vocabulary breakdown that move as you play",
+                 "Whole interface flips to Arabic and right-to-left in place"],
+        "needs": ["Accounts", "Audio pronunciation", "App-store packaging — not implemented"],
+        "pitch": "For anyone who needs one product to work properly in both languages.",
         "bilingual": False,
     },
     "foundry": {
@@ -358,6 +395,16 @@ SHOWCASE_TABS = (
      "مسار البناء كوحدة تحكّم، بما فيها وقفة الموافقة.",
      "Press Run and watch it research, plan, fail a test and repair itself.",
      "اضغط تشغيل وراقبه يبحث ويخطّط ويفشل في اختبار ثم يصلح نفسه."),
+    ("mobile", "Mobile app", "تطبيق جوال", "kilo",
+     "A gym member app: book a class, run the session, watch the week move.",
+     "تطبيق لأعضاء النادي: احجز حصة، نفّذ التمرين، وتابع تقدّم أسبوعك.",
+     "Book a class, then start the session and tick a set.",
+     "احجز حصة، ثم ابدأ التمرين وسجّل مجموعة."),
+    ("bilingual", "Bilingual", "ثنائي اللغة", "wordrush",
+     "One product that works in both languages, switching layout and direction in place.",
+     "منتج واحد يعمل باللغتين، ويبدّل التخطيط والاتجاه في مكانه.",
+     "Play a round, then tap عربي to flip the whole interface.",
+     "العب جولة، ثم اضغط EN لتبديل الواجهة بالكامل."),
     ("game", "Game", "لعبة", "carrot",
      "A one-button browser game with real physics and a score.",
      "لعبة متصفّح بزرّ واحد، بفيزياء حقيقية ونقاط.",
@@ -1481,6 +1528,13 @@ def main(argv: list[str] | None = None) -> int:
     (out / "assets").mkdir(parents=True)
 
     # Hash and copy assets first, so the pages can reference the hashed names.
+    #
+    # The portfolio thumbnails are derived from SHOWCASE rather than listed by
+    # hand. They were listed by hand, and adding two samples shipped two cards
+    # whose <img> pointed at a file the build had never copied: fingerprinted()
+    # falls back to the bare name when an asset is unknown, so the page built
+    # cleanly, deployed cleanly, and rendered two broken boxes. A list that has
+    # to be kept in step with another list will eventually not be.
     for asset in (
         "site.css",
         "sample_mobile_en.png",
@@ -1488,16 +1542,7 @@ def main(argv: list[str] | None = None) -> int:
         "sample_desktop.png",
         "sample-restaurant.png",
         "sample-restaurant-ar.png",
-        "sample-pulse-m.png",
-        "sample-homefix-m.png",
-        "sample-ledgerloop-m.png",
-        "sample-meridian-m.png",
-        "sample-carrot-m.png",
-        "sample-foundry-m.png",
-        "sample-atelier-m.png",
-        "sample-nar-m.png",
-        "sample-apex-m.png",
-        "sample-verdant-m.png",
+        *dict.fromkeys(data["shot"] for data in SHOWCASE.values()),
         "sample-cafe.png",
         "sample-detailing.png",
         "sample-property.png",
@@ -1521,13 +1566,21 @@ def main(argv: list[str] | None = None) -> int:
     (out / "assets" / favicon_name).write_bytes(favicon_bytes)
 
     problems: list[str] = []
+    referenced: set[str] = set()
     for path, (builder, extra) in BUILDERS.items():
         html = shell(path, builder(), extra_head=extra)
         problems += check(path, html)
+        # Every /assets/ URL the page actually emits, so a reference to a file
+        # the build never copied fails here instead of on the live site.
+        referenced |= {m for m in re.findall(r"/assets/([\w.\-]+)", html)}
         target = out / path.strip("/") / "index.html" if path != "/" else out / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(html, encoding="utf-8")
         print(f"  {path:<12} {len(html):>6} bytes")
+
+    for name in sorted(referenced):
+        if not (out / "assets" / name).exists():
+            problems.append(f"asset referenced but not built: /assets/{name}")
 
     if problems:
         print("\nREFUSED — a page claims something Qevik does not do:", file=sys.stderr)

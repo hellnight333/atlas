@@ -190,6 +190,42 @@ argument for a scheduled daily scan rather than a decision taken once and writte
   restricted to `2.28.62.83`, which contains the damage, but rotating it is still the
   right move.
 
+## Portfolio — FROZEN 2026-08-21
+
+Thirteen showcase entries, twelve of them hand-built single files plus the
+bilingual clinic site from the vertical renderer. **No further samples.** The
+portfolio phase is closed; the next work is commercial validation, not more
+product.
+
+The last two additions were chosen for what the portfolio could not yet prove:
+
+- **Word Rush** (`sample-wordrush`) — bilingual Arabic/English vocabulary
+  trainer. Carrot Dash already proved a real-time physics loop; this proves
+  persistent state, a review surface, and an entire interface that switches
+  language and direction at runtime rather than at build time.
+- **Kilo** (`sample-kilo`) — mobile-first gym member app. Pulse already covered
+  fitness as a dark analytics dashboard; this is the operational half, where a
+  booking takes a seat and a set tick moves the week's volume.
+
+A third commercial website was **deliberately not built**. Luxury salon
+(Atelier), fine dining (NAR) and premium real estate (Meridian) already cover
+that ground, and a fourth website-shaped sample would have reintroduced the
+exact "one template in different colours" problem the differentiation checker
+exists to prevent.
+
+All twelve hand-built samples are structurally distinct: closest pair 0.45
+against a 0.62 threshold (`infra/differentiation.py`).
+
+### Guards added because this phase found the gaps
+- `apps/public/build.py` derives the asset copy list from `SHOWCASE` and
+  **refuses to build** if any page references an asset it did not copy. The
+  hand-maintained list drifted the moment SHOWCASE grew, and shipped two cards
+  whose `<img>` pointed at nothing.
+- `test_public_site.py` now checks that every showcase entry has its thumbnail,
+  is actually in `deploy_samples.PORTFOLIO`, and that a `bilingual: True` flag
+  (which emits a `/ar/` link) is only claimed by a site that has one.
+
+
 ## Deferred
 - Broad package/schema/database rename.
 - High-volume autonomous prospecting.

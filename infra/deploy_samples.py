@@ -31,6 +31,8 @@ PORTFOLIO = {
     "ledgerloop": "sample-ledgerloop",
     "meridian": "sample-meridian",
     "carrot": "sample-carrot",
+    "wordrush": "sample-wordrush",
+    "kilo": "sample-kilo",
     "foundry": "sample-foundry",
     "atelier": "sample-atelier",
 }
