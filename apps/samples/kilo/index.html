@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Kilo — gym member app, a Qevik sample</title>
+<meta name="description" content="A mobile-first gym member application built by Qevik. Sample project with demonstration data — not client work.">
+<meta name="theme-color" content="#F4F4F1">
+<style>
+/* Kilo — the gym app you operate, not the one you read.
+ *
+ * Pulse, elsewhere in this portfolio, is already a fitness product: a dark
+ * training log built around charts you look at after the fact. Building a
+ * second analytics dashboard would have proved nothing, so this is the other
+ * half of the same industry — the member-facing app where things actually
+ * happen. You book a class and a seat disappears. You tick a set and a rest
+ * timer starts. You finish a session and the week's volume moves.
+ *
+ * Every number on screen is derived from state the user changed. Nothing here
+ * is a painted mock-up of a number.
+ *
+ * Visually it is the opposite of Pulse on purpose: paper-white instead of
+ * near-black, and built around a race-clock idea — heavy condensed numerals,
+ * hairline rules, uppercase micro-labels. Digits are the hero of a gym app.
+ *
+ * 390x844 first. Bottom tab bar, thumb-reachable actions, and a workout runner
+ * that takes the whole screen because mid-set you are not browsing. */
+
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none !important}
+
+:root{
+  --paper:#F4F4F1; --card:#FFFFFF; --sunk:#ECECE8;
+  --ink:#0E1116; --ink-2:#41474F; --mute:#767C85; --rule:#E0E1DD;
+  --blue:#1F4EF5; --live:#DC2F26; --done:#0B8F63; --amber:#B4740A;
+  --sans:"SF Pro Display",-apple-system,"Segoe UI Variable","Segoe UI",system-ui,Roboto,sans-serif;
+  --tab:72px;
+}
+/* Deliberately single-theme: this is a bright, high-contrast surface meant to
+ * be read at 6am under gym lighting. Every colour is painted explicitly so it
+ * holds whatever ground the host paints behind it. */
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:16px;-webkit-font-smoothing:antialiased;overflow:hidden;
+  display:flex;flex-direction:column}
+h1,h2,h3{margin:0;letter-spacing:-.025em;text-wrap:balance;font-weight:800}
+p{margin:0}
+ul{list-style:none;margin:0;padding:0}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:3px solid var(--blue);outline-offset:2px;border-radius:8px}
+.n{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.eyebrow{font-size:.64rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--mute)}
+
+/* ---------------- header ---------------- */
+header.top{display:flex;align-items:flex-end;gap:.7rem;
+  padding:max(1rem,env(safe-area-inset-top)) 1.05rem .8rem;border-bottom:1px solid var(--rule)}
+header.top h1{font-size:1.5rem;line-height:1}
+header.top .sub{margin-top:.3rem}
+header.top .badge{margin-inline-start:auto;display:flex;align-items:baseline;gap:.28rem;
+  background:var(--ink);color:var(--paper);border-radius:8px;padding:.34rem .55rem}
+header.top .badge b{font-size:1rem;font-weight:800;line-height:1}
+header.top .badge span{font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;opacity:.75}
+
+main{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;
+  padding:1rem 1.05rem calc(var(--tab) + 1.4rem)}
+.view{display:flex;flex-direction:column;gap:1rem}
+
+/* ---------------- shared blocks ---------------- */
+.card{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:1rem}
+.card.flat{padding:0;overflow:hidden}
+.rowsep > li + li{border-top:1px solid var(--rule)}
+.pill{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;
+  padding:.2rem .5rem;font-size:.66rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.pill.live{background:#FDECEB;color:var(--live)}
+.pill.ok{background:#E7F5EF;color:var(--done)}
+.pill.soon{background:#FBF2E0;color:var(--amber)}
+.pill.flat{background:var(--sunk);color:var(--mute)}
+.btn{display:block;width:100%;background:var(--blue);color:#fff;border-radius:11px;
+  padding:.88rem;font-size:1rem;font-weight:800;text-align:center}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--rule)}
+.btn.dark{background:var(--ink);color:var(--paper)}
+.btn.small{width:auto;padding:.45rem .8rem;font-size:.8rem;border-radius:9px}
+
+/* ---------------- today ---------------- */
+.session{background:var(--ink);color:var(--paper);border-radius:16px;padding:1.15rem 1.05rem}
+.session .eyebrow{color:#9AA1AB}
+.session h2{font-size:1.4rem;margin:.4rem 0 .15rem;color:var(--paper)}
+.session .meta{font-size:.83rem;color:#A8AFB8;margin-bottom:1rem}
+.session .lifts{display:flex;gap:1.15rem;margin-bottom:1.05rem}
+.session .lifts div b{display:block;font-size:1.3rem;font-weight:800;line-height:1.15}
+.session .lifts div span{font-size:.6rem;letter-spacing:.13em;text-transform:uppercase;color:#8F969F}
+.session .btn{background:var(--paper);color:var(--ink)}
+
+.next{display:flex;align-items:center;gap:.85rem}
+.next .clock{background:var(--sunk);border-radius:10px;padding:.5rem .6rem;text-align:center;flex:0 0 auto}
+.next .clock b{display:block;font-size:1.1rem;font-weight:800;line-height:1.1}
+.next .clock span{font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.next .what{flex:1 1 auto;min-width:0}
+.next .what b{display:block;font-size:.98rem;font-weight:750}
+.next .what span{font-size:.79rem;color:var(--mute)}
+
+.streak{display:flex;gap:.32rem;margin-top:.75rem}
+.streak i{flex:1 1 0;height:30px;border-radius:5px;background:var(--sunk);
+  display:grid;place-items:center;font-size:.58rem;font-weight:800;color:var(--mute);font-style:normal}
+.streak i.hit{background:var(--done);color:#fff}
+.streak i.today{outline:2px solid var(--ink);outline-offset:1px}
+
+/* ---------------- classes ---------------- */
+.days{display:flex;gap:.35rem;overflow-x:auto;scrollbar-width:none;padding-bottom:.15rem}
+.days::-webkit-scrollbar{display:none}
+.days button{flex:0 0 auto;background:var(--card);border:1px solid var(--rule);border-radius:11px;
+  padding:.5rem .62rem;text-align:center;min-width:52px}
+.days button b{display:block;font-size:1rem;font-weight:800;line-height:1.1}
+.days button span{font-size:.58rem;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.days button[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.days button[aria-pressed=true] span{color:#9AA1AB}
+
+.klass{display:flex;align-items:center;gap:.85rem;padding:.85rem 1rem}
+.klass .when{flex:0 0 54px}
+.klass .when b{display:block;font-size:.98rem;font-weight:800;line-height:1.15}
+.klass .when span{font-size:.68rem;color:var(--mute)}
+.klass .what{flex:1 1 auto;min-width:0}
+.klass .what b{display:block;font-size:.97rem;font-weight:750}
+.klass .what span{font-size:.76rem;color:var(--mute)}
+.klass .seats{margin-top:.3rem;height:3px;border-radius:2px;background:var(--sunk);overflow:hidden}
+.klass .seats i{display:block;height:100%;background:var(--ink)}
+.klass .seats i.tight{background:var(--live)}
+.klass .act{flex:0 0 auto}
+.klass.booked{background:#F7FBF9}
+
+/* ---------------- progress ---------------- */
+.bars{display:flex;align-items:flex-end;gap:.45rem;height:118px;margin:.2rem 0 .5rem}
+.bars div{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:.3rem}
+.bars i{display:block;background:var(--blue);border-radius:4px 4px 0 0;min-height:2px}
+.bars i.now{background:var(--ink)}
+.bars small{text-align:center;font-size:.58rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.kpis{display:flex;gap:.55rem}
+.kpis .card{flex:1 1 0;padding:.78rem .7rem}
+.kpis b{display:block;font-size:1.5rem;font-weight:800;line-height:1.1;margin-bottom:.1rem}
+.pr{display:flex;align-items:baseline;gap:.7rem;padding:.72rem 1rem}
+.pr .lift{flex:1 1 auto;font-weight:700;font-size:.94rem}
+.pr .kg{font-size:1.05rem;font-weight:800}
+.pr .on{font-size:.72rem;color:var(--mute);flex:0 0 auto}
+
+/* ---------------- membership card ---------------- */
+.member{background:linear-gradient(145deg,#1B2028,#0E1116);color:var(--paper);
+  border-radius:18px;padding:1.2rem 1.1rem}
+.member .eyebrow{color:#8F969F}
+.member h2{font-size:1.3rem;color:var(--paper);margin:.35rem 0 .1rem}
+.member .plan{font-size:.83rem;color:#A8AFB8}
+.member .code{display:flex;gap:2px;height:52px;margin:1.1rem 0 .55rem;
+  background:var(--paper);border-radius:7px;padding:7px 9px;align-items:stretch}
+.member .code i{display:block;background:var(--ink);border-radius:1px}
+.member .num{display:flex;justify-content:space-between;font-size:.74rem;color:#A8AFB8;
+  letter-spacing:.09em}
+.facts{display:flex}
+.facts div{flex:1 1 0;padding:.85rem 1rem;border-inline-end:1px solid var(--rule)}
+.facts div:last-child{border-inline-end:0}
+.facts b{display:block;font-size:1.15rem;font-weight:800;line-height:1.2}
+.facts .eyebrow{font-size:.56rem;letter-spacing:.09em}
+.hours{padding:.62rem 1rem;display:flex;justify-content:space-between;font-size:.87rem}
+.hours span{color:var(--mute)}
+.hours.now{background:#F7FBF9;font-weight:700}
+
+footer{margin-top:.6rem;font-size:.72rem;color:var(--mute);line-height:1.6;text-align:center}
+footer b{color:var(--ink-2)}
+
+/* ---------------- bottom tab bar ---------------- */
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:8;height:calc(var(--tab) + env(safe-area-inset-bottom));
+  padding-bottom:env(safe-area-inset-bottom);
+  background:rgba(244,244,241,.94);backdrop-filter:blur(12px);
+  border-top:1px solid var(--rule);display:flex}
+nav.tabs a{flex:1 1 0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:.22rem;text-decoration:none;color:var(--mute);font-size:.62rem;font-weight:750;
+  letter-spacing:.05em}
+nav.tabs a svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+nav.tabs a[aria-current=page]{color:var(--ink)}
+nav.tabs a .dot{position:absolute;margin:-14px 0 0 15px;width:6px;height:6px;border-radius:50%;
+  background:var(--blue)}
+
+/* ---------------- workout runner ---------------- */
+.runner{position:fixed;inset:0;z-index:20;background:var(--paper);display:flex;flex-direction:column}
+.runner .rtop{display:flex;align-items:center;gap:.7rem;
+  padding:max(1rem,env(safe-area-inset-top)) 1.05rem .7rem;border-bottom:1px solid var(--rule)}
+.runner .rtop .elapsed{font-size:1.15rem;font-weight:800}
+.runner .rtop .of{font-size:.75rem;color:var(--mute);margin-inline-start:auto}
+.runner .rtop .x{width:32px;height:32px;border:1px solid var(--rule);border-radius:50%;
+  background:var(--card);font-size:1rem;line-height:1}
+.runner .body{flex:1 1 auto;overflow-y:auto;padding:1rem 1.05rem 1.2rem}
+.runner h2{font-size:1.65rem;margin:.3rem 0 .15rem}
+.runner .cue{font-size:.85rem;color:var(--mute);margin-bottom:1.1rem}
+.sets{display:flex;flex-direction:column;gap:.5rem}
+.set{display:flex;align-items:center;gap:.9rem;background:var(--card);border:1px solid var(--rule);
+  border-radius:12px;padding:.8rem .95rem;width:100%;text-align:start}
+.set .idx{width:26px;height:26px;border-radius:50%;border:2px solid var(--rule);flex:0 0 auto;
+  display:grid;place-items:center;font-size:.72rem;font-weight:800;color:var(--mute)}
+.set .load{flex:1 1 auto;font-size:1.02rem;font-weight:750}
+.set .load em{font-style:normal;color:var(--mute);font-weight:600}
+.set .tick{font-size:.68rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.set.done{background:#F5FAF8;border-color:#CDE8DD}
+.set.done .idx{background:var(--done);border-color:var(--done);color:#fff}
+.set.done .tick{color:var(--done)}
+.rest{position:sticky;bottom:0;margin-top:1rem;background:var(--ink);color:var(--paper);
+  border-radius:13px;padding:.85rem 1rem;display:flex;align-items:center;gap:.9rem}
+.rest b{font-size:1.5rem;font-weight:800;min-width:64px}
+.rest span{font-size:.78rem;color:#A8AFB8;flex:1 1 auto}
+.rest button{color:var(--paper);font-size:.74rem;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;border:1px solid #39404A;border-radius:8px;padding:.4rem .6rem}
+.exnav{display:flex;gap:.5rem;margin-top:1.1rem}
+.exnav .btn{flex:1 1 0}
+
+.sheet{position:fixed;inset:0;z-index:30;display:grid;place-items:end center;
+  background:rgba(14,17,22,.42)}
+.sheet .inner{background:var(--card);width:100%;max-width:430px;border-radius:18px 18px 0 0;
+  padding:1.4rem 1.15rem calc(1.4rem + env(safe-area-inset-bottom));text-align:center}
+.sheet h2{font-size:1.45rem;margin-bottom:.2rem}
+.sheet .note{font-size:.85rem;color:var(--mute);margin-bottom:1.05rem}
+.sheet .tally{display:flex;gap:.55rem;margin-bottom:1.1rem}
+.sheet .tally div{flex:1 1 0;background:var(--sunk);border-radius:11px;padding:.7rem .5rem}
+.sheet .tally b{display:block;font-size:1.35rem;font-weight:800;line-height:1.15}
+
+@media(prefers-reduced-motion:reduce){.btn,.set{transition:none}}
+@media(min-width:720px){
+  body{max-width:430px;margin:0 auto;border-inline:1px solid var(--rule)}
+  /* width:100% matters: with left:50% and right:auto these would shrink to fit
+     their content and drift off the centred app column. */
+  nav.tabs,.runner,.sheet{width:100%;max-width:430px;left:50%;right:auto;
+    transform:translateX(-50%)}
+}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Kilo",
+"applicationCategory":"HealthApplication","operatingSystem":"Web browser",
+"url":"https://sites.qevik.ai/sample-kilo/",
+"author":{"@type":"Organization","name":"Asia Link Internet Content Provider LLC","alternateName":"Qevik"},
+"description":"A mobile-first gym member application built as a Qevik sample project with demonstration data."}
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <p class="eyebrow" id="hdr-eyebrow">Thursday 21 August</p>
+    <h1 id="hdr-title">Today</h1>
+  </div>
+  <div class="badge"><b class="n" id="hdr-num">0</b><span id="hdr-unit">of last 7 days</span></div>
+</header>
+
+<main>
+  <!-- ---------------- today ---------------- -->
+  <section class="view" id="v-today">
+    <div class="session">
+      <p class="eyebrow">Programmed session · Week 3 of 6</p>
+      <h2 id="plan-title">Lower body — strength</h2>
+      <p class="meta" id="plan-meta">4 exercises · 13 sets · about 48 min</p>
+      <div class="lifts">
+        <div><b class="n" id="plan-vol">0</b><span>kg to lift</span></div>
+        <div><b class="n" id="plan-sets">0</b><span>sets left</span></div>
+      </div>
+      <button class="btn" id="start">Start session</button>
+    </div>
+
+    <h2 class="eyebrow">Booked next</h2>
+    <div class="card" id="next-card"></div>
+
+    <h2 class="eyebrow">Last seven days</h2>
+    <div class="card">
+      <div class="streak" id="streak"></div>
+      <p style="font-size:.79rem;color:var(--mute);margin-top:.6rem" id="streak-note"></p>
+    </div>
+    <footer><b>Qevik sample</b> — a gym member app with demonstration data.
+      Not a real gym, not a real product and not client work.</footer>
+  </section>
+
+  <!-- ---------------- classes ---------------- -->
+  <section class="view" id="v-classes" hidden>
+    <div class="days" id="days"></div>
+    <p class="eyebrow" id="class-count"></p>
+    <ul class="card flat rowsep" id="class-list"></ul>
+    <footer><b>Qevik sample</b> — seats, coaches and times are invented for the demo.</footer>
+  </section>
+
+  <!-- ---------------- progress ---------------- -->
+  <section class="view" id="v-progress" hidden>
+    <h2 class="eyebrow">Volume lifted per week</h2>
+    <div class="card">
+      <div class="bars" id="bars"></div>
+      <p style="font-size:.79rem;color:var(--mute)" id="bars-note"></p>
+    </div>
+    <div class="kpis">
+      <div class="card"><b class="n" id="k-sessions">0</b><span class="eyebrow">Sessions · 30d</span></div>
+      <div class="card"><b class="n" id="k-volume">0</b><span class="eyebrow">Tonnes · 30d</span></div>
+      <div class="card"><b class="n" id="k-classes">0</b><span class="eyebrow">Classes booked</span></div>
+    </div>
+    <h2 class="eyebrow">Personal bests</h2>
+    <ul class="card flat rowsep" id="prs"></ul>
+    <footer><b>Qevik sample</b> — figures move when you use the app, they are not painted on.</footer>
+  </section>
+
+  <!-- ---------------- membership ---------------- -->
+  <section class="view" id="v-card" hidden>
+    <div class="member">
+      <p class="eyebrow">Member since March 2024</p>
+      <h2>Amina Rahal</h2>
+      <p class="plan">Full access · Al Quoz &amp; Business Bay</p>
+      <div class="code" id="code" aria-hidden="true"></div>
+      <div class="num n"><span>NO. 4417 0938</span><span>RENEWS 14 MAR 2027</span></div>
+    </div>
+    <div class="card flat"><div class="facts">
+      <div><b class="n" id="m-visits">0</b><span class="eyebrow">Visits 30d</span></div>
+      <div><b class="n" id="m-booked">0</b><span class="eyebrow">Booked</span></div>
+      <div><b class="n">2</b><span class="eyebrow">Guest passes</span></div>
+    </div></div>
+    <h2 class="eyebrow">Al Quoz opening hours</h2>
+    <ul class="card flat rowsep" id="hours"></ul>
+    <footer><b>Qevik sample</b> — the member, the branches and the code are invented.
+      Nothing here scans anywhere.</footer>
+  </section>
+</main>
+
+<nav class="tabs" id="tabs" aria-label="Sections">
+  <a href="#today" data-view="today" aria-current="page">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Today</a>
+  <a href="#classes" data-view="classes">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Classes</a>
+  <a href="#progress" data-view="progress">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Progress</a>
+  <a href="#card" data-view="card">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg>Card</a>
+</nav>
+
+<!-- Mid-set you are not browsing: the runner takes the whole screen. -->
+<div class="runner" id="runner" hidden>
+  <div class="rtop">
+    <span class="elapsed n" id="r-elapsed">0:00</span>
+    <span class="of n" id="r-of">Exercise 1 of 4</span>
+    <button class="x" id="r-quit" type="button" aria-label="End session">✕</button>
+  </div>
+  <div class="body">
+    <p class="eyebrow" id="r-kicker">Now</p>
+    <h2 id="r-name">—</h2>
+    <p class="cue" id="r-cue"></p>
+    <div class="sets" id="r-sets"></div>
+    <div class="rest" id="r-rest" hidden>
+      <b class="n" id="r-clock">0:00</b>
+      <span id="r-restnote">Rest before the next set</span>
+      <button id="r-skip" type="button">Skip</button>
+    </div>
+    <div class="exnav">
+      <button class="btn ghost" id="r-prev" type="button">Previous</button>
+      <button class="btn dark" id="r-next" type="button">Next exercise</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" hidden><div class="inner" id="sheet-inner"></div></div>
+
+<script>
+"use strict";
+
+/* -----------------------------------------------------------------------
+ * Demonstration data. Invented, and labelled as invented everywhere it is
+ * shown — a sample that implies a real gym and real members is a lie with
+ * a stylesheet on it.
+ * --------------------------------------------------------------------- */
+var PLAN = {
+  title:'Lower body — strength',
+  exercises:[
+    {name:'Back squat',            cue:'Belt optional. Two minutes thirty between the top sets.',
+     rest:150, sets:[[5,60],[5,70],[5,80],[5,80]]},
+    {name:'Romanian deadlift',     cue:'Slow on the way down. Stop when the hamstrings run out.',
+     rest:120, sets:[[8,50],[8,55],[8,55]]},
+    {name:'Bulgarian split squat', cue:'Per leg. Dumbbells at the sides.',
+     rest:90,  sets:[[10,16],[10,16],[10,16]]},
+    {name:'Standing calf raise',   cue:'Pause a full second at the top.',
+     rest:60,  sets:[[15,40],[15,40],[15,40]]}
+  ]
+};
+
+var DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+var CLASSES = [
+  {d:0,t:'06:15',m:45,n:'Barbell Club',    c:'Nadia',  r:'Platform', cap:12, taken:9},
+  {d:0,t:'18:30',m:50,n:'Conditioning',    c:'Yusuf',  r:'Turf',     cap:16, taken:16},
+  {d:1,t:'07:00',m:60,n:'Reformer Pilates',c:'Leila',  r:'Studio 2', cap:10, taken:6},
+  {d:1,t:'19:15',m:45,n:'Boxing Technique',c:'Marcus', r:'Ring',     cap:14, taken:11},
+  {d:2,t:'06:15',m:45,n:'Barbell Club',    c:'Nadia',  r:'Platform', cap:12, taken:4},
+  {d:2,t:'12:30',m:30,n:'Lunch Express',   c:'Yusuf',  r:'Turf',     cap:18, taken:7},
+  {d:2,t:'19:00',m:60,n:'Hot Yoga',        c:'Priya',  r:'Studio 1', cap:20, taken:18},
+  {d:3,t:'06:15',m:45,n:'Barbell Club',    c:'Nadia',  r:'Platform', cap:12, taken:8},
+  {d:3,t:'18:30',m:50,n:'Conditioning',    c:'Yusuf',  r:'Turf',     cap:16, taken:12},
+  {d:3,t:'20:00',m:60,n:'Reformer Pilates',c:'Leila',  r:'Studio 2', cap:10, taken:3},
+  {d:4,t:'07:00',m:45,n:'Boxing Technique',c:'Marcus', r:'Ring',     cap:14, taken:5},
+  {d:4,t:'18:00',m:60,n:'Hot Yoga',        c:'Priya',  r:'Studio 1', cap:20, taken:14},
+  {d:5,t:'09:00',m:75,n:'Saturday Long',   c:'Nadia',  r:'Turf',     cap:24, taken:19},
+  {d:5,t:'11:00',m:45,n:'Mobility',        c:'Priya',  r:'Studio 1', cap:20, taken:6},
+  {d:6,t:'10:00',m:60,n:'Open Platform',   c:'—',      r:'Platform', cap:12, taken:2}
+];
+CLASSES.forEach(function(k, i){ k.id = 'c' + i; });
+
+var HOURS = [
+  ['Monday to Thursday','05:30 — 23:00'], ['Friday','05:30 — 12:00, 14:00 — 23:00'],
+  ['Saturday','07:00 — 21:00'], ['Sunday','07:00 — 21:00']
+];
+var PRS = [
+  ['Back squat', 95, 'Jul 2026'], ['Deadlift', 120, 'Jun 2026'],
+  ['Bench press', 52, 'Aug 2026'], ['Overhead press', 34, 'May 2026']
+];
+/* Volume already banked in previous weeks, in kilograms. The current week is
+ * whatever the user actually lifts in the runner, added on top. */
+var HISTORY = [18400, 21050, 19600, 23800, 22400, 24950];
+
+/* -----------------------------------------------------------------------
+ * State. Everything on screen is derived from this.
+ * --------------------------------------------------------------------- */
+/* Today's weekday, fixed to match the date in the header. Kept separate from
+ * the day the user is browsing on the Classes screen: the two were one field,
+ * so opening Wednesday's timetable quietly moved "today" to Wednesday and the
+ * last-seven-days strip relabelled itself. */
+var TODAY_DOW = 3;             // Thursday
+
+var state = {
+  view:'today',
+  day:TODAY_DOW,               // the day being browsed on Classes, not today
+  booked:{},                   // class id -> true
+  done:{},                     // "exercise:set" -> true
+  sessionsDone:0,
+  attended:[true,false,true,true,false,false,false]   // last seven days
+};
+
+var $ = function(id){ return document.getElementById(id); };
+function pad(n){ return (n < 10 ? '0' : '') + n; }
+function clock(sec){ return Math.floor(sec / 60) + ':' + pad(Math.max(0, sec % 60)); }
+function thousands(n){
+  var s = String(Math.round(n)), out = '';
+  for (var i = 0; i < s.length; i++){
+    if (i && (s.length - i) % 3 === 0) out += ',';
+    out += s[i];
+  }
+  return out;
+}
+function seatsLeft(k){ return k.cap - k.taken - (state.booked[k.id] ? 1 : 0); }
+function bookedList(){
+  return CLASSES.filter(function(k){ return state.booked[k.id]; })
+                .sort(function(a,b){ return a.d - b.d || (a.t < b.t ? -1 : 1); });
+}
+/* Derived, never accumulated. The first version added to a running total on
+ * every tick and forgot to subtract on untick, so mis-tapping a set inflated
+ * the week permanently — a browser test caught it as 1,750 kg where 1,450 was
+ * lifted. A number you can only compute one way cannot drift. */
+function weekVolume(){
+  var total = 0;
+  PLAN.exercises.forEach(function(ex, i){
+    ex.sets.forEach(function(set, j){
+      if (state.done[i + ':' + j]) total += set[0] * set[1];
+    });
+  });
+  return total;
+}
+
+function planTotals(){
+  var vol = 0, left = 0;
+  PLAN.exercises.forEach(function(ex, i){
+    ex.sets.forEach(function(s, j){
+      if (state.done[i + ':' + j]) return;
+      vol += s[0] * s[1];
+      left += 1;
+    });
+  });
+  return {vol:vol, left:left};
+}
+
+/* -----------------------------------------------------------------------
+ * Views
+ * --------------------------------------------------------------------- */
+var TITLES = {today:'Today', classes:'Classes', progress:'Progress', card:'Membership'};
+function show(view){
+  state.view = view;
+  ['today','classes','progress','card'].forEach(function(v){
+    $('v-' + v).hidden = v !== view;
+  });
+  $('tabs').querySelectorAll('a').forEach(function(a){
+    if (a.dataset.view === view) a.setAttribute('aria-current','page');
+    else a.removeAttribute('aria-current');
+  });
+  $('hdr-title').textContent = TITLES[view];
+  document.querySelector('main').scrollTop = 0;
+  render();
+}
+$('tabs').addEventListener('click', function(event){
+  var link = event.target.closest('a');
+  if (!link) return;
+  event.preventDefault();
+  show(link.dataset.view);
+});
+
+function renderToday(){
+  var t = planTotals();
+  $('plan-vol').textContent  = thousands(t.vol);
+  $('plan-sets').textContent = t.left;
+  $('plan-meta').textContent = PLAN.exercises.length + ' exercises · '
+    + PLAN.exercises.reduce(function(a, e){ return a + e.sets.length; }, 0)
+    + ' sets · about 48 min';
+  $('start').textContent = t.left === 0 ? 'Session complete'
+    : (t.left < PLAN.exercises.reduce(function(a,e){return a+e.sets.length;},0)
+       ? 'Resume session' : 'Start session');
+
+  var next = bookedList()[0];
+  $('next-card').innerHTML = next
+    ? '<div class="next"><div class="clock"><b class="n">' + next.t + '</b><span>'
+      + DAYS[next.d] + '</span></div><div class="what"><b>' + next.n + '</b><span>'
+      + next.c + ' · ' + next.m + ' min</span></div>'
+      + '<button class="btn ghost small" data-cancel="' + next.id + '" type="button">Cancel</button></div>'
+    : '<p style="font-size:.87rem;color:var(--mute)">Nothing booked. '
+      + '<button type="button" id="to-classes" style="color:var(--blue);font-weight:750">'
+      + 'Browse this week’s classes</button></p>';
+  if ($('to-classes')) $('to-classes').addEventListener('click', function(){ show('classes'); });
+
+  var hit = 0;
+  $('streak').innerHTML = state.attended.map(function(was, i){
+    if (was) hit++;
+    // Seven days ending today, not a fixed Mon-Sun week: the header says
+    // Thursday, so the outlined cell has to be Thursday too.
+    var weekday = (TODAY_DOW - (6 - i) + 7) % 7;
+    return '<i class="' + (was ? 'hit' : '') + (i === 6 ? ' today' : '') + '">'
+         + DAYS[weekday][0] + '</i>';
+  }).join('');
+  $('streak-note').textContent = hit + ' of the last 7 days · '
+    + (state.sessionsDone ? state.sessionsDone + ' logged in this session' : 'finish a workout to add today');
+  $('hdr-num').textContent = hit;
+}
+
+function renderClasses(){
+  $('days').innerHTML = DAYS.map(function(d, i){
+    var n = CLASSES.filter(function(k){ return k.d === i; }).length;
+    return '<button type="button" data-day="' + i + '" aria-pressed="' + (i === state.day) + '">'
+         + '<b>' + n + '</b><span>' + d + '</span></button>';
+  }).join('');
+
+  var today = CLASSES.filter(function(k){ return k.d === state.day; });
+  $('class-count').textContent = today.length + ' classes on ' + DAYS[state.day];
+  $('class-list').innerHTML = today.map(function(k){
+    var left = seatsLeft(k), mine = !!state.booked[k.id], full = left <= 0 && !mine;
+    // One seat badge, beside the name. The first draft also put one in the
+    // action column, so a full class announced itself twice.
+    var tone = mine ? 'ok' : full ? 'flat' : left <= 3 ? 'live' : left <= 6 ? 'soon' : 'flat';
+    var text = mine ? 'Booked' : full ? 'Full' : left + ' left';
+    return '<li class="klass' + (mine ? ' booked' : '') + '">'
+      + '<div class="when"><b class="n">' + k.t + '</b><span class="n">' + k.m + ' min</span></div>'
+      + '<div class="what"><b>' + k.n + ' <span class="pill ' + tone + '">' + text + '</span></b>'
+      + '<span>' + k.c + ' \u00b7 ' + k.r + '</span>'
+      + '<div class="seats"><i class="' + (left <= 3 ? 'tight' : '') + '" style="width:'
+      + Math.round((k.cap - left) / k.cap * 100) + '%"></i></div></div>'
+      + '<div class="act">' + (mine
+          ? '<button class="btn ghost small" data-cancel="' + k.id + '" type="button">Cancel</button>'
+          : full ? '<span class="pill flat">Waitlist</span>'
+          : '<button class="btn small" data-book="' + k.id + '" type="button">Book</button>')
+      + '</div></li>';
+  }).join('');
+}
+
+function renderProgress(){
+  var weeks = HISTORY.concat([weekVolume()]);
+  var top = Math.max.apply(null, weeks);
+  $('bars').innerHTML = weeks.map(function(v, i){
+    var last = i === weeks.length - 1;
+    return '<div><i class="' + (last ? 'now' : '') + '" style="height:'
+         + Math.max(2, Math.round(v / top * 100)) + '%"></i><small>'
+         + (last ? 'Now' : 'W' + (i + 1)) + '</small></div>';
+  }).join('');
+  $('bars-note').textContent = weekVolume()
+    ? thousands(weekVolume()) + ' kg this week so far'
+    : 'This week is empty until you finish a session.';
+
+  $('k-sessions').textContent = 11 + state.sessionsDone;
+  $('k-volume').textContent   = ((132400 + weekVolume()) / 1000).toFixed(1);
+  $('k-classes').textContent  = bookedList().length;
+  $('prs').innerHTML = PRS.map(function(p){
+    return '<li class="pr"><span class="lift">' + p[0] + '</span>'
+         + '<span class="kg n">' + p[1] + ' kg</span><span class="on">' + p[2] + '</span></li>';
+  }).join('');
+}
+
+function renderCard(){
+  $('m-visits').textContent = 11 + state.sessionsDone;
+  $('m-booked').textContent = bookedList().length;
+  if (!$('code').children.length){
+    // A decorative strip derived from the member number. It is not a barcode
+    // and does not encode anything — the caption says so.
+    //
+    // The multiplier has to keep the state inside double-precision integers.
+    // The first version used 1103515245, and 44170938 x 1103515245 is about
+    // 4.9e16 — past 2^53, so the low bits were rounded away, every seed came
+    // out even, and all 46 bars rendered at opacity 0. The strip was blank and
+    // a test that only counted the elements called it present.
+    var seed = 4417 * 938 + 1, bars = '';
+    for (var i = 0; i < 46; i++){
+      seed = (seed * 48271) % 2147483647;
+      bars += '<i style="flex:' + (1 + seed % 3) + ';opacity:'
+            + (Math.floor(seed / 4096) % 2 ? 1 : 0.18) + '"></i>';
+    }
+    $('code').innerHTML = bars;
+  }
+  var today = HOURS[TODAY_DOW <= 3 ? 0 : TODAY_DOW === 4 ? 1 : TODAY_DOW === 5 ? 2 : 3];
+  $('hours').innerHTML = HOURS.map(function(h){
+    return '<li class="hours' + (h === today ? ' now' : '') + '"><span style="color:var(--ink)">'
+         + h[0] + '</span><span class="n">' + h[1] + '</span></li>';
+  }).join('');
+}
+
+function render(){
+  if (state.view === 'today')    renderToday();
+  if (state.view === 'classes')  renderClasses();
+  if (state.view === 'progress') renderProgress();
+  if (state.view === 'card')     renderCard();
+}
+
+/* Booking and cancelling are delegated, so they work from either screen. */
+document.addEventListener('click', function(event){
+  var book = event.target.closest('[data-book]');
+  var drop = event.target.closest('[data-cancel]');
+  var day  = event.target.closest('[data-day]');
+  if (book){
+    var k = CLASSES.filter(function(c){ return c.id === book.dataset.book; })[0];
+    if (k && seatsLeft(k) > 0) state.booked[k.id] = true;
+    render();
+  } else if (drop){
+    delete state.booked[drop.dataset.cancel];
+    render();
+  } else if (day){
+    state.day = +day.dataset.day;
+    renderClasses();
+  }
+});
+
+/* -----------------------------------------------------------------------
+ * The workout runner
+ * --------------------------------------------------------------------- */
+var at = 0, started = 0, restLeft = 0, restTimer = null, elapsedTimer = null;
+
+function openRunner(){
+  at = 0;
+  for (var i = 0; i < PLAN.exercises.length; i++){
+    if (PLAN.exercises[i].sets.some(function(s, j){ return !state.done[i + ':' + j]; })){
+      at = i; break;
+    }
+  }
+  started = Date.now();
+  $('runner').hidden = false;
+  clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(function(){
+    $('r-elapsed').textContent = clock(Math.floor((Date.now() - started) / 1000));
+  }, 1000);
+  $('r-elapsed').textContent = '0:00';
+  drawExercise();
+}
+
+function drawExercise(){
+  var ex = PLAN.exercises[at];
+  $('r-of').textContent   = 'Exercise ' + (at + 1) + ' of ' + PLAN.exercises.length;
+  $('r-name').textContent = ex.name;
+  $('r-cue').textContent  = ex.cue;
+  $('r-kicker').textContent = at === 0 ? 'First up' : 'Now';
+  $('r-sets').innerHTML = ex.sets.map(function(s, j){
+    var isDone = !!state.done[at + ':' + j];
+    return '<button class="set' + (isDone ? ' done' : '') + '" type="button" data-set="' + j + '">'
+      + '<span class="idx n">' + (isDone ? '✓' : j + 1) + '</span>'
+      + '<span class="load n">' + s[1] + ' kg <em>× ' + s[0] + '</em></span>'
+      + '<span class="tick">' + (isDone ? 'Done' : 'Tap when done') + '</span></button>';
+  }).join('');
+  $('r-prev').disabled = at === 0;
+  $('r-prev').style.opacity = at === 0 ? .45 : 1;
+  $('r-next').textContent = at === PLAN.exercises.length - 1 ? 'Finish session' : 'Next exercise';
+}
+
+$('r-sets').addEventListener('click', function(event){
+  var button = event.target.closest('[data-set]');
+  if (!button) return;
+  var j = +button.dataset.set, key = at + ':' + j, ex = PLAN.exercises[at];
+  if (state.done[key]){
+    delete state.done[key];          // tapping again undoes it; people mis-tap
+  } else {
+    state.done[key] = true;
+    beginRest(ex.rest);
+  }
+  drawExercise();
+});
+
+function beginRest(seconds){
+  restLeft = seconds;
+  $('r-rest').hidden = false;
+  var more = PLAN.exercises[at].sets.some(function(set, j){ return !state.done[at + ':' + j]; });
+  $('r-restnote').textContent = more ? 'Rest before the next set'
+    : at === PLAN.exercises.length - 1 ? 'Last set done — rest, then finish'
+    : 'Last set done — rest, then move on';
+  clearInterval(restTimer);
+  restTimer = setInterval(function(){
+    restLeft -= 1;
+    $('r-clock').textContent = clock(restLeft);
+    if (restLeft <= 0){
+      clearInterval(restTimer);
+      $('r-restnote').textContent = 'Rest is up';
+      $('r-clock').textContent = '0:00';
+    }
+  }, 1000);
+  $('r-clock').textContent = clock(restLeft);
+}
+$('r-skip').addEventListener('click', function(){
+  clearInterval(restTimer);
+  $('r-rest').hidden = true;
+});
+
+$('r-prev').addEventListener('click', function(){ if (at > 0){ at--; drawExercise(); } });
+$('r-next').addEventListener('click', function(){
+  if (at < PLAN.exercises.length - 1){ at++; $('r-rest').hidden = true; drawExercise(); }
+  else finishSession();
+});
+$('r-quit').addEventListener('click', finishSession);
+$('start').addEventListener('click', openRunner);
+
+function finishSession(){
+  clearInterval(restTimer); clearInterval(elapsedTimer);
+  var minutes = Math.max(1, Math.round((Date.now() - started) / 60000));
+  var setsDone = Object.keys(state.done).length;
+  var lifted = weekVolume();
+  if (setsDone){ state.sessionsDone += 1; state.attended[6] = true; }
+
+  $('runner').hidden = true;
+  $('r-rest').hidden = true;
+  $('sheet-inner').innerHTML =
+      '<h2>' + (setsDone ? 'Session logged' : 'Session ended') + '</h2>'
+    + '<p class="note">' + (setsDone
+        ? 'Added to this week. Nothing left the device — this is a sample.'
+        : 'No sets were marked, so nothing was logged.') + '</p>'
+    + '<div class="tally">'
+    + '<div><b class="n">' + setsDone + '</b><span class="eyebrow">Sets</span></div>'
+    + '<div><b class="n">' + thousands(lifted) + '</b><span class="eyebrow">kg lifted</span></div>'
+    + '<div><b class="n">' + minutes + '</b><span class="eyebrow">Minutes</span></div>'
+    + '</div><button class="btn dark" id="sheet-close" type="button">Done</button>';
+  $('sheet').hidden = false;
+  $('sheet-close').addEventListener('click', function(){
+    $('sheet').hidden = true;
+    show('progress');
+  });
+}
+
+/* Two classes are pre-booked so the Today screen has something true to show
+ * on first load, rather than an empty state pretending to be a product. */
+state.booked['c7'] = true;
+state.booked['c11'] = true;
+show('today');
+</script>
+</body>
+</html>
