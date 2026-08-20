@@ -58,10 +58,55 @@ def test_the_forbidden_list_actually_fires() -> None:
 
 
 def test_every_page_states_the_operating_entity(pages) -> None:
-    """Qevik is a brand. The licensed company must appear on every page."""
+    """Qevik is a brand. The licensed company must appear on every page.
+
+    The entity name stays Latin in both languages — an Arabic rendering of it
+    would name a company that does not legally exist — but the disclaimer is
+    translated, so both phrasings are accepted.
+    """
     for path, html in pages.items():
         assert "Asia Link Internet Content Provider LLC" in html, path
-        assert "not a separately licensed company" in html, path
+        assert (
+            "not a separately licensed company" in html
+            or "ليست شركة مرخّصة بشكل منفصل" in html
+        ), path
+
+
+def test_the_arabic_routes_exist_and_are_canonical_for_themselves(pages) -> None:
+    """Pointing the Arabic canonical at English declares it a duplicate."""
+    import re as _re
+
+    for path in ("/ar/", "/ar/services/", "/ar/work/", "/ar/about/", "/ar/contact/"):
+        assert path in pages, f"{path} was not built"
+        html = pages[path]
+        canonical = _re.search(r'rel="canonical" href="([^"]*)"', html).group(1)
+        assert canonical == f"https://qevik.ai{path}", f"{path} -> {canonical}"
+        assert 'lang="ar" dir="rtl"' in html, path
+
+
+def test_english_and_arabic_point_at_each_other(pages) -> None:
+    for english, arabic in (
+        ("/", "/ar/"), ("/services/", "/ar/services/"), ("/work/", "/ar/work/"),
+        ("/about/", "/ar/about/"), ("/contact/", "/ar/contact/"),
+    ):
+        for path in (english, arabic):
+            html = pages[path]
+            assert f'hreflang="en" href="https://qevik.ai{english}"' in html, path
+            assert f'hreflang="ar" href="https://qevik.ai{arabic}"' in html, path
+
+
+def test_no_arabic_page_is_mostly_english(pages) -> None:
+    """A page that renders RTL but reads English is a toggle, not a translation."""
+    import re as _re
+
+    for path in ("/ar/", "/ar/services/", "/ar/work/", "/ar/about/", "/ar/contact/"):
+        text = _re.sub(r"<[^>]+>", " ", pages[path])
+        arabic_chars = len(_re.findall(r"[\u0600-\u06ff]", text))
+        latin_words = len(_re.findall(r"\b[A-Za-z]{4,}\b", text))
+        assert arabic_chars > 400, f"{path}: only {arabic_chars} Arabic characters"
+        assert arabic_chars > latin_words * 3, (
+            f"{path}: {latin_words} Latin words against {arabic_chars} Arabic characters"
+        )
 
 
 def test_the_appointment_form_is_described_as_a_request_everywhere(pages) -> None:

@@ -31,6 +31,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import copy_ar  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 SITE = "https://qevik.ai"
 TODAY = date(2026, 8, 19).isoformat()
@@ -263,6 +266,29 @@ PAGES: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+#: The five primary routes exist in both languages. Arabic lives under /ar/ and
+#: each page is canonical for itself — pointing the Arabic canonical at English
+#: declares it a duplicate, and duplicates are dropped from the index, removing
+#: the Arabic page from exactly the searches it exists to win.
+PRIMARY = ("/", "/services/", "/work/", "/about/", "/contact/")
+
+for _path in PRIMARY:
+    _ar = "/ar/" if _path == "/" else "/ar" + _path
+    PAGES[_ar] = (copy_ar.NAV[_path], *copy_ar.META[_path])
+
+
+def counterpart(path: str) -> str:
+    """The same page in the other language."""
+    if path.startswith("/ar/"):
+        rest = path[3:]
+        return rest if rest else "/"
+    return "/ar/" if path == "/" else "/ar" + path
+
+
+def is_arabic(path: str) -> bool:
+    return path.startswith("/ar/") or path == "/ar"
+
+
 #: Wording that would claim something Qevik does not do. Checked against every
 #: built page, so a marketing sentence cannot quietly overstate the product.
 FORBIDDEN = (
@@ -281,24 +307,150 @@ FORBIDDEN = (
 
 
 
-def sample_cards() -> str:
-    """The portfolio grid. Each card links to its own page, not straight out."""
+#: Arabic labels for the portfolio. Only what appears on the Arabic Work page —
+#: the detail pages stay English, and the cards there link straight to the live
+#: product rather than to a page the visitor cannot read.
+AR_LABELS = {
+    "carrot": ("Carrot Dash", "لعبة"),
+    "foundry": ("Foundry", "ذكاء اصطناعي وأتمتة"),
+    "atelier": ("ATELIER", "صالون فاخر"),
+    "pulse": ("Pulse", "تطبيق ويب · لياقة"),
+    "nar": ("NAR", "مطعم"),
+    "apex": ("APEX Detailing", "سيارات"),
+    "verdant": ("Verdant", "متجر إلكتروني"),
+    "homefix": ("HomeFix Dubai", "خدمات منزلية"),
+    "ledgerloop": ("LedgerLoop", "منتج SaaS"),
+    "meridian": ("Meridian", "عقارات"),
+    "clinic": ("Sample Dental Clinic", "رعاية صحية · ثنائي اللغة"),
+}
+
+#: The homepage showcase. Each entry is a product *type* rather than an
+#: industry, because the point being proved is range of product, not range of
+#: sector — six restaurants would demonstrate nothing.
+SHOWCASE_TABS = (
+    ("website", "Website", "موقع", "nar",
+     "An editorial restaurant that opens full-bleed with no navigation at all.",
+     "مطعم يفتح بملء الشاشة بلا أي قائمة تنقّل.",
+     "Scroll the menu, open the room, request a table.",
+     "تصفّح القائمة، شاهد المكان، اطلب طاولة."),
+    ("app", "Web app", "تطبيق ويب", "pulse",
+     "A product interface: sidebar, live charts, training log. No marketing page.",
+     "واجهة منتج: قائمة جانبية ورسوم بيانية حيّة وسجلّ تمارين. بلا صفحة تسويقية.",
+     "Switch the chart between volume and sessions.",
+     "بدّل الرسم البياني بين الحِمل وعدد الجلسات."),
+    ("saas", "SaaS", "منتج SaaS", "ledgerloop",
+     "A B2B marketing site with the product embedded in the hero.",
+     "موقع تسويقي لمنتج B2B مع واجهة المنتج داخل الافتتاحية.",
+     "Filter the approvals queue, switch the billing period.",
+     "صفِّ قائمة الموافقات، وبدّل دورة الفوترة."),
+    ("commerce", "E-commerce", "متجر إلكتروني", "verdant",
+     "A storefront: filter rail, search, product grid, basket drawer.",
+     "متجر: فلاتر وبحث وشبكة منتجات وسلّة تنزلق فوق الصفحة.",
+     "Filter by light and care, then add to the basket.",
+     "صفِّ حسب الإضاءة والعناية، ثم أضف إلى السلّة."),
+    ("interactive", "Configurator", "حاسبة تفاعلية", "apex",
+     "A four-step quote configurator that prices as you tap.",
+     "حاسبة عرض سعر من أربع خطوات تتغيّر أمامك.",
+     "Pick a vehicle and services — the total moves.",
+     "اختر سيارة وخدمات — يتغيّر المجموع فوراً."),
+    ("ai", "AI & automation", "ذكاء اصطناعي", "foundry",
+     "The build pipeline as an operator console, including the approval pause.",
+     "مسار البناء كوحدة تحكّم، بما فيها وقفة الموافقة.",
+     "Press Run and watch it research, plan, fail a test and repair itself.",
+     "اضغط تشغيل وراقبه يبحث ويخطّط ويفشل في اختبار ثم يصلح نفسه."),
+    ("game", "Game", "لعبة", "carrot",
+     "A one-button browser game with real physics and a score.",
+     "لعبة متصفّح بزرّ واحد، بفيزياء حقيقية ونقاط.",
+     "Press space or tap to jump. Hold to jump higher.",
+     "اضغط المسافة أو المس للقفز. استمر بالضغط لقفزة أعلى."),
+)
+
+
+def showcase_block(lang: str = "en") -> str:
+    """A real tab set: the image, the words and the call to action all change.
+
+    Deliberately not an iframe of each product. `sites.qevik.ai` sends
+    `X-Frame-Options: DENY`, and relaxing that for a cosmetic embed would trade
+    a real protection for a nested scroll area that behaves badly on a phone.
+    The tab switch is genuine state, and every panel links straight to the live
+    thing.
+    """
+    arabic = lang == "ar"
+    tabs, panels = "", ""
+    for index, (key, en_label, ar_label, sample, en_desc, ar_desc, en_do, ar_do) in enumerate(
+        SHOWCASE_TABS
+    ):
+        d = SHOWCASE[sample]
+        first = index == 0
+        tabs += (
+            f'<button role="tab" id="tab-{key}" aria-controls="panel-{key}" '
+            f'aria-selected="{"true" if first else "false"}" data-tab="{key}">'
+            f'{ar_label if arabic else en_label}</button>'
+        )
+        panels += f"""
+      <div class="sc-panel" role="tabpanel" id="panel-{key}" aria-labelledby="tab-{key}"{"" if first else " hidden"}>
+        <figure class="sc-shot">
+          <img src="/assets/{fingerprinted(d['shot'])}" width="390" height="844"
+               alt="{d['name']}" loading="{"eager" if first else "lazy"}">
+        </figure>
+        <div class="sc-copy">
+          <p class="sc-name">{d['name']}</p>
+          <p class="sc-desc">{ar_desc if arabic else en_desc}</p>
+          <p class="sc-try"><strong>{"جرّب:" if arabic else "Try:"}</strong>
+             {ar_do if arabic else en_do}</p>
+          <a class="btn primary" href="https://sites.qevik.ai/{d['slug']}/" rel="noopener">
+            {"افتح المنتج الحيّ" if arabic else "Open the live product"}</a>
+        </div>
+      </div>"""
+
+    return f"""
+    <div class="switcher">
+      <div class="sc-tabs" role="tablist"
+           aria-label="{"أنواع المنتجات" if arabic else "Product types"}">{tabs}</div>
+      {panels}
+    </div>
+    <script>
+    // Real state, not an animation: the picture, the words, the suggested
+    // interaction and the link all change together.
+    document.querySelectorAll('.sc-tabs button').forEach(function (tab) {{
+      tab.addEventListener('click', function () {{
+        document.querySelectorAll('.sc-tabs button').forEach(function (t) {{
+          t.setAttribute('aria-selected', String(t === tab));
+        }});
+        document.querySelectorAll('.sc-panel').forEach(function (panel) {{
+          panel.hidden = panel.id !== 'panel-' + tab.dataset.tab;
+        }});
+      }});
+    }});
+    </script>"""
+
+
+def sample_cards(lang: str = "en") -> str:
+    """The portfolio grid. English links to a detail page; Arabic to the product."""
+    arabic = lang == "ar"
     cards = ""
     for key, d in SHOWCASE.items():
+        name, industry = AR_LABELS.get(key, (d["name"], d["industry"])) if arabic \
+            else (d["name"], d["industry"])
+        live = f"https://sites.qevik.ai/{d['slug']}/"
+        target = live if arabic else f"/work/{key}/"
+        links = (
+            f'<a href="{live}" rel="noopener">{copy_ar.UI["open"]}</a>'
+            if arabic
+            else f'<a href="/work/{key}/">Details</a> · <a href="{live}" rel="noopener">Open</a>'
+        )
+        if d["bilingual"]:
+            links += f' · <a href="{live}ar/" rel="noopener">العربية</a>'
         cards += f"""
       <article class="sample">
-        <a href="/work/{key}/">
+        <a href="{target}"{' rel="noopener"' if arabic else ''}>
           <img src="/assets/{fingerprinted(d['shot'])}" width="390" height="844"
-               alt="{d['name']} — {d['industry']} — on a phone." loading="lazy">
+               alt="{name} — {industry}." loading="lazy">
         </a>
         <div class="sample-body">
-          <p class="sample-kind"><a href="/work/{key}/" style="text-decoration:none;color:inherit">{d['name']}</a></p>
-          <p class="sample-detail">{d['industry']}</p>
-          <p class="sample-links">
-            <a href="/work/{key}/">Details</a> ·
-            <a href="https://sites.qevik.ai/{d['slug']}/" rel="noopener">Open</a>
-            {'· <a href="https://sites.qevik.ai/' + d['slug'] + '/ar/" rel="noopener">العربية</a>' if d['bilingual'] else ''}
-          </p>
+          <p class="sample-kind">{name}</p>
+          <p class="sample-detail">{industry}</p>
+          <p class="sample-links">{links}</p>
         </div>
       </article>"""
     return cards
@@ -318,12 +470,44 @@ def fingerprinted(name: str) -> str:
 def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "") -> str:
     label, title, description = PAGES[path]
     canonical = f"{SITE}{path}"
-    # The work sub-pages are in PAGES so they get canonicals, titles and a
-    # sitemap entry — but a nav listing nine links is not navigation.
-    top = ("/", "/services/", "/work/", "/about/", "/contact/")
+    arabic = is_arabic(path)
+    lang, direction = ("ar", "rtl") if arabic else ("en", "ltr")
+    other = counterpart(path)
+    ui = copy_ar.UI if arabic else {
+        "skip": "Skip to content", "operated_by": "Operated by",
+        "talk": "Talk to a person", "english": "English", "arabic": "العربية",
+        "brand_note": f"Qevik is a product and brand of {ENTITY}. It is not a separately "
+                      "licensed company.",
+        "legal": f"{ENTITY}. Qevik is its trading brand.",
+        "tagline": "Digital products for Dubai businesses. Built, tested and hosted.",
+    }
+
+    # Only the five primary routes exist in Arabic. A work detail page has no
+    # Arabic counterpart, so it must not advertise one — an hreflang pointing at
+    # a 404 is worse than none, and a language switch that breaks is the first
+    # thing an Arabic-speaking visitor tests.
+    bilingual = path in PRIMARY or arabic
+    if bilingual:
+        en_href = f"{SITE}{other if arabic else path}"
+        ar_href = f"{SITE}{path if arabic else other}"
+        alternates = (
+            f'<link rel="alternate" hreflang="en" href="{en_href}">\n'
+            f'<link rel="alternate" hreflang="ar" href="{ar_href}">\n'
+            f'<link rel="alternate" hreflang="x-default" href="{en_href}">'
+        )
+        switch = (
+            f'<a class="lang" href="{other}" lang="{"en" if arabic else "ar"}" '
+            f'hreflang="{"en" if arabic else "ar"}">'
+            f'{ui["english"] if arabic else ui["arabic"]}</a>'
+        )
+    else:
+        alternates = ""
+        switch = ""
+
+    nav_paths = PRIMARY if not arabic else tuple(counterpart(p) for p in PRIMARY)
     links = []
-    for item in top:
-        here = item == path or (item == "/work/" and path.startswith("/work/"))
+    for item in nav_paths:
+        here = item == path or (item.rstrip("/").endswith("/work") and "/work/" in path)
         mark = ' class="here" aria-current="page"' if here else ""
         links.append(f'<a href="{item}"{mark}>{PAGES[item][0]}</a>')
     nav = "".join(links)
@@ -331,19 +515,21 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
     year = TODAY[:4]
 
     return f"""<!doctype html>
-<html lang="en">
+<html lang="{lang}" dir="{direction}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{description}">
 <link rel="canonical" href="{canonical}">
+{alternates}
 <meta property="og:type" content="{og_type}">
 <meta property="og:url" content="{canonical}">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{description}">
 <meta property="og:site_name" content="Qevik">
-<meta property="og:locale" content="en_AE">
+<meta property="og:locale" content="{"ar_AE" if arabic else "en_AE"}">
+<meta property="og:locale:alternate" content="{"en_AE" if arabic else "ar_AE"}">
 <meta property="og:image" content="{SITE}/assets/{fingerprinted("og.png")}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -358,12 +544,13 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
 {extra_head}
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main">{ui["skip"]}</a>
 <header class="site">
   <div class="bar">
-    <a class="brand" href="/"><span class="mark">Q</span><span>Qevik</span></a>
+    <a class="brand" href="{"/ar/" if arabic else "/"}"><span class="mark">Q</span><span>Qevik</span></a>
     <nav aria-label="Primary">{nav}</nav>
-    <a class="call" href="tel:{PHONE_TEL}">{PHONE_DISPLAY}</a>
+    {switch}
+    <a class="call" href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a>
   </div>
 </header>
 <main id="main">
@@ -373,21 +560,21 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
   <div class="cols">
     <div>
       <p class="fbrand">Qevik</p>
-      <p>Websites for Dubai clinics and small businesses. Built, tested and hosted.</p>
+      <p>{ui["tagline"]}</p>
     </div>
     <div>
-      <p class="flabel">Operated by</p>
+      <p class="flabel">{ui["operated_by"]}</p>
       <p>{ENTITY}<br>{ADDRESS_1}<br>{ADDRESS_2}</p>
-      <p class="fnote">Qevik is a product and brand of {ENTITY}. It is not a separately licensed company.</p>
+      <p class="fnote">{ui["brand_note"]}</p>
     </div>
     <div>
-      <p class="flabel">Talk to a person</p>
-      <p><a href="tel:{PHONE_TEL}">{PHONE_DISPLAY}</a><br>
+      <p class="flabel">{ui["talk"]}</p>
+      <p><a href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a><br>
          <a href="https://wa.me/{PHONE_WA}" rel="noopener">WhatsApp</a></p>
       <p>{NAME}</p>
     </div>
   </div>
-  <p class="legal">&copy; {year} {ENTITY}. Qevik is its trading brand.</p>
+  <p class="legal">&copy; {year} {ui["legal"]}</p>
 </footer>
 </body>
 </html>
@@ -586,11 +773,9 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>See it working</h2>
-    <p class="stand">{len(SHOWCASE)} samples, deliberately built as {len(SHOWCASE)} different
-      things — a game you can play, a pipeline console, a storefront, a dashboard, a configurator.
-      Real pages on the real internet. They are ours, clearly marked as samples, and they use our
-      own number so the call and WhatsApp buttons genuinely work.</p>
-    <div class="samples">{sample_cards()}</div>
+    <p class="stand">Seven kinds of product, each a live thing you can open and use. Switch
+      between them — the example changes, not just the colour.</p>
+    {showcase_block("en")}
   </div>
 </section>
 
@@ -1026,6 +1211,204 @@ def work_page(key: str):
     return build
 
 
+
+
+# --------------------------------------------------------------------------
+# Arabic pages. Built from copy_ar, which is authored prose rather than a
+# translation table — see that module for why the brand and the legal entity
+# stay in Latin.
+# --------------------------------------------------------------------------
+
+def ar_home() -> str:
+    c = copy_ar.HOME
+    cards = "".join(
+        f'<div class="card"><h3>{h}</h3><p>{b}</p></div>' for h, b in c["cards"]
+    )
+    steps = "".join(
+        f'<li><span class="n">{i}</span><div><h3>{h}</h3><p>{b}</p></div></li>'
+        for i, (h, b) in enumerate(c["steps"], 1)
+    )
+    return f"""
+<section class="hero"><div class="wrap hero-grid">
+  <div>
+    <p class="eyebrow">{c["eyebrow"]}</p>
+    <h1>{c["h1"]}</h1>
+    <p class="lead">{c["lead"]}</p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">{c["cta1"]}</a>
+      <a class="btn" href="/ar/work/">{c["cta2"]}</a>
+      <a class="btn ghost" href="{SAMPLE_CARROT}" rel="noopener">{c["cta3"]}</a>
+    </div>
+  </div>
+  <figure class="hero-shot">
+    <img src="/assets/{fingerprinted("sample-pulse-m.png")}" width="390" height="844"
+         alt="لوحة تحكّم تطبيق لياقة على الهاتف." fetchpriority="high">
+  </figure>
+</div></section>
+
+<section class="band"><div class="wrap">
+  <h2>{c["what_h"]}</h2>
+  <p class="stand">{c["what_p1"]}</p>
+  <p class="stand">{c["what_p2"]}</p>
+  <div class="grid three">{cards}</div>
+</div></section>
+
+<section class="band alt"><div class="wrap">
+  <h2>{c["show_h"]}</h2>
+  <p class="stand">{c["show_p"]}</p>
+  {showcase_block("ar")}
+</div></section>
+
+<section class="band"><div class="wrap">
+  <h2>{c["how_h"]}</h2>
+  <p class="stand">{c["how_p"]}</p>
+  <ol class="steps">{steps}</ol>
+</div></section>
+
+<section class="closing"><div class="wrap">
+  <h2>{c["close_h"]}</h2>
+  <p class="lead">{c["close_p"]}</p>
+  <div class="cta-row">
+    <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">{c["cta1"]}</a>
+    <a class="btn" href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a>
+  </div>
+</div></section>
+"""
+
+
+def ar_services() -> str:
+    c = copy_ar.SERVICES
+    blocks = ""
+    for heading, lede, points in c["items"]:
+        ticks = "".join(f"<li>{x}</li>" for x in points)
+        blocks += (f'<article class="service"><h2>{heading}</h2><p>{lede}</p>'
+                   f'<ul class="ticks">{ticks}</ul></article>')
+    return f"""
+<section class="page-head"><div class="wrap">
+  <p class="eyebrow">{c["eyebrow"]}</p>
+  <h1>{c["h1"]}</h1>
+  <p class="lead">{c["lead"]}</p>
+</div></section>
+
+<section class="band"><div class="wrap">
+  {blocks}
+  <div class="note"><p>{c["note"]}</p></div>
+</div></section>
+
+<section class="closing"><div class="wrap">
+  <h2>{c["close_h"]}</h2>
+  <p class="lead">{c["close_p"]}</p>
+  <div class="cta-row">
+    <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">{copy_ar.HOME["cta1"]}</a>
+    <a class="btn" href="/ar/contact/">{copy_ar.NAV["/contact/"]}</a>
+  </div>
+</div></section>
+"""
+
+
+def ar_work() -> str:
+    c = copy_ar.WORK
+    return f"""
+<section class="page-head"><div class="wrap">
+  <p class="eyebrow">{c["eyebrow"]}</p>
+  <h1>{c["h1"]}</h1>
+  <p class="lead">{c["lead"]}</p>
+</div></section>
+
+<section class="band"><div class="wrap">
+  <h2>{c["h2"]}</h2>
+  <p class="stand">{c["p1"]}</p>
+  <p class="stand">{c["p2"]}</p>
+  <div class="samples">{sample_cards("ar")}</div>
+  <p class="micro">{c["note"]}</p>
+</div></section>
+
+<section class="closing"><div class="wrap">
+  <h2>{c["close_h"]}</h2>
+  <p class="lead">{c["close_p"]}</p>
+  <div class="cta-row">
+    <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">{copy_ar.HOME["cta1"]}</a>
+    <a class="btn" href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a>
+  </div>
+</div></section>
+"""
+
+
+def ar_about() -> str:
+    c = copy_ar.ABOUT
+    nots = "".join(f"<li>{x}</li>" for x in c["s4_items"])
+    return f"""
+<section class="page-head"><div class="wrap">
+  <p class="eyebrow">{c["eyebrow"]}</p>
+  <h1>{c["h1"]}</h1>
+  <p class="lead">{c["lead"]}</p>
+</div></section>
+
+<section class="band"><div class="wrap narrow">
+  <h2>{c["s1_h"]}</h2>
+  <p>{c["s1_p1"]}</p>
+  <p>{c["s1_p2"]}</p>
+
+  <h2>{c["s2_h"]}</h2>
+  <p>{c["s2_p"]}</p>
+
+  <h2>{c["s3_h"]}</h2>
+  <p>{c["s3_p"]}</p>
+  <address class="entity" dir="ltr" style="text-align:start">
+    <strong>{ENTITY}</strong><br>{ADDRESS_1}<br>{ADDRESS_2}
+  </address>
+  <p class="micro">{c["s3_note"]}</p>
+
+  <h2>{c["s4_h"]}</h2>
+  <ul class="ticks plain">{nots}</ul>
+
+  <h2>{c["s5_h"]}</h2>
+  <p><a href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a> ·
+     <a href="https://wa.me/{PHONE_WA}" rel="noopener">WhatsApp</a></p>
+</div></section>
+"""
+
+
+def ar_contact() -> str:
+    c = copy_ar.CONTACT
+    items = "".join(f"<li>{x}</li>" for x in c["send_items"])
+    return f"""
+<section class="page-head"><div class="wrap">
+  <p class="eyebrow">{c["eyebrow"]}</p>
+  <h1>{c["h1"]}</h1>
+  <p class="lead">{c["lead"]}</p>
+</div></section>
+
+<section class="band"><div class="wrap narrow">
+  <div class="contact-grid">
+    <a class="contact-card" href="https://wa.me/{PHONE_WA}" rel="noopener">
+      <span class="ctag">{c["wa_tag"]}</span>
+      <h2>{c["wa_h"]}</h2>
+      <p dir="ltr" style="text-align:start">{PHONE_DISPLAY}</p>
+      <p class="micro">{c["wa_p"]}</p>
+    </a>
+    <a class="contact-card" href="tel:{PHONE_TEL}">
+      <span class="ctag">{c["tel_tag"]}</span>
+      <h2>{c["tel_h"]}</h2>
+      <p dir="ltr" style="text-align:start">{PHONE_DISPLAY}</p>
+      <p class="micro">{c["tel_p"]}</p>
+    </a>
+  </div>
+
+  <h2>{c["send_h"]}</h2>
+  <p>{c["send_p"]}</p>
+  <ul class="ticks">{items}</ul>
+
+  <h2>{c["where_h"]}</h2>
+  <address class="entity" dir="ltr" style="text-align:start">
+    <strong>{ENTITY}</strong><br>{ADDRESS_1}<br>{ADDRESS_2}
+  </address>
+  <p class="micro">{copy_ar.UI["brand_note"]}</p>
+  <p class="micro">{c["email_note"]}</p>
+</div></section>
+"""
+
+
 BUILDERS = {
     "/": (home, organization_schema()),
     "/services/": (services, ""),
@@ -1033,6 +1416,11 @@ BUILDERS = {
     "/about/": (about, ""),
     "/contact/": (contact, ""),
     **{f"/work/{key}/": (work_page(key), "") for key in SHOWCASE},
+    "/ar/": (ar_home, ""),
+    "/ar/services/": (ar_services, ""),
+    "/ar/work/": (ar_work, ""),
+    "/ar/about/": (ar_about, ""),
+    "/ar/contact/": (ar_contact, ""),
 }
 
 
