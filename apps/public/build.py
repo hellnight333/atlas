@@ -45,6 +45,7 @@ ADDRESS_2 = "Deiram, Dubai, UAE"
 
 SAMPLE = "https://sites.qevik.ai/sample/"
 SAMPLE_AR = "https://sites.qevik.ai/sample/ar/"
+SAMPLE_CARROT = "https://sites.qevik.ai/sample-carrot/"
 
 
 #: The portfolio, with the sales facts §21 asks for kept beside each entry:
@@ -149,6 +150,51 @@ SHOWCASE = {
         "pitch": "For an agency whose site is a WordPress theme with a contact form.",
         "bilingual": False,
     },
+    "carrot": {
+        "slug": "sample-carrot", "name": "Carrot Dash", "industry": "Game",
+        "shot": "sample-carrot-m.png",
+        "concept": "A one-button browser game. Hop the fences, eat the carrots. Genuinely "
+                   "playable — the physics, the rising difficulty and the score are real.",
+        "design": "Almost nothing here resembles a website: no navigation, no sections, no "
+                  "scrolling, no footer. One canvas filling the viewport and one button. "
+                  "Everything is drawn — no sprite sheets, no audio files, no libraries, under 14kB.",
+        "real": ["Full gameplay: variable-height jumps, collision, rising speed",
+                 "Score and a best score kept between visits",
+                 "Keyboard, mouse and touch all drive the same one button"],
+        "needs": ["Leaderboards", "Accounts", "App-store packaging — not implemented"],
+        "pitch": "Proves the studio makes things you play, not only pages you read.",
+        "bilingual": False,
+    },
+    "foundry": {
+        "slug": "sample-foundry", "name": "Foundry", "industry": "AI · automation",
+        "shot": "sample-foundry-m.png",
+        "concept": "An operator console for the build pipeline Qevik actually runs: objective, "
+                   "research, plan, generate, test, repair, deploy, verify — including the "
+                   "approval gate and a failed test that repairs itself.",
+        "design": "A run view rather than a dashboard of aggregates: a vertical timeline of "
+                  "steps on the left, the selected step's evidence on the right, a streaming log. "
+                  "Terminal-adjacent without pretending to be a terminal.",
+        "real": ["The whole run plays through with per-step states",
+                 "Every step is inspectable — artefacts, counts, log lines",
+                 "Shows the approval pause and the self-repair, because both are real"],
+        "needs": ["This page simulates one run; it does not execute the pipeline"],
+        "pitch": "Shows the machinery behind everything else in the portfolio.",
+        "bilingual": False,
+    },
+    "atelier": {
+        "slug": "sample-atelier", "name": "ATELIER", "industry": "Luxury salon",
+        "shot": "sample-atelier-m.png",
+        "concept": "A visit builder that accumulates time rather than price — because someone is "
+                   "deciding whether a colour and a facial fit into the same afternoon.",
+        "design": "Pale, warm and unhurried against NAR's dark drama. Centred wordmark over a "
+                  "rule, type sitting low in the opening, treatments as a quiet expanding list "
+                  "with no cards anywhere.",
+        "real": ["Expanding treatment list", "Add or remove from a visit",
+                 "Running total in hours and minutes, not money"],
+        "needs": ["Real availability", "Stylist rosters", "Booking"],
+        "pitch": "For a salon whose current site is a template with stock photography.",
+        "bilingual": False,
+    },
     "clinic": {
         "slug": "sample", "name": "Sample Dental Clinic", "industry": "Health · bilingual",
         "shot": "sample_mobile_en.png",
@@ -174,10 +220,10 @@ SHOWCASE = {
 PAGES: dict[str, tuple[str, str, str]] = {
     "/": (
         "Home",
-        "Qevik — websites for Dubai clinics and small businesses",
-        "Qevik builds bilingual English and Arabic websites for Dubai businesses, "
-        "then tests and verifies them in a real browser before they go live. "
-        "Hosting, HTTPS and ongoing changes included.",
+        "Qevik — digital products built around your business",
+        "Websites, web applications, SaaS interfaces, e-commerce, games and "
+        "AI-assisted automation — designed, built, tested in a real browser and "
+        "deployed. Dubai, English and Arabic.",
     ),
     "/services/": (
         "Services",
@@ -353,16 +399,15 @@ def home() -> str:
 <section class="hero">
   <div class="wrap hero-grid">
    <div>
-    <p class="eyebrow">Dubai · English &amp; Arabic</p>
-    <h1>Websites built from what your business actually does.</h1>
-    <p class="lead">Restaurants, cafés, salons, clinics, garages, agencies. Qevik builds the
-      site, tests it, opens it in a real browser to check what a visitor receives, and puts it
-      online with HTTPS — in English and Arabic. You get a link you can open on your phone before
-      you decide anything.</p>
+    <p class="eyebrow">Dubai · Websites · Apps · SaaS · Games</p>
+    <h1>Digital products built around your business.</h1>
+    <p class="lead">Websites, web applications, SaaS interfaces, e-commerce, games and AI-assisted
+      automation — designed around what the product actually has to do, then built, tested in a
+      real browser and deployed. Every example below is live; open one and use it.</p>
     <div class="cta-row">
-      <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">Ask on WhatsApp</a>
-      <a class="btn" href="{SAMPLE}" rel="noopener">See a live example</a>
-      <a class="btn ghost" href="/work/">How it looks</a>
+      <a class="btn primary" href="https://wa.me/{PHONE_WA}" rel="noopener">Start a project</a>
+      <a class="btn" href="/work/">Explore our work</a>
+      <a class="btn ghost" href="{SAMPLE_CARROT}" rel="noopener">Play the game we built</a>
     </div>
     <p class="micro">No obligation. The example is a real, live page — open it and press the buttons.</p>
    </div>
@@ -377,26 +422,43 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>What Qevik is</h2>
-    <p class="stand">A website service for small businesses in Dubai. You describe what you need
-      in plain language. The system researches your business, plans the work, builds the site,
-      tests it, deploys it — then opens the live address in a browser and checks what a visitor
-      receives. A person reviews it before anyone else sees it.</p>
+    <p class="stand">A digital product studio in Dubai. You describe what you need in plain
+      language. The work is researched, planned, built, tested and deployed — then the live
+      address is opened in a real browser and checked, and a person reviews it before anyone
+      else sees it.</p>
+    <p class="stand">The output is not always a website. It might be a dashboard, a storefront,
+      a configurator, a mobile-first application or a game. What it is depends on what the
+      business actually needs.</p>
     <div class="grid three">
       <div class="card">
-        <h3>Built from your own details</h3>
-        <p>Your name, phone number, address and opening hours, taken from your own listing.
-          Nothing is invented — no doctors you do not employ, no insurers you do not accept,
-          no reviews nobody wrote.</p>
+        <h3>Websites</h3>
+        <p>Business sites, local and multilingual, built from your own verified details.
+          Nothing invented — no staff you do not employ, no reviews nobody wrote.</p>
       </div>
       <div class="card">
-        <h3>English and Arabic, properly</h3>
-        <p>Two separate pages with correct right-to-left layout, not a translate button.
-          Each is its own address so search engines can find both.</p>
+        <h3>Web applications</h3>
+        <p>Dashboards, internal tools, customer portals and request systems. Interfaces people
+          use rather than pages they read.</p>
       </div>
       <div class="card">
-        <h3>Checked before you see it</h3>
-        <p>Every site is opened in a real browser and inspected — the page loads, the phone link
-          dials, the map opens, the Arabic page is right-to-left. If a check fails, it does not ship.</p>
+        <h3>SaaS products</h3>
+        <p>Product interfaces with the marketing site around them — pricing, features and the
+          application itself.</p>
+      </div>
+      <div class="card">
+        <h3>E-commerce</h3>
+        <p>Catalogues, search, filtering and a basket. Payment through a real provider when you
+          choose one.</p>
+      </div>
+      <div class="card">
+        <h3>Games &amp; interactive</h3>
+        <p>Playable browser games and configurators. Things that respond, not screenshots of
+          things that would.</p>
+      </div>
+      <div class="card">
+        <h3>AI &amp; automation</h3>
+        <p>Research, planning, generation, testing and verification wired into a pipeline —
+          the machinery that builds everything above.</p>
       </div>
     </div>
   </div>
@@ -524,9 +586,10 @@ def home() -> str:
 <section class="band">
   <div class="wrap">
     <h2>See it working</h2>
-    <p class="stand">Eight sample sites, deliberately built as eight different things. Real pages
-      on the real internet — open one and press the buttons. They are ours, clearly marked as
-      samples, and they use our own number so the call and WhatsApp buttons genuinely work.</p>
+    <p class="stand">{len(SHOWCASE)} samples, deliberately built as {len(SHOWCASE)} different
+      things — a game you can play, a pipeline console, a storefront, a dashboard, a configurator.
+      Real pages on the real internet. They are ours, clearly marked as samples, and they use our
+      own number so the call and WhatsApp buttons genuinely work.</p>
     <div class="samples">{sample_cards()}</div>
   </div>
 </section>
@@ -660,26 +723,26 @@ def work() -> str:
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Work</p>
-    <h1>Eight things we built</h1>
-    <p class="lead">Not mockups and not one template reskinned. Open one on your phone, press the
-      buttons, filter the shop, build a quote. Each behaves exactly as a real customer site would,
-      because it is one.</p>
+    <h1>{len(SHOWCASE)} things we built</h1>
+    <p class="lead">Not mockups and not one template reskinned. Play the game, build a quote,
+      filter the shop, watch a build run. Each behaves exactly as a real product would, because
+      it is one.</p>
   </div>
 </section>
 
 <section class="band">
   <div class="wrap">
-    <h2>Eight builds, eight different problems</h2>
-    <p class="stand">Not one template in eight colours. A restaurant that opens full-bleed with no
-      navigation at all, a detailing workshop built around a four-step quote configurator, a plant
-      shop with filters and a basket, and a fitness application with a sidebar and live charts —
-      each is a different structure because each business needs a different one.</p>
+    <h2>{len(SHOWCASE)} builds, {len(SHOWCASE)} different problems</h2>
+    <p class="stand">Not one template in {len(SHOWCASE)} colours. A restaurant that opens
+      full-bleed with no navigation at all. A quote configurator that prices as you tap. A shop
+      with filters and a basket. A fitness application with a sidebar and live charts. A playable
+      game. Each is a different structure because each product needs a different one.</p>
     <p class="stand">A structural check compares every pair on navigation, hero, section order,
       type, layout devices, call-to-action placement, footer and interaction model, and refuses any
       two that are the same page in different colours.</p>
     <div class="samples">{sample_cards()}</div>
-    <p class="micro">All six are Qevik samples, not client work, and each says so on the page. The
-      contact details are ours, so every button works — the call button dials Qevik.</p>
+    <p class="micro">All {len(SHOWCASE)} are Qevik samples, not client work, and each says so on
+      the page. The contact details are ours, so every button works — the call button dials Qevik.</p>
   </div>
 </section>
 
@@ -1041,6 +1104,9 @@ def main(argv: list[str] | None = None) -> int:
         "sample-homefix-m.png",
         "sample-ledgerloop-m.png",
         "sample-meridian-m.png",
+        "sample-carrot-m.png",
+        "sample-foundry-m.png",
+        "sample-atelier-m.png",
         "sample-nar-m.png",
         "sample-apex-m.png",
         "sample-verdant-m.png",

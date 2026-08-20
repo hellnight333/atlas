@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATELIER — hair and skin, Jumeirah</title>
+<meta name="description" content="A Qevik sample: luxury salon concept with a visit builder that accumulates time. Not a real salon.">
+<meta name="theme-color" content="#F6F1EA">
+<style>
+/* ATELIER — a luxury brand, which behaves unlike a service business.
+ *
+ * The interaction is the distinguishing idea: APEX accumulates a price and
+ * HomeFix computes a range, so this one accumulates *time*. You assemble a
+ * visit and watch the afternoon fill up — which is how someone actually decides
+ * whether they can fit a colour and a facial into the same trip.
+ *
+ * Composition is editorial and unhurried: a centred wordmark over a wide rule,
+ * a two-column opening where the type sits below the fold line rather than
+ * centred in it, treatments as a quiet expanding list rather than cards, and a
+ * closing that is almost empty. Where NAR is dark and dramatic, this is pale,
+ * warm and slow. */
+:root{
+  --paper:#F6F1EA; --paper-2:#EFE7DC; --card:#FFFDFA;
+  --ink:#241E1B; --ink-2:#5A4F48; --dim:#8C7F75; --rule:#DDD2C4;
+  --plum:#5E2A43; --brass:#A98A4B; --blush:#D9B9A7;
+  --display:"Didot","Bodoni MT","Playfair Display","Iowan Old Style",Georgia,serif;
+  --sans:"Futura","Avenir Next","Century Gothic",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15.5px;
+  line-height:1.62;-webkit-font-smoothing:antialiased}
+.hold{max-width:1120px;margin:0 auto;padding:0 clamp(1.2rem,5vw,3rem)}
+h1,h2,h3{margin:0;font-family:var(--display);font-weight:400;letter-spacing:-.01em}
+
+/* masthead: centred wordmark, rule beneath, links small and wide */
+.mast{padding:1.6rem 0 1.1rem;text-align:center;border-bottom:1px solid var(--rule)}
+.word{font-family:var(--display);font-size:clamp(1.5rem,4vw,2.1rem);letter-spacing:.34em;
+  margin-left:.34em}
+.mast nav{margin-top:.9rem;display:flex;justify-content:center;gap:clamp(1.1rem,4vw,2.6rem);
+  font-size:.68rem;letter-spacing:.22em;text-transform:uppercase}
+.mast nav a{color:var(--ink-2);text-decoration:none}
+.mast nav a:hover{color:var(--plum)}
+
+/* opening: type low-left, tone panel right */
+.open{display:grid;gap:clamp(1.6rem,4vw,3rem);padding:clamp(2.4rem,7vw,5rem) 0 clamp(2rem,5vw,3.4rem)}
+@media(min-width:900px){.open{grid-template-columns:1.02fr .98fr;align-items:end}}
+.open h1{font-size:clamp(2.3rem,6vw,4rem);line-height:1.03;max-width:12ch}
+.open h1 em{font-style:italic;color:var(--plum)}
+.open .say{margin:1.2rem 0 0;color:var(--ink-2);max-width:38ch}
+.open .fine{margin-top:1.6rem;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--dim)}
+.tone{aspect-ratio:4/5;border-radius:2px;position:relative;overflow:hidden;
+  background:linear-gradient(165deg,var(--blush) 0%,#C9A493 38%,var(--plum) 100%)}
+.tone::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(52% 38% at 34% 26%,rgba(255,253,250,.42),transparent 62%)}
+.tone .cut{position:absolute;left:0;right:0;bottom:0;height:34%;background:var(--paper);
+  clip-path:polygon(0 46%,100% 0,100% 100%,0 100%)}
+
+/* treatments: an expanding list, no cards anywhere */
+.work{border-top:1px solid var(--rule);padding:clamp(2.4rem,6vw,4rem) 0}
+.lede{display:grid;gap:1.2rem;margin-bottom:2.2rem}
+@media(min-width:820px){.lede{grid-template-columns:.9fr 1.1fr;align-items:baseline}}
+.lede h2{font-size:clamp(1.6rem,3.6vw,2.4rem);max-width:14ch}
+.lede p{margin:0;color:var(--ink-2);max-width:46ch}
+.tr{border-top:1px solid var(--rule)}
+.tr:last-of-type{border-bottom:1px solid var(--rule)}
+.tr > button{width:100%;background:none;border:0;font:inherit;color:inherit;cursor:pointer;
+  display:grid;grid-template-columns:1fr auto auto;gap:1rem;align-items:baseline;
+  padding:1.15rem .2rem;text-align:left}
+.tr .nm{font-family:var(--display);font-size:1.22rem}
+.tr .mins{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+  white-space:nowrap}
+.tr .add{width:30px;height:30px;border:1px solid var(--rule);border-radius:50%;display:grid;
+  place-items:center;font-size:1rem;color:var(--plum);line-height:1}
+.tr[data-on=true] .add{background:var(--plum);border-color:var(--plum);color:var(--paper)}
+.tr .more{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.tr[data-open=true] .more{max-height:220px}
+.tr .more p{margin:0 0 1.15rem;color:var(--ink-2);font-size:.93rem;max-width:52ch;padding-right:3rem}
+.tr > button:focus-visible,.book:focus-visible{outline:2px solid var(--plum);outline-offset:3px}
+
+/* the visit — accumulates time, not price */
+.visit{position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--rule);
+  padding:.9rem 0;margin-top:2rem;z-index:5}
+.visit .hold{display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap}
+.visit .sum{font-family:var(--display);font-size:1.3rem}
+.visit .sum small{font-family:var(--sans);font-size:.7rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dim);display:block}
+.visit .items{flex:1 1 auto;font-size:.85rem;color:var(--ink-2);min-width:0}
+.book{background:var(--plum);color:var(--paper);border:0;padding:.85rem 1.7rem;font:inherit;
+  font-size:.72rem;letter-spacing:.2em;text-transform:uppercase;cursor:pointer}
+.book:disabled{background:var(--rule);color:var(--dim);cursor:not-allowed}
+.said{display:none;background:var(--paper-2);border-left:2px solid var(--brass);padding:.7rem .9rem;
+  font-size:.88rem;color:var(--ink-2);margin-top:.7rem}
+.said.on{display:block}
+
+/* the room — three plain tone plates, wide gaps */
+.room{border-top:1px solid var(--rule);padding:clamp(2.4rem,6vw,4rem) 0}
+.plates{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-top:1.8rem}
+.plate{aspect-ratio:3/4;border-radius:2px;background:linear-gradient(160deg,#E4D3C6,#C7A48F)}
+.plate:nth-child(2){background:linear-gradient(160deg,#D7C4CE,#8E5E76)}
+.plate:nth-child(3){background:linear-gradient(160deg,#E8DFCF,#B49A6A)}
+.plate + figcaption{margin-top:.7rem;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--dim)}
+figure{margin:0}
+
+/* visit info — a plain definition list */
+.info{border-top:1px solid var(--rule);padding:clamp(2.4rem,6vw,4rem) 0}
+dl{display:grid;gap:.9rem 2.4rem;margin:1.6rem 0 0}
+@media(min-width:700px){dl{grid-template-columns:auto 1fr}}
+dt{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);padding-top:.2rem}
+dd{margin:0;color:var(--ink-2)}
+dd a{color:var(--plum)}
+footer{border-top:1px solid var(--rule);padding:2rem 0 1rem;text-align:center;
+  font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+.flag{background:var(--ink);color:#D9CFC6;padding:1.1rem 0;font-size:.84rem;letter-spacing:0;
+  text-transform:none}
+.flag b{color:var(--paper)}
+@media(prefers-reduced-motion:reduce){.tr .more{transition:none}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BeautySalon","name":"ATELIER",
+"url":"https://sites.qevik.ai/sample-atelier/","telephone":"+971501029104",
+"address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Jumeirah, Dubai","addressCountry":"AE"},
+"openingHours":["Sa-Th 10:00-20:00","Fr 14:00-20:00"]}
+</script>
+</head>
+<body>
+
+<header class="mast">
+  <div class="word">ATELIER</div>
+  <nav><a href="#treatments">Treatments</a><a href="#room">The room</a><a href="#visit">Your visit</a></nav>
+</header>
+
+<main>
+<section class="hold open">
+  <div>
+    <h1>Four chairs, and <em>no</em> hurry.</h1>
+    <p class="say">A small studio in Jumeirah. Appointments only, so nobody waits, and the same
+      hands look after you each time.</p>
+    <p class="fine">Jumeirah, Dubai · Saturday to Thursday</p>
+  </div>
+  <div class="tone"><div class="cut"></div></div>
+</section>
+
+<section class="work hold" id="treatments">
+  <div class="lede">
+    <h2>Treatments</h2>
+    <p>Choose what you would like and the afternoon fills up beside you. Times are honest — longer
+      or thicker hair takes longer, and we would rather say so than run late.</p>
+  </div>
+
+  <div class="tr" data-mins="60" data-on="false">
+    <button aria-expanded="false"><span class="nm">Cut and finish</span>
+      <span class="mins">60 min</span><span class="add" aria-hidden="true">+</span></button>
+    <div class="more"><p>Consultation, wash, cut and dry. If you are growing something out we will
+      say what is realistic rather than what you want to hear.</p></div>
+  </div>
+  <div class="tr" data-mins="150" data-on="false">
+    <button aria-expanded="false"><span class="nm">Colour</span>
+      <span class="mins">150 min</span><span class="add" aria-hidden="true">+</span></button>
+    <div class="more"><p>Full colour, highlights or a correction. Corrections are quoted after a
+      consultation — nobody can price one from a photograph.</p></div>
+  </div>
+  <div class="tr" data-mins="45" data-on="false">
+    <button aria-expanded="false"><span class="nm">Gloss and treatment</span>
+      <span class="mins">45 min</span><span class="add" aria-hidden="true">+</span></button>
+    <div class="more"><p>A deep conditioning or a tone refresh. Often booked alongside a cut rather
+      than on its own.</p></div>
+  </div>
+  <div class="tr" data-mins="45" data-on="false">
+    <button aria-expanded="false"><span class="nm">Facial</span>
+      <span class="mins">45 min</span><span class="add" aria-hidden="true">+</span></button>
+    <div class="more"><p>Cleanse, exfoliate, mask and massage. Quiet room, no upselling during the
+      treatment.</p></div>
+  </div>
+  <div class="tr" data-mins="60" data-on="false">
+    <button aria-expanded="false"><span class="nm">Manicure and pedicure</span>
+      <span class="mins">60 min</span><span class="add" aria-hidden="true">+</span></button>
+    <div class="more"><p>Classic or gel. Gel removal adds fifteen minutes and is included rather
+      than charged separately.</p></div>
+  </div>
+</section>
+
+<div class="visit" id="visit">
+  <div class="hold">
+    <div class="sum"><small>Your visit</small><span id="total">Nothing chosen</span></div>
+    <div class="items" id="items"></div>
+    <button class="book" id="book" disabled>Request this visit</button>
+  </div>
+  <div class="hold"><p class="said" id="said"></p></div>
+</div>
+
+<section class="room hold" id="room">
+  <div class="lede">
+    <h2>The room</h2>
+    <p>Four chairs, one basin, and a back room for treatments. We keep it small deliberately —
+      it is the only way the same person can look after you every time.</p>
+  </div>
+  <div class="plates">
+    <figure><div class="plate"></div><figcaption>The floor</figcaption></figure>
+    <figure><div class="plate"></div><figcaption>Colour bar</figcaption></figure>
+    <figure><div class="plate"></div><figcaption>Treatment room</figcaption></figure>
+  </div>
+</section>
+
+<section class="info hold">
+  <div class="lede"><h2>Your visit</h2>
+    <p>Everything worth knowing before you come.</p></div>
+  <dl>
+    <dt>Where</dt><dd>Office 301, Al Othman Building, Jumeirah, Dubai</dd>
+    <dt>Hours</dt><dd>Saturday to Thursday, 10am – 8pm · Friday, 2pm – 8pm</dd>
+    <dt>Booking</dt><dd>By appointment only. <a href="tel:+971501029104">+971 50 102 9104</a></dd>
+    <dt>Cancelling</dt><dd>Any time up to the day before, without charge.</dd>
+    <dt>Children</dt><dd>Welcome, and we will book you a quiet slot if you ask.</dd>
+  </dl>
+</section>
+</main>
+
+<footer>ATELIER · Jumeirah, Dubai · +971 50 102 9104</footer>
+
+<div class="flag"><div class="hold">
+  <b>Qevik sample.</b> ATELIER is not a real salon. The treatments, times and room are
+  illustrative, no stylists are named because none exist, and the request button is not connected
+  to anything. The telephone number is Qevik's own, so the link works.
+</div></div>
+
+<script>
+// The visit builder accumulates time rather than money — deliberately unlike
+// the configurator and the estimator elsewhere in this portfolio.
+var chosen = [];
+
+function human(mins){
+  var h = Math.floor(mins / 60), m = mins % 60;
+  if (!h) return m + ' minutes';
+  if (!m) return h + (h === 1 ? ' hour' : ' hours');
+  return h + 'h ' + m + 'm';
+}
+
+function paint(){
+  var mins = chosen.reduce(function(n, t){ return n + t.mins; }, 0);
+  document.getElementById('total').textContent = mins ? human(mins) : 'Nothing chosen';
+  document.getElementById('items').textContent = chosen.length
+    ? chosen.map(function(t){ return t.name; }).join(' · ')
+    : 'Choose a treatment to build your visit.';
+  document.getElementById('book').disabled = !chosen.length;
+}
+
+document.querySelectorAll('.tr').forEach(function(row){
+  var button = row.querySelector('button');
+  var name = row.querySelector('.nm').textContent;
+  var mins = Number(row.dataset.mins);
+  button.addEventListener('click', function(event){
+    // The circle adds; the row expands. Two actions, one control, and the hit
+    // area makes it obvious which is which.
+    if (event.target.closest('.add')){
+      var on = row.dataset.on === 'true';
+      row.dataset.on = String(!on);
+      chosen = on ? chosen.filter(function(t){ return t.name !== name; })
+                  : chosen.concat([{name: name, mins: mins}]);
+      paint();
+      return;
+    }
+    var open = row.dataset.open === 'true';
+    document.querySelectorAll('.tr').forEach(function(r){ r.dataset.open = 'false';
+      r.querySelector('button').setAttribute('aria-expanded','false'); });
+    row.dataset.open = String(!open);
+    button.setAttribute('aria-expanded', String(!open));
+  });
+});
+
+document.getElementById('book').addEventListener('click', function(){
+  var said = document.getElementById('said');
+  said.textContent = 'Not sent — ATELIER is a demonstration and this form is not connected. '
+    + 'Your visit of ' + human(chosen.reduce(function(n,t){return n+t.mins;},0))
+    + ' was assembled in this browser. On a real site the studio would confirm the time by phone; '
+    + 'nothing here books an appointment.';
+  said.className = 'said on';
+});
+
+paint();
+</script>
+</body>
+</html>

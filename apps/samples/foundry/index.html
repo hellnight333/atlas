@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foundry — objective to deployed product</title>
+<meta name="description" content="A Qevik concept interface for the build pipeline: objective, research, plan, generate, test, repair, deploy, verify.">
+<meta name="theme-color" content="#08090C">
+<style>
+/* Foundry — the pipeline Qevik actually runs, as an operator console.
+ *
+ * Structurally it is a run view: a vertical timeline of steps on the left, the
+ * selected step's evidence on the right, and a log that streams. No hero, no
+ * sections, no scroll narrative — you watch a thing happen and inspect what it
+ * produced.
+ *
+ * Deliberately unlike Pulse, which is a dashboard of aggregates. This is a
+ * single run, in sequence, with artefacts. Terminal-adjacent but not a fake
+ * terminal: real controls, real state, monospace only where it is data. */
+:root{
+  --void:#08090C; --panel:#101218; --panel-2:#161923; --line:#232733; --line-2:#333949;
+  --ink:#E7EAF2; --ink-2:#A2A9BC; --dim:#6B7285;
+  --run:#5B8CFF; --ok:#3DD68C; --warn:#FFB454; --fail:#FF6B5E; --idle:#3A4152;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--void);color:var(--ink);font-family:var(--sans);font-size:14.5px;
+  line-height:1.5;-webkit-font-smoothing:antialiased}
+
+.shell{display:grid;grid-template-rows:auto 1fr;min-height:100vh}
+.bar{display:flex;align-items:center;gap:1rem;padding:.7rem clamp(.9rem,3vw,1.4rem);
+  border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.logo{font-weight:750;letter-spacing:-.02em;display:flex;align-items:center;gap:.5rem}
+.logo i{width:18px;height:18px;border-radius:5px;background:var(--run);font-style:normal}
+.obj{flex:1 1 320px;min-width:0;display:flex;gap:.5rem}
+.obj input{flex:1 1 auto;background:var(--void);border:1px solid var(--line-2);border-radius:7px;
+  color:var(--ink);font:inherit;font-size:.88rem;padding:.5rem .75rem;min-width:0}
+.obj input:focus{outline:0;border-color:var(--run)}
+.go{background:var(--run);border:0;color:#fff;border-radius:7px;padding:.5rem 1.1rem;font:inherit;
+  font-size:.86rem;font-weight:650;cursor:pointer;white-space:nowrap}
+.go:disabled{background:var(--idle);color:var(--dim);cursor:not-allowed}
+.go:focus-visible,.step:focus-visible,.obj input:focus-visible{outline:2px solid var(--run);outline-offset:2px}
+
+.body{display:grid;grid-template-columns:1fr;min-height:0}
+@media(min-width:920px){.body{grid-template-columns:288px 1fr}}
+
+/* pipeline: a vertical timeline with a live rail */
+.pipe{border-right:1px solid var(--line);padding:1rem .8rem;background:var(--panel);
+  position:relative;overflow-y:auto}
+.pipe h2{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+  margin:0 0 .9rem;padding-left:.35rem}
+.step{display:grid;grid-template-columns:24px 1fr;gap:.7rem;width:100%;background:none;border:0;
+  text-align:left;font:inherit;color:var(--ink-2);padding:.5rem .35rem;border-radius:7px;
+  cursor:pointer;position:relative}
+.step:hover{background:var(--panel-2)}
+.step[aria-current=true]{background:var(--panel-2);color:var(--ink)}
+.dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--idle);display:grid;
+  place-items:center;font-size:.6rem;font-weight:800;color:var(--dim);background:var(--panel);
+  z-index:1;margin-top:.1rem}
+.step[data-state=run] .dot{border-color:var(--run);color:var(--run);
+  animation:pulse 1.1s ease-in-out infinite}
+.step[data-state=ok] .dot{border-color:var(--ok);background:var(--ok);color:#062F1C}
+.step[data-state=fail] .dot{border-color:var(--fail);background:var(--fail);color:#3A0F0B}
+.step[data-state=warn] .dot{border-color:var(--warn);background:var(--warn);color:#3A2A08}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(91,140,255,.5)}50%{box-shadow:0 0 0 6px rgba(91,140,255,0)}}
+.step .name{font-size:.9rem;font-weight:600}
+.step .meta{font-family:var(--mono);font-size:.7rem;color:var(--dim)}
+.rail{position:absolute;left:1.47rem;top:3.1rem;bottom:1rem;width:2px;background:var(--line);z-index:0}
+
+/* evidence pane */
+.pane{padding:1rem clamp(.9rem,3vw,1.5rem) 2.5rem;min-width:0;overflow-y:auto}
+.crumb{font-family:var(--mono);font-size:.72rem;color:var(--dim);margin-bottom:.5rem}
+.pane h3{margin:0 0 .2rem;font-size:1.12rem;letter-spacing:-.02em}
+.pane .cap{color:var(--ink-2);font-size:.9rem;margin:0 0 1.1rem;max-width:62ch}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem;margin-bottom:1.1rem}
+.c{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:.7rem .85rem}
+.c b{display:block;font-family:var(--mono);font-size:1.15rem;font-variant-numeric:tabular-nums}
+.c span{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.art{background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden;
+  margin-bottom:1rem}
+.art .h{padding:.5rem .8rem;border-bottom:1px solid var(--line);font-family:var(--mono);
+  font-size:.72rem;color:var(--dim);display:flex;gap:.6rem}
+.art .h b{color:var(--ink-2);font-weight:600}
+.art pre{margin:0;padding:.8rem;overflow-x:auto;font-family:var(--mono);font-size:.76rem;
+  line-height:1.65;color:var(--ink-2)}
+.art .k{color:var(--run)} .art .s{color:var(--ok)} .art .w{color:var(--warn)}
+.log{background:#05060A;border:1px solid var(--line);border-radius:9px;padding:.75rem .85rem;
+  font-family:var(--mono);font-size:.74rem;line-height:1.75;max-height:210px;overflow-y:auto}
+.log div{color:var(--ink-2)}
+.log .t{color:var(--dim)}
+.log .ok{color:var(--ok)} .log .w{color:var(--warn)} .log .e{color:var(--fail)}
+.gate{background:var(--panel-2);border:1px solid var(--line-2);border-left:3px solid var(--warn);
+  border-radius:9px;padding:.85rem 1rem;margin-bottom:1rem}
+.gate b{color:var(--warn)}
+.gate p{margin:.3rem 0 0;font-size:.87rem;color:var(--ink-2)}
+.idle{color:var(--dim);font-size:.9rem;padding:2rem 0;text-align:center}
+.flag{border-top:1px solid var(--line);background:var(--panel);padding:.9rem clamp(.9rem,3vw,1.4rem);
+  font-size:.83rem;color:var(--ink-2)}
+.flag b{color:var(--ink)}
+@media(prefers-reduced-motion:reduce){.dot{animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <div class="bar">
+    <div class="logo"><i></i>Foundry</div>
+    <div class="obj">
+      <input id="objective" value="A bilingual site for a dental clinic in Karama" aria-label="Objective">
+      <button class="go" id="run">Run</button>
+    </div>
+  </div>
+
+  <div class="body">
+    <nav class="pipe" aria-label="Pipeline">
+      <h2>Run</h2>
+      <div class="rail"></div>
+      <div id="steps"></div>
+    </nav>
+    <main class="pane" id="pane">
+      <p class="idle">Press <strong>Run</strong> to watch a build move through the pipeline.</p>
+    </main>
+  </div>
+
+  <div class="flag">
+    <b>Qevik concept</b> — not a real product and not client work. Foundry is an interface for
+    the pipeline Qevik genuinely runs — research,
+    model-driven planning, generation, testing, self-repair, deployment and browser verification.
+    This page simulates one run so the sequence can be seen; it does not execute anything, and no
+    site is built or deployed from here.
+  </div>
+</div>
+
+<script>
+// The pipeline it depicts is real — it is what builds the other samples. This
+// page replays a representative run so the shape is visible, and says so.
+var STEPS = [
+  {id:'objective', name:'Objective', meta:'plain language',
+   cap:'The operator states what they want. Nothing is chosen for them — no framework, no host, no template.',
+   dur:500, stats:[['1','input'],['0','decisions asked']],
+   art:{h:'objective.txt', body:'A bilingual site for a dental clinic in Karama'},
+   log:[['accepted objective','ok']]},
+
+  {id:'research', name:'Research', meta:'listing + live site',
+   cap:'The public listing and any existing website are read, so the build starts from facts about this business rather than a blank template.',
+   dur:1400, stats:[['7','facts found'],['1','site fetched'],['0','facts invented']],
+   art:{h:'facts.json', body:'{\n  <span class="k">"name"</span>: "Karama Dental Centre",\n  <span class="k">"phone"</span>: "04 xxx xxxx",\n  <span class="k">"hours"</span>: <span class="s">CONFIRMED_PRESENT</span>,\n  <span class="k">"arabic"</span>: <span class="w">CONFIRMED_ABSENT</span>,\n  <span class="k">"insurers"</span>: <span class="w">NOT_VERIFIED</span>\n}'},
+   log:[['fetched listing','ok'],['opened existing site in browser','ok'],
+        ['insurers not on homepage — recorded NOT_VERIFIED','w']]},
+
+  {id:'plan', name:'Plan', meta:'model-driven',
+   cap:'A language model decides the steps and their order. The plan is validated before anything runs, and every step that consumes evidence must name where it came from.',
+   dur:1200, stats:[['8','steps'],['1','rejected'],['qwen-max','planner']],
+   art:{h:'plan.yaml', body:'- generate.pages   <span class="k">uses</span> facts.json\n- generate.arabic  <span class="k">uses</span> facts.json\n- test.suite\n- deploy.publish   <span class="w">gate: approval</span>\n- verify.browser   <span class="k">uses</span> deploy.url'},
+   log:[['plan returned, 9 steps','ok'],['rejected step: invented "insurers accepted"','e'],
+        ['replanned without it','ok']]},
+
+  {id:'generate', name:'Generate', meta:'en + ar',
+   cap:'Pages are written from the facts. Anything not confirmed is left out rather than guessed — no doctors, no insurers, no reviews.',
+   dur:1600, stats:[['4','files'],['2','languages'],['0','stock photos']],
+   art:{h:'files', body:'index.html        <span class="s">12.4 kB</span>\nar/index.html     <span class="s">12.9 kB</span>\nrobots.txt        <span class="s">108 B</span>\nsitemap.xml       <span class="s">412 B</span>'},
+   log:[['wrote english page','ok'],['wrote arabic page, dir=rtl','ok'],
+        ['omitted insurers — NOT_VERIFIED','w']]},
+
+  {id:'test', name:'Test', meta:'first attempt',
+   cap:'The build is tested before it goes anywhere. This run failed the first time.',
+   dur:1500, state:'fail', stats:[['24','checks'],['1','failed']],
+   art:{h:'test output', body:'canonical_self_reference   <span class="w">FAIL</span>\n  arabic page canonicalised to english\n  → duplicates are dropped from the index'},
+   log:[['ran 24 checks','ok'],['canonical_self_reference failed','e']]},
+
+  {id:'repair', name:'Repair', meta:'regenerate + retest',
+   cap:'A failing build is regenerated and re-tested rather than shipped. Nothing broken reaches an address.',
+   dur:1500, stats:[['1','repair'],['24','checks'],['0','failed']],
+   art:{h:'diff', body:'- <span class="w">canonical → /karama-dental/</span>\n+ <span class="s">canonical → /karama-dental/ar/</span>\n\nre-ran suite: <span class="s">24 passed</span>'},
+   log:[['regenerated arabic page','ok'],['re-ran suite','ok'],['24 passed','ok']]},
+
+  {id:'deploy', name:'Deploy', meta:'needs approval',
+   cap:'Publishing is outward-facing, so it stops and waits for a person. The approval is bound to this exact build — changing the content invalidates it.',
+   dur:1800, state:'warn', gate:true,
+   stats:[['1','approval'],['v3','version'],['https','scheme']],
+   art:{h:'deploy', body:'target   sites.qevik.ai/karama-dental/\nversion  <span class="s">v3</span> (v2 kept for rollback)\ntls      <span class="s">automatic</span>'},
+   log:[['paused: approval required','w'],['approved by operator','ok'],
+        ['published v3, promoted','ok']]},
+
+  {id:'verify', name:'Verify', meta:'real browser',
+   cap:'A browser opens the public address — not a copy — and checks what a visitor actually receives.',
+   dur:1600, stats:[['200','status'],['0.7s','load'],['rtl','arabic']],
+   art:{h:'verification', body:'GET /karama-dental/       <span class="s">200</span>\nGET /karama-dental/ar/    <span class="s">200</span>\nheading                   <span class="s">matches</span>\ntel: link                 <span class="s">dials</span>\ndir="rtl"                 <span class="s">present</span>'},
+   log:[['opened public url in chromium','ok'],['extracted heading','ok'],
+        ['screenshot captured','ok'],['verified','ok']]}
+];
+
+var pane = document.getElementById('pane');
+var stepsEl = document.getElementById('steps');
+var runBtn = document.getElementById('run');
+var selected = null, running = false, done = {};
+
+function paintSteps(){
+  stepsEl.innerHTML = STEPS.map(function(s){
+    var state = done[s.id] || 'idle';
+    var glyph = state === 'ok' ? '✓' : state === 'fail' ? '!' : state === 'warn' ? '⏸' : '';
+    return '<button class="step" data-id="' + s.id + '" data-state="' + state + '"'
+      + ' aria-current="' + (selected === s.id) + '">'
+      + '<span class="dot">' + glyph + '</span>'
+      + '<span><span class="name">' + s.name + '</span><br>'
+      + '<span class="meta">' + s.meta + '</span></span></button>';
+  }).join('');
+  stepsEl.querySelectorAll('.step').forEach(function(b){
+    b.addEventListener('click', function(){ select(b.dataset.id); });
+  });
+}
+
+function select(id){
+  selected = id;
+  var s = STEPS.find(function(x){ return x.id === id; });
+  var stats = (s.stats || []).map(function(p){
+    return '<div class="c"><b>' + p[0] + '</b><span>' + p[1] + '</span></div>';
+  }).join('');
+  var gate = s.gate
+    ? '<div class="gate"><b>Approval gate</b><p>Outward-facing actions stop here. The software '
+      + 'cannot approve itself, and consent is bound to this exact build.</p></div>' : '';
+  var log = (s.log || []).map(function(l){
+    return '<div><span class="t">›</span> <span class="' + (l[1] || '') + '">' + l[0] + '</span></div>';
+  }).join('');
+  pane.innerHTML = '<p class="crumb">run · ' + s.id + '</p><h3>' + s.name + '</h3>'
+    + '<p class="cap">' + s.cap + '</p>'
+    + '<div class="cards">' + stats + '</div>' + gate
+    + '<div class="art"><div class="h"><b>' + s.art.h + '</b></div><pre>' + s.art.body + '</pre></div>'
+    + '<div class="log">' + log + '</div>';
+  paintSteps();
+}
+
+function run(){
+  if (running) return;
+  running = true; done = {}; runBtn.disabled = true;
+  runBtn.textContent = 'Running';
+  paintSteps();
+  var i = 0;
+  (function next(){
+    if (i >= STEPS.length){
+      running = false; runBtn.disabled = false; runBtn.textContent = 'Run again';
+      return;
+    }
+    var s = STEPS[i];
+    done[s.id] = 'run'; select(s.id);
+    setTimeout(function(){
+      done[s.id] = s.state || 'ok';
+      paintSteps();
+      if (selected === s.id) select(s.id);
+      i++; next();
+    }, s.dur);
+  })();
+}
+
+runBtn.addEventListener('click', run);
+paintSteps();
+</script>
+</body>
+</html>

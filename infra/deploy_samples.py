@@ -30,6 +30,9 @@ PORTFOLIO = {
     "homefix": "sample-homefix",
     "ledgerloop": "sample-ledgerloop",
     "meridian": "sample-meridian",
+    "carrot": "sample-carrot",
+    "foundry": "sample-foundry",
+    "atelier": "sample-atelier",
 }
 
 

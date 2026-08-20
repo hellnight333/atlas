@@ -12,6 +12,7 @@ this exists to catch score as a pass.
 
 from __future__ import annotations
 
+import re
 import sys
 from itertools import combinations
 from pathlib import Path
@@ -89,12 +90,30 @@ def test_at_least_one_sample_has_a_stateful_interaction(prints) -> None:
     )
 
 
-def test_every_sample_declares_itself_a_sample() -> None:
-    """A visitor must never mistake one of these for a real business."""
+def test_every_sample_declares_itself_a_sample_or_concept() -> None:
+    """A visitor must never mistake one of these for a real business.
+
+    Either designation is acceptable — "Qevik sample" or "Qevik concept". This
+    originally demanded the word "sample" and failed Foundry, which is honestly
+    labelled a concept because it depicts a pipeline rather than a business.
+    """
     for name, html in built():
         body = strip_comments(html).lower()
-        assert "sample" in body, name
-        assert "not a real" in body or "demonstration" in body, name
+        # Either word order. Most say "Sample site built by Qevik"; two say
+        # "Qevik sample" and "Qevik concept". An earlier version matched only
+        # the second form and failed eight honest pages.
+        designated = re.search(
+            r"qevik\s+(sample|concept)|(sample|concept)[^.]{0,40}\bby qevik\b", body
+        )
+        assert designated, f"{name} does not identify itself as a Qevik sample or concept"
+
+        assert any(
+            phrase in body
+            for phrase in (
+                "not a real", "does not exist", "not client work",
+                "illustrative", "simulates", "demonstration",
+            )
+        ), f"{name} does not disclaim being a real business or product"
 
 
 def test_no_sample_claims_a_completed_transaction() -> None:

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Carrot Dash — a Qevik sample game</title>
+<meta name="description" content="A genuinely playable browser game built by Qevik. One button. Sample project, not client work.">
+<meta name="theme-color" content="#7FC5E8">
+<style>
+/* Carrot Dash — a game, so almost nothing here resembles a website.
+ *
+ * No navigation, no sections, no scrolling, no footer, no call to action. One
+ * canvas that fills the viewport, one button, one score. The entire interface
+ * is the play area, which is the point: a portfolio of pages cannot demonstrate
+ * that we can build something you *use* rather than read.
+ *
+ * Everything is drawn — no sprite sheets, no audio files, no libraries. The
+ * whole thing is under 14kB and works offline once loaded. */
+:root{
+  --sky:#7FC5E8; --sky-2:#B9E4F5; --ground:#5FA855; --dirt:#8A6240;
+  --ink:#22331F; --cream:#FFF6E3; --carrot:#E8752B; --leaf:#4E9A3E;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--sky);
+  font-family:"Avenir Next","Segoe UI",system-ui,sans-serif;color:var(--ink);
+  user-select:none;touch-action:manipulation}
+#stage{position:fixed;inset:0;display:block;width:100%;height:100%}
+
+.hud{position:fixed;top:max(.7rem,env(safe-area-inset-top));left:0;right:0;
+  display:flex;align-items:flex-start;gap:1rem;padding:0 clamp(.8rem,3vw,1.4rem);
+  pointer-events:none;font-variant-numeric:tabular-nums}
+.hud .score{font-size:clamp(1.6rem,5vw,2.4rem);font-weight:800;letter-spacing:-.03em;
+  color:var(--cream);text-shadow:0 2px 0 rgba(34,51,31,.35)}
+.hud .best{margin-left:auto;font-size:.85rem;font-weight:700;color:var(--cream);
+  background:rgba(34,51,31,.28);padding:.3rem .7rem;border-radius:999px}
+
+.veil{position:fixed;inset:0;display:grid;place-items:center;padding:1.2rem;
+  background:rgba(34,51,31,.42);backdrop-filter:blur(3px);z-index:5}
+.veil[hidden]{display:none}
+.panel{background:var(--cream);border:3px solid var(--ink);border-radius:20px;
+  padding:clamp(1.3rem,4vw,2rem);max-width:340px;width:100%;text-align:center;
+  box-shadow:0 10px 0 rgba(34,51,31,.28)}
+.panel h1{margin:0 0 .3rem;font-size:clamp(1.7rem,6vw,2.2rem);letter-spacing:-.03em}
+.panel .tag{margin:0 0 1.1rem;font-size:.92rem;color:#5A6B52}
+.panel .how{font-size:.9rem;margin:0 0 1.2rem;line-height:1.5}
+.panel kbd{background:var(--ink);color:var(--cream);border-radius:5px;padding:.1em .45em;
+  font:inherit;font-size:.82em;font-weight:700}
+.play{display:block;width:100%;background:var(--carrot);color:#fff;border:0;
+  border-bottom:4px solid #B4551A;border-radius:12px;padding:.95rem;font:inherit;
+  font-size:1.05rem;font-weight:800;cursor:pointer}
+.play:active{transform:translateY(2px);border-bottom-width:2px}
+.play:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.final{font-size:2.4rem;font-weight:800;letter-spacing:-.03em;margin:.2rem 0 .1rem}
+.newbest{color:var(--carrot);font-weight:800;font-size:.9rem;margin:0 0 .8rem}
+.mark{position:fixed;bottom:max(.6rem,env(safe-area-inset-bottom));left:0;right:0;
+  text-align:center;font-size:.74rem;color:rgba(34,51,31,.55);pointer-events:none;
+  padding:0 1rem}
+.mark b{color:rgba(34,51,31,.8)}
+@media(prefers-reduced-motion:reduce){.veil{backdrop-filter:none}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"VideoGame","name":"Carrot Dash",
+"applicationCategory":"Game","gamePlatform":"Web browser","operatingSystem":"Any",
+"url":"https://sites.qevik.ai/sample-carrot/",
+"author":{"@type":"Organization","name":"Asia Link Internet Content Provider LLC","alternateName":"Qevik"},
+"description":"A one-button browser game built as a Qevik sample project."}
+</script>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div class="hud">
+  <div class="score" id="score">0</div>
+  <div class="best" id="best">Best 0</div>
+</div>
+
+<div class="veil" id="veil">
+  <div class="panel" id="panel">
+    <h1>Carrot Dash</h1>
+    <p class="tag">A Qevik sample game</p>
+    <p class="how">Hop the fences, eat the carrots.<br>
+      <kbd>Space</kbd> or tap to jump. Hold to jump higher.</p>
+    <button class="play" id="play">Play</button>
+  </div>
+</div>
+
+<p class="mark"><b>Qevik sample</b> — not a real product and not client work. Built to show we make things you play, not only pages you read.</p>
+
+<script>
+// A game that is not playable would prove the opposite of what it is here for,
+// so this is a real one: fixed-step physics, variable-height jumps, rising
+// difficulty, persistent best score. Everything drawn on a canvas — no sprites,
+// no audio files, no libraries.
+(function () {
+  var canvas = document.getElementById('stage');
+  var ctx = canvas.getContext('2d');
+  var veil = document.getElementById('veil');
+  var panel = document.getElementById('panel');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+
+  var W = 0, H = 0, DPR = 1, GROUND = 0;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    GROUND = H * 0.78;
+  }
+  window.addEventListener('resize', resize);
+
+  var best = 0;
+  try { best = Number(localStorage.getItem('carrot-best') || 0); } catch (e) { best = 0; }
+  bestEl.textContent = 'Best ' + best;
+
+  var state = 'menu';
+  var rabbit, obstacles, treats, puffs, hills, speed, score, spawnIn, treatIn, held, elapsed;
+
+  function reset() {
+    rabbit = { x: W * 0.22, y: GROUND, vy: 0, w: 34, h: 34, onGround: true, tilt: 0, hop: 0 };
+    obstacles = []; treats = []; puffs = [];
+    hills = [];
+    for (var i = 0; i < 7; i++) hills.push({ x: i * 180, h: 40 + Math.random() * 70, w: 150 + Math.random() * 120 });
+    speed = 300; score = 0; spawnIn = 1.1; treatIn = 0.8; held = false; elapsed = 0;
+    scoreEl.textContent = '0';
+  }
+
+  function start() {
+    resize(); reset(); state = 'play'; veil.hidden = true; last = performance.now();
+    requestAnimationFrame(frame);
+  }
+
+  function over() {
+    state = 'over';
+    var isBest = score > best;
+    if (isBest) {
+      best = score;
+      try { localStorage.setItem('carrot-best', String(best)); } catch (e) {}
+      bestEl.textContent = 'Best ' + best;
+    }
+    panel.innerHTML =
+      '<h1>' + (isBest ? 'New best!' : 'Caught out') + '</h1>'
+      + '<div class="final">' + score + '</div>'
+      + '<p class="newbest">' + (isBest ? 'Your best yet' : 'Best ' + best) + '</p>'
+      + '<button class="play" id="play">Play again</button>';
+    document.getElementById('play').addEventListener('click', start);
+    veil.hidden = false;
+  }
+
+  // --- input: one button, three ways to press it ------------------------
+  function down(event) {
+    if (state === 'play') {
+      if (rabbit.onGround) { rabbit.vy = -560; rabbit.onGround = false; rabbit.hop = 1; }
+      held = true;
+      event.preventDefault();
+    }
+  }
+  function up() { held = false; }
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      if (state === 'menu' || state === 'over') { start(); e.preventDefault(); return; }
+      down(e);
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp') up();
+  });
+  canvas.addEventListener('pointerdown', down);
+  window.addEventListener('pointerup', up);
+  document.getElementById('play').addEventListener('click', start);
+
+  // --- drawing ----------------------------------------------------------
+  function drawRabbit(r) {
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(r.tilt);
+    var squash = r.onGround ? 1 + Math.sin(elapsed * 18) * 0.03 : 1;
+    // ears
+    ctx.fillStyle = '#FFF6E3';
+    ctx.beginPath(); ctx.ellipse(-6, -26 * squash, 5, 14, -0.22, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(6, -27 * squash, 5, 14, 0.16, 0, 7); ctx.fill();
+    ctx.fillStyle = '#F2B7C6';
+    ctx.beginPath(); ctx.ellipse(-6, -26 * squash, 2.2, 9, -0.22, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(6, -27 * squash, 2.2, 9, 0.16, 0, 7); ctx.fill();
+    // body
+    ctx.fillStyle = '#FFF6E3';
+    ctx.beginPath(); ctx.ellipse(0, -12 * squash, 15, 14 * squash, 0, 0, 7); ctx.fill();
+    // tail
+    ctx.beginPath(); ctx.arc(-14, -8, 5, 0, 7); ctx.fill();
+    // eye + nose
+    ctx.fillStyle = '#22331F';
+    ctx.beginPath(); ctx.arc(6, -16, 2.4, 0, 7); ctx.fill();
+    ctx.fillStyle = '#F2B7C6';
+    ctx.beginPath(); ctx.arc(13, -12, 2, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCarrot(x, y, spin) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(spin);
+    ctx.fillStyle = '#E8752B';
+    ctx.beginPath(); ctx.moveTo(0, 11); ctx.lineTo(-6, -7); ctx.lineTo(6, -7); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#4E9A3E';
+    ctx.beginPath(); ctx.ellipse(-3, -10, 3, 5, -0.5, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(3, -10, 3, 5, 0.5, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFence(o) {
+    ctx.fillStyle = '#8A6240';
+    for (var i = 0; i < o.posts; i++) {
+      ctx.fillRect(o.x + i * 13, GROUND - o.h, 7, o.h);
+    }
+    ctx.fillRect(o.x - 2, GROUND - o.h * 0.72, o.posts * 13 + 2, 5);
+    ctx.fillRect(o.x - 2, GROUND - o.h * 0.34, o.posts * 13 + 2, 5);
+  }
+
+  var last = 0;
+  function frame(now) {
+    if (state !== 'play') return;
+    var dt = Math.min((now - last) / 1000, 0.05);
+    last = now; elapsed += dt;
+
+    // --- update -------------------------------------------------------
+    speed = 300 + elapsed * 11;
+    if (held && !rabbit.onGround && rabbit.vy < 0) rabbit.vy -= 900 * dt;
+    rabbit.vy += 1750 * dt;
+    rabbit.y += rabbit.vy * dt;
+    if (rabbit.y >= GROUND) { rabbit.y = GROUND; rabbit.vy = 0; rabbit.onGround = true; }
+    rabbit.tilt = rabbit.onGround ? 0 : Math.max(-0.3, Math.min(0.45, rabbit.vy / 1400));
+
+    spawnIn -= dt;
+    if (spawnIn <= 0) {
+      var posts = 1 + (Math.random() < Math.min(0.45, elapsed / 60) ? 1 : 0);
+      obstacles.push({ x: W + 40, h: 44 + Math.random() * 28, posts: posts, scored: false });
+      spawnIn = Math.max(0.72, 1.55 - elapsed * 0.02) + Math.random() * 0.5;
+    }
+    treatIn -= dt;
+    if (treatIn <= 0) {
+      treats.push({ x: W + 40, y: GROUND - 70 - Math.random() * 90, spin: 0, got: false });
+      treatIn = 1.4 + Math.random() * 1.6;
+    }
+
+    for (var i = obstacles.length - 1; i >= 0; i--) {
+      var o = obstacles[i];
+      o.x -= speed * dt;
+      var ow = o.posts * 13;
+      if (!o.scored && o.x + ow < rabbit.x - 12) {
+        o.scored = true; score += 1; scoreEl.textContent = score;
+      }
+      if (o.x + ow > rabbit.x - 13 && o.x < rabbit.x + 13 && rabbit.y > GROUND - o.h - 4) {
+        for (var p = 0; p < 12; p++) {
+          puffs.push({ x: rabbit.x, y: rabbit.y - 12, vx: (Math.random() - .5) * 260,
+                       vy: -Math.random() * 260, life: 0.6 });
+        }
+        return over();
+      }
+      if (o.x < -60) obstacles.splice(i, 1);
+    }
+
+    for (var j = treats.length - 1; j >= 0; j--) {
+      var t = treats[j];
+      t.x -= speed * dt; t.spin += dt * 3.2;
+      var dx = t.x - rabbit.x, dy = t.y - (rabbit.y - 14);
+      if (!t.got && dx * dx + dy * dy < 26 * 26) {
+        t.got = true; score += 5; scoreEl.textContent = score;
+        for (var q = 0; q < 8; q++) {
+          puffs.push({ x: t.x, y: t.y, vx: (Math.random() - .5) * 200,
+                       vy: -Math.random() * 200, life: 0.5 });
+        }
+      }
+      if (t.x < -40 || t.got) treats.splice(j, 1);
+    }
+
+    for (var k = puffs.length - 1; k >= 0; k--) {
+      var f = puffs[k];
+      f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 700 * dt; f.life -= dt;
+      if (f.life <= 0) puffs.splice(k, 1);
+    }
+
+    for (var m = 0; m < hills.length; m++) {
+      hills[m].x -= speed * 0.18 * dt;
+      if (hills[m].x + hills[m].w < 0) {
+        hills[m].x = Math.max.apply(null, hills.map(function (x) { return x.x; })) + 140 + Math.random() * 120;
+        hills[m].h = 40 + Math.random() * 70;
+      }
+    }
+
+    // --- draw ---------------------------------------------------------
+    var sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+    sky.addColorStop(0, '#7FC5E8'); sky.addColorStop(1, '#B9E4F5');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    ctx.beginPath(); ctx.arc(W * 0.8 - (elapsed * 12 % (W + 200)), H * 0.16, 26, 0, 7);
+    ctx.arc(W * 0.8 - (elapsed * 12 % (W + 200)) + 24, H * 0.16 + 6, 20, 0, 7); ctx.fill();
+
+    ctx.fillStyle = '#7FBF6C';
+    for (var n = 0; n < hills.length; n++) {
+      var hl = hills[n];
+      ctx.beginPath();
+      ctx.moveTo(hl.x, GROUND);
+      ctx.quadraticCurveTo(hl.x + hl.w / 2, GROUND - hl.h, hl.x + hl.w, GROUND);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = '#5FA855'; ctx.fillRect(0, GROUND, W, H - GROUND);
+    ctx.fillStyle = '#4E9A3E';
+    var offset = (elapsed * speed) % 40;
+    for (var g = -40; g < W + 40; g += 40) {
+      ctx.fillRect(g - offset, GROUND, 22, 5);
+    }
+
+    obstacles.forEach(drawFence);
+    treats.forEach(function (t) { drawCarrot(t.x, t.y, t.spin); });
+    drawRabbit(rabbit);
+
+    puffs.forEach(function (f) {
+      ctx.globalAlpha = Math.max(0, f.life / 0.6);
+      ctx.fillStyle = '#FFF6E3';
+      ctx.beginPath(); ctx.arc(f.x, f.y, 4, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+})();
+</script>
+</body>
+</html>
