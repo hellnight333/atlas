@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LedgerLoop — approvals that do not sit in someone's inbox</title>
+<meta name="description" content="Sample B2B SaaS marketing site and product interface built by Qevik. A concept demonstration; the product does not exist.">
+<meta name="theme-color" content="#FCFCFD">
+<style>
+/* LedgerLoop — a B2B SaaS site, which is a different animal again.
+ *
+ * The structure is the one B2B buyers expect and none of the other samples use:
+ * a full link bar with a CTA inside the header, a split hero where the product
+ * screenshot IS the argument, a three-column pricing table with a billing
+ * toggle, a feature comparison matrix, and an embedded product preview whose
+ * tabs actually switch views.
+ *
+ * Where Pulse is the application with no marketing around it, this is the
+ * marketing with the application embedded — deliberately the inverse, so the
+ * pair demonstrates both halves of the same capability.
+ *
+ * Light, tight, low-chroma. No gradient hero, no glassmorphism. */
+:root{
+  --bg:#FCFCFD; --panel:#FFFFFF; --wash:#F4F5F8; --line:#E4E6EC; --line-2:#CFD3DE;
+  --ink:#12141C; --ink-2:#454A5A; --dim:#767C8E;
+  --brand:#3B39C9; --brand-2:#2E2CA8; --brand-wash:#EEEEFB;
+  --ok:#0E7C55; --warn:#B5730B; --stop:#B33A31;
+  --sans:"Helvetica Neue",Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15.5px;
+  line-height:1.55;-webkit-font-smoothing:antialiased}
+.hold{max-width:1140px;margin:0 auto;padding:0 clamp(1rem,3.5vw,2rem)}
+h1,h2,h3{margin:0;letter-spacing:-.025em;font-weight:700}
+p{margin:0 0 .9rem}
+a{color:var(--brand)}
+
+/* header: link bar WITH a cta inside it — nothing else in the portfolio does this */
+.nav{border-bottom:1px solid var(--line);background:rgba(252,252,253,.92);backdrop-filter:blur(8px);
+  position:sticky;top:0;z-index:20}
+.nav .hold{display:flex;align-items:center;gap:1.6rem;padding:.75rem 0}
+.brand{font-weight:800;font-size:1.08rem;letter-spacing:-.035em;display:flex;align-items:center;gap:.45rem}
+.brand i{width:20px;height:20px;border-radius:5px;background:var(--brand);font-style:normal;
+  display:grid;place-items:center;color:#fff;font-size:.7rem;font-weight:800}
+.nav .links{display:flex;gap:1.25rem;font-size:.9rem}
+.nav .links a{color:var(--ink-2);text-decoration:none}
+.nav .links a:hover{color:var(--ink)}
+.nav .right{margin-left:auto;display:flex;align-items:center;gap:.8rem}
+.nav .signin{font-size:.9rem;color:var(--ink-2);text-decoration:none}
+.cta{background:var(--brand);color:#fff;border:0;border-radius:7px;padding:.5rem 1rem;
+  font:inherit;font-size:.88rem;font-weight:650;text-decoration:none;display:inline-block;cursor:pointer}
+.cta:hover{background:var(--brand-2)}
+.cta.ghost{background:transparent;color:var(--brand);border:1px solid var(--line-2)}
+@media(max-width:820px){.nav .links{display:none}}
+
+/* hero: split, product on the right */
+.hero{padding:clamp(2.6rem,7vw,5rem) 0}
+.hero .hold{display:grid;gap:2.4rem;align-items:center}
+@media(min-width:960px){.hero .hold{grid-template-columns:.95fr 1.05fr}}
+.hero h1{font-size:clamp(2rem,4.4vw,3.05rem);line-height:1.06;max-width:17ch}
+.hero .sub{font-size:1.08rem;color:var(--ink-2);max-width:44ch;margin-top:1rem}
+.hero .row{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.5rem}
+.hero .note{font-size:.84rem;color:var(--dim);margin-top:.9rem}
+.shot{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel);
+  box-shadow:0 20px 50px -30px rgba(18,20,28,.4)}
+.shot .chrome{display:flex;gap:.35rem;padding:.55rem .8rem;background:var(--wash);
+  border-bottom:1px solid var(--line)}
+.shot .chrome i{width:9px;height:9px;border-radius:50%;background:var(--line-2)}
+
+/* embedded product preview */
+.app{display:grid;grid-template-columns:132px 1fr;min-height:296px;font-size:.82rem}
+.app .side{background:var(--wash);border-right:1px solid var(--line);padding:.7rem .5rem}
+.app .side button{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;
+  font-size:.8rem;color:var(--ink-2);padding:.4rem .55rem;border-radius:6px;cursor:pointer}
+.app .side button[aria-selected=true]{background:var(--brand-wash);color:var(--brand);font-weight:650}
+.app .side .grp{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
+  padding:.7rem .55rem .3rem}
+.app .view{padding:.9rem 1rem;min-width:0}
+.app .view h4{margin:0 0 .1rem;font-size:.92rem}
+.app .view .cap{color:var(--dim);font-size:.76rem;margin:0 0 .8rem}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:.8rem}
+.kpi{background:var(--wash);border-radius:7px;padding:.5rem .6rem}
+.kpi b{display:block;font-family:var(--mono);font-size:1.05rem;font-variant-numeric:tabular-nums}
+.kpi span{font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.app table{width:100%;border-collapse:collapse;font-size:.76rem}
+.app th,.app td{text-align:left;padding:.38rem .3rem;border-bottom:1px solid var(--line)}
+.app th{font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:650}
+.app td.n{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.badge{font-size:.64rem;font-weight:700;padding:.1em .4em;border-radius:4px}
+.badge.w{background:#FBF1DD;color:var(--warn)}
+.badge.o{background:#E2F3EC;color:var(--ok)}
+.badge.s{background:#FBE9E7;color:var(--stop)}
+.filters{display:flex;gap:.3rem;margin-bottom:.6rem}
+.filters button{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:.22rem .55rem;font:inherit;font-size:.72rem;cursor:pointer;color:var(--ink-2)}
+.filters button[aria-pressed=true]{border-color:var(--brand);color:var(--brand);background:var(--brand-wash)}
+
+/* sections */
+section{padding:clamp(2.4rem,6vw,4.2rem) 0;border-top:1px solid var(--line)}
+section.wash{background:var(--wash)}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--brand);margin:0 0 .6rem}
+h2{font-size:clamp(1.4rem,3vw,2rem);max-width:20ch}
+.lede{color:var(--ink-2);max-width:56ch;margin-top:.7rem}
+
+/* feature rows — alternating, not a card grid */
+.feature{display:grid;gap:1.6rem;padding:1.8rem 0;border-bottom:1px solid var(--line)}
+@media(min-width:860px){
+  .feature{grid-template-columns:1fr 1fr;align-items:center}
+  .feature:nth-child(even) .fig{order:-1}
+}
+.feature:last-child{border-bottom:0}
+.feature h3{font-size:1.12rem;margin-bottom:.4rem}
+.feature p{color:var(--ink-2);margin:0;font-size:.95rem}
+.fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1rem;
+  font-family:var(--mono);font-size:.74rem;color:var(--ink-2);line-height:1.9}
+.fig .l{display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:.15rem 0}
+.fig .l:last-child{border-bottom:0}
+
+/* pricing: three columns and a toggle */
+.toggle{display:inline-flex;background:var(--wash);border:1px solid var(--line);border-radius:999px;
+  padding:.22rem;margin:1.2rem 0 1.6rem}
+.toggle button{border:0;background:none;font:inherit;font-size:.85rem;padding:.4rem 1rem;
+  border-radius:999px;cursor:pointer;color:var(--ink-2)}
+.toggle button[aria-pressed=true]{background:var(--panel);color:var(--ink);font-weight:650;
+  box-shadow:0 1px 3px rgba(18,20,28,.1)}
+.tiers{display:grid;gap:1rem;grid-template-columns:1fr}
+@media(min-width:860px){.tiers{grid-template-columns:repeat(3,1fr)}}
+.tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.3rem}
+.tier.mid{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)}
+.tier .name{font-weight:700;font-size:1rem}
+.tier .who{color:var(--dim);font-size:.84rem;margin:.15rem 0 .9rem}
+.tier .price{font-size:2rem;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.tier .price small{font-size:.85rem;font-weight:500;color:var(--dim);letter-spacing:0}
+.tier ul{list-style:none;margin:1rem 0 1.2rem;padding:0;display:grid;gap:.4rem;font-size:.88rem;
+  color:var(--ink-2)}
+.tier li::before{content:"✓ ";color:var(--ok);font-weight:700}
+.tier .cta{width:100%;text-align:center}
+
+/* comparison matrix */
+.matrix{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel);
+  margin-top:1.6rem}
+.matrix table{width:100%;border-collapse:collapse;font-size:.87rem;min-width:520px}
+.matrix th,.matrix td{padding:.6rem .9rem;border-bottom:1px solid var(--line);text-align:left}
+.matrix thead th{background:var(--wash);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--dim)}
+.matrix td.c{text-align:center}
+.y{color:var(--ok);font-weight:700} .n{color:var(--line-2)}
+
+.slots{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;margin-top:1.4rem}
+.slot{background:var(--panel);border:1px dashed var(--line-2);border-radius:9px;padding:.8rem .9rem;
+  font-size:.88rem;color:var(--ink-2)}
+.slot b{display:block;color:var(--ink);font-size:.92rem;margin-bottom:.15rem}
+
+footer{border-top:1px solid var(--line);padding:2rem 0;font-size:.86rem;color:var(--dim)}
+.flag{background:var(--ink);color:#D9DBE4;padding:1.1rem 0;font-size:.86rem}
+.flag b{color:#fff}
+.said{display:none;background:var(--brand-wash);border:1px solid #C9C8F2;border-radius:8px;
+  padding:.75rem .9rem;font-size:.87rem;color:#2B2A7A;margin-top:.9rem}
+.said.on{display:block}
+button:focus-visible,a:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:5px}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"LedgerLoop",
+"applicationCategory":"BusinessApplication","operatingSystem":"Web",
+"url":"https://sites.qevik.ai/sample-ledgerloop/",
+"offers":{"@type":"Offer","price":"0","priceCurrency":"AED","description":"Concept demonstration — not a purchasable product"}}
+</script>
+</head>
+<body>
+
+<nav class="nav"><div class="hold">
+  <div class="brand"><i>L</i>LedgerLoop</div>
+  <div class="links">
+    <a href="#product">Product</a><a href="#pricing">Pricing</a>
+    <a href="#integrations">Integrations</a><a href="#security">Security</a>
+  </div>
+  <div class="right">
+    <a class="signin" href="#product">Sign in</a>
+    <a class="cta" href="#pricing">Start free</a>
+  </div>
+</div></nav>
+
+<section class="hero" style="border-top:0"><div class="hold">
+  <div>
+    <p class="eyebrow">Approvals · Finance operations</p>
+    <h1>Approvals that do not sit in someone's inbox.</h1>
+    <p class="sub">Route every purchase, invoice and expense to the person who has to sign it,
+      with the limit already applied. See what is waiting, and on whom.</p>
+    <div class="row">
+      <a class="cta" href="#pricing">Start free</a>
+      <a class="cta ghost" href="#product">See the product</a>
+    </div>
+    <p class="note">Concept demonstration. No account is created and nothing is charged.</p>
+  </div>
+  <div class="shot">
+    <div class="chrome"><i></i><i></i><i></i></div>
+    <div class="app">
+      <div class="side" role="tablist" aria-label="Product areas">
+        <div class="grp">Workspace</div>
+        <button role="tab" aria-selected="true" data-view="queue">Approvals</button>
+        <button role="tab" aria-selected="false" data-view="spend">Spend</button>
+        <button role="tab" aria-selected="false" data-view="rules">Rules</button>
+      </div>
+      <div class="view" id="view"></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="product"><div class="hold">
+  <p class="eyebrow">How it works</p>
+  <h2>Three things, done properly.</h2>
+  <p class="lede">No workflow builder, no drag-and-drop canvas. Limits, routing and a record.</p>
+
+  <div class="feature">
+    <div><h3>Limits decide the route</h3>
+      <p>Set what each role may approve. A 4,000 invoice goes to the manager; the same invoice at
+        40,000 goes to the manager and then finance. Nobody chooses who to ask.</p></div>
+    <div class="fig">
+      <div class="l"><span>Team lead</span><span>≤ 5,000</span></div>
+      <div class="l"><span>Department head</span><span>≤ 25,000</span></div>
+      <div class="l"><span>Finance</span><span>≤ 100,000</span></div>
+      <div class="l"><span>Director</span><span>above</span></div>
+    </div>
+  </div>
+
+  <div class="feature">
+    <div><h3>Waiting on whom, not just waiting</h3>
+      <p>Every queue shows the person, how long it has been with them, and what it is holding up.
+        Chasing stops being a guess.</p></div>
+    <div class="fig">
+      <div class="l"><span>INV-4471</span><span>R. Haddad · 2d</span></div>
+      <div class="l"><span>PO-0912</span><span>S. Nair · 6h</span></div>
+      <div class="l"><span>EXP-1180</span><span>You · 12m</span></div>
+    </div>
+  </div>
+
+  <div class="feature">
+    <div><h3>A record that survives the argument</h3>
+      <p>Who approved, at what limit, on what evidence, at what time. Exportable, and not editable
+        after the fact.</p></div>
+    <div class="fig">
+      <div class="l"><span>Approved</span><span>19 Aug 14:22</span></div>
+      <div class="l"><span>By</span><span>R. Haddad</span></div>
+      <div class="l"><span>Under limit</span><span>25,000</span></div>
+      <div class="l"><span>Attachment</span><span>invoice-4471.pdf</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section class="wash" id="pricing"><div class="hold">
+  <p class="eyebrow">Pricing</p>
+  <h2>Per approver, not per seat.</h2>
+  <p class="lede">People who only submit are free. You pay for the people who sign.</p>
+  <div class="toggle" role="group" aria-label="Billing period">
+    <button aria-pressed="true" data-bill="month">Monthly</button>
+    <button aria-pressed="false" data-bill="year">Yearly · save 20%</button>
+  </div>
+  <div class="tiers">
+    <div class="tier">
+      <div class="name">Starter</div><div class="who">Up to 5 approvers</div>
+      <div class="price" data-m="0" data-y="0">Free<small></small></div>
+      <ul><li>Unlimited submitters</li><li>One approval chain</li><li>90-day history</li></ul>
+      <a class="cta ghost" href="#" data-demo>Start free</a>
+    </div>
+    <div class="tier mid">
+      <div class="name">Team</div><div class="who">Most companies</div>
+      <div class="price" data-m="79" data-y="63">AED 79<small> /approver/mo</small></div>
+      <ul><li>Unlimited chains and limits</li><li>Full audit record</li><li>Export to accounting</li><li>Support within one day</li></ul>
+      <a class="cta" href="#" data-demo>Start free</a>
+    </div>
+    <div class="tier">
+      <div class="name">Group</div><div class="who">Multiple entities</div>
+      <div class="price" data-m="149" data-y="119">AED 149<small> /approver/mo</small></div>
+      <ul><li>Everything in Team</li><li>Multi-entity and currency</li><li>Single sign-on</li><li>Named contact</li></ul>
+      <a class="cta ghost" href="#" data-demo>Talk to us</a>
+    </div>
+  </div>
+  <div class="matrix"><table>
+    <thead><tr><th>Included</th><th class="c">Starter</th><th class="c">Team</th><th class="c">Group</th></tr></thead>
+    <tbody>
+      <tr><td>Approval chains</td><td class="c">1</td><td class="c">Unlimited</td><td class="c">Unlimited</td></tr>
+      <tr><td>Spend limits by role</td><td class="c n">—</td><td class="c y">✓</td><td class="c y">✓</td></tr>
+      <tr><td>Audit export</td><td class="c n">—</td><td class="c y">✓</td><td class="c y">✓</td></tr>
+      <tr><td>Multi-entity</td><td class="c n">—</td><td class="c n">—</td><td class="c y">✓</td></tr>
+      <tr><td>Single sign-on</td><td class="c n">—</td><td class="c n">—</td><td class="c y">✓</td></tr>
+      <tr><td>History retained</td><td class="c">90 days</td><td class="c">3 years</td><td class="c">7 years</td></tr>
+    </tbody>
+  </table></div>
+  <p class="said" id="said"></p>
+</div></section>
+
+<section id="integrations"><div class="hold">
+  <p class="eyebrow">Integrations</p>
+  <h2>Connects where the money already lives.</h2>
+  <p class="lede">Described as capability slots rather than named vendors — this is a concept, and
+    naming a product we have not integrated with would be a claim we cannot support.</p>
+  <div class="slots">
+    <div class="slot"><b>Accounting</b>Push approved invoices as bills.</div>
+    <div class="slot"><b>Banking</b>Match payments back to approvals.</div>
+    <div class="slot"><b>Storage</b>Keep attachments where they already are.</div>
+    <div class="slot"><b>Identity</b>Single sign-on and role sync.</div>
+    <div class="slot"><b>Messaging</b>Approve from where your team talks.</div>
+    <div class="slot"><b>Spreadsheets</b>Export the ledger anyone asks for.</div>
+  </div>
+</div></section>
+
+<section class="wash" id="security"><div class="hold">
+  <p class="eyebrow">Security</p>
+  <h2>What we would tell your IT team.</h2>
+  <div class="matrix" style="margin-top:1.2rem"><table>
+    <thead><tr><th>Area</th><th>Position</th></tr></thead>
+    <tbody>
+      <tr><td>Data residency</td><td>UAE region, selectable at signup</td></tr>
+      <tr><td>Encryption</td><td>TLS in transit, encrypted at rest</td></tr>
+      <tr><td>Access</td><td>Role-based, least privilege, SSO on Group</td></tr>
+      <tr><td>Audit</td><td>Append-only record, exportable, not editable</td></tr>
+      <tr><td>Certifications</td><td><strong>None claimed.</strong> This is a concept — a real product would list what it actually holds</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<footer><div class="hold">LedgerLoop · a Qevik concept · Office 301, Al Othman Building, Deiram, Dubai</div></footer>
+
+<div class="flag"><div class="hold">
+  <b>Sample product built by Qevik.</b> LedgerLoop does not exist. No account can be created,
+  nothing is charged, and the figures are illustrative. The interface is real and interactive —
+  switch the tabs, filter the queue, change the billing period — but there is no server behind it.
+</div></div>
+
+<script>
+// The product preview and the pricing toggle both work. A SaaS site whose demo
+// is a picture is the one thing a technical buyer will not forgive.
+var VIEWS = {
+  queue: {
+    h: 'Waiting on you', c: '3 items · oldest 2 days',
+    body: '<div class="filters">'
+      + '<button aria-pressed="true" data-f="all">All</button>'
+      + '<button aria-pressed="false" data-f="invoice">Invoices</button>'
+      + '<button aria-pressed="false" data-f="expense">Expenses</button></div>'
+      + '<table><thead><tr><th>Ref</th><th>Requester</th><th class="n">Amount</th><th>State</th></tr></thead>'
+      + '<tbody id="rows"></tbody></table>'
+  },
+  spend: {
+    h: 'Spend this quarter', c: 'Approved, by department',
+    body: '<div class="kpis">'
+      + '<div class="kpi"><b>412k</b><span>Approved</span></div>'
+      + '<div class="kpi"><b>38k</b><span>Pending</span></div>'
+      + '<div class="kpi"><b>2.1d</b><span>Median wait</span></div></div>'
+      + '<table><thead><tr><th>Department</th><th class="n">Approved</th><th class="n">Share</th></tr></thead><tbody>'
+      + '<tr><td>Operations</td><td class="n">164,200</td><td class="n">40%</td></tr>'
+      + '<tr><td>Marketing</td><td class="n">98,400</td><td class="n">24%</td></tr>'
+      + '<tr><td>Facilities</td><td class="n">86,900</td><td class="n">21%</td></tr>'
+      + '<tr><td>IT</td><td class="n">62,500</td><td class="n">15%</td></tr>'
+      + '</tbody></table>'
+  },
+  rules: {
+    h: 'Approval limits', c: 'Who may sign what',
+    body: '<table><thead><tr><th>Role</th><th class="n">Limit</th><th>Then</th></tr></thead><tbody>'
+      + '<tr><td>Team lead</td><td class="n">5,000</td><td>Department head</td></tr>'
+      + '<tr><td>Department head</td><td class="n">25,000</td><td>Finance</td></tr>'
+      + '<tr><td>Finance</td><td class="n">100,000</td><td>Director</td></tr>'
+      + '<tr><td>Director</td><td class="n">—</td><td>Final</td></tr>'
+      + '</tbody></table>'
+  }
+};
+var QUEUE = [
+  {ref:'INV-4471', who:'R. Haddad', amt:'18,400', kind:'invoice', state:'<span class="badge w">2 days</span>'},
+  {ref:'EXP-1180', who:'You',       amt:'1,260',  kind:'expense', state:'<span class="badge o">12 min</span>'},
+  {ref:'INV-4468', who:'S. Nair',   amt:'46,900', kind:'invoice', state:'<span class="badge s">over limit</span>'},
+  {ref:'EXP-1176', who:'M. Aziz',   amt:'740',    kind:'expense', state:'<span class="badge o">4 h</span>'}
+];
+var filter = 'all';
+
+function rows(){
+  var body = document.getElementById('rows');
+  if (!body) return;
+  body.innerHTML = QUEUE.filter(function(r){ return filter === 'all' || r.kind === filter; })
+    .map(function(r){
+      return '<tr><td>' + r.ref + '</td><td>' + r.who + '</td><td class="n">' + r.amt
+        + '</td><td>' + r.state + '</td></tr>';
+    }).join('');
+}
+
+function show(name){
+  var v = VIEWS[name];
+  document.getElementById('view').innerHTML =
+    '<h4>' + v.h + '</h4><p class="cap">' + v.c + '</p>' + v.body;
+  if (name === 'queue'){
+    rows();
+    document.querySelectorAll('.filters button').forEach(function(b){
+      b.addEventListener('click', function(){
+        filter = b.dataset.f;
+        document.querySelectorAll('.filters button').forEach(function(x){
+          x.setAttribute('aria-pressed', String(x === b));
+        });
+        rows();
+      });
+    });
+  }
+}
+document.querySelectorAll('.side button').forEach(function(button){
+  button.addEventListener('click', function(){
+    document.querySelectorAll('.side button').forEach(function(b){
+      b.setAttribute('aria-selected', String(b === button));
+    });
+    show(button.dataset.view);
+  });
+});
+
+document.querySelectorAll('.toggle button').forEach(function(button){
+  button.addEventListener('click', function(){
+    document.querySelectorAll('.toggle button').forEach(function(b){
+      b.setAttribute('aria-pressed', String(b === button));
+    });
+    var yearly = button.dataset.bill === 'year';
+    document.querySelectorAll('.tier .price').forEach(function(price){
+      var value = yearly ? price.dataset.y : price.dataset.m;
+      var unit = price.querySelector('small');
+      price.firstChild.textContent = value === '0' ? 'Free' : 'AED ' + value;
+      if (unit) unit.textContent = value === '0' ? '' :
+        (yearly ? ' /approver/mo, billed yearly' : ' /approver/mo');
+    });
+  });
+});
+
+document.querySelectorAll('[data-demo]').forEach(function(link){
+  link.addEventListener('click', function(event){
+    event.preventDefault();
+    var said = document.getElementById('said');
+    said.textContent = 'No account was created. LedgerLoop is a concept built by Qevik to '
+      + 'demonstrate a product interface — there is no signup, no billing and no server.';
+    said.className = 'said on';
+    said.scrollIntoView({block:'center', behavior:'smooth'});
+  });
+});
+
+show('queue');
+</script>
+</body>
+</html>

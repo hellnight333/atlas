@@ -46,64 +46,130 @@ ADDRESS_2 = "Deiram, Dubai, UAE"
 SAMPLE = "https://sites.qevik.ai/sample/"
 SAMPLE_AR = "https://sites.qevik.ai/sample/ar/"
 
+
+#: The portfolio, with the sales facts §21 asks for kept beside each entry:
+#: what it demonstrates, which interactions genuinely work, and what would need
+#: a real integration. Written here rather than in a database because it is
+#: copy — a person edits it when the sample changes.
+SHOWCASE = {
+    "pulse": {
+        "slug": "sample-pulse", "name": "Pulse", "industry": "Fitness · web application",
+        "shot": "sample-pulse-m.png",
+        "concept": "A product interface with no marketing page at all — sidebar, dense stat row, "
+                   "live chart, training log. It exists to answer one question: can you build "
+                   "software, not just websites.",
+        "design": "Dark, dense, mono for every number so columns align. No hero, no footer, no "
+                  "sticky call bar. On a phone the sidebar becomes a bottom rail, the way an app does.",
+        "real": ["Chart tabs switch the series, axis labels and legend",
+                 "Responsive sidebar collapses to a mobile rail"],
+        "needs": ["Accounts and sign-in", "Storing a workout", "Syncing from a device"],
+        "pitch": "For anyone who says “we need an internal tool, not a website”.",
+        "bilingual": False,
+    },
+    "nar": {
+        "slug": "sample-nar", "name": "NAR", "industry": "Fine dining",
+        "shot": "sample-nar-m.png",
+        "concept": "An editorial restaurant page that opens full-bleed with no navigation "
+                   "anywhere. The menu is a priced list, not a grid of cards.",
+        "design": "Chromeless and dark, one enormous serif line, asymmetric splits that never "
+                  "align, a horizontal snapping rail for the room. Imagery is CSS, not "
+                  "photographs of a restaurant that does not exist.",
+        "real": ["Table request form that states plainly it is not connected",
+                 "Horizontal scroll rail with snap points"],
+        "needs": ["A reservation provider", "Table availability"],
+        "pitch": "For a restaurant whose current site looks like a takeaway menu.",
+        "bilingual": False,
+    },
+    "apex": {
+        "slug": "sample-apex", "name": "APEX Detailing", "industry": "Automotive",
+        "shot": "sample-apex-m.png",
+        "concept": "A four-step quote configurator that is the page rather than a form at the "
+                   "bottom of one. Vehicle, services, plan, contact — priced live.",
+        "design": "Dark technical, condensed uppercase, hard grid, numbered steps. Where NAR "
+                  "wants you to slow down, this wants you finished in ninety seconds.",
+        "real": ["Full configurator with running total", "Multi-select services",
+                 "Plan discount recalculates", "Step navigation with validation"],
+        "needs": ["Sending the quote", "Scheduling a slot", "Payment"],
+        "pitch": "For any service business that currently says “call for a price”.",
+        "bilingual": False,
+    },
+    "verdant": {
+        "slug": "sample-verdant", "name": "Verdant", "industry": "Retail",
+        "shot": "sample-verdant-m.png",
+        "concept": "A storefront: filter rail, search, product grid and a basket that slides "
+                   "over the page. No hero, no services section — a shop starts at the products.",
+        "design": "Light, warm, roomy. Humanist sans throughout with no mono and no serif, "
+                  "against Pulse's density and APEX's hard grid.",
+        "real": ["Filter by light, care and size", "Live text search",
+                 "Add to basket, remove, running subtotal", "Cart drawer with scrim and Escape"],
+        "needs": ["Payment", "Stock levels", "Delivery pricing"],
+        "pitch": "For a shop selling through Instagram DMs and a spreadsheet.",
+        "bilingual": False,
+    },
+    "homefix": {
+        "slug": "sample-homefix", "name": "HomeFix Dubai", "industry": "Home services",
+        "shot": "sample-homefix-m.png",
+        "concept": "Someone's AC died at 2pm in August. Everything assumes a person on a phone "
+                   "who wants a number and a human — the estimator is the first thing under the "
+                   "headline and the whole page is three screens deep.",
+        "design": "Bright, blunt, enormous touch targets, an urgent strip above everything and "
+                  "two full-width thumb buttons pinned to the bottom. Nothing is subtle.",
+        "real": ["Estimator: job × units × urgency produces a range",
+                 "Counter and urgency multiplier recalculate live",
+                 "Labels adapt — “units” becomes “points” for electrical work"],
+        "needs": ["Dispatching a technician", "Arrival windows", "Payment"],
+        "pitch": "The category our own market scan ranked first — 82% reachable on WhatsApp.",
+        "bilingual": False,
+    },
+    "ledgerloop": {
+        "slug": "sample-ledgerloop", "name": "LedgerLoop", "industry": "B2B SaaS",
+        "shot": "sample-ledgerloop-m.png",
+        "concept": "A B2B marketing site with the product embedded in the hero — the inverse of "
+                   "Pulse, so the pair demonstrates both halves of the same capability.",
+        "design": "Light, tight, low-chroma. Full link bar with the CTA inside the header, "
+                  "alternating feature rows rather than a card grid, three-column pricing with "
+                  "a billing toggle, and a comparison matrix.",
+        "real": ["Product preview tabs switch views", "Queue filters by document type",
+                 "Pricing toggle recalculates all three tiers"],
+        "needs": ["Everything behind it — this is a concept, not a running product"],
+        "pitch": "For when the conversation is “we need a product, not a brochure”.",
+        "bilingual": False,
+    },
+    "meridian": {
+        "slug": "sample-meridian", "name": "Meridian", "industry": "Real estate",
+        "shot": "sample-meridian-m.png",
+        "concept": "Search-first. Criteria on the left, results on the right, detail sliding in "
+                   "over both — a two-pane application rather than a page with listings on it.",
+        "design": "Night palette with gold, serif wordmark and prices, sans for everything "
+                  "operational. Verdant is also a filtered grid, so this one narrows toward a "
+                  "single decision instead of accumulating into a basket.",
+        "real": ["Filter by deal, area, bedrooms and a price slider", "Sorting",
+                 "Save to a list with a live count", "Full detail overlay with viewing request"],
+        "needs": ["Real listings", "Map integration", "Agent routing"],
+        "pitch": "For an agency whose site is a WordPress theme with a contact form.",
+        "bilingual": False,
+    },
+    "clinic": {
+        "slug": "sample", "name": "Sample Dental Clinic", "industry": "Health · bilingual",
+        "shot": "sample_mobile_en.png",
+        "concept": "The bilingual local-business product: English and Arabic as separate indexed "
+                   "pages, verified opening hours, tap-to-call, map, appointment request.",
+        "design": "Generated from a template rather than hand-built, and honest about it. This "
+                  "is what a clinic, salon or café receives.",
+        "real": ["Full Arabic page with RTL layout, Arabic day names and ص/م markers",
+                 "Tap-to-call, WhatsApp where the number can receive it, map link",
+                 "hreflang, per-language canonicals, sitemap covering both"],
+        "needs": ["Appointment booking — the form takes a request only"],
+        "pitch": "The everyday product. Bilingual, local-SEO complete, live in a day.",
+        "bilingual": True,
+    },
+}
+
 #: Qevik's own sample sites. Not clients — every one is flagged as a sample on
 #: the page itself and carries our number, so the buttons genuinely work. The
 #: twenty clinic demos are deliberately absent: they were built unsolicited from
 #: public listings, none of those businesses are customers, and showing them as
 #: portfolio would invent a relationship that does not exist.
-SAMPLES = (
-    ("Fitness app", "sample-pulse", "sample-pulse-m.png",
-     "A product interface, not a page: sidebar, live charts, training log.",
-     "Web application", False),
-    ("Fine dining", "sample-nar", "sample-nar-m.png",
-     "Editorial and chromeless. Full-bleed opening, menu as a priced list.",
-     "Restaurant", False),
-    ("Detailing", "sample-apex", "sample-apex-m.png",
-     "A four-step quote configurator that prices as you choose.",
-     "AutoDetailing", False),
-    ("Plant shop", "sample-verdant", "sample-verdant-m.png",
-     "Filterable catalogue, search and a working basket drawer.",
-     "Store", False),
-    ("Café", "sample-cafe", "sample-cafe.png",
-     "Drinks list, beans to take home, one-line hours.", "CafeOrCoffeeShop", True),
-    ("Salon", "sample-salon", "sample-salon.png",
-     "Treatments with durations, appointment request.", "BeautySalon", True),
-    ("Property", "sample-property", "sample-property.png",
-     "Service groups, FAQ, call-back request.", "RealEstateAgent", True),
-    ("Clinic", "sample", "sample_mobile_en.png",
-     "Services, verified hours, tap-to-call, map.", "Dentist", True),
-)
-
-
-def sample_cards() -> str:
-    cards = ""
-    # The four hand-built samples are single English files. Offering an Arabic
-    # link that 404s is a broken promise on the page whose whole argument is
-    # that these are real and working.
-    for label, slug, shot, detail, schema, bilingual in SAMPLES:
-        arabic = (
-            f'<a href="https://sites.qevik.ai/{slug}/ar/" rel="noopener">العربية</a> ·'
-            if bilingual
-            else '<span title="English only">EN</span> ·'
-        )
-        cards += f"""
-      <article class="sample">
-        <a href="https://sites.qevik.ai/{slug}/" rel="noopener">
-          <img src="/assets/{fingerprinted(shot)}" width="390" height="844"
-               alt="The {label.lower()} sample site on a phone." loading="lazy">
-        </a>
-        <div class="sample-body">
-          <p class="sample-kind">{label}</p>
-          <p class="sample-detail">{detail}</p>
-          <p class="sample-links">
-            <a href="https://sites.qevik.ai/{slug}/" rel="noopener">Open</a> ·
-            {arabic}
-            <code>{schema}</code>
-          </p>
-        </div>
-      </article>"""
-    return cards
-
 #: path -> (nav label, <title>, meta description)
 PAGES: dict[str, tuple[str, str, str]] = {
     "/": (
@@ -133,6 +199,16 @@ PAGES: dict[str, tuple[str, str, str]] = {
         "Provider LLC in Dubai. One person builds your site; you deal with him "
         "directly.",
     ),
+    # The work sub-pages live in PAGES so each gets a title, description,
+    # canonical and sitemap entry from the same source as the top-level five.
+    **{
+        f"/work/{key}/": (
+            data["name"],
+            f"{data['name']} — {data['industry']} — Qevik",
+            data["concept"][:200],
+        )
+        for key, data in SHOWCASE.items()
+    },
     "/contact/": (
         "Contact",
         "Contact — Qevik",
@@ -158,11 +234,34 @@ FORBIDDEN = (
 )
 
 
+
+def sample_cards() -> str:
+    """The portfolio grid. Each card links to its own page, not straight out."""
+    cards = ""
+    for key, d in SHOWCASE.items():
+        cards += f"""
+      <article class="sample">
+        <a href="/work/{key}/">
+          <img src="/assets/{fingerprinted(d['shot'])}" width="390" height="844"
+               alt="{d['name']} — {d['industry']} — on a phone." loading="lazy">
+        </a>
+        <div class="sample-body">
+          <p class="sample-kind"><a href="/work/{key}/" style="text-decoration:none;color:inherit">{d['name']}</a></p>
+          <p class="sample-detail">{d['industry']}</p>
+          <p class="sample-links">
+            <a href="/work/{key}/">Details</a> ·
+            <a href="https://sites.qevik.ai/{d['slug']}/" rel="noopener">Open</a>
+            {'· <a href="https://sites.qevik.ai/' + d['slug'] + '/ar/" rel="noopener">العربية</a>' if d['bilingual'] else ''}
+          </p>
+        </div>
+      </article>"""
+    return cards
+
+
 #: Filled during the build: "site.css" -> "site.9f2a1c.css". Cloudflare caches
 #: /assets/* for a day, so an edited stylesheet kept serving the old bytes even
-#: though the origin had the new ones — cf-cache-status was HIT and the fix was
-#: invisible for 24 hours. Fingerprinting makes a changed file a different URL,
-#: which no cache can serve stale and which needs no purge permission.
+#: though the origin had the new ones. Fingerprinting makes a changed file a
+#: different URL, which no cache can serve stale and which needs no purge.
 ASSETS: dict[str, str] = {}
 
 
@@ -173,10 +272,16 @@ def fingerprinted(name: str) -> str:
 def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "") -> str:
     label, title, description = PAGES[path]
     canonical = f"{SITE}{path}"
-    nav = "".join(
-        f'<a href="{p}"{" class=\"here\" aria-current=\"page\"" if p == path else ""}>{PAGES[p][0]}</a>'
-        for p in PAGES
-    )
+    # The work sub-pages are in PAGES so they get canonicals, titles and a
+    # sitemap entry — but a nav listing nine links is not navigation.
+    top = ("/", "/services/", "/work/", "/about/", "/contact/")
+    links = []
+    for item in top:
+        here = item == path or (item == "/work/" and path.startswith("/work/"))
+        mark = ' class="here" aria-current="page"' if here else ""
+        links.append(f'<a href="{item}"{mark}>{PAGES[item][0]}</a>')
+    nav = "".join(links)
+
     year = TODAY[:4]
 
     return f"""<!doctype html>
@@ -564,7 +669,7 @@ def work() -> str:
 
 <section class="band">
   <div class="wrap">
-    <h2>Eight samples, eight different problems</h2>
+    <h2>Eight builds, eight different problems</h2>
     <p class="stand">Not one template in eight colours. A restaurant that opens full-bleed with no
       navigation at all, a detailing workshop built around a four-step quote configurator, a plant
       shop with filters and a basket, and a fitness application with a sidebar and live charts —
@@ -801,12 +906,70 @@ def organization_schema() -> str:
 }}</script>"""
 
 
+def work_page(key: str):
+    def build() -> str:
+        d = SHOWCASE[key]
+        url = f"https://sites.qevik.ai/{d['slug']}/"
+        real = "".join(f"<li>{item}</li>" for item in d["real"])
+        needs = "".join(f"<li>{item}</li>" for item in d["needs"])
+        arabic = (
+            f'<a class="btn" href="{url}ar/" rel="noopener">افتح بالعربية</a>'
+            if d["bilingual"] else ""
+        )
+        return f"""
+<section class="page-head">
+  <div class="wrap">
+    <p class="eyebrow"><a href="/work/" style="color:inherit">Work</a> · {d['industry']}</p>
+    <h1>{d['name']}</h1>
+    <p class="lead">{d['concept']}</p>
+    <div class="cta-row">
+      <a class="btn primary" href="{url}" rel="noopener">Open the sample</a>
+      {arabic}
+      <a class="btn ghost" href="/work/">All work</a>
+    </div>
+    <p class="micro">A Qevik concept demonstration. {d['name']} is not a real business and is not
+      a client. The contact details on it are ours, so the buttons genuinely work.</p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <figure class="showcase-shot" style="max-width:340px;margin:0 0 2rem">
+      <img src="/assets/{fingerprinted(d['shot'])}" width="390" height="844"
+           alt="{d['name']} on a phone." fetchpriority="high">
+    </figure>
+    <h2>Design direction</h2>
+    <p class="stand">{d['design']}</p>
+
+    <div class="grid two">
+      <div class="card">
+        <h3>What actually works</h3>
+        <ul class="ticks">{real}</ul>
+      </div>
+      <div class="card">
+        <h3>What would need building</h3>
+        <ul class="ticks plain">{needs}</ul>
+        <p class="micro" style="margin-top:.8rem">Listed rather than implied. Nothing on the
+          sample pretends to do these.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <p><strong>Where this fits.</strong> {d['pitch']}</p>
+    </div>
+  </div>
+</section>
+"""
+    return build
+
+
 BUILDERS = {
     "/": (home, organization_schema()),
     "/services/": (services, ""),
     "/work/": (work, ""),
     "/about/": (about, ""),
     "/contact/": (contact, ""),
+    **{f"/work/{key}/": (work_page(key), "") for key in SHOWCASE},
 }
 
 
@@ -875,6 +1038,9 @@ def main(argv: list[str] | None = None) -> int:
         "sample-restaurant.png",
         "sample-restaurant-ar.png",
         "sample-pulse-m.png",
+        "sample-homefix-m.png",
+        "sample-ledgerloop-m.png",
+        "sample-meridian-m.png",
         "sample-nar-m.png",
         "sample-apex-m.png",
         "sample-verdant-m.png",

@@ -41,6 +41,13 @@ class Fingerprint:
     cta: str
     footer: str
     interaction: frozenset[str]
+    #: The components a sample actually uses. Two pages can share a navigation
+    #: pattern and still be different products if one is built from filters and
+    #: a cart and the other from a configurator and a comparison matrix.
+    vocabulary: frozenset[str]
+    #: How much is on the page. A single-screen estimator and a nine-section
+    #: brochure are different products even where every other signal agrees.
+    density: str
 
     def compare(self, other: Fingerprint) -> tuple[float, list[str]]:
         """How alike, and in which specific ways."""
@@ -81,6 +88,19 @@ class Fingerprint:
         checks += 1
         if self.interaction == other.interaction:
             same.append("same interaction model")
+
+        # Component vocabulary is the strongest single signal of "different
+        # product", so it is weighted as two checks rather than one.
+        checks += 2
+        shared_vocab = self.vocabulary & other.vocabulary
+        union = self.vocabulary | other.vocabulary
+        if union and len(shared_vocab) / len(union) > 0.6:
+            same.append(f"same component vocabulary ({', '.join(sorted(shared_vocab))})")
+            same.append("component vocabulary overlap")
+
+        checks += 1
+        if self.density == other.density:
+            same.append(f"same page density ({self.density})")
 
         return len(same) / checks, same
 
@@ -202,6 +222,36 @@ def fingerprint(name: str, html: str) -> Fingerprint:
     if not interaction:
         interaction.add("static")
 
+    # --- component vocabulary -------------------------------------------
+    vocabulary: set[str] = set()
+    for token, present in (
+        ("filters", bool(re.search(r'data-(filter|group)="(light|care|size|area|beds|deal)"', body))),
+        ("cart", "basket" in body or "cart" in body),
+        ("configurator", bool(re.search(r'data-(step|stage)', body))),
+        # HomeFix computes a range from buttons and a counter with no <input>
+        # anywhere, and the first version of this missed it entirely — reporting
+        # the page's whole reason for existing as absent.
+        ("estimator", "estimat" in body and bool(re.search(r"\baed\b|\bamount\b", body))),
+        ("comparison matrix", bool(re.search(r"<table", body)) and "included" in body),
+        ("pricing tiers", "pricing" in body and bool(re.search(r"tier|plan", body))),
+        ("dashboard", "dashboard" in body or bool(re.search(r'class="kpis?"', body))),
+        ("chart", "polyline" in body or "polygon" in body),
+        ("detail overlay", bool(re.search(r"\.(detail|drawer)\b", body))),
+        ("search", 'type="search"' in body or "seek" in body),
+        ("menu list", "menu" in body and "course" in body),
+        ("faq", "<details" in body),
+        ("map link", "google.com/maps" in body),
+        ("saved list", "saved" in body or "wishlist" in body),
+        ("hours", "opening hours" in body or "hours" in body),
+        ("form", "<form" in body or "request" in body and "<input" in body),
+    ):
+        if present:
+            vocabulary.add(token)
+
+    # --- density ----------------------------------------------------------
+    words = len(re.findall(r"[a-z]{3,}", re.sub(r"<[^>]+>", " ", body)))
+    density = "sparse" if words < 450 else "medium" if words < 1100 else "dense"
+
     return Fingerprint(
         name=name,
         nav=nav,
@@ -212,6 +262,8 @@ def fingerprint(name: str, html: str) -> Fingerprint:
         cta=cta,
         footer=footer,
         interaction=frozenset(interaction),
+        vocabulary=frozenset(vocabulary),
+        density=density,
     )
 
 
@@ -235,11 +287,11 @@ def main(argv: list[str] | None = None) -> int:
         for p in paths
     ]
 
-    print(f"{'sample':<22} {'nav':<16} {'hero':<15} {'cta':<24} type")
-    print("-" * 100)
+    print(f"{'sample':<14} {'nav':<16} {'hero':<14} {'cta':<22} {'density':<8} vocabulary")
+    print("-" * 118)
     for fp in prints:
-        print(f"{fp.name:<22} {fp.nav:<16} {fp.hero:<15} {fp.cta:<24} "
-              f"{'/'.join(fp.typography[:2])[:28]}")
+        print(f"{fp.name:<14} {fp.nav:<16} {fp.hero:<14} {fp.cta:<22} {fp.density:<8} "
+              f"{', '.join(sorted(fp.vocabulary))[:44]}")
 
     print()
     worst = 0.0

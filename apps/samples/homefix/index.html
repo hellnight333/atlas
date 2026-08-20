@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeFix Dubai — AC, plumbing, electrical. Today.</title>
+<meta name="description" content="Sample home-services site built by Qevik, with a working price estimator. A demonstration; not a real company.">
+<meta name="theme-color" content="#0E4DA4">
+<style>
+/* HomeFix — someone's AC died at 2pm in August.
+ *
+ * Everything here assumes a person on a phone, standing in a hot flat, who
+ * wants a number and a human. So: no cinematic opening, no story, no gallery.
+ * The estimator is the first thing under the headline, the phone number is
+ * pinned to the thumb, and the whole page is three screens deep.
+ *
+ * Against APEX — which is dark, technical and walks you through four steps —
+ * this is bright, blunt and answers everything on one screen. Against NAR it
+ * shares nothing at all. Type is a heavy grotesque with enormous touch targets;
+ * nothing is subtle, because subtlety is not what an emergency wants. */
+:root{
+  --paper:#FFFFFF; --wash:#F2F6FB; --edge:#D9E2EE; --edge-2:#B9C9DC;
+  --ink:#0C1B2A; --ink-2:#3C5165; --dim:#6E829A;
+  --blue:#0E4DA4; --blue-2:#0A3B80; --urgent:#D93A2B; --go:#128A4A; --amber:#E8A32D;
+  --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;
+  line-height:1.5;-webkit-font-smoothing:antialiased;padding-bottom:74px}
+.hold{max-width:940px;margin:0 auto;padding:0 clamp(1rem,4vw,1.8rem)}
+h1,h2,h3{margin:0;letter-spacing:-.025em;font-weight:800}
+
+/* urgent strip — the first thing, and it is information not decoration */
+.strip{background:var(--urgent);color:#fff;font-size:.88rem;font-weight:700;padding:.55rem 0}
+.strip .hold{display:flex;gap:.6rem;align-items:center;justify-content:center;text-align:center;
+  flex-wrap:wrap}
+.strip a{color:#fff}
+
+.top{border-bottom:1px solid var(--edge);position:sticky;top:0;background:rgba(255,255,255,.96);
+  backdrop-filter:blur(6px);z-index:8}
+.top .hold{display:flex;align-items:center;gap:1rem;padding:.7rem 0}
+.mark{font-size:1.2rem;font-weight:800;letter-spacing:-.03em}
+.mark b{color:var(--blue)}
+.top .tel{margin-left:auto;font-weight:800;color:var(--blue);text-decoration:none;font-size:1.02rem}
+
+/* the ask */
+.ask{padding:1.6rem 0 .5rem}
+.ask h1{font-size:clamp(1.75rem,6vw,2.7rem);line-height:1.05;max-width:15ch}
+.ask p{color:var(--ink-2);max-width:44ch;margin:.7rem 0 0;font-size:1.02rem}
+
+/* estimator — one screen, no steps, everything visible at once */
+.est{background:var(--wash);border:2px solid var(--edge);border-radius:14px;padding:1.1rem;
+  margin:1.3rem 0 2rem}
+.est h2{font-size:1.06rem;margin-bottom:.15rem}
+.est .sub{color:var(--dim);font-size:.87rem;margin:0 0 1rem}
+.q{margin:0 0 1.1rem}
+.q > span{display:block;font-size:.76rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--dim);font-weight:700;margin-bottom:.45rem}
+.opts{display:flex;gap:.45rem;flex-wrap:wrap}
+.opt{background:var(--paper);border:2px solid var(--edge);border-radius:10px;padding:.6rem .85rem;
+  font:inherit;font-size:.92rem;font-weight:600;cursor:pointer;color:var(--ink);flex:1 1 auto;
+  min-width:96px;text-align:center}
+.opt:hover{border-color:var(--edge-2)}
+.opt[aria-pressed=true]{border-color:var(--blue);background:#E8F0FC;color:var(--blue-2)}
+.opt.hot[aria-pressed=true]{border-color:var(--urgent);background:#FCEAE8;color:#8E2419}
+.opt:focus-visible,.big:focus-visible,.count button:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+.count{display:flex;align-items:center;gap:.6rem}
+.count button{width:46px;height:46px;border:2px solid var(--edge);background:var(--paper);
+  border-radius:10px;font-size:1.4rem;font-weight:700;cursor:pointer;color:var(--blue);line-height:1}
+.count b{font-size:1.35rem;min-width:2ch;text-align:center;font-variant-numeric:tabular-nums}
+.count span{color:var(--dim);font-size:.88rem}
+
+.result{background:var(--ink);color:#fff;border-radius:12px;padding:1rem 1.15rem;margin-top:.4rem}
+.result .lbl{font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;opacity:.72}
+.result .amt{font-size:2rem;font-weight:800;letter-spacing:-.03em;margin:.15rem 0;
+  font-variant-numeric:tabular-nums}
+.result .fine{font-size:.83rem;opacity:.78;margin:0}
+.result.none .amt{font-size:1.1rem;font-weight:600;opacity:.7}
+
+.big{display:block;width:100%;margin-top:.8rem;background:var(--go);border:0;color:#fff;
+  font:inherit;font-size:1.02rem;font-weight:800;padding:1rem;border-radius:11px;cursor:pointer}
+.big:hover{background:#0E7440}
+.said{display:none;background:#FFF6E5;border:2px solid #F0DCA8;border-radius:10px;padding:.8rem .95rem;
+  font-size:.9rem;color:#7A5A12;margin-top:.7rem}
+.said.on{display:block}
+
+/* trust — a plain list, no cards */
+.trust{border-top:1px solid var(--edge);padding:1.8rem 0}
+.trust h2{font-size:1.2rem;margin-bottom:.9rem}
+.trust ul{list-style:none;margin:0;padding:0;display:grid;gap:.55rem}
+.trust li{display:grid;grid-template-columns:26px 1fr;gap:.6rem;font-size:.95rem;color:var(--ink-2)}
+.trust li b{color:var(--go);font-size:1.05rem;line-height:1.35}
+
+/* coverage — a plain wrapping list of areas, not a map graphic */
+.areas{background:var(--wash);border-top:1px solid var(--edge);padding:1.8rem 0}
+.areas h2{font-size:1.2rem;margin-bottom:.5rem}
+.areas p{color:var(--ink-2);font-size:.94rem;margin:0 0 .8rem}
+.pills{display:flex;flex-wrap:wrap;gap:.4rem}
+.pills span{background:var(--paper);border:1px solid var(--edge);border-radius:999px;
+  padding:.32rem .8rem;font-size:.86rem;color:var(--ink-2)}
+
+/* FAQ as plain disclosure, tight */
+.faq{padding:1.8rem 0;border-top:1px solid var(--edge)}
+.faq h2{font-size:1.2rem;margin-bottom:.8rem}
+details{border-bottom:1px solid var(--edge);padding:.75rem 0}
+summary{cursor:pointer;font-weight:700;font-size:.97rem}
+details p{margin:.5rem 0 0;color:var(--ink-2);font-size:.93rem}
+
+/* the thumb bar — two enormous targets, nothing else */
+.thumb{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr 1fr;
+  gap:2px;background:var(--edge);z-index:9}
+.thumb a{padding:1rem .5rem;text-align:center;font-weight:800;font-size:1rem;text-decoration:none}
+.thumb .c{background:var(--blue);color:#fff}
+.thumb .w{background:#25D366;color:#062B15}
+footer{padding:1.4rem 0 2rem;font-size:.85rem;color:var(--dim);border-top:1px solid var(--edge)}
+.flag{background:var(--ink);color:#D6E2EF;padding:1rem 0;font-size:.86rem}
+.flag b{color:#fff}
+@media(min-width:760px){
+  .est{padding:1.5rem 1.7rem}
+  .thumb{grid-template-columns:1fr 1fr;max-width:520px;left:auto;right:1.2rem;bottom:1.2rem;
+    border-radius:12px;overflow:hidden;box-shadow:0 8px 28px rgba(12,27,42,.24)}
+  body{padding-bottom:0}
+}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HVACBusiness","name":"HomeFix Dubai",
+"url":"https://sites.qevik.ai/sample-homefix/","telephone":"+971501029104",
+"areaServed":["Dubai Marina","JLT","Business Bay","Deira","Al Quoz","Jumeirah","Mirdif","Silicon Oasis"],
+"openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],"opens":"07:00","closes":"22:00"}],
+"address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Deiram, Dubai","addressCountry":"AE"}}
+</script>
+</head>
+<body>
+
+<div class="strip"><div class="hold">
+  <span>AC out? Water leaking?</span>
+  <a href="tel:+971501029104">Call now — same-day slots</a>
+</div></div>
+
+<header class="top"><div class="hold">
+  <div class="mark">Home<b>Fix</b></div>
+  <a class="tel" href="tel:+971501029104">050 102 9104</a>
+</div></header>
+
+<main>
+<section class="ask"><div class="hold">
+  <h1>AC, plumbing and electrical. Fixed today.</h1>
+  <p>Tell us what is wrong and see the price range before anyone comes out. No call-out fee if you
+    go ahead.</p>
+</div></section>
+
+<div class="hold">
+<section class="est" aria-labelledby="est-h">
+  <h2 id="est-h">What needs fixing?</h2>
+  <p class="sub">A range, not a quote — the technician confirms on site.</p>
+
+  <div class="q">
+    <span>Job</span>
+    <div class="opts" data-group="job">
+      <button class="opt" data-value="AC repair" data-base="240" data-per="120">AC repair</button>
+      <button class="opt" data-value="AC servicing" data-base="150" data-per="90">AC service</button>
+      <button class="opt" data-value="Plumbing" data-base="180" data-per="80">Plumbing</button>
+      <button class="opt" data-value="Electrical" data-base="200" data-per="90">Electrical</button>
+      <button class="opt" data-value="Appliance repair" data-base="220" data-per="110">Appliance</button>
+    </div>
+  </div>
+
+  <div class="q">
+    <span id="unit-label">How many units</span>
+    <div class="count">
+      <button type="button" id="minus" aria-label="Fewer">−</button>
+      <b id="units">1</b>
+      <button type="button" id="plus" aria-label="More">+</button>
+      <span id="unit-word">unit</span>
+    </div>
+  </div>
+
+  <div class="q">
+    <span>When</span>
+    <div class="opts" data-group="when">
+      <button class="opt hot" data-value="Today" data-mult="1.35">Today</button>
+      <button class="opt" data-value="Tomorrow" data-mult="1.1">Tomorrow</button>
+      <button class="opt" data-value="This week" data-mult="1">This week</button>
+    </div>
+  </div>
+
+  <div class="result none" id="result" role="status">
+    <div class="lbl">Estimated range</div>
+    <div class="amt" id="amount">Choose a job to see the range</div>
+    <p class="fine" id="fine">Parts are quoted separately if any are needed.</p>
+  </div>
+
+  <button class="big" id="request">Request this visit</button>
+  <p class="said" id="said"></p>
+</section>
+</div>
+
+<section class="trust"><div class="hold">
+  <h2>What you get</h2>
+  <ul>
+    <li><b>✓</b><span>A fixed price agreed before work starts — not after.</span></li>
+    <li><b>✓</b><span>No call-out fee if you go ahead with the repair.</span></li>
+    <li><b>✓</b><span>The technician's name and arrival window sent by message.</span></li>
+    <li><b>✓</b><span>90-day guarantee on labour. Parts carry the maker's warranty.</span></li>
+    <li><b>✓</b><span>Card or cash on completion. Nothing paid in advance.</span></li>
+  </ul>
+</div></section>
+
+<section class="areas"><div class="hold">
+  <h2>Where we cover</h2>
+  <p>Same-day across most of Dubai. Outside these, next day.</p>
+  <div class="pills">
+    <span>Dubai Marina</span><span>JLT</span><span>Business Bay</span><span>Downtown</span>
+    <span>Deira</span><span>Bur Dubai</span><span>Al Quoz</span><span>Jumeirah</span>
+    <span>Mirdif</span><span>Silicon Oasis</span><span>Al Barsha</span><span>Sports City</span>
+  </div>
+</div></section>
+
+<section class="faq"><div class="hold">
+  <h2>Before you call</h2>
+  <details><summary>Is there a call-out charge?</summary>
+    <p>Only if you decide not to go ahead after the technician has assessed the job. If the work is
+      done, the visit is included in the price.</p></details>
+  <details><summary>How quickly can someone come?</summary>
+    <p>Most same-day requests placed before 4pm are attended the same evening. AC in summer is the
+      exception — those slots fill early.</p></details>
+  <details><summary>Are parts included in the estimate?</summary>
+    <p>No. The range above covers labour and the visit. If a part is needed, the technician quotes it
+      before fitting anything.</p></details>
+  <details><summary>Do you work on Fridays?</summary>
+    <p>Yes, from 2pm. Emergencies are covered every day from 7am to 10pm.</p></details>
+</div></section>
+
+<footer><div class="hold">
+  HomeFix Dubai · 7am–10pm every day · 050 102 9104 · Office 301, Al Othman Building, Deiram
+</div></footer>
+</main>
+
+<nav class="thumb" aria-label="Contact">
+  <a class="c" href="tel:+971501029104">Call now</a>
+  <a class="w" href="https://wa.me/971501029104" rel="noopener">WhatsApp</a>
+</nav>
+
+<div class="flag"><div class="hold">
+  <b>Sample site built by Qevik.</b> HomeFix is not a real company. The prices are illustrative, the
+  estimator runs entirely in your browser, and the request button is not connected to anything — no
+  visit is booked and no message is sent. The telephone number is Qevik's own, so the buttons work.
+</div></div>
+
+<script>
+// The estimator is the page. If it did not work, the page would be a poster.
+var job = null, when = null, units = 1;
+
+function label(){
+  var word = (job && job.value === 'Plumbing') ? 'job' :
+             (job && job.value === 'Electrical') ? 'point' : 'unit';
+  document.getElementById('unit-label').textContent =
+    'How many ' + (word === 'unit' ? 'units' : word + 's');
+  document.getElementById('unit-word').textContent = units === 1 ? word : word + 's';
+}
+
+function paint(){
+  var box = document.getElementById('result');
+  var amount = document.getElementById('amount');
+  var fine = document.getElementById('fine');
+  label();
+  if (!job || !when){
+    box.classList.add('none');
+    amount.textContent = job ? 'Choose when you need it' : 'Choose a job to see the range';
+    fine.textContent = 'Parts are quoted separately if any are needed.';
+    return;
+  }
+  var base = job.base + job.per * (units - 1);
+  var low = Math.round(base * when.mult / 10) * 10;
+  var high = Math.round(low * 1.45 / 10) * 10;
+  box.classList.remove('none');
+  amount.textContent = 'AED ' + low + ' – ' + high;
+  fine.textContent = job.value + ', ' + units + ' × ' + document.getElementById('unit-word').textContent
+    + ', ' + when.value.toLowerCase() + '. Labour and visit only — parts quoted on site.';
+}
+
+document.querySelectorAll('.opt').forEach(function(button){
+  button.addEventListener('click', function(){
+    var group = button.parentElement.dataset.group;
+    button.parentElement.querySelectorAll('.opt').forEach(function(b){
+      b.setAttribute('aria-pressed','false');
+    });
+    button.setAttribute('aria-pressed','true');
+    if (group === 'job'){
+      job = {value:button.dataset.value, base:Number(button.dataset.base), per:Number(button.dataset.per)};
+    } else {
+      when = {value:button.dataset.value, mult:Number(button.dataset.mult)};
+    }
+    paint();
+  });
+});
+document.getElementById('plus').addEventListener('click', function(){
+  if (units < 8){ units++; document.getElementById('units').textContent = units; paint(); }
+});
+document.getElementById('minus').addEventListener('click', function(){
+  if (units > 1){ units--; document.getElementById('units').textContent = units; paint(); }
+});
+document.getElementById('request').addEventListener('click', function(){
+  var said = document.getElementById('said');
+  said.textContent = job && when
+    ? 'Not sent — this is a demonstration. Your estimate was calculated in this browser and went '
+      + 'nowhere. On a real site this would reach the dispatcher and you would get an arrival window.'
+    : 'Choose a job and a time first — then this button would send the request on a real site.';
+  said.className = 'said on';
+});
+paint();
+</script>
+</body>
+</html>

@@ -27,6 +27,9 @@ PORTFOLIO = {
     "nar": "sample-nar",
     "apex": "sample-apex",
     "verdant": "sample-verdant",
+    "homefix": "sample-homefix",
+    "ledgerloop": "sample-ledgerloop",
+    "meridian": "sample-meridian",
 }
 
 

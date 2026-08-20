@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian — property in Dubai</title>
+<meta name="description" content="Sample property search platform built by Qevik: working filters, saved list and a detail view. Illustrative listings; nothing is for sale.">
+<meta name="theme-color" content="#101820">
+<style>
+/* Meridian — search first.
+ *
+ * A property site is not a brochure with listings bolted on; the search IS the
+ * product, so it occupies the top of the screen and the results respond as you
+ * change it. The layout is a two-pane desktop app — criteria on the left,
+ * results on the right, detail sliding in over both — which nothing else in the
+ * portfolio does.
+ *
+ * Verdant is also a filtered grid, so the distinction is deliberate: Verdant
+ * accumulates into a basket, this one narrows towards a single decision and
+ * opens a full detail view. Different job, different shape.
+ *
+ * Listings are illustrative. Real addresses and prices would be a claim about
+ * property that is not for sale. */
+:root{
+  --night:#101820; --slate:#1B2530; --line:#2A3642; --line-2:#3A4855;
+  --ink:#EEF2F6; --ink-2:#A9B7C4; --dim:#7A8896;
+  --gold:#C8A24A; --gold-2:#A9873A; --sea:#4FB0C6;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--night);color:var(--ink);font-family:var(--sans);font-size:15px;
+  line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;font-family:var(--serif);font-weight:600;letter-spacing:-.015em}
+
+.masthead{border-bottom:1px solid var(--line);padding:.9rem clamp(1rem,3vw,1.6rem);
+  display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap}
+.wordmark{font-family:var(--serif);font-size:1.3rem;letter-spacing:.02em}
+.wordmark span{color:var(--gold)}
+.masthead .saved{margin-left:auto;background:none;border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:.4rem .95rem;font:inherit;font-size:.85rem;cursor:pointer}
+.masthead .saved b{color:var(--gold)}
+.masthead .tel{color:var(--ink-2);text-decoration:none;font-size:.88rem}
+
+/* two-pane */
+.pane{display:grid;grid-template-columns:1fr;min-height:calc(100vh - 62px)}
+@media(min-width:940px){.pane{grid-template-columns:288px 1fr}}
+.criteria{border-right:1px solid var(--line);padding:1.2rem clamp(1rem,3vw,1.4rem);
+  background:var(--slate)}
+.criteria h2{font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+  font-family:var(--sans);font-weight:700;margin:0 0 .8rem}
+.crit{margin:0 0 1.4rem}
+.crit > label{display:block;font-size:.78rem;color:var(--ink-2);margin-bottom:.4rem}
+.seg{display:flex;flex-wrap:wrap;gap:.35rem}
+.seg button{background:transparent;border:1px solid var(--line-2);color:var(--ink-2);border-radius:6px;
+  padding:.38rem .7rem;font:inherit;font-size:.83rem;cursor:pointer}
+.seg button[aria-pressed=true]{border-color:var(--gold);color:var(--gold);background:rgba(200,162,74,.1)}
+input[type=range]{width:100%;accent-color:var(--gold)}
+.rangeval{font-size:.85rem;color:var(--ink);margin-top:.3rem}
+.reset{background:none;border:0;color:var(--sea);font:inherit;font-size:.83rem;cursor:pointer;padding:0}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--sea);outline-offset:2px}
+
+/* results */
+.results{padding:1.2rem clamp(1rem,3vw,1.6rem) 3rem;min-width:0}
+.rhead{display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;margin-bottom:1rem}
+.rhead h1{font-size:1.5rem}
+.rhead .n{margin-left:auto;color:var(--dim);font-size:.88rem}
+.sort{background:transparent;border:1px solid var(--line-2);color:var(--ink-2);border-radius:6px;
+  padding:.35rem .6rem;font:inherit;font-size:.83rem}
+.list{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(268px,1fr))}
+.card{background:var(--slate);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  cursor:pointer;text-align:left;padding:0;font:inherit;color:inherit;display:block;width:100%}
+.card:hover{border-color:var(--line-2)}
+.card .view{aspect-ratio:16/10;position:relative;
+  background:linear-gradient(155deg,#243141,#16202B)}
+.card .view::after{content:"";position:absolute;inset:auto 0 0 0;height:52%;
+  background:linear-gradient(180deg,transparent,rgba(16,24,32,.75))}
+.card .view .sky{position:absolute;inset:0;
+  background:radial-gradient(70% 50% at 70% 18%,rgba(79,176,198,.26),transparent 65%)}
+.card .view .tower{position:absolute;bottom:0;left:12%;right:12%;height:62%;
+  background:linear-gradient(180deg,#2E3E4F,#1A242F);border-radius:3px 3px 0 0}
+.card .keep{position:absolute;top:.55rem;right:.55rem;z-index:2;background:rgba(16,24,32,.68);
+  border:1px solid var(--line-2);color:var(--ink-2);border-radius:50%;width:30px;height:30px;
+  cursor:pointer;font-size:.9rem;line-height:1}
+.card .keep[aria-pressed=true]{color:var(--gold);border-color:var(--gold)}
+.card .meta{padding:.8rem .9rem}
+.card .price{font-family:var(--serif);font-size:1.22rem;color:var(--gold)}
+.card h3{font-size:.98rem;font-family:var(--sans);font-weight:600;margin:.2rem 0 .1rem}
+.card .where{color:var(--dim);font-size:.84rem}
+.card .facts{display:flex;gap:.9rem;margin-top:.6rem;font-size:.82rem;color:var(--ink-2);
+  border-top:1px solid var(--line);padding-top:.6rem}
+.none{grid-column:1/-1;border:1px dashed var(--line-2);border-radius:10px;padding:2.6rem 1rem;
+  text-align:center;color:var(--dim)}
+
+/* detail — slides over, unlike Verdant's side drawer */
+.scrim{position:fixed;inset:0;background:rgba(8,12,16,.7);opacity:0;pointer-events:none;
+  transition:opacity .2s;z-index:40}
+.scrim.on{opacity:1;pointer-events:auto}
+.detail{position:fixed;inset:auto 0 0 0;max-height:92vh;overflow-y:auto;background:var(--slate);
+  border-top:1px solid var(--line-2);border-radius:14px 14px 0 0;transform:translateY(100%);
+  transition:transform .26s ease;z-index:41}
+.detail.on{transform:none}
+@media(min-width:940px){
+  .detail{inset:0 0 0 auto;width:min(560px,94vw);max-height:none;border-radius:0;
+    border-left:1px solid var(--line-2);border-top:0;transform:translateX(100%)}
+  .detail.on{transform:none}
+}
+.detail .bar{display:flex;align-items:center;padding:.9rem 1.2rem;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:var(--slate)}
+.detail .bar h2{font-size:1.05rem;font-family:var(--sans);font-weight:600}
+.detail .bar button{margin-left:auto;background:none;border:0;color:var(--ink-2);font-size:1.5rem;
+  cursor:pointer;line-height:1}
+.detail .inner{padding:1.2rem}
+.hero-img{aspect-ratio:16/9;border-radius:8px;position:relative;overflow:hidden;
+  background:linear-gradient(155deg,#26374A,#141D26);margin-bottom:1rem}
+.hero-img .sky{position:absolute;inset:0;background:radial-gradient(60% 45% at 66% 20%,rgba(79,176,198,.3),transparent 66%)}
+.hero-img .tower{position:absolute;bottom:0;left:16%;right:16%;height:66%;
+  background:linear-gradient(180deg,#31435А,#1B2530);border-radius:4px 4px 0 0}
+.detail .price{font-family:var(--serif);font-size:1.9rem;color:var(--gold)}
+.spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:.5rem;margin:1rem 0}
+.spec div{background:var(--night);border:1px solid var(--line);border-radius:8px;padding:.6rem .7rem}
+.spec b{display:block;font-size:1.02rem}
+.spec span{font-size:.72rem;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.plan{background:var(--night);border:1px solid var(--line);border-radius:8px;padding:1rem;
+  margin:1rem 0;color:var(--dim);font-size:.85rem;text-align:center}
+.plan .box{display:grid;grid-template-columns:1.3fr 1fr;gap:4px;height:112px;margin-bottom:.6rem}
+.plan .box i{background:var(--slate);border:1px solid var(--line-2);border-radius:3px}
+.plan .box i:first-child{grid-row:span 2}
+.ask{display:grid;gap:.6rem;margin-top:1rem}
+.ask input{background:var(--night);border:1px solid var(--line);border-radius:7px;color:var(--ink);
+  font:inherit;padding:.6rem .75rem}
+.ask button{background:var(--gold);border:0;color:#1A1408;font:inherit;font-weight:700;
+  border-radius:7px;padding:.75rem;cursor:pointer}
+.ask button:hover{background:var(--gold-2)}
+.said{display:none;background:rgba(79,176,198,.12);border:1px solid #2C5A66;border-radius:7px;
+  padding:.7rem .85rem;font-size:.86rem;color:var(--ink-2)}
+.said.on{display:block}
+.flag{background:var(--night);border-top:1px solid var(--line);padding:1.1rem clamp(1rem,3vw,1.6rem);
+  font-size:.85rem;color:var(--ink-2)}
+.flag b{color:var(--ink)}
+@media(prefers-reduced-motion:reduce){.detail,.scrim{transition:none}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"RealEstateAgent","name":"Meridian",
+"url":"https://sites.qevik.ai/sample-meridian/","telephone":"+971501029104","areaServed":"Dubai",
+"address":{"@type":"PostalAddress","streetAddress":"Office 301, Al Othman Building","addressLocality":"Deiram, Dubai","addressCountry":"AE"}}
+</script>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wordmark">MERIDIAN<span>.</span></div>
+  <a class="tel" href="tel:+971501029104">050 102 9104</a>
+  <button class="saved" id="saved-btn">Saved <b id="saved-n">0</b></button>
+</header>
+
+<div class="pane">
+  <aside class="criteria">
+    <h2>Refine</h2>
+    <div class="crit">
+      <label>Looking to</label>
+      <div class="seg" data-group="deal">
+        <button aria-pressed="true" data-value="buy">Buy</button>
+        <button aria-pressed="false" data-value="rent">Rent</button>
+      </div>
+    </div>
+    <div class="crit">
+      <label>Area</label>
+      <div class="seg" data-group="area">
+        <button aria-pressed="false" data-value="Marina">Marina</button>
+        <button aria-pressed="false" data-value="Downtown">Downtown</button>
+        <button aria-pressed="false" data-value="JLT">JLT</button>
+        <button aria-pressed="false" data-value="Palm">Palm</button>
+      </div>
+    </div>
+    <div class="crit">
+      <label>Bedrooms</label>
+      <div class="seg" data-group="beds">
+        <button aria-pressed="false" data-value="1">1</button>
+        <button aria-pressed="false" data-value="2">2</button>
+        <button aria-pressed="false" data-value="3">3</button>
+        <button aria-pressed="false" data-value="4">4+</button>
+      </div>
+    </div>
+    <div class="crit">
+      <label for="max">Maximum price</label>
+      <input type="range" id="max" min="1" max="12" value="12" step="1">
+      <div class="rangeval" id="maxval">Any</div>
+    </div>
+    <button class="reset" id="reset">Clear all</button>
+  </aside>
+
+  <main class="results">
+    <div class="rhead">
+      <h1>Property in Dubai</h1>
+      <span class="n" id="count"></span>
+      <select class="sort" id="sort" aria-label="Sort">
+        <option value="new">Newest</option>
+        <option value="low">Price: low to high</option>
+        <option value="high">Price: high to low</option>
+      </select>
+    </div>
+    <div class="list" id="list"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="detail" id="detail" aria-hidden="true" aria-label="Property detail">
+  <div class="bar"><h2 id="d-title">Property</h2><button id="d-close" aria-label="Close">×</button></div>
+  <div class="inner" id="d-inner"></div>
+</aside>
+
+<div class="flag">
+  <b>Sample platform built by Qevik.</b> Meridian is not a real agency and none of these properties
+  exist — prices, sizes and buildings are illustrative, and nothing here is for sale or rent. The
+  search, saving and viewing request all run in your browser; no enquiry is sent. The telephone
+  number is Qevik's own.
+</div>
+
+<script>
+// Search, filter, save and detail all work. A property site whose filters are
+// decorative is the clearest possible demonstration of the opposite of skill.
+var LISTINGS = [
+  {id:1, deal:'buy',  area:'Marina',   beds:2, price:2350000, size:1180, name:'Tower apartment, high floor', view:'Marina view', bath:2, ref:'MER-1024'},
+  {id:2, deal:'buy',  area:'Downtown', beds:1, price:1650000, size:820,  name:'Boulevard studio suite',      view:'Boulevard',   bath:1, ref:'MER-1031'},
+  {id:3, deal:'buy',  area:'Palm',     beds:4, price:9800000, size:3900, name:'Beachside villa',             view:'Sea',         bath:5, ref:'MER-1042'},
+  {id:4, deal:'rent', area:'JLT',      beds:2, price:135000,  size:1240, name:'Lake-facing two bedroom',     view:'Lake',        bath:2, ref:'MER-2011'},
+  {id:5, deal:'rent', area:'Marina',   beds:1, price:95000,   size:760,  name:'Compact marina one bed',      view:'Partial marina', bath:1, ref:'MER-2019'},
+  {id:6, deal:'buy',  area:'JLT',      beds:3, price:3100000, size:1860, name:'Corner three bedroom',        view:'Lake and skyline', bath:3, ref:'MER-1055'},
+  {id:7, deal:'rent', area:'Downtown', beds:3, price:240000,  size:1980, name:'Fountain-side family flat',   view:'Fountain',    bath:3, ref:'MER-2027'},
+  {id:8, deal:'buy',  area:'Marina',   beds:4, price:6400000, size:2950, name:'Duplex penthouse',            view:'Full marina', bath:4, ref:'MER-1068'}
+];
+var STEPS = [500000,1000000,1500000,2000000,2500000,3000000,4000000,5000000,6500000,8000000,10000000,null];
+var pick = {deal:'buy', area:null, beds:null, max:null};
+var saved = new Set();
+var sort = 'new';
+
+function money(n, deal){
+  return deal === 'rent'
+    ? 'AED ' + n.toLocaleString('en-AE') + '/yr'
+    : 'AED ' + (n/1000000).toFixed(n % 1000000 ? 2 : 1) + 'M';
+}
+
+function matching(){
+  var out = LISTINGS.filter(function(p){
+    if (pick.deal && p.deal !== pick.deal) return false;
+    if (pick.area && p.area !== pick.area) return false;
+    if (pick.beds && !(pick.beds === '4' ? p.beds >= 4 : p.beds === Number(pick.beds))) return false;
+    if (pick.max && p.deal === 'buy' && p.price > pick.max) return false;
+    return true;
+  });
+  if (sort === 'low')  out.sort(function(a,b){ return a.price - b.price; });
+  if (sort === 'high') out.sort(function(a,b){ return b.price - a.price; });
+  return out;
+}
+
+function draw(){
+  var found = matching();
+  document.getElementById('count').textContent =
+    found.length + (found.length === 1 ? ' property' : ' properties');
+  var list = document.getElementById('list');
+  if (!found.length){
+    list.innerHTML = '<div class="none">Nothing matches those criteria. Try widening the price or clearing an area.</div>';
+    return;
+  }
+  list.innerHTML = found.map(function(p){
+    return '<button class="card" data-id="' + p.id + '">'
+      + '<div class="view"><div class="sky"></div><div class="tower"></div>'
+      + '<span class="keep" role="button" data-keep="' + p.id + '" aria-pressed="'
+      + saved.has(p.id) + '" aria-label="Save">♥</span></div>'
+      + '<div class="meta"><div class="price">' + money(p.price, p.deal) + '</div>'
+      + '<h3>' + p.name + '</h3><div class="where">' + p.area + ' · ' + p.view + '</div>'
+      + '<div class="facts"><span>' + p.beds + ' bed</span><span>' + p.bath + ' bath</span>'
+      + '<span>' + p.size.toLocaleString('en-AE') + ' sq ft</span></div></div></button>';
+  }).join('');
+}
+
+document.getElementById('list').addEventListener('click', function(event){
+  var keep = event.target.closest('[data-keep]');
+  if (keep){
+    event.stopPropagation();
+    var kid = Number(keep.dataset.keep);
+    if (saved.has(kid)) { saved.delete(kid); } else { saved.add(kid); }
+    document.getElementById('saved-n').textContent = saved.size;
+    draw();
+    return;
+  }
+  var card = event.target.closest('.card');
+  if (card) open(Number(card.dataset.id));
+});
+
+function open(id){
+  var p = LISTINGS.find(function(x){ return x.id === id; });
+  document.getElementById('d-title').textContent = p.ref;
+  document.getElementById('d-inner').innerHTML =
+      '<div class="hero-img"><div class="sky"></div><div class="tower"></div></div>'
+    + '<div class="price">' + money(p.price, p.deal) + '</div>'
+    + '<h3 style="font-family:var(--sans);font-weight:600;margin:.3rem 0 .1rem">' + p.name + '</h3>'
+    + '<div style="color:var(--dim);font-size:.88rem">' + p.area + ', Dubai · ' + p.view + '</div>'
+    + '<div class="spec"><div><b>' + p.beds + '</b><span>Bedrooms</span></div>'
+    + '<div><b>' + p.bath + '</b><span>Bathrooms</span></div>'
+    + '<div><b>' + p.size.toLocaleString('en-AE') + '</b><span>Sq ft</span></div>'
+    + '<div><b>' + (p.deal === 'buy' ? 'Freehold' : 'Yearly') + '</b><span>Tenure</span></div></div>'
+    + '<div class="plan"><div class="box"><i></i><i></i><i></i></div>Floor plan — illustrative</div>'
+    + '<div class="ask"><input placeholder="Your name" aria-label="Your name">'
+    + '<input placeholder="Mobile" type="tel" aria-label="Mobile">'
+    + '<button id="ask-btn">Request a viewing</button>'
+    + '<p class="said" id="d-said"></p></div>';
+  document.getElementById('ask-btn').addEventListener('click', function(){
+    var said = document.getElementById('d-said');
+    said.textContent = 'Not sent — Meridian is a demonstration and this property does not exist. '
+      + 'On a real platform this would reach the agent handling ' + p.ref + '.';
+    said.className = 'said on';
+  });
+  document.getElementById('detail').classList.add('on');
+  document.getElementById('detail').setAttribute('aria-hidden','false');
+  document.getElementById('scrim').classList.add('on');
+}
+function shut(){
+  document.getElementById('detail').classList.remove('on');
+  document.getElementById('detail').setAttribute('aria-hidden','true');
+  document.getElementById('scrim').classList.remove('on');
+}
+document.getElementById('d-close').addEventListener('click', shut);
+document.getElementById('scrim').addEventListener('click', shut);
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') shut(); });
+
+document.querySelectorAll('.seg').forEach(function(seg){
+  seg.addEventListener('click', function(event){
+    var button = event.target.closest('button');
+    if (!button) return;
+    var group = seg.dataset.group;
+    var already = pick[group] === button.dataset.value;
+    seg.querySelectorAll('button').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
+    if (group === 'deal'){
+      pick.deal = button.dataset.value; button.setAttribute('aria-pressed','true');
+    } else {
+      pick[group] = already ? null : button.dataset.value;
+      if (!already) button.setAttribute('aria-pressed','true');
+    }
+    draw();
+  });
+});
+document.getElementById('max').addEventListener('input', function(event){
+  var cap = STEPS[Number(event.target.value) - 1];
+  pick.max = cap;
+  document.getElementById('maxval').textContent =
+    cap ? 'Up to AED ' + (cap/1000000).toFixed(cap % 1000000 ? 1 : 0) + 'M' : 'Any';
+  draw();
+});
+document.getElementById('sort').addEventListener('change', function(e){ sort = e.target.value; draw(); });
+document.getElementById('reset').addEventListener('click', function(){
+  pick = {deal:'buy', area:null, beds:null, max:null};
+  document.querySelectorAll('.seg button').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
+  document.querySelector('.seg[data-group="deal"] button').setAttribute('aria-pressed','true');
+  document.getElementById('max').value = 12;
+  document.getElementById('maxval').textContent = 'Any';
+  draw();
+});
+document.getElementById('saved-btn').addEventListener('click', function(){
+  alert(saved.size ? saved.size + ' saved. On a real platform these would persist to your account.'
+                   : 'Nothing saved yet — tap the heart on a listing.');
+});
+draw();
+</script>
+</body>
+</html>
