@@ -32,6 +32,46 @@ from dataclasses import dataclass, field
 
 BASE = "https://sites.qevik.ai"
 
+#: What a demo *is*, in ascending order of what it entitles a message to claim.
+#: This is the honesty class of the artefact, and outreach language is derived
+#: from it rather than written per prospect — "I built you a working example"
+#: and "I put together a concept" are not interchangeable, and which one is true
+#: is a property of the demo, not of how confident the sentence feels.
+CLASSES: tuple[str, ...] = (
+    "GENERIC_SAMPLE",          # ours, for a trade, nobody in particular
+    "INDUSTRY_CONCEPT",        # ours, exploring how a trade could work
+    "PROSPECT_INSPIRED",       # built from what a named business publishes, unsolicited
+    "PROSPECT_REBUILD",        # their site, rebuilt — still unsolicited
+    "CLIENT_APPROVED_REBUILD", # they asked for it
+)
+
+#: How a message may introduce each class. The strong verbs are unlocked by
+#: approval, never by enthusiasm.
+CLAIM: dict[str, str] = {
+    "GENERIC_SAMPLE": "Ours, not a client's",
+    "INDUSTRY_CONCEPT": "A concept we built to show how this could work",
+    "PROSPECT_INSPIRED": "A concept I put together from what you publish — not commissioned "
+                         "by you and not your site",
+    "PROSPECT_REBUILD": "A working rebuild of your site, built unsolicited from what you "
+                        "publish",
+    "CLIENT_APPROVED_REBUILD": "The rebuild you approved",
+}
+
+#: Verbs no message may use about a demo below the given class.
+FORBIDDEN_ABOVE: dict[str, tuple[str, ...]] = {
+    "GENERIC_SAMPLE": ("built you", "we built your", "your new site", "commissioned"),
+    "INDUSTRY_CONCEPT": ("built you", "we built your", "your new site", "commissioned"),
+    # "built you" is barred here too. Unsolicited work can honestly be described
+    # as built *for* someone, but only once the artefact is their site rebuilt.
+    # A concept assembled from what they publish is a concept, and saying it was
+    # built for them is how a demo turns into an accidental claim of a
+    # relationship that does not exist.
+    "PROSPECT_INSPIRED": ("built you", "we built your", "your new site", "commissioned",
+                          "you approved"),
+    "PROSPECT_REBUILD": ("commissioned", "you approved"),
+    "CLIENT_APPROVED_REBUILD": (),
+}
+
 
 @dataclass(frozen=True)
 class Demo:
@@ -71,6 +111,9 @@ class Demo:
     does_not_prove: str = ""
     #: What to walk somebody through, in order, if they reply.
     show_this: tuple[str, ...] = ()
+    #: The honesty class. Defaults to the weakest claim on purpose: a demo that
+    #: forgot to declare what it is must not be introduced as client work.
+    classification: str = "GENERIC_SAMPLE"
 
     @property
     def url(self) -> str:
@@ -100,7 +143,8 @@ DEMOS: tuple[Demo, ...] = (
                     "Show today's opening hours",
                     'Tap the call button',
                     'Open the appointment form and read the note saying it is not connected',
-         )),
+         ),
+         classification="GENERIC_SAMPLE"),
     Demo("sample-nar", "NAR", "Fine dining",
          frozenset({"food"}), "restaurant site",
          "a priced menu, a room gallery and a table request that says plainly it is not connected",
@@ -120,7 +164,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Scroll the priced menu',
                     'Swipe the room gallery',
                     'Open the table request',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-atelier", "Atelier", "Luxury salon",
          frozenset({"beauty"}), "salon site",
          "a treatment list with real durations and prices, and today's opening hours",
@@ -139,7 +184,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Show durations and prices',
                     'Build a visit',
                     'Open it on a phone',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-apex", "APEX Detailing", "Automotive",
          frozenset({"automotive"}), "car detailing site",
          "a four-step quote configurator that prices the job live",
@@ -160,7 +206,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Add two services and watch the total',
                     'Change the plan and watch the discount',
                     'Open it on a phone',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-homefix", "HomeFix", "Home services",
          frozenset({"home"}), "home services site",
          "an estimator above the fold and two thumb-sized buttons pinned to the bottom of the phone",
@@ -180,7 +227,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Use the estimator',
                     'Show the pinned call and WhatsApp bar',
                     'Open the FAQ',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-meridian", "Meridian", "Real estate",
          frozenset({"real_estate", "property"}), "estate agency site",
          "property search with filters, a saved list and a call-back request",
@@ -201,7 +249,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Save two properties',
                     'Open the saved list',
                     'Request a call back',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-verdant", "Verdant", "Retail",
          frozenset({"retail"}), "retail site",
          "a filterable catalogue, live search and a working basket",
@@ -222,7 +271,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Add two items to the basket',
                     'Open the cart and show the subtotal',
                     'Open it on a phone',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-ledgerloop", "LedgerLoop", "B2B software site",
          frozenset({"professional"}), "B2B software site",
          "a business site with the product itself running inside the page, and clear pricing",
@@ -243,7 +293,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Switch the billing period',
                     'Scroll the comparison table',
                     'Open it on a phone',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-foundry", "Foundry", "AI and automation",
          frozenset({"technology", "ai"}), "workflow automation concept",
          "a workflow product with explicit states and the evidence behind each one",
@@ -261,7 +312,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Walk the workflow states',
                     'Open the evidence behind a state',
                     'Point out that it is labelled a concept',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-pulse", "Pulse", "Fitness analytics",
          frozenset(), "training log app",
          "a product interface rather than a marketing page — charts, goals and a session history",
@@ -282,7 +334,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Show the goals',
                     'Scroll the session history',
                     'Open it on a phone and show the rail',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-kilo", "Kilo", "Gym membership",
          frozenset({"fitness"}), "gym member app",
          "a member app: class booking that takes a seat, a workout runner and a membership card",
@@ -303,7 +356,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Show the rest timer',
                     'Finish and show the week move',
                     'Open the membership card',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     Demo("sample-carrot", "Carrot Dash", "Games",
          frozenset({"games"}), "browser game",
          "a genuinely playable one-button game — physics, rising difficulty and a kept score",
@@ -322,7 +376,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Play it',
                     'Show the score rising',
                     'Show it works on a phone with one thumb',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
     # Recruitment is its own category, deliberately not folded into
     # "professional". A staffing business and an accountancy practice are both
     # professional services and need completely different products; collapsing
@@ -345,7 +400,8 @@ DEMOS: tuple[Demo, ...] = (
          does_not_prove="It takes no bookings and no payments.",
          show_this=("Open it on a phone", "Tap العربية and watch the whole page flip to RTL",
                     "Scroll the priced menu", "Tap the call button",
-                    "Open the table request and read the note saying it is not connected")),
+                    "Open the table request and read the note saying it is not connected"),
+         classification="GENERIC_SAMPLE"),
     Demo("sample-cafe", "Sample Coffee Roasters", "Café and roastery",
          frozenset({"cafe"}), "bilingual café site",
          "a drinks list with prices, beans to take home, and an Arabic version",
@@ -357,7 +413,8 @@ DEMOS: tuple[Demo, ...] = (
          proves="Qevik ships small bilingual sites that work on a phone.",
          does_not_prove="It has no ordering or delivery.",
          show_this=("Open it on a phone", "Switch to Arabic", "Scroll the drinks list",
-                    "Tap WhatsApp")),
+                    "Tap WhatsApp"),
+         classification="GENERIC_SAMPLE"),
     Demo("sample-salon", "Sample Beauty Studio", "Salon",
          frozenset({"beauty"}), "bilingual salon site",
          "a treatment list with prices and durations, in English and Arabic",
@@ -369,7 +426,8 @@ DEMOS: tuple[Demo, ...] = (
          proves="Qevik ships a bilingual salon site a customer can use on a phone.",
          does_not_prove="It takes no appointments.",
          show_this=("Open it on a phone", "Switch to Arabic", "Scroll the treatment list",
-                    "Tap the call button")),
+                    "Tap the call button"),
+         classification="GENERIC_SAMPLE"),
     Demo("sample-detailing", "Sample Auto Detailing", "Car detailing",
          frozenset({"automotive"}), "bilingual detailing site",
          "priced packages, tap-to-call and directions, in English and Arabic",
@@ -381,7 +439,8 @@ DEMOS: tuple[Demo, ...] = (
          proves="Qevik ships a bilingual workshop site that works on a phone.",
          does_not_prove="It has no quoting engine — APEX is the sample for that.",
          show_this=("Open it on a phone", "Switch to Arabic", "Scroll the packages",
-                    "Tap the call button")),
+                    "Tap the call button"),
+         classification="GENERIC_SAMPLE"),
     Demo("sample-property", "Sample Property", "Property",
          frozenset({"real_estate", "property"}), "bilingual property site",
          "listings, service pages and a call-back request, in English and Arabic",
@@ -393,7 +452,8 @@ DEMOS: tuple[Demo, ...] = (
          proves="Qevik ships a bilingual property site that works on a phone.",
          does_not_prove="It has no search or saved list — Meridian is the sample for that.",
          show_this=("Open it on a phone", "Switch to Arabic", "Read the service pages",
-                    "Tap the call button")),
+                    "Tap the call button"),
+         classification="GENERIC_SAMPLE"),
     # Built from one real business's published information, for that business.
     # `serves` is empty on purpose: this is not a category demo and must never be
     # auto-selected for anybody else. It reaches AHS through their own
@@ -418,7 +478,8 @@ DEMOS: tuple[Demo, ...] = (
                     "Set 400+ guests and watch Capacity come forward",
                     "Scroll the live-station sequence",
                     "Show the enquiry already written from what you chose",
-                    "Open it on a phone and pull up the brief bar")),
+                    "Open it on a phone and pull up the brief bar"),
+         classification="PROSPECT_INSPIRED"),
     Demo("sample-hire360", "HIRE360", "Hospitality recruitment",
          frozenset({"recruitment", "staffing", "hospitality"}), "hospitality recruitment platform",
          "a two-sided talent marketplace — search and filter candidates, open a profile, "
@@ -448,7 +509,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Switch to candidate mode',
                     'Switch to Arabic and show the RTL layout',
                     'Open it on a phone',
-         )),
+         ),
+         classification="PROSPECT_INSPIRED"),
     Demo("sample-wordrush", "Word Rush", "Education",
          frozenset({"education"}), "bilingual learning app",
          "an interface that switches language and direction at runtime, not at build time",
@@ -468,7 +530,8 @@ DEMOS: tuple[Demo, ...] = (
                     'Tap عربي and watch the whole interface flip',
                     'Open the word list and search in Arabic',
                     'Show the progress screen',
-         )),
+         ),
+         classification="INDUSTRY_CONCEPT"),
 )
 
 BY_SLUG = {demo.slug: demo for demo in DEMOS}
@@ -667,3 +730,17 @@ def show_this(selection: Selection) -> tuple[str, ...]:
                 "Check their own opening hours and phone number are right",
                 "Point out the appointment form is a placeholder and says so")
     return selection.demo.show_this if selection.demo else ()
+
+
+def claim(demo: Demo | None) -> str:
+    """The sentence a message may use to introduce this demo."""
+    return CLAIM.get(demo.classification, "") if demo is not None else ""
+
+
+def overclaims(text: str, demo: Demo | None) -> list[str]:
+    """Phrases in this text that claim more than the demo's class allows."""
+    if demo is None:
+        return []
+    lowered = text.lower()
+    return [phrase for phrase in FORBIDDEN_ABOVE.get(demo.classification, ())
+            if phrase in lowered]

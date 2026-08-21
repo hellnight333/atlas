@@ -111,6 +111,11 @@ def check(
                         f"which it does not serve")
     if chosen.kind == "sample" and "built you" in lowered:
         problems.append("implies a Qevik sample was built for this prospect")
+    # The demo's honesty class, not the sentence's confidence, decides which
+    # verbs are available. "We built your new site" is true of exactly one
+    # class, and it is the one a customer has to have asked for.
+    for phrase in demos.overclaims(text, chosen.demo):
+        problems.append(f"says {phrase!r} about a {chosen.demo.classification} demo")
     if not chosen.url and "sites.qevik.ai" in lowered:
         problems.append("links a demo when none was selected as relevant")
 
