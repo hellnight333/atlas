@@ -231,9 +231,20 @@ def _demo_view(folded: dict) -> dict:
     }
 
 
-#: Job states, §45. "Done" is not one of them — a build is READY only once its
-#: QA has run, and READY is the only state outreach may reference.
-JOB_STATES = ("DRAFT", "QUEUED", "RUNNING", "QA", "READY", "FAILED", "CANCELLED")
+#: The build lifecycle. "Done" is not one of them — a build is READY only once
+#: its QA has run, and READY is the only state outreach may reference.
+#:
+#: The middle states name what is actually happening, because "running" for
+#: forty minutes tells an operator nothing while "MEDIA" tells them what it is
+#: waiting on. CANCELLED is terminal and kept deliberately: one real job is in
+#: it, and a vocabulary that cannot express the state a record is already in
+#: would force either a rewrite of history or a job displayed as something it
+#: is not.
+JOB_STATES = ("QUEUED", "RESEARCHING", "DESIGNING", "BUILDING", "MEDIA", "QA",
+              "REVIEW", "READY", "FAILED", "CANCELLED")
+
+#: Nothing further happens from here.
+TERMINAL_JOB_STATES = frozenset({"READY", "FAILED", "CANCELLED"})
 
 #: What an operator can ask to have built. Checking a box requests nothing; a
 #: build starts on an explicit action and never as a side effect of ticking.
@@ -246,7 +257,18 @@ JOB_STATES = ("DRAFT", "QUEUED", "RUNNING", "QA", "READY", "FAILED", "CANCELLED"
 NATIVE = ("Android app", "iOS app", "PWA / mobile web app")
 PRODUCTS = tuple(sorted(opportunity.PRODUCTS | set(NATIVE)))
 
-MEDIA_PERMISSION = ("none", "use_originals", "edit_enhance", "generate_matching")
+#: What the customer has actually agreed to, in ascending order.
+#:
+#: `permission_pending` earns its place by being the state everything else
+#: collapses into wrongly: "we asked and they have not answered" is not "no
+#: permission", and an operator chasing a reply needs to see the difference. The
+#: existing four keep their names — they are written into production event
+#: history, and renaming them would buy tidiness at the cost of a migration.
+MEDIA_PERMISSION = ("none", "permission_pending", "use_originals", "edit_enhance",
+                    "generate_matching")
+
+#: Only these allow a customer's own photographs anywhere near a build.
+MEDIA_ALLOWS_ORIGINALS = frozenset({"use_originals", "edit_enhance", "generate_matching"})
 
 
 log = logging.getLogger(__name__)
@@ -306,6 +328,43 @@ class BuildRequest(BaseModel):
     product: str
     brief: str = ""
     opportunity: str = ""   #: the opportunity key this build answers
+
+
+#: What the console needs to show a research run honestly. A run that partly
+#: failed must look different from one that found nothing, which is the whole
+#: reason the stage states are carried through rather than summarised away.
+def _research_view(folded: dict) -> dict:
+    research = folded.get("research") or {}
+    if not research:
+        return {"state": "NONE",
+                "summary": "This business has not been researched yet.",
+                "stages": {}, "facts": {}}
+    stages = research.get("stages") or {}
+    failed = [name for name, s in stages.items() if s.get("state") == "failed"]
+    state = research.get("state", "NOT_VERIFIED")
+    summary = {
+        "READY": "Every stage ran.",
+        "PARTIAL": f"{len(stages) - len(failed)} of {len(stages)} stages ran; "
+                   f"{', '.join(failed)} did not.",
+        "FAILED": "The site could not be reached, so nothing about it is established.",
+    }.get(state, "Research state unknown.")
+    facts = research.get("facts") or {}
+    return {
+        "state": state, "summary": summary, "at": research.get("at", ""),
+        "website": research.get("website", ""),
+        "stages": stages, "failed": failed,
+        "speed": (facts.get("technical") or {}).get("speed_class", "NOT_VERIFIED"),
+        "model": (facts.get("classify") or {}).get("model", "NOT_VERIFIED"),
+        "position": (facts.get("position") or {}).get("grade", "NOT_VERIFIED"),
+        "position_reasons": (facts.get("position") or {}).get("reasons", []),
+        "journey_break": (facts.get("journey") or {}).get("first_break", ""),
+        "pages": (facts.get("cms") or {}).get("pages"),
+        "posts": (facts.get("cms") or {}).get("posts"),
+        "media": (facts.get("cms") or {}).get("media_total"),
+        "orphans": (facts.get("seo") or {}).get("orphan_count"),
+        "crawled": (facts.get("crawl") or {}).get("ok"),
+        "stopped_because": (facts.get("crawl") or {}).get("stopped_because", ""),
+    }
 
 
 def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
@@ -370,9 +429,15 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         replies: list[dict] = []
         media: dict = {"permission": "none", "source": "", "at": "", "note": ""}
         builds: dict[str, dict] = {}
+        research: dict = {}
 
         for factory, kind, at, detail in events:
-            if kind == "media_permission_recorded":
+            if kind == "researched":
+                # Latest run wins for presentation; the observations are merged
+                # into the audit below so a partial run adds evidence rather
+                # than replacing what a fuller run established.
+                research = {**detail, "at": at.isoformat() if at else ""}
+            elif kind == "media_permission_recorded":
                 # Latest wins: permission is a current fact, and a customer who
                 # revokes must not be overridden by the earlier grant. The
                 # timeline keeps the history.
@@ -440,6 +505,19 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 f["feature"] for f in _observations(merged) if f.get("status") == "not_found"
             ),
         )
+        if research.get("observations"):
+            merged = dict(merged)
+            by_feature = {o["feature"]: o for o in _observations(merged)}
+            for observation in research["observations"]:
+                current = by_feature.get(observation["feature"])
+                # A crawl-wide confirmation outranks a homepage guess; an
+                # unverified reading never displaces a confirmed one.
+                if current and observation["status"] == "unverified" \
+                        and current.get("status") != "unverified":
+                    continue
+                by_feature[observation["feature"]] = observation
+            merged["observations"] = list(by_feature.values())
+
         score = scoring.score(
             business_id=business["id"], name=business["name"], website=business["website"],
             phone=business["phone"], email=business["email"], category=category,
@@ -454,7 +532,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             "audited_at": audited_at, "verified_at": verified_at,
             "demo": demo, "chosen": chosen, "shots": shots, "shots_at": shots_at,
             "drafts": drafts, "messages": messages, "sent": sent, "replies": replies,
-            "media": media, "builds": builds,
+            "media": media, "builds": builds, "research": research,
             "timeline": timeline, "fresh_hours": fresh_hours,
             "stale": fresh_hours is None or fresh_hours > STALE_AFTER_HOURS,
         }
@@ -883,6 +961,9 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                       "mobile": {"captured": False, "reason": "not captured"}},
                 "screenshots_at": folded["shots_at"].isoformat() if folded["shots_at"] else "",
                 "demo": _demo_view(folded),
+                "research": _safe(
+                    "research", lambda: _research_view(folded), {"state": "NONE"},
+                    business_id=business_id, warnings=warnings),
                 "digital_opportunities": _safe(
                     "digital_opportunities",
                     lambda: _digital(findings, category=folded["category"],

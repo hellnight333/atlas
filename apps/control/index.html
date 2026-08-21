@@ -269,6 +269,14 @@ table.compact tr:last-child td{border-bottom:0}
     .job{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;padding:.5rem 0;
       border-bottom:1px solid var(--rule)}
     .job:last-child{border-bottom:0}
+
+    .rgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.5rem}
+    .rcell{border:1px solid var(--rule);border-radius:6px;padding:.55rem .7rem}
+    .rcell .k{display:block;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;
+      color:var(--muted)}
+    .rcell b{font-size:1.05rem}
+    .rcell b.good{color:var(--present)}
+    .rcell b.bad{color:var(--absent)}
 </style>
 </head>
 <body>
@@ -657,6 +665,51 @@ async function drawProspect(id) {
         demonstrate it: ${esc(d.strongest.deferred.join(", "))}.</p>` : ""}
     </div>` : ""}
 
+    ${d.research ? `
+    <section class="card" style="margin-bottom:1rem">
+      <div class="pad" style="border-bottom:1px solid var(--rule);display:flex;
+        align-items:baseline;gap:.6rem;flex-wrap:wrap">
+        <p class="eyebrow">Research</p>
+        <span class="tag ${d.research.state === "READY" ? "accent"
+          : d.research.state === "FAILED" ? "bad" : "flat"}">${esc(d.research.state)}</span>
+        <span class="small muted">${esc(d.research.summary || "")}</span>
+        ${d.research.at ? `<span class="small muted" style="margin-inline-start:auto">
+          ${esc(d.research.at.slice(0, 16).replace("T", " "))}</span>` : ""}
+      </div>
+      ${d.research.state === "NONE" ? `<div class="pad">
+        <p class="small muted">Nothing has been crawled for this business. The audit you see
+        below is a single page; opportunities that need a crawl, a sitemap or a content API
+        cannot be derived until research has run.</p></div>` : `
+      <div class="pad">
+        <div class="rgrid">
+          ${[["Business model", d.research.model], ["Position", d.research.position],
+             ["Site speed", d.research.speed],
+             ["Pages", d.research.pages], ["Posts", d.research.posts],
+             ["Media items", d.research.media],
+             ["Unlinked pages", d.research.orphans], ["Pages crawled", d.research.crawled]]
+            .filter(([, v]) => v !== null && v !== undefined && v !== "")
+            .map(([k, v]) => `<div class="rcell"><span class="k">${esc(k)}</span>
+              <b class="${["STRONG","ESTABLISHED","FAST"].includes(String(v)) ? "good"
+                : ["WEAK","SLOW","UNAVAILABLE"].includes(String(v)) ? "bad" : ""}">
+              ${esc(v)}</b></div>`).join("")}
+        </div>
+        ${d.research.position_reasons && d.research.position_reasons.length ? `
+          <p class="small" style="margin-top:.8rem"><b>Why that grade:</b>
+          ${esc(d.research.position_reasons.join("; "))}.
+          ${["STRONG","ESTABLISHED"].includes(d.research.position)
+            ? "Lead with what could be added, never with what is wrong." : ""}</p>` : ""}
+        ${d.research.journey_break ? `<p class="small" style="margin-top:.5rem">
+          <b>Journey breaks at:</b> <span class="mono">${esc(d.research.journey_break)}</span>
+          — the first step a customer cannot complete.</p>` : ""}
+        ${d.research.stopped_because ? `<p class="small muted" style="margin-top:.5rem">
+          Crawl ${esc(d.research.stopped_because)}.</p>` : ""}
+        ${d.research.failed && d.research.failed.length ? `
+          <p class="small" style="margin-top:.5rem;color:var(--absent)">
+          Did not run: ${esc(d.research.failed.join(", "))}. Anything those stages would have
+          established is <span class="mono">NOT_VERIFIED</span>, not absent.</p>` : ""}
+      </div>`}
+    </section>` : ""}
+
     ${(d.warnings && d.warnings.length) ? `
     <div class="hero" style="margin-bottom:1rem;border-color:var(--absent)">
       <p class="eyebrow" style="color:var(--absent)">Partly unavailable</p>
@@ -723,6 +776,7 @@ async function drawProspect(id) {
               <input type="radio" name="mediaperm" value="${esc(o)}"
                 ${d.media.permission === o ? "checked" : ""}>
               <span>${esc({none: "No permission",
+                           permission_pending: "Asked — no answer yet",
                            use_originals: "Use original images",
                            edit_enhance: "Edit / enhance images",
                            generate_matching: "Generate matching visuals"}[o] || o)}</span>

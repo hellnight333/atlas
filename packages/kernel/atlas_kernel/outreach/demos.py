@@ -43,6 +43,11 @@ CLASSES: tuple[str, ...] = (
     "PROSPECT_INSPIRED",       # built from what a named business publishes, unsolicited
     "PROSPECT_REBUILD",        # their site, rebuilt — still unsolicited
     "CLIENT_APPROVED_REBUILD", # they asked for it
+    # Ours, showing what Qevik can build. Deliberately last and deliberately
+    # apart from the ladder above: the others describe how close a demo is to a
+    # particular business, and this one is not about a business at all. A 3D
+    # venue or a CRM shown to a caterer proves capability, not that they need it.
+    "CAPABILITY_DEMO",
 )
 
 #: How a message may introduce each class. The strong verbs are unlocked by
@@ -55,6 +60,8 @@ CLAIM: dict[str, str] = {
     "PROSPECT_REBUILD": "A working rebuild of your site, built unsolicited from what you "
                         "publish",
     "CLIENT_APPROVED_REBUILD": "The rebuild you approved",
+    "CAPABILITY_DEMO": "Something we built to show what is possible — not for "
+                       "your business and not a suggestion that you need it",
 }
 
 #: Verbs no message may use about a demo below the given class.
@@ -70,6 +77,10 @@ FORBIDDEN_ABOVE: dict[str, tuple[str, ...]] = {
                           "you approved"),
     "PROSPECT_REBUILD": ("commissioned", "you approved"),
     "CLIENT_APPROVED_REBUILD": (),
+    # The strictest of the lot. A capability demo may not be attached to the
+    # prospect in any way, so the possessive is barred outright.
+    "CAPABILITY_DEMO": ("built you", "we built your", "your new site", "commissioned",
+                        "you approved", "for your business"),
 }
 
 

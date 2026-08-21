@@ -17,16 +17,37 @@ from atlas_kernel.outreach import opportunity
 
 
 def test_job_states_are_explicit_and_have_no_done() -> None:
-    assert sales.JOB_STATES == ("DRAFT", "QUEUED", "RUNNING", "QA", "READY",
-                                "FAILED", "CANCELLED")
+    """The middle states name what is happening, not merely that something is.
+
+    CANCELLED is terminal and deliberately retained: one real job is in it, and
+    a vocabulary unable to express the state a record already holds forces
+    either a rewrite of history or a job displayed as something it is not.
+    """
+    assert sales.JOB_STATES == ("QUEUED", "RESEARCHING", "DESIGNING", "BUILDING",
+                                "MEDIA", "QA", "REVIEW", "READY", "FAILED", "CANCELLED")
     assert "DONE" not in sales.JOB_STATES, "'done' hides whether QA ran"
     assert sales.JOB_STATES.index("QA") < sales.JOB_STATES.index("READY")
+    assert sales.TERMINAL_JOB_STATES == {"READY", "FAILED", "CANCELLED"}
+
+
+def test_the_historical_cancelled_job_is_still_expressible() -> None:
+    """A live record sits in CANCELLED. Dropping it would mean rewriting it."""
+    assert "CANCELLED" in sales.JOB_STATES
 
 
 def test_the_media_vocabulary_starts_at_no_permission() -> None:
     assert sales.MEDIA_PERMISSION[0] == "none"
-    assert set(sales.MEDIA_PERMISSION) == {"none", "use_originals", "edit_enhance",
-                                           "generate_matching"}
+    assert set(sales.MEDIA_PERMISSION) == {"none", "permission_pending", "use_originals",
+                                           "edit_enhance", "generate_matching"}
+
+
+def test_asked_and_unanswered_is_not_the_same_as_refused() -> None:
+    """The state everything else collapses into wrongly."""
+    assert "permission_pending" in sales.MEDIA_PERMISSION
+    assert "permission_pending" not in sales.MEDIA_ALLOWS_ORIGINALS
+    assert sales.MEDIA_ALLOWS_ORIGINALS == {"use_originals", "edit_enhance",
+                                            "generate_matching"}
+    assert "none" not in sales.MEDIA_ALLOWS_ORIGINALS
 
 
 def test_a_product_list_offers_more_than_websites() -> None:
