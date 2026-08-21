@@ -320,6 +320,12 @@ table.cmp tbody th{font-weight:600;color:var(--mute);white-space:nowrap;font-siz
   aside.filters{display:none}
   main.results{flex:1 1 auto;min-height:0}
   .searchbar{padding:max(.8rem,env(safe-area-inset-top)) .9rem .7rem}
+  /* Search gets its own row. Sharing one with the filter button and the sort
+     select squeezed it down to two visible characters at 390px. */
+  .searchbar .row{flex-wrap:wrap}
+  .seek{flex:1 1 100%}
+  .searchbar .row #openfilters{flex:0 0 auto}
+  .searchbar .row .sortsel{flex:1 1 auto;min-width:0}
   .list{padding:.7rem .9rem calc(76px + env(safe-area-inset-bottom))}
   .mob{display:flex}
   nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:35;height:calc(62px + env(safe-area-inset-bottom));

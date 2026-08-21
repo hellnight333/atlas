@@ -53,9 +53,24 @@ class Demo:
     #: Audit features it visibly demonstrates. Used to break ties, and to avoid
     #: raising a gap the thing we are linking to does not answer.
     demonstrates: frozenset[str] = field(default_factory=frozenset)
-    #: Whether it exists in Arabic. Only the bilingual clinic vertical does; the
-    #: hand-built portfolio samples are English-only.
+    #: Whether it exists in Arabic. The vertical-generated local-business sites
+    #: have an /ar/ route; HIRE360 and Word Rush switch in place; the rest of
+    #: the hand-built samples are English-only.
     bilingual: bool = False
+    #: What kind of thing this is, in the operator's words.
+    product_type: str = "Website"
+    #: The kind of business it suits, said plainly.
+    business_class: str = ""
+    #: The one capability worth leading with.
+    primary: str = ""
+    #: Everything else it genuinely shows.
+    secondary: tuple[str, ...] = ()
+    #: What a prospect may conclude from it.
+    proves: str = ""
+    #: The honest limit. Shown beside `proves`, never omitted.
+    does_not_prove: str = ""
+    #: What to walk somebody through, in order, if they reply.
+    show_this: tuple[str, ...] = ()
 
     @property
     def url(self) -> str:
@@ -68,65 +83,367 @@ DEMOS: tuple[Demo, ...] = (
          frozenset({"health", "dental"}), "bilingual clinic site",
          "English and Arabic side by side, verified opening hours and tap-to-call",
          frozenset({"arabic", "click_to_call", "whatsapp", "opening_hours",
-                    "google_maps", "structured_data", "contact_form"}), bilingual=True),
+                    "google_maps", "structured_data", "contact_form"}), bilingual=True,
+         product_type='Website',
+         business_class='a clinic or medical practice',
+         primary='English and Arabic as two separately indexed sites',
+         secondary=(
+                    'verified opening hours with a today marker',
+                    'tap-to-call and WhatsApp',
+                    'LocalBusiness structured data',
+         ),
+         proves='Qevik ships a bilingual clinic site where the Arabic is authored and has its own canonical URL.',
+         does_not_prove='The appointment form is a placeholder and books nothing.',
+         show_this=(
+                    'Open it on a phone',
+                    'Switch to the Arabic version and check it is RTL, not mirrored',
+                    "Show today's opening hours",
+                    'Tap the call button',
+                    'Open the appointment form and read the note saying it is not connected',
+         )),
     Demo("sample-nar", "NAR", "Fine dining",
          frozenset({"food"}), "restaurant site",
          "a priced menu, a room gallery and a table request that says plainly it is not connected",
-         frozenset({"contact_form", "opening_hours", "structured_data"})),
+         frozenset({"contact_form", "opening_hours", "structured_data"}),
+         product_type='Website',
+         business_class='a fine-dining restaurant',
+         primary='an editorial page with no navigation at all — the menu is the site',
+         secondary=(
+                    'priced menu as a list, not cards',
+                    'horizontal room gallery',
+                    'table request that states it is not connected',
+         ),
+         proves='Qevik can build something that reads like a restaurant rather than a template.',
+         does_not_prove='It has no Arabic version and takes no reservations.',
+         show_this=(
+                    'Open on desktop for the full-bleed opening',
+                    'Scroll the priced menu',
+                    'Swipe the room gallery',
+                    'Open the table request',
+         )),
     Demo("sample-atelier", "Atelier", "Luxury salon",
          frozenset({"beauty"}), "salon site",
          "a treatment list with real durations and prices, and today's opening hours",
-         frozenset({"opening_hours", "structured_data", "contact_form"})),
+         frozenset({"opening_hours", "structured_data", "contact_form"}),
+         product_type='Website',
+         business_class='a premium salon or spa',
+         primary='a treatment list with real durations and prices',
+         secondary=(
+                    "today's opening hours",
+                    'a visit builder',
+         ),
+         proves='Qevik can present a service menu a customer can plan a visit from.',
+         does_not_prove='It has no Arabic version and takes no appointments.',
+         show_this=(
+                    'Open the treatment list',
+                    'Show durations and prices',
+                    'Build a visit',
+                    'Open it on a phone',
+         )),
     Demo("sample-apex", "APEX Detailing", "Automotive",
          frozenset({"automotive"}), "car detailing site",
          "a four-step quote configurator that prices the job live",
-         frozenset({"contact_form", "structured_data"})),
+         frozenset({"contact_form", "structured_data"}),
+         product_type='Web app',
+         business_class='a detailing or workshop business',
+         primary='a four-step quote configurator that prices the job live',
+         secondary=(
+                    'multi-select services with a running total',
+                    'plan discount recalculates',
+                    'step validation',
+         ),
+         proves='Qevik can replace “call for a price” with a number the customer gets themselves.',
+         does_not_prove='It sends no quote and schedules nothing. No Arabic version.',
+         show_this=(
+                    'Start the configurator',
+                    'Pick a vehicle',
+                    'Add two services and watch the total',
+                    'Change the plan and watch the discount',
+                    'Open it on a phone',
+         )),
     Demo("sample-homefix", "HomeFix", "Home services",
          frozenset({"home"}), "home services site",
          "an estimator above the fold and two thumb-sized buttons pinned to the bottom of the phone",
-         frozenset({"click_to_call", "whatsapp", "opening_hours", "contact_form"})),
+         frozenset({"click_to_call", "whatsapp", "opening_hours", "contact_form"}),
+         product_type='Website',
+         business_class='a home-services company',
+         primary='built for somebody on a phone at the worst moment',
+         secondary=(
+                    'estimator above the fold',
+                    'two thumb buttons pinned to the bottom',
+                    'FAQ and service area',
+         ),
+         proves='Qevik designs for the actual moment of need, not a desktop brochure.',
+         does_not_prove='It dispatches nobody and takes no payment. No Arabic version.',
+         show_this=(
+                    'Open it on a phone first',
+                    'Use the estimator',
+                    'Show the pinned call and WhatsApp bar',
+                    'Open the FAQ',
+         )),
     Demo("sample-meridian", "Meridian", "Real estate",
          frozenset({"real_estate", "property"}), "estate agency site",
          "property search with filters, a saved list and a call-back request",
-         frozenset({"contact_form", "google_maps"})),
+         frozenset({"contact_form", "google_maps"}),
+         product_type='Web app',
+         business_class='an estate or letting agency',
+         primary='property search with filters and a saved list',
+         secondary=(
+                    'detail overlay',
+                    'call-back request',
+                    'sidebar layout',
+         ),
+         proves='Qevik can build a searchable catalogue, not a page of listings.',
+         does_not_prove='No live inventory, no Arabic version, no viewings booked.',
+         show_this=(
+                    'Filter by beds and area',
+                    'Open a property detail',
+                    'Save two properties',
+                    'Open the saved list',
+                    'Request a call back',
+         )),
     Demo("sample-verdant", "Verdant", "Retail",
          frozenset({"retail"}), "retail site",
          "a filterable catalogue, live search and a working basket",
-         frozenset({"contact_form", "structured_data"})),
+         frozenset({"contact_form", "structured_data"}),
+         product_type='E-commerce',
+         business_class='a shop selling physical products',
+         primary='a filterable catalogue with a working basket',
+         secondary=(
+                    'live text search',
+                    'cart drawer with a running subtotal',
+                    'detail overlay',
+         ),
+         proves='Qevik can build a storefront that behaves like one.',
+         does_not_prove='No payment, no stock levels, no delivery pricing. No Arabic version.',
+         show_this=(
+                    'Filter the catalogue',
+                    'Search for a product',
+                    'Add two items to the basket',
+                    'Open the cart and show the subtotal',
+                    'Open it on a phone',
+         )),
     Demo("sample-ledgerloop", "LedgerLoop", "B2B software site",
          frozenset({"professional"}), "B2B software site",
          "a business site with the product itself running inside the page, and clear pricing",
-         frozenset({"contact_form", "structured_data", "meta_description"})),
+         frozenset({"contact_form", "structured_data", "meta_description"}),
+         product_type='SaaS',
+         business_class='a B2B software or services company',
+         primary='the product itself running inside the marketing page',
+         secondary=(
+                    'filterable approvals queue',
+                    'billing period switch',
+                    'pricing comparison',
+         ),
+         proves='Qevik can put a working product on the page instead of a screenshot of one.',
+         does_not_prove='No accounts, no data, no billing. No Arabic version.',
+         show_this=(
+                    'Show the product embedded in the hero',
+                    'Filter the approvals queue',
+                    'Switch the billing period',
+                    'Scroll the comparison table',
+                    'Open it on a phone',
+         )),
     Demo("sample-foundry", "Foundry", "AI and automation",
          frozenset({"technology", "ai"}), "workflow automation concept",
          "a workflow product with explicit states and the evidence behind each one",
-         frozenset({"opening_hours", "structured_data"})),
+         frozenset({"opening_hours", "structured_data"}),
+         product_type='Concept',
+         business_class='an AI or automation business',
+         primary='a workflow product with explicit states and the evidence behind each',
+         secondary=(
+                    'state transitions',
+                    'evidence panel',
+         ),
+         proves='Qevik can express an operational workflow rather than a marketing claim about AI.',
+         does_not_prove='It is a concept piece and says so. Nothing runs behind it.',
+         show_this=(
+                    'Walk the workflow states',
+                    'Open the evidence behind a state',
+                    'Point out that it is labelled a concept',
+         )),
     Demo("sample-pulse", "Pulse", "Fitness analytics",
          frozenset(), "training log app",
          "a product interface rather than a marketing page — charts, goals and a session history",
-         frozenset()),
+         frozenset(),
+         product_type='Web app',
+         business_class='a training or analytics product',
+         primary='a product interface with no marketing page at all',
+         secondary=(
+                    'chart tabs that switch the series',
+                    'goals',
+                    'session history',
+                    'sidebar collapses to a mobile rail',
+         ),
+         proves='Qevik builds software, not only websites.',
+         does_not_prove='No accounts, no device sync, no stored workouts. No Arabic version.',
+         show_this=(
+                    'Switch the chart between volume and sessions',
+                    'Show the goals',
+                    'Scroll the session history',
+                    'Open it on a phone and show the rail',
+         )),
     Demo("sample-kilo", "Kilo", "Gym membership",
          frozenset({"fitness"}), "gym member app",
          "a member app: class booking that takes a seat, a workout runner and a membership card",
-         frozenset({"opening_hours", "click_to_call"})),
+         frozenset({"opening_hours", "click_to_call"}),
+         product_type='Mobile app',
+         business_class='a gym or membership business',
+         primary='a member app where booking a class takes a seat',
+         secondary=(
+                    'workout runner with a rest timer',
+                    'membership card',
+                    'figures derived from what you did',
+         ),
+         proves='Qevik can build the operational side of a membership business, not just its brochure.',
+         does_not_prove='No accounts, no real timetable, and the check-in code scans nothing.',
+         show_this=(
+                    'Book a class and watch a seat go',
+                    'Start the session and tick a set',
+                    'Show the rest timer',
+                    'Finish and show the week move',
+                    'Open the membership card',
+         )),
     Demo("sample-carrot", "Carrot Dash", "Games",
          frozenset({"games"}), "browser game",
          "a genuinely playable one-button game — physics, rising difficulty and a kept score",
-         frozenset()),
+         frozenset(),
+         product_type='Game',
+         business_class='a brand wanting something playable',
+         primary='a genuinely playable one-button game',
+         secondary=(
+                    'variable-height jumps',
+                    'rising difficulty',
+                    'best score kept between visits',
+         ),
+         proves='Qevik makes things people play, not only pages they read.',
+         does_not_prove='No leaderboards, no accounts, and it is not packaged for an app store.',
+         show_this=(
+                    'Play it',
+                    'Show the score rising',
+                    'Show it works on a phone with one thumb',
+         )),
     # Recruitment is its own category, deliberately not folded into
     # "professional". A staffing business and an accountancy practice are both
     # professional services and need completely different products; collapsing
     # them is how the real-estate sample reached a staffing agency.
+    # The vertical-generated local-business sites. Structurally simpler than the
+    # hand-built samples, and the only ones with a real Arabic route — which
+    # makes them the better demo whenever the prospect's confirmed gap is
+    # Arabic, the most common confirmed gap in the whole pool.
+    Demo("sample-restaurant", "Sample Grill House", "Restaurant",
+         frozenset({"food"}), "bilingual restaurant site",
+         "a priced menu, tap-to-call, WhatsApp and directions — in English and Arabic",
+         frozenset({"arabic", "click_to_call", "whatsapp", "google_maps",
+                    "opening_hours", "structured_data", "contact_form"}), bilingual=True,
+         product_type="Website", business_class="a restaurant or grill house",
+         primary="the same page in English and Arabic, with its own Arabic URL",
+         secondary=("priced menu by section", "tap-to-call and WhatsApp on a phone",
+                    "a table request that says plainly it is not connected"),
+         proves="Qevik ships a bilingual local-business site where the Arabic is authored, "
+                "not machine-translated, and has its own indexable address.",
+         does_not_prove="It takes no bookings and no payments.",
+         show_this=("Open it on a phone", "Tap العربية and watch the whole page flip to RTL",
+                    "Scroll the priced menu", "Tap the call button",
+                    "Open the table request and read the note saying it is not connected")),
+    Demo("sample-cafe", "Sample Coffee Roasters", "Café and roastery",
+         frozenset({"cafe"}), "bilingual café site",
+         "a drinks list with prices, beans to take home, and an Arabic version",
+         frozenset({"arabic", "click_to_call", "whatsapp", "google_maps",
+                    "opening_hours", "structured_data"}), bilingual=True,
+         product_type="Website", business_class="a café or roastery",
+         primary="an authored Arabic version at its own address",
+         secondary=("priced drinks list", "retail beans", "tap-to-call and directions"),
+         proves="Qevik ships small bilingual sites that work on a phone.",
+         does_not_prove="It has no ordering or delivery.",
+         show_this=("Open it on a phone", "Switch to Arabic", "Scroll the drinks list",
+                    "Tap WhatsApp")),
+    Demo("sample-salon", "Sample Beauty Studio", "Salon",
+         frozenset({"beauty"}), "bilingual salon site",
+         "a treatment list with prices and durations, in English and Arabic",
+         frozenset({"arabic", "click_to_call", "whatsapp", "google_maps",
+                    "opening_hours", "structured_data"}), bilingual=True,
+         product_type="Website", business_class="a hair, skin or nails salon",
+         primary="an authored Arabic version at its own address",
+         secondary=("treatments with durations and prices", "tap-to-call and WhatsApp"),
+         proves="Qevik ships a bilingual salon site a customer can use on a phone.",
+         does_not_prove="It takes no appointments.",
+         show_this=("Open it on a phone", "Switch to Arabic", "Scroll the treatment list",
+                    "Tap the call button")),
+    Demo("sample-detailing", "Sample Auto Detailing", "Car detailing",
+         frozenset({"automotive"}), "bilingual detailing site",
+         "priced packages, tap-to-call and directions, in English and Arabic",
+         frozenset({"arabic", "click_to_call", "whatsapp", "google_maps",
+                    "opening_hours", "structured_data"}), bilingual=True,
+         product_type="Website", business_class="a detailing or car-care workshop",
+         primary="an authored Arabic version at its own address",
+         secondary=("priced packages", "tap-to-call and WhatsApp", "directions"),
+         proves="Qevik ships a bilingual workshop site that works on a phone.",
+         does_not_prove="It has no quoting engine — APEX is the sample for that.",
+         show_this=("Open it on a phone", "Switch to Arabic", "Scroll the packages",
+                    "Tap the call button")),
+    Demo("sample-property", "Sample Property", "Property",
+         frozenset({"real_estate", "property"}), "bilingual property site",
+         "listings, service pages and a call-back request, in English and Arabic",
+         frozenset({"arabic", "click_to_call", "whatsapp", "google_maps",
+                    "opening_hours", "structured_data"}), bilingual=True,
+         product_type="Website", business_class="a small property or letting agency",
+         primary="an authored Arabic version at its own address",
+         secondary=("service pages", "call-back request", "tap-to-call"),
+         proves="Qevik ships a bilingual property site that works on a phone.",
+         does_not_prove="It has no search or saved list — Meridian is the sample for that.",
+         show_this=("Open it on a phone", "Switch to Arabic", "Read the service pages",
+                    "Tap the call button")),
     Demo("sample-hire360", "HIRE360", "Hospitality recruitment",
          frozenset({"recruitment", "staffing", "hospitality"}), "hospitality recruitment platform",
          "a two-sided talent marketplace — search and filter candidates, open a profile, "
          "shortlist, compare people side by side, and raise a hiring brief",
          frozenset({"arabic", "click_to_call", "contact_form", "structured_data"}),
-         bilingual=True),
+         bilingual=True,
+         product_type='Marketplace',
+         business_class='a recruitment or staffing business',
+         primary='a two-sided talent marketplace with real search and shortlisting',
+         secondary=(
+                    'six composable filters and sorting',
+                    'candidate profiles with a timeline',
+                    'side-by-side comparison',
+                    'a seven-step hiring brief',
+                    'employer and candidate modes',
+                    'full Arabic RTL',
+         ),
+         proves='Qevik can build a working digital product around a hiring workflow, not a brochure in front of one.',
+         does_not_prove="Every candidate is invented. Nothing submits, sends or contacts anybody, and it is not a rebuild of anyone's existing platform.",
+         show_this=(
+                    'Open candidate search',
+                    'Filter to a role and a city',
+                    'Change the location on the map',
+                    'Open a candidate profile',
+                    'Shortlist two people',
+                    'Compare them side by side',
+                    'Switch to candidate mode',
+                    'Switch to Arabic and show the RTL layout',
+                    'Open it on a phone',
+         )),
     Demo("sample-wordrush", "Word Rush", "Education",
          frozenset({"education"}), "bilingual learning app",
          "an interface that switches language and direction at runtime, not at build time",
-         frozenset({"arabic"}), bilingual=True),
+         frozenset({"arabic"}), bilingual=True,
+         product_type='Mobile app',
+         business_class='a business needing both languages',
+         primary='an interface that switches language and direction at runtime',
+         secondary=(
+                    'timed drill with lives and streaks',
+                    'searchable word list with mastery',
+                    'progress history',
+         ),
+         proves='Qevik can build one product that works properly in Arabic and English.',
+         does_not_prove='No accounts, no audio, and it is not packaged for an app store.',
+         show_this=(
+                    'Play a round',
+                    'Tap عربي and watch the whole interface flip',
+                    'Open the word list and search in Arabic',
+                    'Show the progress screen',
+         )),
 )
 
 BY_SLUG = {demo.slug: demo for demo in DEMOS}
@@ -261,3 +578,67 @@ def leadable(selection: Selection, weaknesses: tuple[str, ...]) -> tuple[str, ..
 def article(noun: str) -> str:
     """"a" or "an", for a noun the registry supplies."""
     return "an" if noun[:1].lower() in "aeiou" else "a"
+
+
+# --- the sales brief -------------------------------------------------------
+
+def why_this_demo(selection: Selection, category: str, weakness: str = "") -> dict:
+    """Everything the operator needs to justify this demo, out loud, to a stranger.
+
+    Assembled from the selected `Demo` and nothing else, so the argument on the
+    dashboard, the sentence in the message and the URL in both are the same
+    object's fields. The `does_not_claim` line is not optional: a demo shown
+    without its limits is how a concept turns into a promise.
+    """
+    if selection.prospect_url:
+        return {
+            "chose": ("This page was generated for them specifically, from their own public "
+                      "listing — name, address, phone and opening hours."),
+            "demonstrates": ("An authored Arabic version alongside the English one",
+                             "Verified opening hours and a tap-to-call number",
+                             "A layout built for a phone first"),
+            "relevant": ("It is their own business on the page, so there is nothing to "
+                         "imagine — they can check every detail against reality."),
+            "does_not_claim": ("Nobody asked for it. It is unsolicited work, it is not their "
+                               "website, and the appointment form on it books nothing."),
+        }
+    demo = selection.demo
+    if demo is None:
+        return {
+            "chose": ("Nothing in the portfolio is genuinely this trade, so no demo is "
+                      "attached. Contact them on the evidence alone."),
+            "demonstrates": (),
+            "relevant": "",
+            "does_not_claim": ("Do not imply a sample was built for a business like theirs — "
+                               "none was."),
+        }
+    answered = weakness and weakness in demo.demonstrates
+    return {
+        "chose": (f"They are {demo.business_class}. {demo.name} is Qevik's own "
+                  f"{demo.industry.lower()} {demo.product_type.lower()} — it shows "
+                  f"{demo.primary}."),
+        "demonstrates": (demo.primary,) + demo.secondary,
+        "relevant": (
+            f"It answers the gap confirmed on their own site: {weakness.replace('_', ' ')}."
+            if answered else
+            (f"Their confirmed gap is {weakness.replace('_', ' ')}, which this sample does not "
+             f"itself demonstrate — raise that from the evidence, and use the demo to show "
+             f"what Qevik builds." if weakness else
+             "No weakness was confirmed, so this is a capability conversation rather than a "
+             "problem one.")),
+        # The generic disclaimer is appended only when the demo's own limits do
+        # not already cover it, so the sentence does not say the same thing twice.
+        "does_not_claim": (demo.does_not_prove if "rebuild" in demo.does_not_prove
+                           else demo.does_not_prove
+                           + " It is a Qevik sample, not client work, and not a rebuild of "
+                             "anything they already run."),
+    }
+
+
+def show_this(selection: Selection) -> tuple[str, ...]:
+    """The order to walk somebody through it, if they reply."""
+    if selection.prospect_url:
+        return ("Open it on their phone", "Switch to the Arabic version",
+                "Check their own opening hours and phone number are right",
+                "Point out the appointment form is a placeholder and says so")
+    return selection.demo.show_this if selection.demo else ()

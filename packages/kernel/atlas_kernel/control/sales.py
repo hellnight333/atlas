@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ..auth import Scope, User, requires
-from ..outreach import consistency, demos, scoring
+from ..outreach import consistency, demos, offer, scoring
 
 #: Where `capture_evidence.py` writes screenshots. Served through this API
 #: rather than by the web server: the console's CSP is `img-src 'self'`, and
@@ -102,11 +102,20 @@ REMEDY = {
     "viewport_meta": "A responsive layout built mobile-first.",
 }
 
-#: The nav's industry groups, mapped onto the categories the discovery wrote.
+#: The nav's industry groups, mapped onto the categories the discovery wrote and
+#: onto the finer ones an evidenced `business_classified` event can introduce.
+#: A category with no entry here reads as "Other", which is how a recruitment
+#: agency ended up labelled "Other · Dubai · recruitment" on its own page.
 INDUSTRY = {
-    "food": "Food & Drink", "beauty": "Health & Beauty", "health": "Health & Beauty",
-    "dental": "Health & Beauty", "home": "Home Services", "automotive": "Automotive",
-    "professional": "Professional Services", "retail": "Retail",
+    "food": "Food & Drink", "cafe": "Food & Drink",
+    "beauty": "Health & Beauty", "health": "Health & Beauty", "dental": "Health & Beauty",
+    "home": "Home Services", "automotive": "Automotive",
+    "professional": "Professional Services",
+    "recruitment": "Recruitment & Staffing", "staffing": "Recruitment & Staffing",
+    "hospitality": "Hospitality", "retail": "Retail",
+    "real_estate": "Real Estate", "property": "Real Estate",
+    "fitness": "Fitness", "technology": "Technology", "ai": "Technology",
+    "education": "Education", "games": "Games",
 }
 
 _FIXTURE_HOST = re.compile(r"-[0-9a-f]{8,}\.(ae|com)\b|(^|\.)example\.|(^|\.)test\.")
@@ -212,6 +221,12 @@ def _demo_view(folded: dict) -> dict:
         "label": chosen.label,
         "bilingual": chosen.bilingual,
         "why": demos.relevance(chosen, folded["category"], strongest),
+        "product_type": chosen.demo.product_type if chosen.demo else "Website",
+        "business_class": chosen.demo.business_class if chosen.demo else "",
+        "primary": chosen.demo.primary if chosen.demo else "",
+        "secondary": list(chosen.demo.secondary) if chosen.demo else [],
+        "proves": chosen.demo.proves if chosen.demo else "",
+        "does_not_prove": chosen.demo.does_not_prove if chosen.demo else "",
     }
 
 
@@ -421,6 +436,36 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             rules.append("Do not claim they are on WhatsApp — the number is not a UAE mobile.")
         return rules
 
+    def _confidence(folded: dict, ready: bool) -> dict:
+        """HIGH / MEDIUM / LOW / HOLD, folded from the same evidence as everything
+        else. Not a stored field — a reading, with the reasons it came to it.
+        """
+        score = folded["score"]
+        contact = contactability(folded["business"]["phone"], folded["business"]["email"])
+        holds, softs = [], []
+        if not score.audit_complete:
+            holds.append("the audit never completed — nothing is confirmed either way")
+        if folded["stale"]:
+            holds.append("evidence is older than three days; re-verify before claiming anything")
+        if contact["channel"] == "NONE":
+            holds.append("no contact method on the listing")
+        if not folded["chosen"].url:
+            holds.append("no Qevik sample genuinely matches this trade")
+        if holds:
+            return {"level": "HOLD", "why": holds}
+        if not score.speakable:
+            softs.append("no confirmed weakness — this is a capability conversation, not a problem one")
+        if contact["whatsapp"] != "REACHABLE":
+            softs.append("not WhatsApp-reachable; this is a phone call")
+        if folded["chosen"].kind == "sample":
+            softs.append("a relevant sample rather than a demo built for them")
+        if not ready:
+            softs.append("no draft that passes its checks yet")
+        level = "HIGH" if not softs else "MEDIUM" if len(softs) <= 2 else "LOW"
+        return {"level": level, "why": softs or [
+            "fresh evidence, a confirmed gap Qevik fixes, a reachable mobile, "
+            "a matched demo and a draft that passes its checks"]}
+
     def _card(folded: dict) -> dict:
         business, score = folded["business"], folded["score"]
         contact = contactability(business["phone"], business["email"])
@@ -445,6 +490,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 demos.leadable(folded["chosen"], score.speakable)),
             "speakable": [LABEL.get(f, f) for f in score.speakable],
             "demo": folded["demo"],
+            "confidence": _confidence(folded, bool(folded["messages"]))["level"],
             "demo_kind": folded["chosen"].kind,
             "demo_matched": folded["chosen"].matched,
             "demo_name": (folded["chosen"].demo.name if folded["chosen"].demo
@@ -585,6 +631,53 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         return {"ready": out[:limit], "blocked": blocked[:40],
                 "ready_total": len(out), "blocked_total": len(blocked)}
 
+    def _brief(folded: dict, lead: str, chosen, drafts: list) -> dict:
+        """What to read in the thirty seconds before typing to a stranger."""
+        score = folded["score"]
+        name = folded["business"]["name"].split("|")[0].split("(")[0].strip()
+        why = demos.why_this_demo(chosen, folded["category"], lead)
+        gap = LABEL.get(lead, lead)
+        return {
+            "opening": (
+                f"Open on something true about their site, then the one gap: {gap.lower()}."
+                if lead else
+                "There is no confirmed gap, so open on what they do and what Qevik builds — "
+                "not on a problem."),
+            "why_them": (
+                f"{score.total}/100. "
+                + (f"{len(score.speakable)} confirmed gap(s) Qevik ships fixes for, "
+                   if score.speakable else "No confirmed gap, but ")
+                + f"{contactability(folded['business']['phone'], folded['business']['email'])['why'].lower()}"),
+            "what_to_show": ({"demo": chosen.url,
+                              "name": chosen.demo.name if chosen.demo else "built for them",
+                              "steps": list(demos.show_this(chosen))}),
+            "mention": [m for m in (
+                (f"The {gap.lower()} gap, and only that one" if lead else ""),
+                (why["demonstrates"][0] if why["demonstrates"] else ""),
+                "That the demo is Qevik's own work and nobody asked for it",
+            ) if m][:3],
+            "answers": [
+                {"q": "Why did you build this?",
+                 "a": (f"Your business is a good example of where a normal brochure website "
+                       f"isn't enough, so I wanted to show the kind of product we build. "
+                       f"{name} wasn't involved — I put it together from what's public.")},
+                {"q": "Is this our website?",
+                 "a": ("No. It's an independent concept built from publicly visible information "
+                       "about your business."
+                       if chosen.kind != "prospect" else
+                       "No. It's an example I built using your public listing details — your "
+                       "name, address, phone and hours. It isn't connected to anything.")},
+                {"q": "Are you already working with us?",
+                 "a": "No. This is unsolicited — nobody asked for it and there's no invoice attached."},
+                {"q": "How much?",
+                 "a": (f"{offer.CURRENCY} {offer.SETUP_AED:,} to set up, then "
+                       f"{offer.CURRENCY} {offer.MONTHLY_AED} a month. "
+                       "Only answer this if they ask — it is not in the first message.")},
+            ],
+            "do_not_say": _do_not_say(folded),
+            "does_not_claim": why["does_not_claim"],
+        }
+
     @router.get("/prospects/{business_id}", dependencies=[Depends(requires(Scope.READ))])
     def prospect(business_id: str) -> dict:
         everything = _all()
@@ -696,6 +789,11 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                     "ready": bool(drafts) and not any(d["problems"] for d in drafts),
                     "problems": sorted({p for d in drafts for p in d["problems"]}),
                 },
+                "why_demo": demos.why_this_demo(folded["chosen"], folded["category"], lead),
+                "show_this": list(demos.show_this(folded["chosen"])),
+                "brief": _brief(folded, lead, folded["chosen"], drafts),
+                "confidence": _confidence(
+                    folded, bool(drafts) and not any(d["problems"] for d in drafts)),
                 "timeline": folded["timeline"],
                 "stage": _stage(folded),
             }

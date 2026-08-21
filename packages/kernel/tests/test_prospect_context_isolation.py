@@ -107,11 +107,15 @@ def test_a_message_carries_no_other_prospects_details(key) -> None:
 
 
 def test_three_prospects_select_three_different_demos() -> None:
+    """Each trade gets its own demo, and an Arabic gap pulls the bilingual one."""
     chosen = {k: selection_for(k).demo.slug for k in PROSPECTS}
     assert len(set(chosen.values())) == 3, chosen
     assert chosen["staffing"] == "sample-ledgerloop"
-    assert chosen["restaurant"] == "sample-nar"
-    assert chosen["automotive"] == "sample-apex"
+    # All three fixtures carry an Arabic gap, so the bilingual variants win where
+    # they exist — raising Arabic and linking an English-only page answers nothing.
+    assert chosen["restaurant"] == "sample-restaurant"
+    assert chosen["automotive"] == "sample-detailing"
+    assert all(demos.BY_SLUG[s].bilingual for s in (chosen["restaurant"], chosen["automotive"]))
 
 
 def test_the_real_case_that_failed() -> None:
@@ -146,7 +150,8 @@ def test_it_catches_a_demo_from_the_wrong_trade() -> None:
 
 
 def test_it_catches_a_url_that_is_not_the_selected_demo() -> None:
-    text = message_for("restaurant").replace("sample-nar", "sample-verdant")
+    slug = selection_for("restaurant").demo.slug
+    text = message_for("restaurant").replace(slug, "sample-verdant")
     problems = verdict("restaurant", text)
     assert any("sample-verdant" in p for p in problems), problems
     assert any("does not carry the selected demo URL" in p for p in problems), problems
@@ -258,9 +263,14 @@ def test_the_angle_a_page_headlines_is_the_one_its_message_uses() -> None:
 
 
 def test_arabic_is_only_led_with_when_the_link_has_arabic() -> None:
-    english_only = demos.select("food", weaknesses=("arabic", "click_to_call"))
-    assert english_only.bilingual is False
+    # Professional services has only the English-only B2B sample.
+    english_only = demos.select("professional", weaknesses=("arabic", "click_to_call"))
+    assert english_only.bilingual is False, english_only.demo.slug
     assert "arabic" not in demos.leadable(english_only, ("arabic", "click_to_call"))
+
+    # Food has a bilingual one, so Arabic may be led with.
+    food = demos.select("food", weaknesses=("arabic", "click_to_call"))
+    assert food.bilingual is True and "arabic" in demos.leadable(food, ("arabic",))
 
     bilingual = demos.select("dental", weaknesses=("arabic",))
     assert bilingual.bilingual is True
@@ -318,3 +328,56 @@ def test_a_recruitment_message_never_mentions_the_saas_or_property_samples() -> 
     assert problems == [], problems
     for forbidden in ("ledgerloop", "meridian", "property", "estate agency", "B2B"):
         assert forbidden.lower() not in text.lower(), forbidden
+
+
+def test_a_trade_that_contains_another_trade_is_not_a_mismatch() -> None:
+    """"restaurant site" sits inside "bilingual restaurant site".
+
+    A correct draft for the bilingual restaurant sample was refused for
+    apparently describing itself as NAR. The guard refusing is the right
+    failure direction; refusing a true message is still a bug.
+    """
+    chosen = demos.select("food", weaknesses=("arabic",))
+    assert chosen.demo.slug == "sample-restaurant", chosen.demo.slug
+    text = (f"I built {demos.article(chosen.demo.trade)} {chosen.demo.trade} around how "
+            f"{chosen.demo.business_class} works.\n{chosen.url}")
+    problems = consistency.check(
+        text, business_id="x", speakable=("arabic",), unfixable=(), unverified=(),
+        chosen=chosen, category="food", others=(),
+    )
+    assert problems == [], problems
+
+
+def test_a_genuinely_wrong_trade_is_still_caught() -> None:
+    """The containment fix must not blunt the check it was protecting."""
+    chosen = demos.select("food", weaknesses=("arabic",))
+    text = f"I built an estate agency site for you.\n{chosen.url}"
+    problems = consistency.check(
+        text, business_id="x", speakable=("arabic",), unfixable=(), unverified=(),
+        chosen=chosen, category="food", others=(),
+    )
+    assert any("estate agency site" in p for p in problems), problems
+
+
+def test_an_arabic_gap_prefers_a_demo_that_has_arabic() -> None:
+    """The most common confirmed gap in the pool is Arabic.
+
+    Where a bilingual sample exists for the trade it wins, because raising the
+    gap and then linking an English-only page answers nothing.
+    """
+    for category, bilingual, other in (("food", "sample-restaurant", "sample-nar"),
+                                       ("beauty", "sample-salon", "sample-atelier")):
+        with_arabic = demos.select(category, weaknesses=("arabic", "contact_form"))
+        without = demos.select(category, weaknesses=("contact_form", "structured_data"))
+        assert with_arabic.demo.slug == bilingual, (category, with_arabic.demo.slug)
+        assert with_arabic.bilingual is True
+        assert without.demo.slug == other, (category, without.demo.slug)
+
+
+def test_every_demo_declares_what_it_does_not_prove() -> None:
+    """A demo shown without its limits is how a concept becomes a promise."""
+    for demo in demos.DEMOS:
+        assert demo.does_not_prove.strip(), f"{demo.slug} states no limit"
+        assert demo.proves.strip(), f"{demo.slug} states nothing it proves"
+        assert demo.show_this, f"{demo.slug} has no demo walkthrough"
+        assert demo.business_class.strip(), f"{demo.slug} names no business class"

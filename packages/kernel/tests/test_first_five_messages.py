@@ -108,7 +108,7 @@ def test_arabic_is_not_raised_when_the_linked_demo_is_english_only(first_five) -
 def test_a_sample_is_never_implied_to_be_their_own_site(first_five) -> None:
     score = make()
     sample = first_five.whatsapp(score, SAMPLE, "food")
-    assert "It's ours, not a client's" in sample
+    assert "Ours, not a client's" in sample
     assert "built you a working example" not in sample
 
     theirs = first_five.whatsapp(score, DEMO, "dental")

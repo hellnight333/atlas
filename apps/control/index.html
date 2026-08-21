@@ -476,7 +476,7 @@ function card(c) {
         </div>
         <p class="meta">${esc(c.industry)} · ${esc(c.location)}</p>
         <div class="facts">
-          ${c.score >= 75 ? `<span class="tag accent">HIGH OPPORTUNITY</span>` : ""}
+          <span class="tag ${{HIGH:"present",MEDIUM:"flat",LOW:"unknown",HOLD:"absent"}[c.confidence] || "flat"}">${esc(c.confidence || "")}</span>
           ${tag(c.https, c.https === "CONFIRMED_PRESENT" ? "HTTPS" : "HTTPS")}
           ${tag(c.contactability.whatsapp === "REACHABLE" ? "CONFIRMED_PRESENT" : "NOT_VERIFIED", "WhatsApp")}
           ${c.stale ? `<span class="tag absent">STALE</span>` : ""}
@@ -515,7 +515,11 @@ async function drawProspects() {
       <label><span class="eyebrow">Industry</span>${sel("industry", [
         ["", "All"], ["Food & Drink", "Food & Drink"], ["Health & Beauty", "Health & Beauty"],
         ["Home Services", "Home Services"], ["Automotive", "Automotive"],
-        ["Professional Services", "Professional Services"], ["Retail", "Retail"], ["Other", "Other"]],
+        ["Professional Services", "Professional Services"],
+        ["Recruitment & Staffing", "Recruitment & Staffing"], ["Hospitality", "Hospitality"],
+        ["Retail", "Retail"], ["Real Estate", "Real Estate"], ["Fitness", "Fitness"],
+        ["Technology", "Technology"], ["Education", "Education"], ["Games", "Games"],
+        ["Other", "Other"]],
         filters.industry)}</label>
       <label><span class="eyebrow">Contact</span>${sel("contact", [
         ["", "Any"], ["whatsapp", "WhatsApp reachable"], ["phone", "Phone only"],
@@ -562,6 +566,19 @@ async function drawProspect(id) {
         ${f.impact && f.state === "CONFIRMED_ABSENT" && !f.refuted ? `<p>${esc(f.impact)}</p>` : ""}
         ${f.remedy && f.state === "CONFIRMED_ABSENT" && f.fixable && !f.refuted ? `<p><b>Qevik:</b> ${esc(f.remedy)}</p>` : ""}
         ${f.evidence ? `<div class="ev">${esc(f.evidence)}</div>` : ""}
+        <details style="margin-top:.35rem"><summary class="small"
+          style="cursor:pointer;color:var(--accent);font-size:.76rem">Evidence</summary>
+          <table class="compact" style="margin-top:.35rem">
+            <tr><td class="muted">Finding</td><td>${esc(f.label)}</td></tr>
+            <tr><td class="muted">Status</td><td>${tag(f.refuted ? "REFUTED" : f.state)}</td></tr>
+            <tr><td class="muted">Observation</td><td>${esc(f.evidence || "none recorded")}</td></tr>
+            <tr><td class="muted">Source</td><td class="mono" style="word-break:break-all">${esc(ident.website)}</td></tr>
+            <tr><td class="muted">Checked</td><td>${esc(d.health.checked_at ? when(d.health.checked_at) : "never")}</td></tr>
+            <tr><td class="muted">May support a claim</td><td>${
+              f.state === "NOT_VERIFIED" || f.refuted
+                ? `<span class="tag absent">No</span>`
+                : `<span class="tag present">Yes</span>`}</td></tr>
+          </table></details>
       </div>
       <div class="side">
         ${f.refuted ? tag("REFUTED") : tag(f.state)}
@@ -674,6 +691,30 @@ async function drawProspect(id) {
 
       <div class="stack">
         <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:.6rem">
+            <p class="eyebrow">Before you message</p>
+            <span class="tag ${{HIGH:"present",MEDIUM:"flat",LOW:"unknown",HOLD:"absent"}[d.confidence.level]}"
+                  style="margin-inline-start:auto">${esc(d.confidence.level)}</span>
+          </div>
+          <div class="pad stack">
+            <div><p class="eyebrow" style="margin-bottom:.25rem">Opening angle</p>
+              <p class="small">${esc(d.brief.opening)}</p></div>
+            <div><p class="eyebrow" style="margin-bottom:.25rem">Why this prospect</p>
+              <p class="small">${esc(d.brief.why_them)}</p>
+              <ul class="dns" style="--absent:var(--mute);margin-top:.3rem">${
+                d.confidence.why.map(w => `<li style="color:var(--mute)">${esc(w)}</li>`).join("")}</ul></div>
+            <div><p class="eyebrow" style="margin-bottom:.25rem">What to mention — and nothing more</p>
+              <ol style="margin:0;padding-inline-start:1.15rem;display:grid;gap:.25rem">${
+                d.brief.mention.map(m => `<li class="small">${esc(m)}</li>`).join("")}</ol></div>
+            <details><summary class="small" style="cursor:pointer;color:var(--accent)">If they ask…</summary>
+              <div class="stack" style="margin-top:.6rem">${d.brief.answers.map(a => `
+                <div><p class="small" style="font-weight:700">${esc(a.q)}</p>
+                <p class="small muted" style="margin-top:.15rem">${esc(a.a)}</p></div>`).join("")}</div>
+            </details>
+          </div>
+        </section>
+
+        <section class="card">
           <div class="pad" style="border-bottom:1px solid var(--rule)">
             <p class="eyebrow">Recommended outreach</p>
             <h3 style="font-size:1.15rem;margin-top:.35rem">${esc(d.outreach.channel)}</h3>
@@ -718,35 +759,51 @@ async function drawProspect(id) {
 
         <section class="card">
           <div class="pad" style="border-bottom:1px solid var(--rule)">
-            <p class="eyebrow">What Qevik can show</p>
+            <p class="eyebrow">Why this demo?</p>
           </div>
           <div class="pad stack">
             ${d.demo.url ? `
               <div>
                 <h3 style="font-size:1.1rem">${esc(d.demo.name || "Built for them")}</h3>
                 <p class="small muted" style="margin-top:.2rem">
-                  ${esc(d.demo.industry || "This business")} ·
-                  <span class="tag ${d.demo.kind === "prospect" ? "accent" : "flat"}">${esc(d.demo.label)}</span>
+                  ${esc(d.demo.product_type || "")}${d.demo.business_class ? " · for " + esc(d.demo.business_class) : ""}
+                  · <span class="tag ${d.demo.kind === "prospect" ? "accent" : "flat"}">${esc(d.demo.label)}</span>
                 </p>
               </div>
-              <div>
-                <p class="eyebrow" style="margin-bottom:.3rem">Why this is relevant</p>
-                <p class="small">${esc(d.demo.why)}</p>
-              </div>
+              <div><p class="eyebrow" style="margin-bottom:.3rem">Why Qevik chose it</p>
+                <p class="small">${esc(d.why_demo.chose)}</p></div>
+              ${d.why_demo.demonstrates.length ? `<div>
+                <p class="eyebrow" style="margin-bottom:.3rem">What it demonstrates</p>
+                <ul class="dns" style="--absent:var(--present)">${
+                  d.why_demo.demonstrates.slice(0, 5).map(x =>
+                    `<li style="color:var(--ink-2)">${esc(x)}</li>`).join("")}</ul></div>` : ""}
+              <div><p class="eyebrow" style="margin-bottom:.3rem">Why it is relevant here</p>
+                <p class="small">${esc(d.why_demo.relevant)}</p></div>
+              <div style="background:var(--sunk);border-radius:9px;padding:.7rem .8rem">
+                <p class="eyebrow" style="margin-bottom:.3rem">What it does not claim</p>
+                <p class="small muted">${esc(d.why_demo.does_not_claim)}</p></div>
               <p class="small mono muted" style="word-break:break-all">${esc(d.demo.url)}</p>
               <div class="row">
                 <a class="btn sm" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Open demo</a>
                 ${copyBtn(d.demo.url, "Copy URL")}</div>
+              <p class="small muted" style="border-top:1px solid var(--rule);padding-top:.6rem">
+                Qevik has no customers. A sample is Qevik's own work, never a client's, and only a
+                demo built for this business is described that way.</p>
             ` : `
-              <div>
-                <h3 style="font-size:1.05rem">No directly matched demo</h3>
-                <p class="small muted" style="margin-top:.3rem">${esc(d.demo.why)}</p>
-              </div>`}
-            <p class="small muted" style="border-top:1px solid var(--rule);padding-top:.6rem">
-              Qevik has no customers. A sample is Qevik's own work, never a client's, and only a
-              demo built for this business is described that way.</p>
+              <div><h3 style="font-size:1.05rem">No directly matched demo</h3>
+                <p class="small muted" style="margin-top:.3rem">${esc(d.why_demo.chose)}</p>
+                <p class="small muted" style="margin-top:.5rem">${esc(d.why_demo.does_not_claim)}</p></div>`}
           </div>
         </section>
+
+        ${d.show_this.length ? `<section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow">When they reply — show this, in order</p>
+          </div>
+          <div class="pad"><ol style="margin:0;padding-inline-start:1.15rem;display:grid;gap:.4rem">
+            ${d.show_this.map(x => `<li class="small">${esc(x)}</li>`).join("")}
+          </ol></div>
+        </section>` : ""}
 
         <section class="card">
           <div class="pad" style="border-bottom:1px solid var(--rule)"><p class="eyebrow">Why this score</p></div>

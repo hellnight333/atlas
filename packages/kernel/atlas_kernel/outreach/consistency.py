@@ -97,8 +97,14 @@ def check(
             continue
         if f"/{demo.slug}/" in text:
             problems.append(f"links {demo.slug}, which is not the selected demo")
-        if chosen.demo is not None and demo.trade != chosen.demo.trade \
-                and demo.trade.lower() in lowered:
+        # Substring, not phrase: "restaurant site" sits inside "bilingual
+        # restaurant site", so a correct draft for the bilingual sample was
+        # refused for describing itself as the other one. Only a trade that is
+        # not part of the chosen trade can be a genuine mismatch.
+        if (chosen.demo is not None
+                and demo.trade != chosen.demo.trade
+                and demo.trade.lower() not in chosen.demo.trade.lower()
+                and demo.trade.lower() in lowered):
             problems.append(f"describes the demo as {demos.article(demo.trade)} {demo.trade}")
     if chosen.demo is not None and category and category not in chosen.demo.serves:
         problems.append(f"offers the {chosen.demo.name} sample to a {category} business, "
