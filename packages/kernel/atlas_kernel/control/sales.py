@@ -29,6 +29,7 @@ operator's own phone opens; there is no API call behind it.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -246,6 +247,31 @@ NATIVE = ("Android app", "iOS app", "PWA / mobile web app")
 PRODUCTS = tuple(sorted(opportunity.PRODUCTS | set(NATIVE)))
 
 MEDIA_PERMISSION = ("none", "use_originals", "edit_enhance", "generate_matching")
+
+
+log = logging.getLogger(__name__)
+
+
+def _safe(name: str, produce, fallback, *, business_id: str, warnings: list[dict]):
+    """Run one presentation block; degrade it rather than the whole page.
+
+    The prospect page went to 500 for every prospect because one helper raised a
+    NameError. A page that cannot show a build queue should still show who the
+    business is, what the evidence says and how to reach them — the operator
+    loses a panel, not the customer.
+
+    Nothing is swallowed: the traceback is logged with the business id, and the
+    response carries a warning the interface displays. A block that is quietly
+    empty is worse than one that is visibly broken.
+    """
+    try:
+        return produce()
+    except Exception:                      # noqa: BLE001 - deliberately broad
+        log.exception("sales: %s failed for business %s", name, business_id)
+        warnings.append({"block": name,
+                         "message": "Could not be built for this prospect. "
+                                    "The error is in the server log."})
+        return fallback
 
 
 def _digital(findings: list[dict], *, category: str, website: str) -> list[dict]:
@@ -759,6 +785,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             if folded["business"]["id"] != business_id:
                 continue
             score, business = folded["score"], folded["business"]
+            warnings: list[dict] = []
             findings = _findings(folded)
             # The angle the message can actually open with, by the same rule the
             # generator uses — so the headline and the draft never disagree.
@@ -856,12 +883,25 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                       "mobile": {"captured": False, "reason": "not captured"}},
                 "screenshots_at": folded["shots_at"].isoformat() if folded["shots_at"] else "",
                 "demo": _demo_view(folded),
-                "digital_opportunities": _digital(
-                    findings, category=folded["category"], website=business["website"]),
-                "media": {**folded["media"], "options": list(MEDIA_PERMISSION)},
-                "builds": {"jobs": sorted(folded["builds"].values(),
-                                          key=lambda j: j["created"], reverse=True),
-                           "products": list(PRODUCTS), "states": list(JOB_STATES)},
+                "digital_opportunities": _safe(
+                    "digital_opportunities",
+                    lambda: _digital(findings, category=folded["category"],
+                                     website=business["website"]),
+                    [], business_id=business_id, warnings=warnings),
+                "media": _safe(
+                    "media",
+                    lambda: {**folded["media"], "options": list(MEDIA_PERMISSION)},
+                    {"permission": "none", "source": "", "at": "", "note": "",
+                     "options": list(MEDIA_PERMISSION)},
+                    business_id=business_id, warnings=warnings),
+                "builds": _safe(
+                    "builds",
+                    lambda: {"jobs": sorted(folded["builds"].values(),
+                                            key=lambda j: j["created"], reverse=True),
+                             "products": list(PRODUCTS), "states": list(JOB_STATES)},
+                    {"jobs": [], "products": list(PRODUCTS), "states": list(JOB_STATES)},
+                    business_id=business_id, warnings=warnings),
+                "warnings": warnings,
                 "outreach": {
                     "channel": contact["channel"], "why": contact["why"],
                     "contactability": contact, "drafts": drafts,

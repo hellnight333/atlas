@@ -657,7 +657,14 @@ async function drawProspect(id) {
         demonstrate it: ${esc(d.strongest.deferred.join(", "))}.</p>` : ""}
     </div>` : ""}
 
-    ${d.digital_opportunities && d.digital_opportunities.length ? `
+    ${(d.warnings && d.warnings.length) ? `
+    <div class="hero" style="margin-bottom:1rem;border-color:var(--absent)">
+      <p class="eyebrow" style="color:var(--absent)">Partly unavailable</p>
+      <p class="small">${d.warnings.map(w => esc(w.block + ": " + w.message)).join(" ")}
+      The rest of this page is unaffected.</p>
+    </div>` : ""}
+
+    ${d.digital_opportunities ? (d.digital_opportunities.length ? `
     <section class="card" style="margin-bottom:1rem">
       <div class="pad" style="border-bottom:1px solid var(--rule)">
         <p class="eyebrow">Digital opportunities</p>
@@ -671,29 +678,37 @@ async function drawProspect(id) {
             <div class="opp-n mono">${String(i + 1).padStart(2, "0")}</div>
             <div>
               <div class="opp-head">
-                <b>${esc(o.name)}</b>
+                <b>${esc(o.name || "Unknown / needs review")}</b>
                 <span class="tag ${o.priority === "HIGH" ? "accent" : "flat"}">${esc(o.priority)}</span>
-                <span class="small muted">${esc(o.product)} · confidence ${esc(o.confidence)}</span>
+                <span class="small muted">${esc(o.product || "—")} · confidence ${esc(o.confidence || "unknown")}</span>
               </div>
               <p class="small" style="margin:.35rem 0 .5rem">${esc(o.why)}</p>
               <p class="small"><b>Qevik would build:</b> ${esc(o.builds)}</p>
               <p class="small muted">${esc(o.user)} — ${esc(o.interaction)}</p>
+              ${(o.evidence && o.evidence.length) ? `
               <details style="margin-top:.45rem">
                 <summary class="small">Evidence (${o.evidence.length})</summary>
                 <ul class="small muted" style="margin:.4rem 0 0 1rem">
                   ${o.evidence.map(e => `<li>${esc(e)}</li>`).join("")}
                 </ul>
-              </details>
+              </details>` : `<p class="small" style="color:var(--absent);margin-top:.45rem">
+                Not verified — no evidence recorded, so this must not be used in a message.</p>`}
               <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap">
                 ${o.demo ? `<a class="btn ghost sm" target="_blank" rel="noopener"
                    href="https://sites.qevik.ai/${esc(o.demo)}/">Open the demo</a>` : ""}
-                <button class="btn sm" data-build="${esc(o.product)}"
-                  data-opp="${esc(o.key)}">Request build</button>
+                ${o.product ? `<button class="btn sm" data-build="${esc(o.product)}"
+                  data-opp="${esc(o.key)}">Request build</button>` : ""}
               </div>
             </div>
           </div>`).join("")}
       </div>
-    </section>` : ""}
+    </section>` : `
+    <section class="card" style="margin-bottom:1rem"><div class="pad">
+      <p class="eyebrow">Digital opportunities</p>
+      <p class="small muted" style="margin-top:.3rem">Nothing evidenced yet. Opportunities are
+      derived from confirmed observations, so an unaudited business has none — that is an
+      absence of evidence, not an absence of opportunity. Audit the site first.</p>
+    </div></section>`) : ""}
 
     ${d.media ? `
     <section class="card" style="margin-bottom:1rem">
