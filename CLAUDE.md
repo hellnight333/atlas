@@ -40,6 +40,14 @@ ranks the ten factories against it and names the current next milestone.
 4. **Never over-engineer.** Simple, modular, production-ready. No speculative abstraction.
 5. **Premium feel.** Professional, minimal, Apple-like, fast.
 
+## Before building any user-facing surface
+
+**Run the `design-pass` skill and read `docs/DESIGN_SYSTEM.md` first.** The
+sales dashboard was built without either and came out as a generic admin
+template — dark rail, white cards, blue accent — while the design system sat
+unread in this repo. Precedence is fixed: the user's words, then this repo's
+system, then your own choices.
+
 ## Standing UI rules (see PROJECT_MEMORY.md for why)
 
 1. **Never allocate inside a Zustand selector.** Select stable references only;
