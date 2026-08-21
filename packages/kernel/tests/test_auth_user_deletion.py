@@ -228,3 +228,93 @@ def test_the_deletion_is_recorded(store, temp_user, caplog) -> None:
     assert "an-admin" in caplog.text
     assert seen and seen[0]["actor"] == "an-admin"
     assert seen[0]["removed"]["user_id"] == user.id
+
+
+# --- audit integrity -------------------------------------------------------
+#
+# The property that matters is not "a delete writes a line". It is that a line
+# is written when and only when rows actually went away. A deletion audit that
+# can be produced by a refusal is worse than none, because it reports removals
+# that never happened.
+
+AUDIT_MARK = "account deleted"
+
+
+@pytest.mark.parametrize("refusal", ["unknown", "self", "last-admin"])
+def test_a_refused_deletion_writes_no_deletion_record(store, temp_user, caplog,
+                                                      refusal) -> None:
+    """Every refusal raises before the transaction opens, so no audit can exist."""
+    if refusal == "unknown":
+        target, kwargs = _name("ghost"), {}
+    elif refusal == "self":
+        user = temp_user()
+        target, kwargs = user.username, {"requested_by": user.username}
+    else:
+        admins = [u for u in store.list_users() if u.has(Scope.ADMIN) and not u.disabled]
+        if len(admins) != 1:
+            pytest.skip("needs exactly one administrator to exercise the guard")
+        target, kwargs = admins[0].username, {}
+
+    before = [u.username for u in store.list_users()]
+    with caplog.at_level("WARNING"):
+        with pytest.raises(AuthError):
+            store.delete_user(target, **kwargs)
+    assert AUDIT_MARK not in caplog.text, f"{refusal} refusal produced a deletion record"
+    assert [u.username for u in store.list_users()] == before, "a refusal removed somebody"
+
+
+def test_an_unauthorized_http_delete_writes_no_deletion_record(store, temp_user,
+                                                               caplog) -> None:
+    """A 403 must leave neither a row removed nor a record claiming one was."""
+    user = temp_user()
+    outsider = User(id="o", username="not-an-admin", password_hash="",
+                    scopes=[Scope.READ], disabled=False)
+    with caplog.at_level("INFO"):
+        response = _client(store, outsider).delete(f"/auth/users/{user.username}")
+    assert response.status_code == 403
+    assert AUDIT_MARK not in caplog.text
+    assert store.get_user(user.username) is not None
+
+
+def test_exactly_one_record_per_successful_deletion(store, temp_user, caplog) -> None:
+    user = temp_user()
+    with caplog.at_level("WARNING"):
+        store.delete_user(user.username, requested_by="an-operator")
+    assert caplog.text.count(AUDIT_MARK) == 1, "a deletion must be recorded once"
+
+
+def test_the_record_describes_what_actually_happened(store, temp_user, caplog) -> None:
+    """The audited session count has to be the number really removed, not a
+    figure computed before the delete and left unchecked."""
+    user = temp_user()
+    store.login(user.username, "correct-horse-battery-staple")
+    store.login(user.username, "correct-horse-battery-staple")
+    store.login(user.username, "correct-horse-battery-staple")
+    with caplog.at_level("WARNING"):
+        removed = store.delete_user(user.username, requested_by="an-operator")
+    assert f"sessions_removed={removed['sessions_removed']}" in caplog.text
+    assert removed["sessions_removed"] >= 3
+    assert f"id={user.id}" in caplog.text
+    assert removed["rows_removed"] == 1
+
+
+def test_every_refusal_precedes_the_transaction(store) -> None:
+    """Structural, so the property above survives an edit to the method.
+
+    If a guard is ever moved below `engine.begin()`, a refusal could roll back
+    rows that were already deleted while the audit reported success.
+    """
+    import inspect
+
+    body = inspect.getsource(store.delete_user)
+    opens_at = body.index("with engine.begin()")
+    guards = [body.index(marker) for marker in (
+        'raise AuthError(f"no user',
+        'raise AuthError("an account cannot delete itself")',
+        'raise AuthError("refusing to delete the last administrator")',
+    )]
+    assert all(position < opens_at for position in guards), \
+        "a refusal moved below the transaction"
+    # And the record is emitted only after the delete has been verified.
+    assert body.index("log.warning") > body.index("DELETE FROM qevik_users")
+    assert body.index("log.warning") > body.index("session(s) survived the cascade")
