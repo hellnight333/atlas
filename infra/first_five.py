@@ -343,7 +343,51 @@ def main(argv: list[str] | None = None) -> int:
                 actor="first_five.py",
             ))
         print(f"\nrecorded {len(sheet)} experiment_prepared events (sent: False)")
+        written = store_drafts(sheet)
+        if written:
+            print(f"stored {written} draft message bodies in atlas_outreach_messages")
     return 0
+
+
+def store_drafts(sheet: list) -> int:
+    """Put the message body where the dashboard reads bodies from.
+
+    `experiment_prepared` carries a digest of the wording, not the wording — it
+    exists to tell two versions apart, not to be read. The body belongs in
+    `atlas_outreach_messages`, which is the existing outreach table and already
+    holds the ten dental drafts.
+
+    Only businesses with no message at all get one. The two approved rows and
+    the eight earlier drafts are real history and are never rewritten; a second
+    row for the same business would present the operator with two messages and
+    no way to tell which is live.
+    """
+    from sqlalchemy import text
+
+    from atlas_kernel.db import SessionLocal
+
+    written = 0
+    with SessionLocal() as session:
+        existing = {row[0] for row in session.execute(text(
+            "select distinct business_id from atlas_outreach_messages"))}
+        for score, _why, _business, _demo, channel, subject, body, mail, _p in sheet:
+            if score.business_id in existing or channel != "whatsapp":
+                continue
+            for kind, subj, text_body in (("whatsapp", "", body), ("email", subject, mail)):
+                # proposal_id is NOT NULL with no foreign key, and every
+                # existing row carries an empty string. These drafts come from
+                # evidence rather than a proposal, so they do the same.
+                session.execute(text(
+                    "insert into atlas_outreach_messages "
+                    "(id, proposal_id, business_id, channel, recipient, subject, body, "
+                    " status, created_at) "
+                    "values (gen_random_uuid()::text, '', :b, :c, :r, :s, :y, 'draft', now())"),
+                    {"b": score.business_id, "c": kind,
+                     "r": score.contact if kind == "whatsapp" else "",
+                     "s": subj, "y": text_body})
+                written += 1
+        session.commit()
+    return written
 
 
 if __name__ == "__main__":

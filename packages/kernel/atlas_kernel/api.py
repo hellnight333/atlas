@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -134,8 +135,11 @@ try:
     from .control import install as install_control
 
     install_control(app)
-except Exception:  # noqa: BLE001 - the control router is additive
-    pass
+except Exception as error:  # noqa: BLE001 - the control router is additive
+    # Additive, but not silent. A typo in a control module used to remove the
+    # entire control plane with no trace anywhere, which presents as "the
+    # dashboard 404s" and sends you looking at Caddy.
+    logging.getLogger(__name__).exception("control router not installed: %s", error)
 
 
 @app.middleware("http")

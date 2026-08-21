@@ -2,351 +2,1012 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Qevik Control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Qevik Sales Intelligence</title>
+<meta name="robots" content="noindex, nofollow">
 <style>
-  :root {
-    color-scheme: light dark;
-    --bg: #0d1117; --panel: #161b22; --line: #30363d; --fg: #e6edf3;
-    --muted: #8b949e; --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-  header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem;
-           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-  header h1 { font-size: 1rem; margin: 0; letter-spacing: .02em; }
-  header .who { margin-left: auto; color: var(--muted); font-size: .85rem; }
-  button { font: inherit; background: var(--accent); color: #fff; border: 0;
-           padding: .5rem .9rem; border-radius: 6px; cursor: pointer; }
-  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--fg); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  main { max-width: 1100px; margin: 0 auto; padding: 1rem; display: grid; gap: 1rem; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
-  .panel h2 { margin: 0 0 .75rem; font-size: .8rem; text-transform: uppercase;
-              letter-spacing: .08em; color: var(--muted); }
-  textarea, input { width: 100%; font: inherit; background: var(--bg); color: var(--fg);
-                    border: 1px solid var(--line); border-radius: 6px; padding: .6rem; }
-  textarea { min-height: 5.5rem; resize: vertical; }
-  label.check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .9rem; }
-  label.check input { width: auto; }
-  .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .75rem; }
-  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-  th { text-align: left; color: var(--muted); font-weight: 500; padding: .4rem .5rem;
-       border-bottom: 1px solid var(--line); font-size: .8rem; }
-  td { padding: .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  tr.job { cursor: pointer; }
-  tr.job:hover td { background: #1c2333; }
-  .pill { display: inline-block; padding: .1rem .5rem; border-radius: 99px; font-size: .75rem;
-          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-  .pill.completed { color: var(--ok); border-color: var(--ok); }
-  .pill.failed, .pill.lost { color: var(--bad); border-color: var(--bad); }
-  .pill.running, .pill.planning, .pill.researching, .pill.generating,
-  .pill.testing, .pill.repairing, .pill.deploying, .pill.verifying { color: var(--accent); border-color: var(--accent); }
-  .pill.waiting_approval { color: var(--warn); border-color: var(--warn); }
-  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .75rem;
-        overflow-x: auto; font-family: var(--mono); font-size: .8rem; margin: 0; max-height: 22rem; }
-  a { color: var(--accent); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; }
-  .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .5rem .7rem; }
-  .stat b { display: block; font-size: 1.1rem; }
-  .stat span { color: var(--muted); font-size: .75rem; }
-  .err { color: var(--bad); font-size: .9rem; min-height: 1.2rem; }
-  #login { max-width: 22rem; margin: 12vh auto; }
-  .hidden { display: none; }
-  .appr { border: 1px solid var(--line); border-radius: 6px; padding: .8rem; margin-bottom: .8rem;
-          background: var(--bg); }
-  .appr h3 { margin: 0 0 .3rem; font-size: 1rem; }
-  .appr .risk { float: right; }
-  .appr dl { margin: .5rem 0; }
-  .appr pre { max-height: 12rem; margin: .4rem 0; }
-  .pill.public, .pill.outbound { color: var(--warn); border-color: var(--warn); }
-  .pill.financial, .pill.destructive { color: var(--bad); border-color: var(--bad); }
-  dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; font-size: .9rem; }
-  dt { color: var(--muted); }
-  dd { margin: 0; word-break: break-word; }
-  @media (max-width: 640px) { main { padding: .5rem; } header h1 { font-size: .9rem; } }
+/* Qevik Sales Intelligence.
+ *
+ * A sales interface, not a database viewer. The whole design exists to make one
+ * sequence readable at a glance — RESEARCH -> EVIDENCE -> OPPORTUNITY ->
+ * OUTREACH — rather than to render rows.
+ *
+ * The one rule everything else follows: **three states, drawn three ways.**
+ * CONFIRMED_PRESENT, CONFIRMED_ABSENT and NOT_VERIFIED never share a colour or
+ * a glyph. A dashboard that paints "not verified" red has invented a finding,
+ * and the operator will repeat it to a business owner who knows better. A
+ * REFUTED finding gets a fourth treatment again — violet, reading as a
+ * correction rather than a fault, because the old claim was ours, not theirs.
+ *
+ * Semantic colour is deliberately separate from the accent. Blue means "you can
+ * act on this"; green, amber and grey mean things about evidence. They never
+ * borrow each other's meaning.
+ */
+*,*::before,*::after{box-sizing:border-box}
+/* Both spellings. The markup gates the app shell with a `.hidden` class and the
+ * attribute is used elsewhere; defining only one left the whole workspace frame
+ * on screen before sign-in, which a browser test caught and a reader would
+ * have read as a broken dashboard. */
+[hidden],.hidden{display:none !important}
+
+:root{
+  --shell:#101623; --shell-2:#18202F; --shell-line:#252E3E; --shell-ink:#E8ECF3;
+  --shell-dim:#8B95A8;
+  --bg:#F6F7F9; --card:#FFFFFF; --sunk:#F0F2F5;
+  --ink:#0E1420; --ink-2:#3E4757; --mute:#6B7484; --rule:#E3E6EB;
+  --accent:#2B5CE6; --accent-soft:#EAF0FE;
+  --present:#0E8A5F; --present-soft:#E6F5EF;
+  --absent:#C2410C;  --absent-soft:#FDF0E8;
+  --unknown:#7A8496;  --unknown-soft:#F0F2F5;
+  --refuted:#6D28D9; --refuted-soft:#F2ECFD;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",system-ui,Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --side:236px;
+}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden}
+h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
+p{margin:0}
+ul{list-style:none;margin:0;padding:0}
+a{color:var(--accent);text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.n{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono)}
+.eyebrow{font-size:.66rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--mute)}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:100vh}
+nav.side{width:var(--side);flex:0 0 var(--side);background:var(--shell);color:var(--shell-ink);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+nav.side .brand{padding:1.2rem 1.1rem .9rem;border-bottom:1px solid var(--shell-line)}
+nav.side .brand b{display:block;font-size:1rem;font-weight:800;letter-spacing:-.01em}
+nav.side .brand span{font-size:.7rem;color:var(--shell-dim)}
+nav.side .links{padding:.7rem .6rem;display:flex;flex-direction:column;gap:.1rem;flex:1 1 auto;overflow-y:auto}
+nav.side a{display:flex;align-items:center;gap:.6rem;padding:.55rem .65rem;border-radius:8px;
+  color:var(--shell-dim);font-size:.88rem;font-weight:600}
+nav.side a:hover{background:var(--shell-2);color:var(--shell-ink)}
+nav.side a[aria-current=page]{background:var(--accent);color:#fff}
+nav.side a .c{margin-left:auto;font-size:.72rem;opacity:.75;font-variant-numeric:tabular-nums}
+nav.side svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+nav.side .foot{padding:.8rem 1.1rem;border-top:1px solid var(--shell-line);font-size:.74rem;
+  color:var(--shell-dim);display:flex;align-items:center;gap:.5rem}
+nav.side .foot button{color:var(--shell-dim);font-size:.74rem;text-decoration:underline}
+
+main{flex:1 1 auto;min-width:0;padding:1.5rem 1.7rem 4rem}
+.head{display:flex;align-items:flex-start;gap:1rem;margin-bottom:1.3rem;flex-wrap:wrap}
+.head h1{font-size:1.55rem}
+.head p{color:var(--mute);font-size:.9rem;margin-top:.25rem}
+.head .tools{margin-left:auto;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+
+/* ---------- primitives ---------- */
+.card{background:var(--card);border:1px solid var(--rule);border-radius:12px}
+.pad{padding:1.1rem}
+.btn{display:inline-flex;align-items:center;gap:.4rem;background:var(--accent);color:#fff;
+  border-radius:8px;padding:.5rem .85rem;font-size:.85rem;font-weight:650;white-space:nowrap}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--rule)}
+.btn.dark{background:var(--ink);color:#fff}
+.btn.sm{padding:.34rem .6rem;font-size:.78rem}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+input,select,textarea{font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--rule);
+  border-radius:8px;padding:.5rem .7rem;width:100%}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.tag{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;padding:.16rem .55rem;
+  font-size:.7rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.tag.present{background:var(--present-soft);color:var(--present)}
+.tag.absent{background:var(--absent-soft);color:var(--absent)}
+.tag.unknown{background:var(--unknown-soft);color:var(--unknown)}
+.tag.refuted{background:var(--refuted-soft);color:var(--refuted)}
+.tag.accent{background:var(--accent-soft);color:var(--accent)}
+.tag.flat{background:var(--sunk);color:var(--mute)}
+.muted{color:var(--mute)}
+.small{font-size:.82rem}
+.stack{display:flex;flex-direction:column;gap:1rem}
+.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+
+/* ---------- KPIs ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:.7rem;margin-bottom:1.4rem}
+.kpi{background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:.85rem .95rem}
+.kpi b{display:block;font-size:1.65rem;font-weight:800;line-height:1.1;letter-spacing:-.02em}
+.kpi span{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:650}
+.kpi.hot b{color:var(--accent)}
+.kpi.warn b{color:var(--absent)}
+
+/* ---------- prospect cards ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:.85rem}
+.pcard{background:var(--card);border:1px solid var(--rule);border-radius:12px;overflow:hidden;
+  display:flex;flex-direction:column;text-align:left;transition:border-color .12s,box-shadow .12s}
+.pcard:hover{border-color:#C9D2E4;box-shadow:0 2px 12px rgba(16,22,35,.06)}
+.pcard .shot{aspect-ratio:16/9;background:var(--sunk);overflow:hidden;border-bottom:1px solid var(--rule);
+  position:relative}
+.pcard .shot img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
+.pcard .shot .none{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);
+  font-size:.76rem;text-align:center;padding:1rem}
+.pcard .body{padding:.85rem .95rem 1rem;display:flex;flex-direction:column;gap:.5rem;flex:1 1 auto}
+.pcard .title{display:flex;align-items:flex-start;gap:.6rem}
+.pcard .title b{font-size:.98rem;font-weight:700;line-height:1.25}
+.pcard .title .score{margin-left:auto;text-align:right;flex:0 0 auto}
+.pcard .title .score b{display:block;font-size:1.25rem;font-weight:800;line-height:1}
+.pcard .title .score span{font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.pcard .meta{font-size:.78rem;color:var(--mute)}
+.pcard .gap{font-size:.84rem}
+.pcard .gap i{font-style:normal;color:var(--mute)}
+.pcard .facts{display:flex;gap:.3rem;flex-wrap:wrap}
+.pcard .foot{display:flex;align-items:center;gap:.5rem;padding-top:.5rem;border-top:1px solid var(--rule);
+  margin-top:auto;font-size:.78rem;color:var(--mute)}
+
+/* ---------- filters ---------- */
+.filters{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:.5rem;margin-bottom:1rem}
+.filters label{display:block}
+.filters .eyebrow{margin-bottom:.25rem}
+
+/* ---------- detail ---------- */
+.detail-head{display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap;margin-bottom:1.2rem}
+.detail-head h1{font-size:1.7rem}
+.detail-head .sub{color:var(--mute);font-size:.88rem;margin-top:.3rem}
+.scorebig{text-align:right;margin-left:auto}
+.scorebig b{display:block;font-size:2.4rem;font-weight:800;line-height:1;letter-spacing:-.03em}
+.scorebig span{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.cols{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:1rem;align-items:start}
+.hero{background:linear-gradient(160deg,#141C2C,#0E1420);color:#fff;border-radius:13px;padding:1.25rem}
+.hero .eyebrow{color:#8C97AC}
+.hero h2{font-size:1.5rem;margin:.4rem 0 .55rem;color:#fff}
+.hero p{color:#B9C2D2;font-size:.88rem;line-height:1.55}
+.hero .ev{background:rgba(255,255,255,.06);border-radius:9px;padding:.65rem .8rem;margin-top:.8rem;
+  font-size:.82rem;color:#D3DAE6;font-family:var(--mono)}
+.hero .fix{margin-top:.8rem;font-size:.88rem;color:#fff}
+.hero .fix b{color:#7FE7C0}
+
+.finding{display:flex;gap:.75rem;padding:.8rem .95rem;border-bottom:1px solid var(--rule);align-items:flex-start}
+.finding:last-child{border-bottom:0}
+.finding .dot{width:20px;height:20px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
+  font-size:.7rem;font-weight:800;margin-top:.1rem}
+.finding .dot.present{background:var(--present-soft);color:var(--present)}
+.finding .dot.absent{background:var(--absent-soft);color:var(--absent)}
+.finding .dot.unknown{background:var(--unknown-soft);color:var(--unknown)}
+.finding .dot.refuted{background:var(--refuted-soft);color:var(--refuted)}
+.finding .what{flex:1 1 auto;min-width:0}
+.finding .what b{font-size:.9rem;font-weight:650}
+.finding .what p{font-size:.8rem;color:var(--mute);margin-top:.2rem;line-height:1.5}
+.finding .what .ev{font-family:var(--mono);font-size:.74rem;color:var(--ink-2);background:var(--sunk);
+  border-radius:6px;padding:.35rem .5rem;margin-top:.35rem;word-break:break-word}
+.finding .side{flex:0 0 auto;text-align:right}
+
+.shots{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}
+.shotcard{border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:var(--sunk)}
+.shotcard .cap{display:flex;align-items:center;gap:.4rem;padding:.5rem .65rem;background:var(--card);
+  border-bottom:1px solid var(--rule);font-size:.75rem;color:var(--mute)}
+.shotcard .cap b{color:var(--ink);font-weight:650}
+.shotcard a{display:block;max-height:280px;overflow:hidden}
+.shotcard img{width:100%;display:block}
+.shotcard .none{padding:1.6rem 1rem;text-align:center;color:var(--mute);font-size:.8rem}
+
+.msg{background:var(--sunk);border:1px solid var(--rule);border-radius:10px;padding:.9rem 1rem;
+  white-space:pre-wrap;font-size:.88rem;line-height:1.6;word-break:break-word}
+.dns li{display:flex;gap:.5rem;font-size:.83rem;color:var(--ink-2);padding:.35rem 0;line-height:1.5}
+.dns li::before{content:"✕";color:var(--absent);font-weight:800;flex:0 0 auto}
+
+.tl{position:relative;padding-left:1.15rem}
+.tl::before{content:"";position:absolute;left:5px;top:.4rem;bottom:.4rem;width:2px;background:var(--rule)}
+.tl li{position:relative;padding:.45rem 0 .45rem 0;font-size:.83rem}
+.tl li::before{content:"";position:absolute;left:-1.15rem;top:.75rem;width:10px;height:10px;
+  border-radius:50%;background:var(--card);border:2px solid var(--accent)}
+.tl li .when{color:var(--mute);font-size:.75rem}
+
+table.compact{width:100%;border-collapse:collapse;font-size:.85rem}
+table.compact th{text-align:left;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--mute);font-weight:700;padding:.5rem .6rem;border-bottom:1px solid var(--rule)}
+table.compact td{padding:.55rem .6rem;border-bottom:1px solid var(--rule);vertical-align:top}
+table.compact tr:last-child td{border-bottom:0}
+
+.pipe{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.7rem;align-items:start}
+.pipe .col{background:var(--card);border:1px solid var(--rule);border-radius:11px;overflow:hidden}
+.pipe .col h3{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
+  padding:.65rem .8rem;border-bottom:1px solid var(--rule);display:flex}
+.pipe .col h3 span{margin-left:auto;color:var(--ink);font-weight:800}
+.pipe .col .item{padding:.6rem .8rem;border-bottom:1px solid var(--rule);font-size:.83rem;
+  display:block;width:100%;text-align:left}
+.pipe .col .item:last-child{border-bottom:0}
+.pipe .col .item:hover{background:var(--sunk)}
+.pipe .col .item b{display:block;font-weight:650}
+.pipe .col .item span{color:var(--mute);font-size:.75rem}
+
+.empty{padding:2.2rem 1rem;text-align:center;color:var(--mute);font-size:.88rem}
+.err{color:var(--absent);font-size:.85rem}
+
+/* ---------- sign in ---------- */
+#login{max-width:23rem;margin:14vh auto;padding:1.5rem}
+#login h1{font-size:1.3rem;margin-bottom:.3rem}
+#login p{color:var(--mute);font-size:.85rem;margin-bottom:1.1rem}
+#login input{margin-bottom:.6rem}
+
+/* ---------- mobile ---------- */
+.mobar{display:none}
+@media (max-width:900px){
+  .cols{grid-template-columns:1fr}
+  .filters{grid-template-columns:1fr 1fr}
+  .shots{grid-template-columns:1fr}
+}
+@media (max-width:720px){
+  body{font-size:14.5px}
+  .shell{flex-direction:column}
+  nav.side{position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;height:auto;flex:none;
+    z-index:20;border-top:1px solid var(--shell-line)}
+  nav.side .brand,nav.side .foot{display:none}
+  nav.side .links{flex-direction:row;overflow-x:auto;padding:.4rem .4rem calc(.4rem + env(safe-area-inset-bottom));
+    gap:.2rem;scrollbar-width:none}
+  nav.side .links::-webkit-scrollbar{display:none}
+  nav.side a{flex-direction:column;gap:.15rem;font-size:.62rem;padding:.45rem .5rem;min-width:62px;
+    text-align:center;flex:0 0 auto}
+  nav.side a .c{display:none}
+  main{padding:1rem 1rem 6.5rem}
+  .head h1{font-size:1.3rem}
+  .grid{grid-template-columns:1fr}
+  .kpis{grid-template-columns:1fr 1fr}
+  .detail-head{gap:.6rem}
+  .scorebig{margin-left:0}
+  .scorebig b{font-size:1.9rem}
+  .mobar{display:flex;position:fixed;left:0;right:0;bottom:calc(52px + env(safe-area-inset-bottom));
+    z-index:19;background:var(--card);border-top:1px solid var(--rule);padding:.5rem .7rem;gap:.45rem}
+  .mobar .btn{flex:1 1 0;justify-content:center;padding:.6rem .3rem;font-size:.78rem}
+}
 </style>
 </head>
 <body>
 
-<div id="login" class="panel">
-  <h2>Qevik Control</h2>
-  <p style="color:var(--muted);font-size:.9rem;margin-top:0">
-    Sign in. This console can deploy websites and spend money.
-  </p>
+<div id="login" class="card hidden">
+  <h1>Qevik Sales Intelligence</h1>
+  <p>Sign in. Prospect evidence and contact details are behind this door.</p>
   <input id="u" placeholder="username" autocomplete="username">
-  <div style="height:.5rem"></div>
   <input id="p" type="password" placeholder="password" autocomplete="current-password">
-  <div class="row"><button id="signin">Sign in</button><span id="loginerr" class="err"></span></div>
+  <div class="row"><button class="btn" id="signin">Sign in</button><span id="loginerr" class="err"></span></div>
 </div>
 
-<div id="app" class="hidden">
-<header>
-  <h1>QEVIK CONTROL</h1>
-  <span id="health" class="pill">checking…</span>
-  <span class="who"><span id="me"></span> <button id="signout" class="ghost">Sign out</button></span>
-</header>
-
-<main>
-  <section class="panel">
-    <h2>Objective</h2>
-    <textarea id="objective" placeholder="Create a simple children's browser game about a rabbit wearing a hat. Build it, test it, deploy it, verify the public deployment, and report the result."></textarea>
-    <div class="row">
-      <button id="run">Run objective</button>
-      <label class="check"><input type="checkbox" id="pub"> Authorise publishing to the public site host</label>
-      <span id="runerr" class="err"></span>
-    </div>
-    <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0">
-      Qevik decides the steps. Publishing is refused unless authorised above and your account holds the publish scope.
-    </p>
-  </section>
-
-  <section class="panel" id="approvals-panel">
-    <h2>Approvals required</h2>
-    <div id="approvals" style="color:var(--muted);font-size:.9rem">none pending</div>
-  </section>
-
-  <section class="panel">
-    <h2>Jobs</h2>
-    <table><thead><tr><th>Job</th><th>Phase</th><th>Kind</th><th>Duration</th><th>Note</th></tr></thead>
-      <tbody id="jobs"><tr><td colspan="5" style="color:var(--muted)">loading…</td></tr></tbody></table>
-  </section>
-
-  <section class="panel hidden" id="detail">
-    <h2>Job detail</h2>
-    <dl id="meta"></dl>
-    <div class="row"><button class="ghost" id="refresh">Refresh</button><button class="ghost" id="close">Close</button></div>
-    <div id="deployed" style="margin-top:.75rem"></div>
-    <h2 style="margin-top:1rem">Plan</h2><pre id="plan">—</pre>
-    <h2 style="margin-top:1rem">Provenance</h2><pre id="prov">—</pre>
-    <h2 style="margin-top:1rem">Artifacts</h2><div id="arts" style="font-size:.9rem;color:var(--muted)">—</div>
-    <h2 style="margin-top:1rem">Log</h2><pre id="log">—</pre>
-  </section>
-
-  <section class="panel">
-    <h2>System</h2>
-    <div class="grid" id="stats"></div>
-  </section>
-</main>
+<div class="shell hidden" id="app">
+  <nav class="side" aria-label="Sections">
+    <div class="brand"><b>Qevik</b><span>Sales Intelligence</span></div>
+    <div class="links" id="nav"></div>
+    <div class="foot"><span id="me"></span><button id="signout">Sign out</button></div>
+  </nav>
+  <main id="view"><div class="empty">Loading…</div></main>
 </div>
 
 <script>
+"use strict";
+
 const API = location.origin.replace(/\/$/, "");
-let current = null, timer = null;
-
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+const NAV = [
+  ["dashboard", "Dashboard", '<path d="M3 12h6v9H3zM9 3h6v18H9zM15 8h6v13h-6z"/>'],
+  ["prospects", "Prospects", '<circle cx="9" cy="8" r="3.4"/><path d="M3 20a6 6 0 0 1 12 0M17 11h4M19 9v4"/>'],
+  ["pipeline",  "Pipeline",  '<path d="M4 5h16M6 12h12M9 19h6"/>'],
+  ["outreach",  "Outreach",  '<path d="M4 5h16v13H8l-4 3z"/>'],
+  ["evidence",  "Evidence",  '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>'],
+  ["demos",     "Demos",     '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'],
+  ["settings",  "Settings",  '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>'],
+];
+
+/* ------------------------------------------------------------------ api */
 async function api(path, opts = {}) {
   const res = await fetch(API + path, {
     credentials: "include",
-    headers: { "content-type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
     ...opts,
   });
-  if (res.status === 401) { show(false); throw new Error("not signed in"); }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail || res.statusText);
-  return body;
+  if (res.status === 401) { showLogin(); throw new Error("unauthenticated"); }
+  if (!res.ok) throw new Error((await res.text().catch(() => "")) || res.statusText);
+  return res.status === 204 ? null : res.json();
 }
 
-function show(authed) {
-  $("app").classList.toggle("hidden", !authed);
-  $("login").classList.toggle("hidden", authed);
-  if (!authed && timer) { clearInterval(timer); timer = null; }
+function showLogin() {
+  $("login").classList.remove("hidden");
+  $("app").classList.add("hidden");
 }
 
-$("signin").onclick = async () => {
+/* ------------------------------------------------- three-state rendering */
+/* The whole point of the interface. `NOT_VERIFIED` must never be able to
+ * borrow the styling of `CONFIRMED_ABSENT`; they are different claims and only
+ * one of them can be said out loud. */
+const STATE = {
+  CONFIRMED_PRESENT: { cls: "present", mark: "✓", word: "Confirmed present" },
+  CONFIRMED_ABSENT:  { cls: "absent",  mark: "✕", word: "Confirmed absent" },
+  NOT_VERIFIED:      { cls: "unknown", mark: "?", word: "Not verified" },
+  REFUTED:           { cls: "refuted", mark: "↺", word: "Refuted" },
+};
+const state = s => STATE[s] || STATE.NOT_VERIFIED;
+
+function tag(s, text) {
+  const v = state(s);
+  return `<span class="tag ${v.cls}">${v.mark} ${esc(text || v.word)}</span>`;
+}
+
+function scoreColour(n) {
+  return n >= 75 ? "var(--accent)" : n >= 55 ? "var(--ink)" : "var(--mute)";
+}
+
+function copyBtn(text, label = "Copy") {
+  const id = "c" + Math.abs(hash(text)).toString(36);
+  copyables[id] = text;
+  return `<button class="btn ghost sm" data-copy="${id}">${esc(label)}</button>`;
+}
+const copyables = {};
+function hash(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) | 0; return h; }
+
+/* WhatsApp affordance appears only for a number WhatsApp can actually reach.
+ * Offering it for a landline produces a message that silently goes nowhere. */
+function contactButtons(c, phone) {
+  const out = [];
+  if (phone) out.push(`<a class="btn ghost sm" href="tel:${esc(phone.replace(/\s/g, ""))}">Call</a>`);
+  if (c && c.whatsapp === "REACHABLE" && c.wa_link)
+    out.push(`<a class="btn sm" href="${esc(c.wa_link)}" target="_blank" rel="noopener">Open WhatsApp</a>`);
+  if (phone) out.push(copyBtn(phone, "Copy number"));
+  return out.join(" ");
+}
+
+/* ------------------------------------------------------------- routing */
+let route = { view: "dashboard", id: "" };
+
+function go(view, id = "") {
+  route = { view, id };
+  location.hash = id ? `#/${view}/${id}` : `#/${view}`;
+  render();
+}
+
+function readHash() {
+  const parts = (location.hash || "#/dashboard").slice(2).split("/");
+  route = { view: parts[0] || "dashboard", id: parts[1] || "" };
+}
+
+function drawNav(counts) {
+  $("nav").innerHTML = NAV.map(([key, label, icon]) => `
+    <a href="#/${key}" data-view="${key}"${route.view === key ? ' aria-current="page"' : ""}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>${label}
+      ${counts && counts[key] != null ? `<span class="c n">${counts[key]}</span>` : ""}
+    </a>`).join("");
+}
+
+/* --------------------------------------------------------------- views */
+let summary = null;
+
+async function render() {
+  drawNav(summary ? { prospects: summary.total, outreach: summary.approved } : null);
+  const view = $("view");
+  view.innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    if (route.view === "prospects" && route.id) return await drawProspect(route.id);
+    const fn = { dashboard: drawDashboard, prospects: drawProspects, pipeline: drawPipeline,
+                 outreach: drawOutreach, evidence: drawEvidence, demos: drawDemos,
+                 settings: drawSettings }[route.view] || drawDashboard;
+    await fn();
+  } catch (err) {
+    if (String(err.message) !== "unauthenticated")
+      view.innerHTML = `<div class="card pad err">Could not load: ${esc(err.message)}</div>`;
+  }
+}
+
+/* ---- dashboard: who do I contact today? ---- */
+async function drawDashboard() {
+  const [s, ready] = await Promise.all([
+    api("/control/sales/summary"),
+    api("/control/sales/ready?limit=5"),
+  ]);
+  summary = s;
+  drawNav({ prospects: s.total, outreach: s.approved });
+
+  const kpi = (n, label, cls = "") =>
+    `<div class="kpi ${cls}"><b class="n">${n}</b><span>${label}</span></div>`;
+
+  $("view").innerHTML = `
+    <div class="head">
+      <div>
+        <h1>Sales Intelligence</h1>
+        <p>Find the right business, understand the opportunity, and send the right message.</p>
+      </div>
+    </div>
+
+    <div class="kpis">
+      ${kpi(s.total, "Prospects")}
+      ${kpi(s.audited, "Audited")}
+      ${kpi(s.high_opportunity, "High opportunity", "hot")}
+      ${kpi(s.whatsapp_reachable, "WhatsApp reachable")}
+      ${kpi(s.approved, "Approved to contact")}
+      ${kpi(s.contacted, "Contacted")}
+      ${kpi(s.replies, "Replies")}
+      ${kpi(s.interested, "Interested")}
+    </div>
+
+    <div class="stack">
+      <section>
+        <div class="head" style="margin-bottom:.7rem">
+          <div><h2 style="font-size:1.05rem">Contact today</h2>
+          <p class="small muted">${ready.ready_total} pass every check. ${ready.blocked_total} are held back, each for a stated reason.</p></div>
+          <div class="tools"><button class="btn ghost sm" data-go="prospects">All prospects</button></div>
+        </div>
+        ${ready.ready.length ? `<div class="grid">${ready.ready.map(card).join("")}</div>`
+          : `<div class="card empty">Nothing passes every check right now. Open Prospects to see what each is waiting on.</div>`}
+      </section>
+
+      <section>
+        <h2 style="font-size:1.05rem;margin-bottom:.5rem">Held back</h2>
+        <div class="card"><table class="compact">
+          <thead><tr><th>Business</th><th>Score</th><th>Waiting on</th></tr></thead>
+          <tbody>${ready.blocked.slice(0, 8).map(b => `
+            <tr><td><button class="linkish" data-open="${b.id}" style="color:var(--accent);font-weight:600">${esc(b.name)}</button></td>
+            <td class="n">${b.score}</td>
+            <td class="muted">${esc(b.blocked_by.join(" · "))}</td></tr>`).join("")}
+          </tbody></table></div>
+      </section>
+
+      <section>
+        <h2 style="font-size:1.05rem;margin-bottom:.5rem">Experiment</h2>
+        <div class="kpis" style="margin-bottom:0">
+          ${kpi(s.contacted, "Sent")}
+          ${kpi(s.replies, "Replies")}
+          ${kpi(s.interested, "Interested")}
+          ${kpi(s.not_contacted, "Not contacted")}
+          ${kpi(s.stale, "Stale evidence", s.stale ? "warn" : "")}
+        </div>
+        <p class="small muted" style="margin-top:.6rem">
+          “Not contacted” is not “no reply”, and silence is not rejection.
+          Nothing is counted as sent until a person records that they sent it.
+        </p>
+      </section>
+    </div>`;
+}
+
+function card(c) {
+  const shot = c.has_shot
+    ? `<img loading="lazy" alt="Homepage of ${esc(c.name)}"
+            src="/control/sales/prospects/${c.id}/shot/desktop?thumb=1">`
+    : `<div class="none">Screenshot not captured</div>`;
+  return `
+    <button class="pcard" data-open="${c.id}">
+      <div class="shot">${shot}</div>
+      <div class="body">
+        <div class="title">
+          <b>${esc(c.name)}</b>
+          <span class="score"><b class="n" style="color:${scoreColour(c.score)}">${c.score}</b><span>score</span></span>
+        </div>
+        <p class="meta">${esc(c.industry)} · ${esc(c.location)}</p>
+        <div class="facts">
+          ${c.score >= 75 ? `<span class="tag accent">HIGH OPPORTUNITY</span>` : ""}
+          ${tag(c.https, c.https === "CONFIRMED_PRESENT" ? "HTTPS" : "HTTPS")}
+          ${tag(c.contactability.whatsapp === "REACHABLE" ? "CONFIRMED_PRESENT" : "NOT_VERIFIED", "WhatsApp")}
+          ${c.stale ? `<span class="tag absent">STALE</span>` : ""}
+        </div>
+        ${c.strongest ? `<p class="gap"><i>Strongest gap:</i> ${esc(c.strongest)}</p>`
+          : `<p class="gap muted">${c.audit_complete ? "No confirmed gap we fix" : "Audit did not complete"}</p>`}
+        <div class="foot">
+          <span>${esc(c.contact || "no contact")}</span>
+          <span style="margin-left:auto">${c.demo_kind === "prospect" ? "Demo built" :
+            c.demo_kind === "sample" ? "Sample matches" : "No demo"}</span>
+        </div>
+      </div>
+    </button>`;
+}
+
+/* ---- prospects ---- */
+let filters = { q: "", industry: "", contact: "", website: "", stage: "", sort: "score", page: 1 };
+
+async function drawProspects() {
+  const qs = new URLSearchParams({ ...filters, size: 24 }).toString();
+  const data = await api("/control/sales/prospects?" + qs);
+  const pages = Math.max(1, Math.ceil(data.total / data.size));
+  const sel = (name, opts, value) => `<select data-filter="${name}">` +
+    opts.map(([v, l]) => `<option value="${v}"${v === value ? " selected" : ""}>${l}</option>`).join("") +
+    `</select>`;
+
+  $("view").innerHTML = `
+    <div class="head">
+      <div><h1>Prospects</h1><p>${data.total} match. Ranked by opportunity, every score explainable from stored evidence.</p></div>
+    </div>
+    <div class="filters">
+      <label><span class="eyebrow">Search</span>
+        <input id="q" placeholder="Name, domain, phone, area…" value="${esc(filters.q)}"></label>
+      <label><span class="eyebrow">Industry</span>${sel("industry", [
+        ["", "All"], ["Food & Drink", "Food & Drink"], ["Health & Beauty", "Health & Beauty"],
+        ["Home Services", "Home Services"], ["Automotive", "Automotive"],
+        ["Professional Services", "Professional Services"], ["Retail", "Retail"], ["Other", "Other"]],
+        filters.industry)}</label>
+      <label><span class="eyebrow">Contact</span>${sel("contact", [
+        ["", "Any"], ["whatsapp", "WhatsApp reachable"], ["phone", "Phone only"],
+        ["email", "Email only"], ["none", "No contact"]], filters.contact)}</label>
+      <label><span class="eyebrow">Website</span>${sel("website", [
+        ["", "Any"], ["weaknesses", "Has confirmed weakness"], ["no_arabic", "No Arabic"],
+        ["no_mobile_cta", "No mobile call button"], ["slow", "Slow"], ["https", "HTTPS working"]],
+        filters.website)}</label>
+      <label><span class="eyebrow">Sort</span>${sel("sort", [
+        ["score", "Opportunity score"], ["confidence", "Evidence confidence"],
+        ["verified", "Last verified"], ["contactability", "Contactability"],
+        ["industry", "Industry"], ["stage", "Outreach stage"]], filters.sort)}</label>
+    </div>
+    ${data.items.length ? `<div class="grid">${data.items.map(card).join("")}</div>`
+      : `<div class="card empty">Nothing matches those filters.</div>`}
+    <div class="row" style="justify-content:center;margin-top:1.2rem">
+      <button class="btn ghost sm" data-page="${filters.page - 1}" ${filters.page <= 1 ? "disabled" : ""}>Previous</button>
+      <span class="small muted n">Page ${filters.page} of ${pages}</span>
+      <button class="btn ghost sm" data-page="${filters.page + 1}" ${filters.page >= pages ? "disabled" : ""}>Next</button>
+    </div>`;
+
+  const q = $("q");
+  let debounce;
+  q.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => { filters.q = q.value; filters.page = 1; drawProspects()
+      .then(() => { const box = $("q"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } }); }, 260);
+  });
+}
+
+/* ---- the prospect briefing ---- */
+async function drawProspect(id) {
+  const d = await api(`/control/sales/prospects/${id}`);
+  const c = d.card, ident = d.identity, con = d.outreach.contactability;
+  const wa = d.outreach.drafts.find(m => m.channel === "whatsapp");
+  const mail = d.outreach.drafts.find(m => m.channel === "email");
+
+  const findingRow = f => `
+    <div class="finding">
+      <span class="dot ${state(f.refuted ? "REFUTED" : f.state).cls}">${state(f.refuted ? "REFUTED" : f.state).mark}</span>
+      <div class="what">
+        <b>${esc(f.label)}</b>
+        ${f.refuted ? `<p><b style="color:var(--refuted)">Refuted.</b> A previous audit recorded this as absent; the live re-check found it present. The old reading is kept, not shown as current.</p>` : ""}
+        ${f.impact && f.state === "CONFIRMED_ABSENT" && !f.refuted ? `<p>${esc(f.impact)}</p>` : ""}
+        ${f.remedy && f.state === "CONFIRMED_ABSENT" && f.fixable && !f.refuted ? `<p><b>Qevik:</b> ${esc(f.remedy)}</p>` : ""}
+        ${f.evidence ? `<div class="ev">${esc(f.evidence)}</div>` : ""}
+      </div>
+      <div class="side">
+        ${f.refuted ? tag("REFUTED") : tag(f.state)}
+        ${f.state === "CONFIRMED_ABSENT" && !f.fixable && !f.refuted
+          ? `<div class="small muted" style="margin-top:.3rem">Qevik does not build this</div>` : ""}
+      </div>
+    </div>`;
+
+  const shotCard = (label, size) => {
+    const s = d.screenshots[label] || { captured: false };
+    return `<div class="shotcard">
+      <div class="cap"><b>${label[0].toUpperCase() + label.slice(1)}</b>
+        <span class="n">${esc(s.viewport || size)}</span>
+        <span style="margin-left:auto">${d.screenshots_at ? esc(when(d.screenshots_at)) : ""}</span></div>
+      ${s.captured
+        ? `<a href="/control/sales/prospects/${id}/shot/${label}" target="_blank" rel="noopener">
+             <img loading="lazy" alt="${label} screenshot of ${esc(ident.name)}"
+                  src="/control/sales/prospects/${id}/shot/${label}?thumb=1"></a>`
+        : `<div class="none">Screenshot not captured${s.reason ? `<br><span class="small">${esc(s.reason)}</span>` : ""}</div>`}
+    </div>`;
+  };
+
+  $("view").innerHTML = `
+    <div class="row" style="margin-bottom:.9rem">
+      <button class="btn ghost sm" data-go="prospects">← All prospects</button>
+      <span class="tag flat">${esc(d.stage.replace("_", " "))}</span>
+      ${ident.stale ? `<span class="tag absent">STALE — RE-VERIFY BEFORE CONTACT</span>`
+        : `<span class="tag present">Verified ${esc(ident.last_verified)}</span>`}
+    </div>
+
+    <div class="detail-head">
+      <div>
+        <h1>${esc(ident.name)}</h1>
+        <p class="sub">${esc(c.industry)} · ${esc(ident.location)} · ${esc(ident.category || "category not verified")}</p>
+        <div class="row" style="margin-top:.7rem">
+          ${ident.website ? `<a class="btn ghost sm" href="${esc(ident.website)}" target="_blank" rel="noopener">Open website</a>` : ""}
+          <a class="btn ghost sm" href="${esc(ident.maps)}" target="_blank" rel="noopener">Google Maps</a>
+          ${d.demo.url ? `<a class="btn ghost sm" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Open Qevik demo</a>` : ""}
+          ${contactButtons(con, ident.phone)}
+        </div>
+      </div>
+      <div class="scorebig">
+        <b class="n" style="color:${scoreColour(c.score)}">${c.score}</b>
+        <span>opportunity / 100</span>
+      </div>
+    </div>
+
+    ${!c.audit_complete ? `<div class="card pad" style="border-color:var(--absent);margin-bottom:1rem">
+      <b style="color:var(--absent)">The audit never completed for this business.</b>
+      <p class="small muted" style="margin-top:.3rem">Nothing about their website is confirmed, in either direction.
+      This score describes our failure to look, not their site. Re-verify before making any claim.</p></div>` : ""}
+
+    ${d.strongest ? `<div class="hero" style="margin-bottom:1rem">
+      <p class="eyebrow">Strongest sales angle</p>
+      <h2>${esc(d.strongest.label)}</h2>
+      <p>${esc(d.strongest.impact)}</p>
+      ${d.strongest.evidence ? `<div class="ev">${esc(d.strongest.evidence)}</div>` : ""}
+      ${d.strongest.remedy ? `<p class="fix"><b>Qevik can show:</b> ${esc(d.strongest.remedy)}</p>` : ""}
+    </div>` : ""}
+
+    <div class="cols">
+      <div class="stack">
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow">What their website looks like</p>
+            <p class="small muted" style="margin-top:.25rem">
+              ${d.screenshots_at ? `Captured ${esc(when(d.screenshots_at))} from ${esc(ident.website)}`
+                : "Not captured yet"}</p>
+          </div>
+          <div class="pad"><div class="shots">
+            ${shotCard("desktop", "1280×900")}${shotCard("mobile", "390×844")}
+          </div></div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:.6rem">
+            <div><p class="eyebrow">Website health</p>
+            <p class="small muted" style="margin-top:.25rem">
+              HTTP ${d.health.http_status || "—"} ·
+              ${d.health.load_ms ? `loaded in ${(d.health.load_ms / 1000).toFixed(1)}s${
+                  d.health.load_measured === "re-check" ? " (re-checked)" : ""}` : "load time not measured"}
+              ${d.health.checked_at ? ` · checked ${esc(when(d.health.checked_at))}` : ""}</p></div>
+          </div>
+          ${d.opportunities.length ? `<div>${d.opportunities.map(findingRow).join("")}</div>` : ""}
+          ${d.refuted.length ? `<div style="border-top:1px solid var(--rule)">${d.refuted.map(findingRow).join("")}</div>` : ""}
+          ${d.unfixable.length ? `<div style="border-top:1px solid var(--rule)">${d.unfixable.map(findingRow).join("")}</div>` : ""}
+          ${d.unverified.length ? `<div style="border-top:1px solid var(--rule)">${d.unverified.map(findingRow).join("")}</div>` : ""}
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow">What they already do well</p>
+            <p class="small muted" style="margin-top:.25rem">Confirmed present. Useful when writing — do not insult these.</p>
+          </div>
+          ${d.strengths.length ? `<div>${d.strengths.map(findingRow).join("")}</div>`
+            : `<div class="empty">Nothing confirmed present.</div>`}
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)"><p class="eyebrow">History</p></div>
+          <div class="pad"><ul class="tl">${d.timeline.slice().reverse().map(e => `
+            <li><b>${esc(kindLabel(e.kind))}</b>
+              <div class="when">${esc(when(e.at))}${e.detail && e.detail.channel ? ` · ${esc(e.detail.channel)}` : ""}</div>
+            </li>`).join("")}</ul></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow">Recommended outreach</p>
+            <h3 style="font-size:1.15rem;margin-top:.35rem">${esc(d.outreach.channel)}</h3>
+            <p class="small muted" style="margin-top:.25rem">${esc(d.outreach.why)}</p>
+          </div>
+          <div class="pad stack">
+            ${wa ? `<div>
+              <div class="row" style="margin-bottom:.5rem">
+                <span class="eyebrow">First message</span>
+                <span class="tag ${wa.status === "approved" ? "present" : "flat"}">${esc(wa.status)}</span>
+              </div>
+              <div class="msg">${esc(wa.body)}</div>
+              <div class="row" style="margin-top:.6rem">
+                ${copyBtn(wa.body, "Copy message")}
+                ${con.whatsapp === "REACHABLE" && con.wa_link
+                  ? `<a class="btn sm" href="${esc(con.wa_link)}" target="_blank" rel="noopener">Open WhatsApp</a>`
+                  : `<span class="small muted">No WhatsApp — ${esc(con.why)}</span>`}
+              </div></div>` : `<p class="small muted">No message prepared for this prospect yet.</p>`}
+            ${mail ? `<details><summary class="small" style="cursor:pointer;color:var(--accent)">Email version</summary>
+              <p class="small muted" style="margin:.5rem 0 .3rem">Subject: ${esc(mail.subject)}</p>
+              <div class="msg">${esc(mail.body)}</div>
+              <div class="row" style="margin-top:.5rem">${copyBtn(mail.body, "Copy email")}</div>
+            </details>` : ""}
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow" style="color:var(--absent)">Do not say</p>
+          </div>
+          <div class="pad"><ul class="dns">
+            ${d.outreach.do_not_say.map(r => `<li>${esc(r)}</li>`).join("")}
+          </ul></div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)">
+            <p class="eyebrow">Recommended demonstration</p>
+          </div>
+          <div class="pad stack">
+            <div>
+              <b>${esc(d.demo.label)}</b>
+              <p class="small muted" style="margin-top:.25rem">${esc(d.demo.why)}</p>
+            </div>
+            ${d.demo.url ? `<div class="row">
+              <a class="btn sm" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Open demo</a>
+              ${copyBtn(d.demo.url, "Copy URL")}</div>` : ""}
+            <p class="small muted">Qevik has no customers. A sample is Qevik's own work, never a client's.</p>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)"><p class="eyebrow">Why this score</p></div>
+          <div class="pad"><table class="compact">
+            ${d.score.components.map(comp => `
+              <tr><td style="width:42%">${esc(comp.name)}</td>
+              <td class="n" style="width:16%"><b>${comp.points}</b><span class="muted">/${comp.out_of}</span></td>
+              <td class="muted small">${esc(comp.reason)}</td></tr>`).join("")}
+            <tr><td><b>Total</b></td><td class="n"><b>${d.score.total}</b>/100</td><td></td></tr>
+          </table></div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)"><p class="eyebrow">Identity</p></div>
+          <div class="pad"><table class="compact">
+            ${[["Listing name", ident.listing_name], ["Website", ident.website],
+               ["Phone", ident.phone], ["Email", ident.email],
+               ["WhatsApp", con.whatsapp.replace("_", " ")],
+               ["Area", ident.location], ["City", ident.city], ["Country", ident.country],
+               ["Category", ident.category],
+               ["Discovered via", (ident.sources || []).join(", ")],
+               ["Last audited", ident.audited_at ? when(ident.audited_at) : ""],
+               ["Last re-verified", ident.verified_at ? when(ident.verified_at) : ""]]
+              .map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${v
+                ? esc(v) : `<span class="tag unknown">? NOT VERIFIED</span>`}</td></tr>`).join("")}
+          </table></div>
+        </section>
+
+        <section class="card">
+          <div class="pad" style="border-bottom:1px solid var(--rule)"><p class="eyebrow">Record what happened</p></div>
+          <div class="pad stack">
+            <p class="small muted">Nothing here sends. Record a send only after you have actually sent it by hand.</p>
+            <button class="btn ghost sm" data-sent="${id}">I sent this by hand</button>
+            <button class="btn ghost sm" data-reply="${id}">Log a reply</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="mobar">
+      ${ident.phone ? `<a class="btn ghost" href="tel:${esc(ident.phone.replace(/\s/g, ""))}">Call</a>` : ""}
+      ${con.whatsapp === "REACHABLE" && con.wa_link
+        ? `<a class="btn" href="${esc(con.wa_link)}" target="_blank" rel="noopener">WhatsApp</a>` : ""}
+      ${d.demo.url ? `<a class="btn ghost" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Demo</a>` : ""}
+      ${wa ? copyBtn(wa.body, "Message") : ""}
+    </div>`;
+}
+
+const KIND = {
+  business_discovered: "Discovered", website_audited: "Website audited",
+  claims_verified: "Claims re-verified live", website_demo_published: "Demo built and published",
+  screenshot_captured: "Screenshots captured", prospect_scored: "Scored",
+  outreach_drafted: "Draft written", experiment_prepared: "Message prepared (not sent)",
+  experiment_sent: "Sent by hand", experiment_response: "Reply received",
+  experiment_objection: "Objection recorded", experiment_outcome: "Outcome recorded",
+};
+const kindLabel = k => KIND[k] || k.replace(/_/g, " ");
+
+function when(iso) {
+  if (!iso) return "";
+  const then = new Date(iso), mins = (Date.now() - then) / 60000;
+  if (mins < 60) return `${Math.round(mins)} minutes ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)} hours ago`;
+  const days = Math.round(mins / 1440);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+/* ---- pipeline ---- */
+const STAGES = ["NOT_CONTACTED", "DRAFT", "APPROVED", "SENT", "REPLIED", "WON"];
+async function drawPipeline() {
+  const data = await api("/control/sales/prospects?size=100&sort=score");
+  const cols = Object.fromEntries(STAGES.map(s => [s, []]));
+  data.items.forEach(c => (cols[c.stage] || cols.NOT_CONTACTED).push(c));
+  $("view").innerHTML = `
+    <div class="head"><div><h1>Pipeline</h1>
+      <p>Folded from the event timeline, never a stored status. Silence is not rejection.</p></div></div>
+    <div class="pipe">${STAGES.map(s => `
+      <div class="col">
+        <h3>${s.replace("_", " ")}<span class="n">${cols[s].length}</span></h3>
+        ${cols[s].length ? cols[s].slice(0, 12).map(c => `
+          <button class="item" data-open="${c.id}">
+            <b>${esc(c.name)}</b><span>${c.score} · ${esc(c.strongest || "no confirmed gap")}</span>
+          </button>`).join("") : `<div class="empty small">empty</div>`}
+      </div>`).join("")}</div>
+    <p class="small muted" style="margin-top:1rem">Showing the top 100 by score.</p>`;
+}
+
+/* ---- outreach ---- */
+async function drawOutreach() {
+  const data = await api("/control/sales/ready?limit=50");
+  const all = [...data.ready, ...data.blocked];
+  const withDraft = all.filter(c => c.stage === "DRAFT" || c.stage === "APPROVED" || c.stage === "SENT");
+  $("view").innerHTML = `
+    <div class="head"><div><h1>Outreach</h1>
+      <p>Every prepared message. Nothing here can send — the system has no client and no credential.</p></div></div>
+    <div class="card"><table class="compact">
+      <thead><tr><th>Business</th><th>Stage</th><th>Channel</th><th>Contact</th><th>Claim used</th><th></th></tr></thead>
+      <tbody>${withDraft.length ? withDraft.map(c => `
+        <tr><td><b>${esc(c.name)}</b></td>
+        <td><span class="tag ${c.stage === "APPROVED" ? "present" : "flat"}">${esc(c.stage)}</span></td>
+        <td>${esc(c.contactability.channel)}</td>
+        <td class="mono small">${esc(c.contact)}</td>
+        <td class="muted">${esc(c.strongest || "—")}</td>
+        <td><button class="btn ghost sm" data-open="${c.id}">Open</button></td></tr>`).join("")
+        : `<tr><td colspan="6" class="empty">No messages prepared yet.</td></tr>`}
+      </tbody></table></div>`;
+}
+
+/* ---- evidence ---- */
+async function drawEvidence() {
+  const data = await api("/control/sales/prospects?size=40&sort=verified");
+  $("view").innerHTML = `
+    <div class="head"><div><h1>Evidence</h1>
+      <p>What was checked, when. Anything older than three days is marked stale rather than presented as current.</p></div></div>
+    <div class="card"><table class="compact">
+      <thead><tr><th>Business</th><th>Last verified</th><th>Audit</th><th>Load</th><th>Screenshot</th><th>Confidence</th></tr></thead>
+      <tbody>${data.items.map(c => `
+        <tr><td><button data-open="${c.id}" style="color:var(--accent);font-weight:600">${esc(c.name)}</button></td>
+        <td>${c.stale ? `<span class="tag absent">${esc(c.last_verified)}</span>`
+                      : `<span class="tag present">${esc(c.last_verified)}</span>`}</td>
+        <td>${c.audit_complete ? tag("CONFIRMED_PRESENT", "complete") : tag("NOT_VERIFIED", "incomplete")}</td>
+        <td class="n">${c.load_ms ? (c.load_ms / 1000).toFixed(1) + "s" : "—"}</td>
+        <td>${c.has_shot ? tag("CONFIRMED_PRESENT", "captured") : tag("NOT_VERIFIED", "not captured")}</td>
+        <td class="n">${c.confidence}/10</td></tr>`).join("")}
+      </tbody></table></div>`;
+}
+
+/* ---- demos ---- */
+const DEMOS = [
+  ["sample", "Bilingual clinic", "Health", "Verified hours, tap-to-call, English and Arabic"],
+  ["sample-nar", "NAR", "Fine dining", "Editorial restaurant, no navigation, priced menu"],
+  ["sample-atelier", "Atelier", "Luxury salon", "Treatment list with real durations"],
+  ["sample-apex", "APEX", "Automotive", "Four-step quote configurator, priced live"],
+  ["sample-homefix", "HomeFix", "Home services", "Built for a phone, estimator above the fold"],
+  ["sample-meridian", "Meridian", "Real estate", "Filters, saved list, call-back request"],
+  ["sample-verdant", "Verdant", "Retail", "Filterable catalogue with a working basket"],
+  ["sample-ledgerloop", "LedgerLoop", "B2B SaaS", "Product embedded in the hero"],
+  ["sample-foundry", "Foundry", "AI / automation", "Concept piece, labelled as one"],
+  ["sample-pulse", "Pulse", "Fitness", "A training log — software, not a website"],
+  ["sample-kilo", "Kilo", "Fitness", "Mobile-first member app: booking, sessions, progress"],
+  ["sample-carrot", "Carrot Dash", "Game", "A real one-button browser game"],
+  ["sample-wordrush", "Word Rush", "Education", "Bilingual trainer that flips language at runtime"],
+];
+async function drawDemos() {
+  $("view").innerHTML = `
+    <div class="head"><div><h1>Demos</h1>
+      <p>Qevik's own samples. None is client work — Qevik has no customers.</p></div></div>
+    <div class="card"><table class="compact">
+      <thead><tr><th>Sample</th><th>Industry</th><th>What it shows</th><th></th></tr></thead>
+      <tbody>${DEMOS.map(([slug, name, industry, what]) => `
+        <tr><td><b>${esc(name)}</b></td><td class="muted">${esc(industry)}</td>
+        <td class="muted">${esc(what)}</td>
+        <td><a class="btn ghost sm" href="https://sites.qevik.ai/${slug}/" target="_blank" rel="noopener">Open</a></td></tr>`).join("")}
+      </tbody></table></div>
+    <p class="small muted" style="margin-top:1rem">
+      Prospect-specific demos are unsolicited work built from public listing details, and are shown on the prospect's own page.</p>`;
+}
+
+/* ---- settings: the objective console lives on ---- */
+async function drawSettings() {
+  const health = await api("/control/health").catch(() => ({}));
+  $("view").innerHTML = `
+    <div class="head"><div><h1>Settings</h1><p>Account, system health, and the objective console.</p></div></div>
+    <div class="stack">
+      <section class="card pad">
+        <p class="eyebrow">Account</p>
+        <p style="margin-top:.4rem">Signed in as <b id="who2"></b></p>
+        <div class="row" style="margin-top:.7rem"><button class="btn ghost sm" id="so2">Sign out</button></div>
+      </section>
+      <section class="card pad">
+        <p class="eyebrow">System</p>
+        <pre class="msg mono small" style="margin-top:.5rem">${esc(JSON.stringify(health, null, 2))}</pre>
+      </section>
+      <section class="card pad">
+        <p class="eyebrow">Objective console</p>
+        <p class="small muted" style="margin:.4rem 0 .7rem">
+          Qevik decides the steps. Publishing is refused unless authorised and your account holds the scope.</p>
+        <textarea id="objective" rows="3" placeholder="Build, test, deploy and verify…"></textarea>
+        <div class="row" style="margin-top:.6rem">
+          <button class="btn" id="runobj">Run objective</button>
+          <label class="small muted"><input type="checkbox" id="pub" style="width:auto"> Authorise publishing</label>
+          <span id="objerr" class="err"></span>
+        </div>
+      </section>
+      <section class="card pad">
+        <p class="eyebrow">Outbound messaging</p>
+        <p class="small" style="margin-top:.4rem">
+          <span class="tag absent">✕ Not connected</span>
+          No SMTP, WhatsApp, Meta or Twilio client exists in this system, and no credential is installed.
+          This dashboard can prepare and copy a message; it cannot send one.</p>
+      </section>
+    </div>`;
+  $("who2").textContent = $("me").textContent;
+  $("so2").addEventListener("click", signOut);
+  $("runobj").addEventListener("click", async () => {
+    const objective = $("objective").value.trim();
+    if (objective.length < 8) return ($("objerr").textContent = "Say a bit more.");
+    $("objerr").textContent = "";
+    try {
+      await api("/control/objectives", { method: "POST",
+        body: JSON.stringify({ objective, authorise_publish: $("pub").checked }) });
+      $("objerr").textContent = "Submitted.";
+    } catch (e) { $("objerr").textContent = e.message; }
+  });
+}
+
+/* ------------------------------------------------------------ events */
+document.addEventListener("click", async event => {
+  const open = event.target.closest("[data-open]");
+  if (open) return go("prospects", open.dataset.open);
+
+  const nav = event.target.closest("nav.side a");
+  if (nav) { event.preventDefault(); return go(nav.dataset.view); }
+
+  const goto = event.target.closest("[data-go]");
+  if (goto) return go(goto.dataset.go);
+
+  const page = event.target.closest("[data-page]");
+  if (page && !page.disabled) { filters.page = +page.dataset.page; return drawProspects(); }
+
+  const copy = event.target.closest("[data-copy]");
+  if (copy) {
+    const text = copyables[copy.dataset.copy] || "";
+    try { await navigator.clipboard.writeText(text); }
+    catch { const t = document.createElement("textarea"); t.value = text;
+            document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); }
+    const was = copy.textContent; copy.textContent = "Copied";
+    setTimeout(() => (copy.textContent = was), 1400);
+    return;
+  }
+
+  const sent = event.target.closest("[data-sent]");
+  if (sent) {
+    const at = prompt("When did you actually send it? Leave blank for now.\n(YYYY-MM-DD HH:MM, your local time)");
+    if (at === null) return;
+    const stamp = at.trim() ? new Date(at.replace(" ", "T")) : new Date();
+    if (isNaN(stamp)) return alert("Could not read that time.");
+    const channel = prompt("Channel? (whatsapp / phone / email)", "whatsapp");
+    if (!channel) return;
+    await api(`/control/sales/prospects/${sent.dataset.sent}/sent`, { method: "POST",
+      body: JSON.stringify({ channel, sent_at: stamp.toISOString() }) });
+    return render();
+  }
+
+  const reply = event.target.closest("[data-reply]");
+  if (reply) {
+    const response = prompt("What kind of reply? (interested / questions / not_now / declined / hostile)");
+    if (!response) return;
+    const verbatim = prompt("Paste exactly what they said (optional):") || "";
+    await api(`/control/sales/prospects/${reply.dataset.reply}/reply`, { method: "POST",
+      body: JSON.stringify({ response, verbatim }) });
+    return render();
+  }
+});
+
+document.addEventListener("change", event => {
+  const filter = event.target.closest("[data-filter]");
+  if (!filter) return;
+  filters[filter.dataset.filter] = filter.value;
+  filters.page = 1;
+  drawProspects();
+});
+
+window.addEventListener("hashchange", () => { readHash(); render(); });
+
+/* --------------------------------------------------------------- auth */
+async function signOut() {
+  try { await api("/auth/logout", { method: "POST" }); } catch {}
+  location.reload();
+}
+$("signout").addEventListener("click", signOut);
+
+$("signin").addEventListener("click", async () => {
   $("loginerr").textContent = "";
   try {
-    const r = await api("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ username: $("u").value, password: $("p").value }),
-    });
-    $("me").textContent = r.user.username + " (" + r.user.scopes.join(", ") + ")";
-    $("p").value = "";
-    show(true); start();
-  } catch (e) { $("loginerr").textContent = e.message; }
-};
+    await api("/auth/login", { method: "POST",
+      body: JSON.stringify({ username: $("u").value, password: $("p").value }) });
+    location.reload();
+  } catch (e) { $("loginerr").textContent = "Sign-in failed."; }
+});
+$("p").addEventListener("keydown", e => { if (e.key === "Enter") $("signin").click(); });
 
-$("signout").onclick = async () => {
-  try { await api("/auth/logout", { method: "POST" }); } catch {}
-  show(false);
-};
-
-$("run").onclick = async () => {
-  const objective = $("objective").value.trim();
-  $("runerr").textContent = "";
-  if (objective.length < 8) { $("runerr").textContent = "describe what you want done"; return; }
-  $("run").disabled = true;
-  try {
-    const r = await api("/control/objectives", {
-      method: "POST",
-      body: JSON.stringify({ objective, authorise_publish: $("pub").checked }),
-    });
-    $("objective").value = "";
-    await jobs(); open_(r.job_id);
-  } catch (e) { $("runerr").textContent = e.message; }
-  finally { $("run").disabled = false; }
-};
-
-async function jobs() {
-  try {
-    const list = await api("/control/jobs?limit=25");
-    $("jobs").innerHTML = list.length ? list.map(j => `
-      <tr class="job" data-id="${esc(j.id)}">
-        <td style="font-family:var(--mono);font-size:.8rem">${esc(j.id)}</td>
-        <td><span class="pill ${esc(j.phase)}">${esc(j.phase)}</span></td>
-        <td>${esc(j.kind)}</td>
-        <td>${Math.round(j.duration_seconds)}s</td>
-        <td style="color:var(--muted)">${esc((j.note || "").slice(0, 70))}</td>
-      </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">no jobs yet</td></tr>`;
-    document.querySelectorAll("tr.job").forEach(tr => tr.onclick = () => open_(tr.dataset.id));
-  } catch (e) { /* transient; the next tick retries */ }
-}
-
-async function open_(id) { current = id; $("detail").classList.remove("hidden"); await detail(); }
-$("close").onclick = () => { current = null; $("detail").classList.add("hidden"); };
-$("refresh").onclick = detail;
-
-async function detail() {
-  if (!current) return;
-  try {
-    const j = await api("/control/jobs/" + current);
-    const o = j.outcome || {};
-    $("meta").innerHTML = [
-      ["Job", j.id], ["State", j.state], ["Phase", j.phase],
-      ["Objective", (j.note || "").replace(/^[^:]*:\s*/, "")],
-      ["Planner", o.planner ? `${o.planner} (${o.model || "—"})` : "—"],
-      ["Exit code", j.exit_code ?? "—"],
-      ["Repairs", o.repairs ?? "—"],
-      ["Started", j.started_at], ["Ended", j.ended_at || "—"],
-      ["Publish authorised", o.publish_authorised === undefined ? "—" : String(o.publish_authorised)],
-      ["Error", j.error || o.error || "—"],
-    ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
-
-    $("deployed").innerHTML = o.deployed_url
-      ? `<a href="${esc(o.deployed_url)}" target="_blank" rel="noopener">${esc(o.deployed_url)}</a>
-         <span class="pill ${o.verified_status === 200 ? "completed" : "failed"}">verified ${esc(o.verified_status ?? "—")}</span>`
-      : `<span style="color:var(--muted)">nothing deployed</span>`;
-
-    $("plan").textContent = j.plan
-      ? j.plan.steps.map(s => {
-          const refs = (JSON.stringify(s.payload).match(/\$\{([\w.\-\[\]]+)\}/g) || []).join(", ");
-          return `${s.id.padEnd(22)} ${s.action.padEnd(16)} ${refs ? "<- " + refs : ""}`;
-        }).join("\n")
-      : "—";
-
-    const p = j.provenance;
-    $("prov").textContent = p
-      ? (p.researched.length
-          ? p.researched.map(r =>
-              `researched ${JSON.stringify(r.query)} -> ${r.sources.length} source(s)\n` +
-              r.sources.map(u => "  - " + u).join("\n")).join("\n") +
-            "\n" + (p.decisions.length
-              ? p.decisions.map(d =>
-                  `${d.step} read ${d.consumed_from.join(", ")} and wrote:\n` +
-                  Object.entries(d.produced).map(([k, v]) => `  ${k}: ${v}`).join("\n")).join("\n")
-              : "NOTHING CONSUMED IT")
-          : "no external research was used")
-      : "—";
-
-    $("arts").innerHTML = (j.artifacts || []).length
-      ? j.artifacts.map(a => `${esc(a.name)} <span style="opacity:.6">(${a.bytes} bytes)</span>`).join(" · ")
-      : "—";
-
-    const l = await api(`/control/jobs/${current}/logs?tail=200`);
-    $("log").textContent = l.text || "—";
-    $("log").scrollTop = $("log").scrollHeight;
-  } catch (e) { $("log").textContent = "could not load: " + e.message; }
-}
-
-async function approvals() {
-  try {
-    const list = await api("/control/approvals");
-    if (!list.length) { $("approvals").innerHTML = "none pending"; return; }
-    $("approvals").innerHTML = list.map(a => {
-      // Everything material is shown. "Approve action" with the details hidden
-      // is how a reviewer ends up allowing a publish to the wrong place.
-      const rows = [
-        ["Job", a.job_id], ["Step", a.step_id], ["Action", a.action],
-        ["Exact target", a.target || "—"], ["Required scope", a.required_scope],
-        ["Requested", a.created_at], ["Expires", a.expires_at || "—"],
-        ["Estimated cost", a.estimated_cost ? a.estimated_cost + " USD" : "none"],
-      ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
-
-      const prov = a.provenance || {};
-      const sources = (prov.researched || []).flatMap(r => r.sources || []);
-      const evidence = sources.length
-        ? `<h2 style="margin-top:.6rem">Evidence it used</h2><pre>${esc(sources.join("\n"))}</pre>` : "";
-
-      return `<div class="appr" data-id="${esc(a.approval_id)}">
-        <span class="pill risk ${esc(a.risk)}">${esc(a.risk)}</span>
-        <h3>${esc(a.what)}</h3>
-        <dl>${rows}</dl>
-        <h2 style="margin-top:.6rem">Exact proposed operation</h2>
-        <pre>${esc(JSON.stringify(a.proposed, null, 2))}</pre>
-        ${evidence}
-        <div class="row">
-          <button data-approve="1">Approve</button>
-          <button class="ghost" data-approve="0">Reject</button>
-          <input placeholder="reason (optional)" style="max-width:18rem">
-          <span class="err"></span>
-        </div>
-      </div>`;
-    }).join("");
-
-    document.querySelectorAll(".appr").forEach(card => {
-      card.querySelectorAll("button[data-approve]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = card.dataset.id;
-          const approve = btn.dataset.approve === "1";
-          const reason = card.querySelector("input").value;
-          card.querySelectorAll("button").forEach(b => b.disabled = true);
-          try {
-            const r = await api("/control/approvals/" + id, {
-              method: "POST", body: JSON.stringify({ approve, reason }),
-            });
-            await approvals(); await jobs();
-            if (r.resumed_job) open_(r.resumed_job);
-          } catch (e) {
-            card.querySelector(".err").textContent = e.message;
-            card.querySelectorAll("button").forEach(b => b.disabled = false);
-          }
-        };
-      });
-    });
-  } catch (e) { /* transient; the next tick retries */ }
-}
-
-async function health() {
-  try {
-    const h = await api("/control/health");
-    $("health").textContent = h.healthy ? "healthy" : "degraded";
-    $("health").className = "pill " + (h.healthy ? "completed" : "failed");
-    $("stats").innerHTML = [
-      ["Memory", `${h.memory_used_mb}/${h.memory_total_mb} MB`],
-      ["Load", h.load_1min], ["Disk", h.disk_used_percent + "%"],
-      ["Processes", h.process_count], ["Browsers", h.browser_count],
-      ["Running jobs", (h.active_jobs || []).length],
-      ["API", h.api_healthy ? "ok" : "down"],
-      ["Site host", h.site_host_status || "—"],
-    ].map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("");
-  } catch (e) { $("health").textContent = "unknown"; }
-}
-
-function start() {
-  jobs(); health(); detail(); approvals();
-  if (timer) clearInterval(timer);
-  // Polled rather than streamed: a dropped connection must never be able to
-  // stall the view, and this control plane's network is demonstrably unreliable.
-  timer = setInterval(() => { jobs(); health(); detail(); approvals(); }, 4000);
-}
-
-api("/auth/me").then(u => {
-  $("me").textContent = u.username + " (" + u.scopes.join(", ") + ")";
-  show(true); start();
-}).catch(() => show(false));
+api("/auth/me").then(user => {
+  $("me").textContent = user.username || "signed in";
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  readHash();
+  render();
+}).catch(showLogin);
 </script>
 </body>
 </html>
