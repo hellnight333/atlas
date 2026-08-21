@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ..auth import Scope, User, requires
-from ..outreach import consistency, demos, offer, scoring
+from ..outreach import consistency, demos, opportunity, offer, scoring
 
 #: Where `capture_evidence.py` writes screenshots. Served through this API
 #: rather than by the web server: the console's CSP is `img-src 'self'`, and
@@ -230,6 +230,58 @@ def _demo_view(folded: dict) -> dict:
     }
 
 
+#: Job states, §45. "Done" is not one of them — a build is READY only once its
+#: QA has run, and READY is the only state outreach may reference.
+JOB_STATES = ("DRAFT", "QUEUED", "RUNNING", "QA", "READY", "FAILED", "CANCELLED")
+
+#: What an operator can ask to have built. Checking a box requests nothing; a
+#: build starts on an explicit action and never as a side effect of ticking.
+#:
+#: Derived, not typed out. The first version was a hand-written list beside the
+#: opportunity vocabulary, and the two disagreed immediately: the interface sent
+#: an opportunity's name — "Proof system" — while this list held a different
+#: label, so six of eight buildable opportunities came back "unknown product".
+#: Two lists keyed on the same thing always drift; this one cannot.
+NATIVE = ("Android app", "iOS app", "PWA / mobile web app")
+PRODUCTS = tuple(sorted(opportunity.PRODUCTS | set(NATIVE)))
+
+MEDIA_PERMISSION = ("none", "use_originals", "edit_enhance", "generate_matching")
+
+
+def _digital(findings: list[dict], *, category: str, website: str) -> list[dict]:
+    """The products this business is missing, ranked, each citing its evidence.
+
+    Deliberately separate from the audit findings above it. A finding is "your
+    phone is not a link"; this is "you have thirty-two event pages nobody can
+    find". Only CONFIRMED_ABSENT features are passed in — an unverified feature
+    is a gap in our checking, and pitching against it would be pitching against
+    our own blind spot.
+    """
+    absent = frozenset(f["feature"] for f in findings if f["state"] == "CONFIRMED_ABSENT")
+    present = frozenset(f["feature"] for f in findings if f["state"] == "CONFIRMED_PRESENT")
+    host = re.sub(r"^https?://(www\.)?", "", website).split("/")[0]
+    return [
+        {"key": o.key, "name": o.name, "product": o.product, "family": o.family,
+         "priority": o.priority, "confidence": o.confidence, "evidence": list(o.evidence),
+         "why": o.why, "builds": o.builds, "user": o.user, "interaction": o.interaction,
+         "value": o.value, "demo": o.demo or ""}
+        for o in opportunity.for_host(host, category=category,
+                                      absent=absent, present=present)
+    ]
+
+
+class MediaPermission(BaseModel):
+    permission: str
+    source: str = ""     #: WhatsApp / Email / Call / Other — where they said it
+    note: str = ""
+
+
+class BuildRequest(BaseModel):
+    product: str
+    brief: str = ""
+    opportunity: str = ""   #: the opportunity key this build answers
+
+
 def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
     router = APIRouter(prefix="/control/sales", tags=["sales"])
 
@@ -290,9 +342,30 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         timeline: list[dict] = []
         sent: list[dict] = []
         replies: list[dict] = []
+        media: dict = {"permission": "none", "source": "", "at": "", "note": ""}
+        builds: dict[str, dict] = {}
 
         for factory, kind, at, detail in events:
-            if kind == "website_audited":
+            if kind == "media_permission_recorded":
+                # Latest wins: permission is a current fact, and a customer who
+                # revokes must not be overridden by the earlier grant. The
+                # timeline keeps the history.
+                media = {"permission": detail.get("permission", "none"),
+                         "source": detail.get("source", ""),
+                         "note": detail.get("note", ""),
+                         "at": at.isoformat() if at else ""}
+            elif kind == "product_build_requested":
+                builds[detail["job_id"]] = {
+                    "job_id": detail["job_id"], "product": detail["product"],
+                    "state": "QUEUED", "brief": detail.get("brief", ""),
+                    "created": at.isoformat() if at else "", "started": "", "finished": "",
+                    "output": "", "error": "", "screenshots": 0, "qa": "",
+                    "requested_by": detail.get("actor", "")}
+            elif kind == "product_build_progressed":
+                job = builds.get(detail.get("job_id"))
+                if job:
+                    job.update({k: v for k, v in detail.items() if k in job and k != "job_id"})
+            elif kind == "website_audited":
                 audit, audits, audited_at = detail, audits + 1, at
             elif kind == "claims_verified":
                 # Merged, never replaced: a later run only re-tests what is
@@ -355,6 +428,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             "audited_at": audited_at, "verified_at": verified_at,
             "demo": demo, "chosen": chosen, "shots": shots, "shots_at": shots_at,
             "drafts": drafts, "messages": messages, "sent": sent, "replies": replies,
+            "media": media, "builds": builds,
             "timeline": timeline, "fresh_hours": fresh_hours,
             "stale": fresh_hours is None or fresh_hours > STALE_AFTER_HOURS,
         }
@@ -782,6 +856,12 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                       "mobile": {"captured": False, "reason": "not captured"}},
                 "screenshots_at": folded["shots_at"].isoformat() if folded["shots_at"] else "",
                 "demo": _demo_view(folded),
+                "digital_opportunities": _digital(
+                    findings, category=folded["category"], website=business["website"]),
+                "media": {**folded["media"], "options": list(MEDIA_PERMISSION)},
+                "builds": {"jobs": sorted(folded["builds"].values(),
+                                          key=lambda j: j["created"], reverse=True),
+                           "products": list(PRODUCTS), "states": list(JOB_STATES)},
                 "outreach": {
                     "channel": contact["channel"], "why": contact["why"],
                     "contactability": contact, "drafts": drafts,
@@ -858,6 +938,67 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                                          "objection": record.objection},
         ))
         return {"recorded": True}
+
+    @router.post("/prospects/{business_id}/media-permission")
+    def record_media_permission(business_id: str, record: MediaPermission,
+                                user: User = Depends(requires(Scope.READ))) -> dict:
+        """A human ticks what the customer actually said, when they said it.
+
+        Deliberately one field and one click. An operator reading "yes, use our
+        photos" in a WhatsApp thread should be able to record it without
+        leaving the conversation, and a permission that is slow to record is a
+        permission that gets assumed instead.
+        """
+        from ..opportunity.models import BusinessEvent
+        from ..opportunity.repository import OpportunityRepository
+
+        if record.permission not in MEDIA_PERMISSION:
+            raise HTTPException(status_code=400, detail=f"permission must be one of "
+                                                        f"{MEDIA_PERMISSION}")
+        OpportunityRepository().record_event(BusinessEvent(
+            business_id=business_id, factory="media", kind="media_permission_recorded",
+            actor=user.username, detail={"permission": record.permission,
+                                         "source": record.source, "note": record.note},
+        ))
+        return {"recorded": True, "permission": record.permission}
+
+    @router.post("/prospects/{business_id}/build")
+    def request_build(business_id: str, record: BuildRequest,
+                      user: User = Depends(requires(Scope.READ))) -> dict:
+        """Queue a product build. Queues it — nothing is generated here.
+
+        A queued job is not a thing that exists, so it may not appear in a
+        message. Outreach reads READY and nothing else.
+        """
+        from ..opportunity.models import BusinessEvent
+        from ..opportunity.repository import OpportunityRepository
+
+        if record.product not in PRODUCTS:
+            raise HTTPException(status_code=400, detail="unknown product")
+        everything = {f["business"]["id"]: f for f in _all()}
+        folded = everything.get(business_id)
+        if folded is None:
+            raise HTTPException(status_code=404, detail="no such prospect")
+        # §49: a build must not guess. Without research there is nothing for the
+        # brief to be derived from, and a generic product is worse than none.
+        if not _digital(_findings(folded), category=folded["category"],
+                        website=folded["business"]["website"]):
+            raise HTTPException(status_code=409,
+                                detail="REQUIRES BRIEF — no evidenced opportunity for this "
+                                       "business yet; audit it first")
+        if (record.product in ("Android app", "iOS app")
+                and folded["media"]["permission"] == "none"):
+            # Not a blocker, a label: an app concept without media rights is a
+            # concept, and it must not be described as anything else.
+            pass
+        job_id = f"{business_id[:8]}-{len(folded['builds']) + 1:03d}"
+        OpportunityRepository().record_event(BusinessEvent(
+            business_id=business_id, factory="product_build",
+            kind="product_build_requested", actor=user.username,
+            detail={"job_id": job_id, "product": record.product, "brief": record.brief,
+                    "opportunity": record.opportunity, "actor": user.username},
+        ))
+        return {"queued": True, "job_id": job_id, "state": "QUEUED"}
 
     return router
 

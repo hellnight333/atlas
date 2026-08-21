@@ -280,10 +280,27 @@ def test_the_dashboard_keeps_no_demo_map_of_its_own() -> None:
 # -------------------------------------------- nothing here can ever send
 
 def test_the_sales_module_imports_no_outbound_client() -> None:
+    """Nothing here can send. Checked against the imports, not the prose.
+
+    A bare substring search over the whole file matched the word "requests"
+    inside a comment — "ticking a box requests nothing" — and failed a module
+    that imports no HTTP client at all. A guard that fires on English is a guard
+    that gets deleted, so this reads the import statements.
+    """
+    import ast
+
     source = Path(sales.__file__).read_text(encoding="utf-8")
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
     for forbidden in ("smtplib", "twilio", "sendgrid", "mailgun", "requests",
-                      "graph.facebook.com", "api.whatsapp.com/send"):
-        assert forbidden not in source, f"{forbidden} reached the sales module"
+                      "httpx", "urllib", "aiohttp"):
+        assert forbidden not in imported, f"{forbidden} reached the sales module"
+    for endpoint in ("graph.facebook.com", "api.whatsapp.com/send", "api.twilio.com"):
+        assert endpoint not in source, f"{endpoint} reached the sales module"
 
 
 def test_no_outbound_client_exists_anywhere_in_the_kernel() -> None:
@@ -319,14 +336,26 @@ def test_the_console_only_ever_links_whatsapp_it_was_given() -> None:
     assert not re.search(r"wa\.me/\$\{", html), "the console assembles its own WhatsApp link"
 
 
-def test_only_two_writes_exist_and_both_record_a_human_action(api) -> None:
-    writes = [path for path, fn in api.items()
-              if any(r.path == path and "POST" in r.methods
-                     for r in sales.build_router().routes)]
-    assert sorted(writes) == [
+def test_every_write_records_a_human_action_and_none_of_them_send(api) -> None:
+    """Four writes now, and the invariant is unchanged: each one records
+    something a person did — they sent a message, a customer replied, a customer
+    granted media permission, an operator asked for a build. None of them
+    contacts anybody, and none of them generates anything."""
+    writes = sorted(path for path in api
+                    if any(r.path == path and "POST" in r.methods
+                           for r in sales.build_router().routes))
+    assert writes == [
+        "/control/sales/prospects/{business_id}/build",
+        "/control/sales/prospects/{business_id}/media-permission",
         "/control/sales/prospects/{business_id}/reply",
         "/control/sales/prospects/{business_id}/sent",
     ]
+    source = Path(sales.__file__).read_text(encoding="utf-8")
+    # Every write goes through the one append-only timeline, so "state" is
+    # always folded from events and a second customer entity cannot appear.
+    assert source.count("BusinessEvent(") == len(writes)
+    for verb in ("def send", "def dispatch", "def publish_message"):
+        assert verb not in source, verb
 
 
 def test_recording_a_send_demands_a_real_timestamp(api) -> None:

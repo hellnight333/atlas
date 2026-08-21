@@ -254,6 +254,21 @@ table.compact tr:last-child td{border-bottom:0}
     z-index:19;background:var(--card);border-top:1px solid var(--rule);padding:.5rem .7rem;gap:.45rem}
   .mobar .btn{flex:1 1 0;justify-content:center;padding:.6rem .3rem;font-size:.78rem}
 }
+
+    .opps{display:grid;gap:1rem}
+    .opp{display:grid;grid-template-columns:2.2rem 1fr;gap:.7rem;padding-bottom:1rem;
+      border-bottom:1px solid var(--rule)}
+    .opp:last-child{border-bottom:0;padding-bottom:0}
+    .opp-n{color:var(--accent);font-size:.85rem;padding-top:.15rem}
+    .opp-head{display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap}
+    .perms{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.4rem}
+    .perm{display:flex;gap:.5rem;align-items:center;border:1px solid var(--rule);
+      padding:.55rem .7rem;border-radius:6px;cursor:pointer;font-size:.9rem}
+    .perm.on{border-color:var(--accent)}
+    .perm input{accent-color:var(--accent)}
+    .job{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;padding:.5rem 0;
+      border-bottom:1px solid var(--rule)}
+    .job:last-child{border-bottom:0}
 </style>
 </head>
 <body>
@@ -642,6 +657,94 @@ async function drawProspect(id) {
         demonstrate it: ${esc(d.strongest.deferred.join(", "))}.</p>` : ""}
     </div>` : ""}
 
+    ${d.digital_opportunities && d.digital_opportunities.length ? `
+    <section class="card" style="margin-bottom:1rem">
+      <div class="pad" style="border-bottom:1px solid var(--rule)">
+        <p class="eyebrow">Digital opportunities</p>
+        <p class="small muted" style="margin-top:.25rem">What could be <b>built</b> for this
+        business, ranked. Not what is wrong with the site — every line below cites what it was
+        derived from, and nothing unverified appears here.</p>
+      </div>
+      <div class="pad opps">
+        ${d.digital_opportunities.map((o, i) => `
+          <div class="opp">
+            <div class="opp-n mono">${String(i + 1).padStart(2, "0")}</div>
+            <div>
+              <div class="opp-head">
+                <b>${esc(o.name)}</b>
+                <span class="tag ${o.priority === "HIGH" ? "accent" : "flat"}">${esc(o.priority)}</span>
+                <span class="small muted">${esc(o.product)} · confidence ${esc(o.confidence)}</span>
+              </div>
+              <p class="small" style="margin:.35rem 0 .5rem">${esc(o.why)}</p>
+              <p class="small"><b>Qevik would build:</b> ${esc(o.builds)}</p>
+              <p class="small muted">${esc(o.user)} — ${esc(o.interaction)}</p>
+              <details style="margin-top:.45rem">
+                <summary class="small">Evidence (${o.evidence.length})</summary>
+                <ul class="small muted" style="margin:.4rem 0 0 1rem">
+                  ${o.evidence.map(e => `<li>${esc(e)}</li>`).join("")}
+                </ul>
+              </details>
+              <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap">
+                ${o.demo ? `<a class="btn ghost sm" target="_blank" rel="noopener"
+                   href="https://sites.qevik.ai/${esc(o.demo)}/">Open the demo</a>` : ""}
+                <button class="btn sm" data-build="${esc(o.product)}"
+                  data-opp="${esc(o.key)}">Request build</button>
+              </div>
+            </div>
+          </div>`).join("")}
+      </div>
+    </section>` : ""}
+
+    ${d.media ? `
+    <section class="card" style="margin-bottom:1rem">
+      <div class="pad">
+        <p class="eyebrow">Customer media</p>
+        <p class="small muted" style="margin:.25rem 0 .6rem">Tick what they actually said, the
+        moment they say it. Nothing uses their photographs until this is above
+        <span class="mono">none</span>.</p>
+        <div class="perms">
+          ${d.media.options.map(o => `
+            <label class="perm ${d.media.permission === o ? "on" : ""}">
+              <input type="radio" name="mediaperm" value="${esc(o)}"
+                ${d.media.permission === o ? "checked" : ""}>
+              <span>${esc({none: "No permission",
+                           use_originals: "Use original images",
+                           edit_enhance: "Edit / enhance images",
+                           generate_matching: "Generate matching visuals"}[o] || o)}</span>
+            </label>`).join("")}
+        </div>
+        <div style="margin-top:.6rem;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+          <select id="permsrc" class="btn ghost sm">
+            <option value="">Heard via…</option>
+            <option>WhatsApp</option><option>Email</option><option>Call</option>
+            <option>Other</option>
+          </select>
+          <button class="btn sm" id="permsave">Record permission</button>
+          ${d.media.at ? `<span class="small muted">recorded ${esc(d.media.at.slice(0, 16).replace("T", " "))}</span>` : ""}
+        </div>
+      </div>
+    </section>` : ""}
+
+    ${d.builds && d.builds.jobs.length ? `
+    <section class="card" style="margin-bottom:1rem">
+      <div class="pad" style="border-bottom:1px solid var(--rule)">
+        <p class="eyebrow">Build queue</p>
+        <p class="small muted" style="margin-top:.25rem">A queued job is not a product. Only
+        <span class="mono">READY</span> may be shown to a customer or named in a message.</p>
+      </div>
+      <div class="pad">
+        ${d.builds.jobs.map(j => `
+          <div class="job">
+            <span class="mono small">${esc(j.job_id)}</span>
+            <b class="small">${esc(j.product)}</b>
+            <span class="tag ${j.state === "READY" ? "accent" : j.state === "FAILED" ? "bad" : "flat"}">${esc(j.state)}</span>
+            <span class="small muted">${esc((j.created || "").slice(0, 16).replace("T", " "))}</span>
+            ${j.output ? `<a class="btn ghost sm" href="${esc(j.output)}" target="_blank" rel="noopener">Open</a>` : ""}
+            ${j.error ? `<span class="small" style="color:var(--absent)">${esc(j.error)}</span>` : ""}
+          </div>`).join("")}
+      </div>
+    </section>` : ""}
+
     <div class="cols">
       <div class="stack">
         <section class="card">
@@ -850,6 +953,59 @@ async function drawProspect(id) {
       ${d.demo.url ? `<a class="btn ghost" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Demo</a>` : ""}
       ${wa ? copyBtn(wa.body, "Message") : ""}
     </div>`;
+
+  wireProspectActions(id);
+}
+
+/* Two writes, both recording something a human did. Neither generates anything:
+   ticking a permission records what a customer said, and requesting a build
+   queues a job. A queued job is not a product and never reaches a message. */
+function wireProspectActions(id) {
+  const save = document.getElementById("permsave");
+  if (save) save.addEventListener("click", async () => {
+    const picked = document.querySelector('input[name="mediaperm"]:checked');
+    if (!picked) return;
+    const was = save.textContent;
+    save.disabled = true; save.textContent = "Recording…";   // before the await
+    try {
+      await api(`/control/sales/prospects/${id}/media-permission`, {
+        method: "POST",
+        body: JSON.stringify({ permission: picked.value,
+                               source: document.getElementById("permsrc").value }),
+      });
+      save.textContent = "Recorded";
+      setTimeout(() => drawProspect(id), 600);
+    } catch (err) {
+      save.disabled = false; save.textContent = was;
+      alert("Not recorded: " + err.message);
+    }
+  });
+
+  document.querySelectorAll("[data-build]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const product = btn.dataset.build, was = btn.textContent;
+      btn.disabled = true; btn.textContent = "Queueing…";
+      try {
+        const r = await api(`/control/sales/prospects/${id}/build`, {
+          method: "POST",
+          body: JSON.stringify({ product, opportunity: btn.dataset.opp }),
+        });
+        btn.textContent = `Queued ${r.job_id}`;
+        setTimeout(() => drawProspect(id), 800);
+      } catch (err) {
+        btn.disabled = false; btn.textContent = was;
+        alert(err.message.includes("REQUIRES BRIEF")
+          ? "Requires a brief — this business has no evidenced opportunity yet. Audit it first."
+          : "Not queued: " + err.message);
+      }
+    });
+  });
+
+  document.querySelectorAll('input[name="mediaperm"]').forEach(r =>
+    r.addEventListener("change", () => {
+      document.querySelectorAll(".perm").forEach(l =>
+        l.classList.toggle("on", l.contains(document.querySelector('input[name="mediaperm"]:checked'))));
+    }));
 }
 
 const KIND = {

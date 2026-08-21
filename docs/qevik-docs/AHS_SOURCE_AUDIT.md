@@ -1,160 +1,176 @@
 # AHS Catering & Events — source audit
 
-Read from `https://ahscatering.com/` on 2026-08-21, across all twelve public
-pages, the header, the footer and the contact form. **Everything below was
-observed on their site.** Nothing here is inferred, and where something could
-not be established it says so.
+Read from `https://ahscatering.com/` on 2026-08-21: the twelve pages linked from
+their navigation, plus their WordPress REST API, which exposes **sixty pages and
+four posts** — most of which the navigation does not reach.
 
-This exists so the concept at `sites.qevik.ai/sample-ahs/` can be checked line
-by line against the source rather than against taste.
+**Everything below was observed on their site.** Where something could not be
+established it says so. The machine-readable form is
+[`apps/samples/ahs/source.py`](../../apps/samples/ahs/source.py); the concept
+generator and the tests both read from it, so the site and this document cannot
+drift apart.
 
 ---
 
-## 1. Confirmed business facts
+## 1. What they actually are
 
 | Fact | Where |
 |---|---|
 | Trading name **AHS**, tagline **Beyond Catering** | Logo, every page |
-| Dubai-based event catering | Homepage copy |
-| "Backed by 20+ years of culinary mastery, halal-certified kitchens and a planning team that perfects every detail of your celebration." | Homepage hero, verbatim |
-| **"Your Dream Event, Our Signature Cuisine"** | Homepage H2, verbatim |
-| Two arms: **Corporate Events** and **Private Events** | Two homepage H2s |
-| **EATLUX** — their own concept/sub-brand | Top-level nav, dedicated page |
-| Founder is **Managing Partner and Founder of EATLUX** | Homepage H2 |
-| Named consultant **Kristina** | Contact form: "complimentary consultation … with Kristina" |
-| Capability strip: **Capacity · HACCP Certified · Sustainability · Local Products · Special Dietary Needs** | Homepage H3s |
-| **No prices published anywhere.** They ask "Catering budget per person" as an input | All pages / contact form |
+| "more than 20 years of excellence in luxury weddings, corporate functions, and private celebrations" | About, verbatim |
+| Founder **Ali Darwish** — started at 16 polishing cutlery, learned front-of-house, then the kitchen | About |
+| "You can't lead excellence if you don't understand the details." | About, verbatim |
+| **EATLUX** — "the UAE's first-ever Show Belt Dining Experience" | EATLUX page, blog |
+| EATLUX was created by **Kristina** (from wedding planning) with **Ali** | EATLUX page |
+| Halal-certified kitchens · HACCP · sustainability · local sourcing · dietary needs | Homepage |
+| **No prices published anywhere**; the form asks "catering budget per person" | All pages |
 
-**Testimonials exist and are attributed** — two named individuals with roles on
-the homepage. Not reproduced in the concept; see §9.
+This resolves the two questions the previous audit left open: the founder is
+named, and Kristina is his EATLUX co-founder rather than the same person.
 
-## 2. Navigation and services
+## 2. Their client list — theirs, published, not ours
 
-Eleven top-level items, wrapping onto three lines at 1280:
+From the About page, verbatim: **MBC Group, Michelin, Dubai Mall, Gucci,
+Booking.com, Validus, Hyundai, Red Bull, Nestlé, Messara Living, the Romanian
+Consulate, Sephora** — "and many more".
 
-`About Us · EATLUX · Private Catering · Corporate Catering · Live Station
-Catering · Canapé & Dessert Catering · Wedding Catering · Gala Catering ·
-Ramadan 2026 · Blog · Contact`
+From their Formula 1 post: **Amazon, Bybit, DHL, Dubai Police, DEWA**, and
+serving at the **Formula 1 Abu Dhabi Grand Prix 2025**.
 
-Footer repeats all eleven as "Quick Links", plus **Privacy Policy**.
+Seventeen named brands, in two paragraphs, on two pages, linked from neither the
+homepage nor the work.
 
-Photograph counts per service page — this is where their real assets are, and
-the homepage surfaces almost none of them:
+## 3. The finding that changes the pitch
 
-| Page | Photographs |
-|---|---|
-| Corporate catering | 19 |
-| Live station catering | 18 |
-| Canapé & dessert | 17 |
-| Private catering | 16 |
-| Gala catering | 9 |
-| Blog | 7 |
-| About us | 6 |
-| **Homepage** | **10** (several the same logo SVG repeated) |
+Their REST API returns **32 event pages carrying 170 photographs**, against a
+**501-item media library**:
 
-## 3. Contact methods
+| Sample | Photographs | Words of text |
+|---|---|---|
+| Winter wonderland | 7 | 2 |
+| Nestle | 6 | 1 |
+| Roger Vivier Dubai Mall | 6 | 4 |
+| Geidea board meeting | 6 | 3 |
+| Breakfast catering for Pepsi in DIP | 5 | 6 |
+| Porsche | 3 | 1 |
+
+Every one is a title and photographs. **No date, no guest count, no service
+style, no menu, no story on any of them.** The homepage links to none of the 32.
+
+So a corporate buyer cannot answer the only question that matters — *have they
+done my kind of event* — about a company that has catered Formula 1, Nestlé,
+Porsche and Gucci. That is not a business that needs a redesign. It is a
+business with world-class proof and no proof system.
+
+## 4. Contact methods
 
 | Method | Value | Evidence |
 |---|---|---|
-| Phone | **+971 55 749 2608** | Footer "Contact number", plain text on all 12 pages |
-| Email | **Info@ahscatering.com** | Footer "Contact email", plain text on all 12 pages |
-| WhatsApp | **971557492608** | Click-to-Chat widget config: `class="ht_ctc_chat_data" data-settings="{"number":"971557492608","pre_filled":"Hello, I do have a question regarding your catering services. Sent from ahscatering.com"}"` |
-| Address | **Dubai Investment Park 2** | Footer "Address" |
-| Map | **none** | No map link and no iframe on any page, including Contact |
+| Phone | **+971 55 749 2608** | Footer, plain text on all 12 pages |
+| Email | **Info@ahscatering.com** | Footer, plain text on all 12 pages |
+| WhatsApp | **971557492608** | Click-to-Chat config: `class="ht_ctc_chat_data" data-settings="{"number":"971557492608",…}"` |
+| Address | **Dubai Investment Park 2** | Footer |
+| Map | **none** | No map link or iframe on any page |
 
-**Two conversion defects on their own site, both confirmed:**
+**There is not one `tel:` or `mailto:` link anywhere on the site.** On a phone
+the number cannot be tapped. This matches the `click_to_call` finding already on
+their timeline.
 
-- The phone number and email are **plain text on every page** — there is not a
-  single `tel:` or `mailto:` link anywhere on the site. On a phone the number
-  cannot be tapped.
-- No map or directions link exists, despite an address in the footer.
+## 5. Social accounts
 
-The first matches the `click_to_call` finding already recorded against this
-business in the audit timeline.
+Instagram `ahscatering` and LinkedIn `ahs-catering-and-events`, site-wide. **No
+Facebook, TikTok, YouTube or X is linked**, so none appears in the concept, and
+a test fails the build if one is added.
 
-## 4. Social accounts
+## 6. Arabic — confirmed absent
 
-Only two are linked, and both appear site-wide:
+`html lang="en-US"`. No `hreflang` alternates, no language switcher, no WPML or
+TranslatePress, no `/ar/` route. The site is English only — while they sell
+Ramadan iftars, an Arabic-theme dinner, and MBC Group's iftar.
 
-- Instagram — `https://www.instagram.com/ahscatering`
-- LinkedIn — `https://www.linkedin.com/company/ahs-catering-and-events`
+## 7. Their blog
 
-The footer labels the LinkedIn link "Linkedin". **No Facebook, TikTok, YouTube
-or X account is linked from the site**, so none is shown in the concept.
+Four posts, **all published 2025-11-11**, all filed *Uncategorized*, **103–331
+words**, and **not one of them carries an image** — beside a 501-item media
+library. Their largest achievement, Formula 1 Abu Dhabi 2025, is the 103-word
+one.
 
-## 5. Existing CTAs, in their own words
+The subjects are good and they are theirs: Formula 1 · EATLUX show-belt dining ·
+behind the scenes · sustainability and luxury. The concept keeps all four
+subjects and presents them as a reader would want them.
 
-`PLAN YOUR EVENT` · `Get Quote` (desktop hero) · `Get Custom Offer` (mobile
-hero) · `CALL US` · `CONTACT` · `LET'S HANDLE YOUR EVENT` (contact page) ·
-"Tell Us About Your Event. We'll Handle The Rest"
+## 8. Other defects, all confirmed
 
-Note their own inconsistency: the same hero button is "Get Quote" on desktop and
-"Get Custom Offer" on mobile.
+- **Testimonials name a different brand.** `/reviews/` is not in the navigation,
+  and two of its three testimonials thank *"Al Hamra Street"* rather than AHS.
+- **The privacy policy is the unedited WordPress sample.** "Who we are — Our
+  website address is…", then sections on blog comments, Gravatar and embedded
+  content. Nothing about catering, events or guest data.
+- **Duplicate and stale routes**: `/home-old-old/`, `/homeold/`,
+  `/sample-page-2-2/` titled "New Home", `/privet/`, `/corporate-events-2/`
+  titled "PRIVATE EVENTS", three Ramadan pages, and two competing
+  corporate-catering URLs.
+- **Their CMS clones pages without renaming them**: `/nas-daily-x-solana-16-2/`
+  is titled "Birthday" and `/nas-daily-x-solana-2-3-4/` is titled "Staff party
+  for real estate". The address and the page disagree.
+- **Every heading is duplicated in the DOM**, and the eleven-item navigation
+  appears three times per page — a theme rendering desktop and mobile copies.
 
-## 6. Their enquiry structure — verbatim
+## 9. Their services — substantial, and the source for the concept's pages
 
-This is the most valuable thing on their site and the concept's brief is built
-from it:
+| Page | Words | Photographs | Headings they publish |
+|---|---|---|---|
+| Wedding catering | 1045 | 9 | Seated & plated · Buffet & live stations |
+| Live station catering | 981 | 17 | BBQ · Seafood & oyster bar · Pasta & sliders |
+| Corporate catering | 878 | 19 | Tailored menus · Presentation · On-time service |
+| Canapé & dessert | 805 | 16 | European · Arabic delight · Asian & international |
+| Private catering | 795 | 15 | Housewarming · Birthday · Gatherings · Seated dinners |
+| Gala catering | 787 | 7 | Black-tie award nights · Executive dinners |
+| Ramadan 2026 | 554 | 17 | Grilled & carving stations · Signature dessert |
+| EATLUX | 756 | 1 | Show belt dining |
 
-Name · Phone number · Email · Event date · Event timings · Event location ·
-Number of guests
+## 10. Their enquiry structure — verbatim
 
-- **Occasion type** — Birthday, Engagement, Wedding, Private party,
-  Housewarming, Graduation, Breakfast, Brunch, Corporate lunch,
-  Opening ceremonies, Product launch
-- **Event site** — Indoor, Outdoor
-- **Services needed** — Catering, Mocktail station, Furniture, Decoration,
-  Table setup, Flower centerpieces, Balloons, Dessert setup, Beach setup,
-  Specialty cake, Event planning and management, Entertainment
-- **Serving staff** — Waiters, Bartenders, Hostesses, Mixologists
-- **Food allergy** — No / Yes, then "Please indicate type of allergy"
-- **Type of service** — Buffet, Canapes, Pass around, Seated dinner,
-  Live cooking (bbq), Private chef
-- **Type of cuisine**
-- **Catering budget per person**
-- **Complimentary consultation with Kristina** — Yes / No
+Name · Phone · Email · Event date · Timings · Location · Number of guests, then:
+**Occasion type** (11 options) · **Event site** · **Services needed** (12) ·
+**Serving staff** (4) · **Food allergy** · **Type of service** (6) ·
+**Type of cuisine** · **Catering budget per person** · **Complimentary
+consultation with Kristina**.
 
-## 7. Brand elements to preserve
+They already know exactly what they need in order to quote. It is asked as one
+long form at the end rather than collected while the visitor reads.
 
-Gold `#E1C25F` on near-black; cloche/dome logo mark; "Beyond Catering"; the
-uppercase headline voice; full-bleed dark food photography in the hero. Their
-type is Roboto and Poppins — generic WordPress theme faces, deliberately not
-carried over.
-
-## 8. Content that must survive a redesign
-
-Two arms · seven event types · EATLUX · live stations · the five capability
-statements · founder positioning · bespoke quoting with no prices · phone ·
-email · WhatsApp · address · both social accounts · Ramadan seasonal offering ·
-blog.
-
-## 9. Deliberately not included, and why
+## 11. Deliberately not included, and why
 
 | Omitted | Why |
 |---|---|
-| **Their photographs** | Rights uncertain, no permission. Not re-hosted on a public Qevik directory. Every image region is a labelled composed treatment cut to the real crop, so their pictures drop in later. |
-| **Their two named testimonials** | They are on the source site and attributed, so reproducing them is permitted by the brief — but putting named individuals' words on an unsolicited third-party page implies we verified them. Same stance as the photography. Available on request. |
-| **The 11-item navigation** | Deliberate UX change. Every destination stays reachable; the visitor is no longer asked to classify themselves before seeing anything. |
-| **Their "Sent from ahscatering.com" WhatsApp pre-fill** | It would be false coming from a Qevik page. |
-| **A map link** | They publish an address but no map. Inventing a pin would be inventing a location. |
-| **Blog** | Content-dependent; nothing to show without reproducing their posts. |
-| **"Catering budget per person"** | Present in their form, left out of the concept's brief so nothing on the page can read as a price. |
+| **Their photographs** | Rights uncertain, no permission sought or given. Not re-hosted. Every image region is a composed CSS treatment and says so. |
+| **Their testimonials** | Attributed on their site, so reproducible — but putting named individuals' words on an unsolicited page implies we verified them. Also two of three name a different brand. |
+| **Client logos** | Their client *names* are their own published claim and appear as text. Logos are trademarks and are not reproduced. |
+| **Their WhatsApp pre-fill** | "Sent from ahscatering.com" would be false from a Qevik page. |
+| **A map link** | They publish an address and no map. A pin would be a location we chose. |
+| **"Budget per person"** | Left out of the brief so nothing on the page can read as a price. |
+| **The 11-item navigation** | Deliberate change to six. Every destination stays reachable. |
 
-## 10. One deployment note
+## 12. Two deployment notes
 
-Cloudflare's **Email Address Obfuscation** rewrites the `mailto:` in the served
-HTML to `/cdn-cgi/l/email-protection#…` with the address replaced by
-`[email protected]`. Its decoder restores both the href and the visible text on
-load, so a real visitor sees `Info@ahscatering.com` and a working `mailto:` —
-verified in a browser against the live URL.
+**Cloudflare Email Obfuscation** rewrites `mailto:` in the served HTML to
+`/cdn-cgi/l/email-protection#…`. Its decoder restores the href and the visible
+text, so a real visitor sees the address — verified in a browser. A
+source-fidelity check run against the raw response reports the email missing;
+check the rendered page.
 
-Worth knowing because a source-fidelity check run against **raw HTML** reports
-the email as missing. Check the rendered page, not the response body.
+**The edge caches the stylesheet for four hours.** A correct CSS fix shipped and
+was invisible because `styles.css` was served from cache over new HTML. The
+stylesheet is now content-addressed (`styles-<hash>.css`), so a changed
+stylesheet is a different URL and cannot go stale.
 
-## 11. Uncertainty
+## 13. Remaining uncertainty
 
-- Whether the founder named on the contact form is the same person as the
-  "Managing Partner and Founder of EATLUX" on the homepage. The concept uses
-  the **role**, never a name.
 - Whether "Dubai Investment Park 2" is a visitable address or a kitchen. Shown
   as published, with no map and no claim either way.
+- Whether "Al Hamra Street" in their testimonials is a former trading name (AHS
+  is a plausible acronym for it) or copy taken from elsewhere. **Not asserted in
+  the concept either way** — the testimonials are simply not reproduced.
+- Guest counts, dates and service styles for all 32 events. They publish none,
+  and the concept marks every one of them *not published* rather than guessing.
