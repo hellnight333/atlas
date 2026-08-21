@@ -12,13 +12,15 @@ The allow-list is short on purpose and every entry has a reason.
 
 from __future__ import annotations
 
+import logging
+
 import time
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from .models import NotAuthenticated, NotAuthorised, Scope, User
+from .models import AuthError, NotAuthenticated, NotAuthorised, Scope, User
 from .store import AuthStore
 
 #: Reachable without a session. Nothing here changes state or reveals anything
@@ -43,6 +45,9 @@ LOGIN_ATTEMPTS = 10
 LOGIN_WINDOW_SECONDS = 300.0
 
 _attempts: dict[str, list[float]] = defaultdict(list)
+
+
+log = logging.getLogger(__name__)
 
 
 def _rate_limited(key: str) -> bool:
@@ -113,7 +118,7 @@ class LoginResponse(BaseModel):
     approval_required_for: list[str] = Field(default_factory=list)
 
 
-def build_router(store: AuthStore | None = None) -> APIRouter:
+def build_router(store: AuthStore | None = None, audit=None) -> APIRouter:
     store = store or AuthStore()
     router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -186,6 +191,31 @@ def build_router(store: AuthStore | None = None) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"unknown scope: {error}") from error
         return store.set_scopes(body.username, scopes).redacted()
+
+    @router.delete("/users/{username}", dependencies=[Depends(requires(Scope.ADMIN))])
+    def delete_user(username: str, user: User = Depends(current_user)) -> dict:
+        """Remove an account. Administrator only, and it cannot be undone.
+
+        Named for exactly one thing. There is no bulk endpoint and no query
+        filter, because the safety of a destructive route comes from what it is
+        unable to express, not from how carefully it is called.
+
+        The removal is recorded before it is returned. An account disappearing
+        with no trace of who removed it, or of the scopes it held, is the part
+        that matters months later.
+        """
+        try:
+            removed = store.delete_user(username, requested_by=user.username)
+        except AuthError as error:
+            # "no such user" is a 404; a refusal to lock the system out is a 409.
+            missing = "no user" in str(error)
+            raise HTTPException(status_code=404 if missing else 409,
+                                detail=str(error)) from error
+        # The store already records the removal; this adds who asked for it.
+        log.info("auth: deletion of %s requested by %s", removed["username"], user.username)
+        if audit is not None:
+            audit(actor=user.username, removed=removed)
+        return {"deleted": True, **removed, "deleted_by": user.username}
 
     return router
 

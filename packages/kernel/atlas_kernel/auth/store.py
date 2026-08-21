@@ -13,6 +13,7 @@ in the same connection pool and the same database.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import text
@@ -28,6 +29,8 @@ from .models import (
     hash_token,
     new_token,
 )
+
+log = logging.getLogger(__name__)
 
 SCHEMA = (
     """
@@ -247,6 +250,66 @@ class AuthStore:
                 {"u": user_id},
             )
         return result.rowcount or 0
+
+    def delete_user(self, username: str, *, requested_by: str = "") -> dict:
+        """Remove a user and everything that authenticates them. Irreversible.
+
+        The only destructive operation in this module, and deliberately the
+        narrowest one that does the job: it takes a username, it removes that
+        row, and the sessions table drops its rows through the foreign key's
+        ON DELETE CASCADE. There is no bulk form and no filter argument,
+        because a delete that can take a predicate is a delete that eventually
+        takes the wrong one.
+
+        Two refusals, both about not locking anybody out of their own system:
+        the last account holding ADMIN cannot be removed, and neither can the
+        account making the request.
+
+        Returns what was removed, so the caller can record it. Raises AuthError
+        if there is no such user — deleting nothing must not look like success.
+        """
+        username = username.strip().lower()
+        user = self.get_user(username)
+        if user is None:
+            raise AuthError(f"no user {username!r}")
+        if requested_by and requested_by.strip().lower() == username:
+            raise AuthError("an account cannot delete itself")
+        if user.has(Scope.ADMIN):
+            remaining = [
+                other for other in self.list_users()
+                if other.id != user.id and other.has(Scope.ADMIN) and not other.disabled
+            ]
+            if not remaining:
+                raise AuthError("refusing to delete the last administrator")
+
+        with engine.begin() as conn:
+            sessions = conn.execute(
+                text("SELECT COUNT(*) FROM qevik_sessions WHERE user_id = :u"),
+                {"u": user.id},
+            ).scalar() or 0
+            deleted = conn.execute(
+                text("DELETE FROM qevik_users WHERE id = :i"), {"i": user.id}
+            ).rowcount or 0
+            left = conn.execute(
+                text("SELECT COUNT(*) FROM qevik_sessions WHERE user_id = :u"),
+                {"u": user.id},
+            ).scalar() or 0
+        if left:
+            raise AuthError(f"{left} session(s) survived the cascade for {username!r}")
+        # Recorded here rather than in the HTTP route, so the trail does not
+        # depend on which caller happened to perform the deletion. There is no
+        # audit table in this module and adding one to log a single event would
+        # be a worse trade than a structured line the host already retains.
+        log.warning(
+            "auth: account deleted — username=%s id=%s scopes=%s created=%s "
+            "sessions_removed=%s requested_by=%s",
+            user.username, user.id, ",".join(sorted(str(x) for x in user.scopes)) or "none",
+            user.created_at.isoformat(), sessions, requested_by or "unattributed",
+        )
+        return {"user_id": user.id, "username": user.username,
+                "scopes": sorted(str(scope) for scope in user.scopes),
+                "created_at": user.created_at.isoformat(),
+                "sessions_removed": sessions, "rows_removed": deleted}
 
     def active_sessions(self, user_id: str) -> int:
         with engine.connect() as conn:
