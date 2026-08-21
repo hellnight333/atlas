@@ -34,6 +34,7 @@ PORTFOLIO = {
     "wordrush": "sample-wordrush",
     "kilo": "sample-kilo",
     "hire360": "sample-hire360",
+    "ahs": "sample-ahs",
     "foundry": "sample-foundry",
     "atelier": "sample-atelier",
 }

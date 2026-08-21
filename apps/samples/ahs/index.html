@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AHS — Beyond Catering · a Qevik concept</title>
+<meta name="description" content="A concept site built by Qevik for AHS Catering &amp; Events, Dubai. Not a client website and not affiliated with AHS.">
+<meta name="theme-color" content="#0C0B09">
+<meta name="robots" content="noindex, nofollow">
+<style>
+/* AHS — Beyond Catering. A Qevik concept.
+ *
+ * Built from what AHS publishes about itself, not from a catering template.
+ * Three things about their business shaped the structure, and if you removed
+ * them the page would not work for anybody else:
+ *
+ *   - They are organised in two arms, corporate and private, stated as the two
+ *     H2s on their own homepage. The page splits there, early and hard.
+ *   - EATLUX is their sub-brand and gets its own chapter, not a service slot.
+ *   - Live stations is their differentiator — a dedicated page and eighteen
+ *     photographs on their site — so it is a full cinematic sequence here.
+ *
+ * The signature is the Event Brief: a persistent rail where a visitor sets
+ * occasion, guests, date and style, and the page answers — the gallery filters,
+ * the matching arm lights, the capability that matters surfaces. By the time
+ * they reach the enquiry it is already written, because they wrote it by
+ * looking around. It never produces a price, because AHS quotes bespoke and
+ * publishes no prices anywhere.
+ *
+ * That inverts their current site, where eleven top-level menu items make the
+ * visitor classify themselves before they see anything, and eighty-odd
+ * photographs sit behind those doors.
+ *
+ * PHOTOGRAPHY. Every image region here is a composed treatment, not a
+ * photograph, and each one says so. AHS's own photography is theirs; it is not
+ * re-hosted here and nothing is presented as one of their events. The regions
+ * are cut to real crops so their pictures drop straight in — see PLATES below.
+ */
+
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none !important}
+
+:root{
+  --night:#0C0B09; --night-2:#16130F; --night-3:#221D16;
+  --gold:#C9A227; --gold-lift:#EBD79A;
+  --linen:#EFE9DD; --linen-2:#E3DBCB;
+  --sage:#6E7A5E;
+  --on-night:#E8E0D2; --on-night-dim:#9A9080;
+  --on-linen:#1A1712; --on-linen-dim:#6B6252;
+  --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:"Avenir Next","Segoe UI Variable","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --rail:296px;
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--night);color:var(--on-night);font-family:var(--sans);
+  font-size:16px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+h1,h2,h3{margin:0;font-weight:400}
+p{margin:0}
+ul{list-style:none;margin:0;padding:0}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+
+/* ---------- the two voices ---------- */
+/* Engraved: small, wide-tracked, gold. Section anchors and event names. */
+.engraved{font-family:var(--display);font-size:.7rem;letter-spacing:.34em;text-transform:uppercase;
+  color:var(--gold);font-weight:400}
+.engraved.dim{color:var(--on-night-dim)}
+/* Deck: large, light, sentence case. The few real statements. */
+.deck{font-family:var(--display);font-weight:400;line-height:1.06;letter-spacing:-.018em}
+.docket{font-family:var(--mono);font-size:.74rem;letter-spacing:.04em}
+.rule{height:1px;background:var(--gold);opacity:.5;border:0;margin:0}
+
+/* ---------- composed plates (not photographs) ---------- */
+/* Layered warm gradients cut to real crops. Each carries a caption saying what
+ * it is, so nothing here can be mistaken for one of their events. Swapping in
+ * a photograph is one background-image declaration per variant. */
+.plate{position:relative;overflow:hidden;background:var(--night-2);
+  background-image:
+    radial-gradient(58% 46% at 26% 24%, rgba(255,214,120,.30), transparent 62%),
+    radial-gradient(70% 60% at 82% 86%, rgba(150,58,24,.34), transparent 64%),
+    radial-gradient(120% 100% at 50% 50%, transparent 42%, rgba(6,5,4,.72) 100%),
+    linear-gradient(168deg,#2A2115 0%,#120F0B 58%,#080706 100%)}
+.plate.b{background-image:
+    radial-gradient(52% 44% at 78% 20%, rgba(235,215,154,.26), transparent 60%),
+    radial-gradient(66% 58% at 14% 88%, rgba(110,122,94,.34), transparent 62%),
+    radial-gradient(120% 100% at 50% 50%, transparent 44%, rgba(6,5,4,.70) 100%),
+    linear-gradient(200deg,#1E2018 0%,#0F0F0C 68%,#080706 100%)}
+.plate.c{background-image:
+    radial-gradient(64% 50% at 50% 6%, rgba(255,205,96,.34), transparent 58%),
+    radial-gradient(80% 70% at 50% 100%, rgba(88,34,16,.40), transparent 62%),
+    radial-gradient(130% 100% at 50% 45%, transparent 38%, rgba(6,5,4,.74) 100%),
+    linear-gradient(180deg,#2C2314 0%,#141009 60%,#090807 100%)}
+.plate.d{background-image:
+    radial-gradient(48% 42% at 16% 80%, rgba(214,168,74,.32), transparent 58%),
+    radial-gradient(70% 60% at 90% 12%, rgba(58,66,52,.52), transparent 60%),
+    radial-gradient(120% 100% at 50% 50%, transparent 44%, rgba(6,5,4,.68) 100%),
+    linear-gradient(150deg,#20190F 0%,#0D0C09 100%)}
+.plate::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:repeating-linear-gradient(112deg,rgba(255,255,255,.022) 0 1px,transparent 1px 4px);
+  mix-blend-mode:overlay}
+.plate .note{position:absolute;left:0;bottom:0;right:0;padding:.5rem .7rem;
+  font-family:var(--mono);font-size:.6rem;letter-spacing:.05em;color:rgba(232,224,210,.5);
+  background:linear-gradient(transparent,rgba(8,7,6,.82));text-transform:uppercase}
+
+/* ---------- shell ---------- */
+.page{margin-inline-end:var(--rail)}
+section{position:relative}
+.dark{background:var(--night);color:var(--on-night)}
+.light{background:var(--linen);color:var(--on-linen)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 2.4rem}
+
+/* ---------- masthead: not a sticky navbar ---------- */
+/* The persistent element on this page is the brief, not the navigation. The
+ * masthead sits inside the hero and scrolls away with it. */
+.masthead{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;
+  gap:2rem;padding:1.5rem 2.4rem}
+.mark{font-family:var(--display);font-size:1.06rem;letter-spacing:.2em;color:var(--gold);
+  text-transform:uppercase;white-space:nowrap}
+.mark small{display:block;font-size:.52rem;letter-spacing:.34em;color:var(--on-night-dim);
+  margin-top:.22rem}
+.masthead nav{display:flex;gap:1.6rem;margin-inline-start:auto}
+.masthead nav a{font-size:.72rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--on-night-dim);padding-bottom:.2rem;border-bottom:1px solid transparent}
+.masthead nav a:hover{color:var(--on-night);border-color:var(--gold)}
+.masthead .call{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--gold);border:1px solid rgba(201,162,39,.5);padding:.5rem .9rem}
+.masthead .call:hover{background:var(--gold);color:var(--night)}
+
+/* ---------- 1 · hero ---------- */
+.hero{min-height:100vh;display:flex;align-items:flex-end;padding-bottom:4.5rem}
+.hero .plate{position:absolute;inset:0}
+.hero .inner{position:relative;z-index:2;width:100%}
+.hero .eyebrow{display:flex;align-items:center;gap:1rem;margin-bottom:1.4rem}
+.hero .eyebrow .rule{flex:1 1 auto;max-width:120px}
+.hero h1{font-size:clamp(2.6rem,6.4vw,5.1rem);max-width:15ch;color:var(--linen)}
+.hero h1 em{font-style:italic;color:var(--gold-lift)}
+.hero .sub{margin-top:1.5rem;max-width:52ch;font-size:1.03rem;line-height:1.72;
+  color:var(--on-night-dim)}
+.hero .acts{display:flex;gap:.8rem;margin-top:2.2rem;flex-wrap:wrap}
+.cta{display:inline-block;font-size:.73rem;letter-spacing:.2em;text-transform:uppercase;
+  padding:1rem 1.7rem;background:var(--gold);color:var(--night);font-weight:600;
+  transition:background .18s}
+.cta:hover{background:var(--gold-lift)}
+.cta.ghost{background:none;color:var(--on-night);border:1px solid rgba(232,224,210,.3)}
+.cta.ghost:hover{border-color:var(--gold);color:var(--gold-lift)}
+.cta.dark{background:var(--night);color:var(--linen)}
+
+/* ---------- 2 · the two arms ---------- */
+.arms{display:grid;grid-template-columns:1fr 1fr;min-height:78vh}
+.arm{position:relative;display:flex;flex-direction:column;justify-content:flex-end;
+  padding:2.8rem 2.4rem;overflow:hidden;text-align:start;color:var(--on-night);
+  border-inline-end:1px solid rgba(201,162,39,.22)}
+.arm:last-child{border-inline-end:0}
+.arm .plate{position:absolute;inset:0;transition:transform .5s ease,filter .35s}
+.arm:hover .plate{transform:scale(1.03)}
+.arm > *{position:relative;z-index:2}
+.arm h2{font-family:var(--display);font-size:clamp(1.9rem,3.2vw,2.7rem);color:var(--linen);
+  margin:.5rem 0 .7rem}
+.arm p{color:var(--on-night-dim);font-size:.94rem;line-height:1.65;max-width:36ch}
+.arm .types{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:1.3rem}
+.arm .types span{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;
+  border:1px solid rgba(232,224,210,.22);padding:.32rem .6rem;color:var(--on-night-dim)}
+.arm .types span.hit{border-color:var(--gold);color:var(--gold-lift)}
+.arm[data-live=true]::before{content:"";position:absolute;inset:0;z-index:1;
+  box-shadow:inset 0 0 0 2px var(--gold)}
+.arm .marker{position:absolute;top:1.6rem;inset-inline-end:1.6rem;z-index:3;
+  font-size:.62rem;letter-spacing:.18em;text-transform:uppercase;color:var(--night);
+  background:var(--gold);padding:.3rem .55rem;opacity:0;transition:opacity .25s}
+.arm[data-live=true] .marker{opacity:1}
+
+/* ---------- 3 · about, linen editorial ---------- */
+.about{padding:6rem 0}
+.about .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:3.4rem;align-items:start}
+.about h2{font-size:clamp(1.9rem,3.5vw,2.9rem);max-width:17ch;margin:1rem 0 1.4rem}
+.about p{font-size:1rem;line-height:1.78;color:var(--on-linen-dim);max-width:54ch}
+.about p + p{margin-top:1rem}
+.about .plate{aspect-ratio:4/5;margin-top:2.4rem}
+.about .stat{border-top:1px solid rgba(26,23,18,.16);padding-top:1rem;margin-top:2.2rem;
+  display:grid;grid-template-columns:1fr 1fr;gap:1.4rem}
+.about .stat b{display:block;font-family:var(--display);font-size:1.7rem;color:var(--on-linen)}
+.about .stat span{font-size:.78rem;color:var(--on-linen-dim);line-height:1.5;display:block;
+  margin-top:.2rem}
+
+/* ---------- 4 · live stations, the signature sequence ---------- */
+.live{padding:6rem 0 5rem;overflow:hidden}
+.live .head{display:flex;align-items:flex-end;gap:2rem;flex-wrap:wrap;margin-bottom:2.4rem}
+.live h2{font-family:var(--display);font-size:clamp(2.1rem,4.6vw,3.6rem);color:var(--linen);
+  max-width:16ch}
+.live .said{margin-inline-start:auto;max-width:34ch;color:var(--on-night-dim);font-size:.95rem;
+  line-height:1.7}
+.seq{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(280px,30vw);gap:1px;
+  overflow-x:auto;scroll-snap-type:x mandatory;background:rgba(201,162,39,.22);
+  scrollbar-width:none;padding-bottom:2px}
+.seq::-webkit-scrollbar{display:none}
+.step{scroll-snap-align:start;background:var(--night);position:relative;
+  display:flex;flex-direction:column}
+.step .plate{aspect-ratio:4/3}
+.step .body{padding:1.3rem 1.4rem 1.6rem}
+.step .n{font-family:var(--mono);font-size:.7rem;color:var(--gold);letter-spacing:.14em}
+.step h3{font-family:var(--display);font-size:1.28rem;color:var(--linen);margin:.5rem 0 .5rem}
+.step p{font-size:.86rem;line-height:1.65;color:var(--on-night-dim)}
+.live .hint{margin-top:1rem;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--on-night-dim)}
+
+/* ---------- 5 · proof, linen ---------- */
+.proof{padding:5rem 0}
+.proof .row{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid rgba(26,23,18,.18)}
+.proof .cell{padding:1.7rem 1.3rem 1.5rem;border-inline-end:1px solid rgba(26,23,18,.12);
+  transition:background .25s}
+.proof .cell:last-child{border-inline-end:0}
+.proof .cell[data-live=true]{background:rgba(110,122,94,.14)}
+.proof .cell h3{font-family:var(--display);font-size:.72rem;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--on-linen);margin-bottom:.6rem}
+.proof .cell[data-live=true] h3{color:var(--sage)}
+.proof .cell p{font-size:.83rem;line-height:1.62;color:var(--on-linen-dim)}
+
+/* ---------- 6 · gallery, evidence ---------- */
+.gallery{padding:5.5rem 0 6rem}
+.gallery .head{display:flex;align-items:baseline;gap:1.4rem;flex-wrap:wrap;margin-bottom:1.6rem}
+.gallery h2{font-family:var(--display);font-size:clamp(1.8rem,3.4vw,2.6rem);color:var(--linen)}
+.filters{display:flex;gap:.4rem;flex-wrap:wrap;margin-inline-start:auto}
+.filters button{font-size:.66rem;letter-spacing:.18em;text-transform:uppercase;
+  padding:.42rem .7rem;border:1px solid rgba(232,224,210,.2);color:var(--on-night-dim)}
+.filters button[aria-pressed=true]{background:var(--gold);border-color:var(--gold);color:var(--night)}
+/* Asymmetric on purpose: a feature plate, then crops of three different shapes.
+ * Nothing here is a card and no two are the same size. */
+.frames{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(201,162,39,.18)}
+.frame{position:relative;background:var(--night);min-height:130px}
+.frame .plate{position:absolute;inset:0}
+.frame .cap{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:.7rem .8rem;
+  background:linear-gradient(transparent,rgba(8,7,6,.86))}
+.frame .cap b{display:block;font-family:var(--display);font-size:.72rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--gold-lift)}
+.frame:nth-child(1){grid-column:span 4;grid-row:span 2;min-height:400px}
+.frame:nth-child(2){grid-column:span 2;min-height:198px}
+.frame:nth-child(3){grid-column:span 2;min-height:201px}
+.frame:nth-child(4){grid-column:span 2}
+.frame:nth-child(5){grid-column:span 4}
+.gallery .empty{padding:3rem;text-align:center;color:var(--on-night-dim);
+  border:1px dashed rgba(232,224,210,.2)}
+
+/* ---------- 7 · EATLUX, its own chapter ---------- */
+/* Reversed and centred, narrow measure — deliberately unlike every other
+ * section, because it is a sub-brand rather than a service. */
+.eatlux{padding:6.5rem 0;text-align:center}
+.eatlux .inner{max-width:640px;margin:0 auto;padding:0 2rem}
+.eatlux .lux{font-family:var(--display);font-size:clamp(2.6rem,6vw,4.2rem);letter-spacing:.16em;
+  color:var(--on-linen)}
+.eatlux .by{margin-top:.5rem;font-size:.68rem;letter-spacing:.3em;text-transform:uppercase;
+  color:var(--on-linen-dim)}
+.eatlux p{margin-top:1.8rem;font-size:1.02rem;line-height:1.8;color:var(--on-linen-dim)}
+.eatlux .plate{margin-top:2.6rem;aspect-ratio:21/9}
+
+/* ---------- 8 · founder ---------- */
+.founder{padding:0 0 6rem}
+.founder .grid{display:grid;grid-template-columns:.8fr 1.2fr;gap:3rem;align-items:center}
+.founder .plate{aspect-ratio:3/4}
+.founder blockquote{margin:0;font-family:var(--display);font-size:clamp(1.4rem,2.5vw,2rem);
+  line-height:1.34;color:var(--on-linen)}
+.founder .who{margin-top:1.6rem;font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--on-linen-dim)}
+
+/* ---------- 9 · the brief, completed ---------- */
+.enquiry{padding:6rem 0 7rem}
+.enquiry h2{font-family:var(--display);font-size:clamp(2rem,4vw,3rem);color:var(--linen);
+  max-width:18ch}
+.enquiry .lead{margin-top:1.2rem;max-width:52ch;color:var(--on-night-dim);line-height:1.72}
+.summary{margin-top:2.4rem;border:1px solid rgba(201,162,39,.34);padding:1.6rem 1.7rem}
+.summary .line{display:flex;gap:1rem;padding:.62rem 0;border-bottom:1px solid rgba(232,224,210,.1)}
+.summary .line:last-child{border-bottom:0}
+.summary .k{flex:0 0 128px;font-size:.66rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--on-night-dim);padding-top:.18rem}
+.summary .v{font-family:var(--display);font-size:1.12rem;color:var(--gold-lift)}
+.summary .v.unset{font-family:var(--sans);font-size:.9rem;color:var(--on-night-dim);font-style:italic}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:1.6rem}
+.fields label{display:block}
+.fields .full{grid-column:1 / -1}
+.fields span{display:block;font-size:.64rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--on-night-dim);margin-bottom:.4rem}
+.fields input,.fields textarea{width:100%;background:transparent;border:0;
+  border-bottom:1px solid rgba(232,224,210,.26);color:var(--on-night);padding:.6rem 0;
+  font:inherit;font-size:.95rem}
+.fields input:focus,.fields textarea:focus{outline:none;border-color:var(--gold)}
+.enquiry .disclaim{margin-top:1.2rem;font-size:.78rem;line-height:1.65;color:var(--on-night-dim)}
+
+/* ---------- the Event Brief rail ---------- */
+aside.brief{position:fixed;top:0;inset-inline-end:0;bottom:0;width:var(--rail);z-index:20;
+  background:var(--night-2);border-inline-start:1px solid rgba(201,162,39,.28);
+  display:flex;flex-direction:column}
+aside.brief .top{padding:1.4rem 1.3rem 1rem;border-bottom:1px solid rgba(232,224,210,.1)}
+aside.brief .top h2{font-family:var(--display);font-size:1.1rem;color:var(--linen);margin-top:.5rem}
+aside.brief .top p{font-size:.78rem;color:var(--on-night-dim);margin-top:.35rem;line-height:1.5}
+aside.brief .steps{flex:1 1 auto;overflow-y:auto;padding:.4rem 0}
+.stepq{padding:1rem 1.3rem;border-bottom:1px solid rgba(232,224,210,.07)}
+.stepq .n{font-family:var(--mono);font-size:.66rem;color:var(--gold);letter-spacing:.14em}
+.stepq .q{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--on-night-dim);
+  margin:.3rem 0 .6rem}
+.opts{display:flex;flex-wrap:wrap;gap:.3rem}
+.opts button{font-size:.72rem;padding:.36rem .6rem;border:1px solid rgba(232,224,210,.2);
+  color:var(--on-night-dim);transition:all .16s}
+.opts button:hover{border-color:var(--gold);color:var(--on-night)}
+.opts button[aria-pressed=true]{background:var(--gold);border-color:var(--gold);color:var(--night);
+  font-weight:600}
+aside.brief .foot{padding:1.1rem 1.3rem;border-top:1px solid rgba(232,224,210,.1)}
+aside.brief .foot .cta{display:block;text-align:center;width:100%}
+aside.brief .progress{display:flex;gap:3px;margin-bottom:.9rem}
+aside.brief .progress i{flex:1 1 0;height:2px;background:rgba(232,224,210,.16)}
+aside.brief .progress i.on{background:var(--gold)}
+
+/* ---------- footer / disclosure ---------- */
+footer{background:var(--night-2);padding:2.6rem 0;border-top:1px solid rgba(201,162,39,.2)}
+footer .grid{display:grid;grid-template-columns:1.4fr 1fr;gap:2rem;align-items:start}
+footer p{font-size:.8rem;line-height:1.7;color:var(--on-night-dim)}
+footer b{color:var(--gold-lift);font-weight:600}
+footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(--on-night-dim);
+  line-height:1.7}
+
+/* ---------- mobile: designed, not collapsed ---------- */
+.mob{display:none}
+@media (max-width:1024px){
+  :root{--rail:0px}
+  aside.brief{display:none}
+  .page{margin-inline-end:0}
+  .arms{grid-template-columns:1fr}
+  .about .grid,.founder .grid{grid-template-columns:1fr}
+  .proof .row{grid-template-columns:1fr 1fr}
+  .proof .cell{border-bottom:1px solid rgba(26,23,18,.12)}
+  .frames{grid-template-columns:repeat(2,1fr)}
+  .frame:nth-child(1){grid-column:span 2;grid-row:auto;min-height:280px}
+  .frame:nth-child(n+2){grid-column:span 1;min-height:170px}
+  .mob{display:flex}
+}
+@media (max-width:640px){
+  body{font-size:15px}
+  .wrap{padding:0 1.2rem}
+  .masthead{padding:1.1rem 1.2rem;gap:1rem}
+  .masthead nav{display:none}
+  .hero{min-height:92vh;padding-bottom:7.5rem}
+  .hero h1{font-size:clamp(2.3rem,10.5vw,3rem)}
+  /* The eyebrow is a flex row on desktop with a rule between two labels. At
+   * 390 both labels wrapped mid-phrase, so it stacks and the rule goes. */
+  .hero .eyebrow{display:block}
+  .hero .eyebrow .rule{display:none}
+  .hero .eyebrow .engraved.dim{display:block;margin-top:.4rem}
+  /* `margin-inline-start:auto` pushes this right on desktop; once the row wraps
+   * it survives as a stray indent. */
+  .live .head .said{margin-inline-start:0}
+  .arm{padding:2rem 1.2rem;min-height:60vh}
+  .about,.proof,.gallery,.eatlux,.live{padding-inline:0}
+  .about{padding:3.6rem 0}
+  .live{padding:3.6rem 0 3rem}
+  .live .head{margin-bottom:1.5rem}
+  .seq{grid-auto-columns:78vw}
+  .proof{padding:3.4rem 0}
+  .proof .row{grid-template-columns:1fr}
+  .gallery{padding:3.4rem 0}
+  .frames{grid-template-columns:1fr}
+  /* The span rules from the wider breakpoints still match here. With a single
+   * column, `grid-column: span 4` makes the grid invent three more and the page
+   * runs 87px past the viewport — so the spans are cleared, not just resized. */
+  .frames .frame{grid-column:auto}
+  .frame:nth-child(1){min-height:240px}
+  .frame:nth-child(n+2){min-height:180px}
+  .eatlux{padding:4rem 0}
+  .founder{padding-bottom:3.6rem}
+  .enquiry{padding:3.6rem 0 8rem}
+  .fields{grid-template-columns:1fr}
+  .summary .k{flex:0 0 92px}
+  footer{padding:2rem 0 7rem}
+  footer .grid{grid-template-columns:1fr}
+}
+/* the brief becomes a bar you can pull up */
+/* Both are hidden at base. `.sheet` was styled only inside the mobile query,
+ * which left it with no display rule on desktop — so the whole panel rendered
+ * inline at the foot of the page. A full-page screenshot caught it. */
+.dock,.sheet{display:none}
+@media (max-width:1024px){
+  .dock{display:block;position:fixed;left:0;right:0;bottom:0;z-index:30;
+    background:var(--night-2);border-top:1px solid rgba(201,162,39,.4);
+    padding:.8rem 1.2rem calc(.8rem + env(safe-area-inset-bottom))}
+  .dock .bar{display:flex;align-items:center;gap:.8rem;width:100%;text-align:start}
+  .dock .bar .t{flex:1 1 auto;min-width:0}
+  .dock .bar .lbl{font-size:.6rem;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--on-night-dim)}
+  .dock .bar .val{font-family:var(--display);font-size:.98rem;color:var(--gold-lift);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.15rem}
+  .dock .bar .chev{color:var(--gold);font-size:.8rem}
+  .sheet{position:fixed;inset:0;z-index:40;background:rgba(8,7,6,.72);display:none}
+  .sheet[data-open=true]{display:block}
+  .sheet .panel{position:absolute;left:0;right:0;bottom:0;background:var(--night-2);
+    border-top:1px solid rgba(201,162,39,.4);max-height:88vh;overflow-y:auto;
+    padding-bottom:calc(1rem + env(safe-area-inset-bottom));animation:rise .22s ease-out}
+  @keyframes rise{from{transform:translateY(26px);opacity:0}to{transform:none;opacity:1}}
+  .sheet .phead{display:flex;align-items:center;gap:.8rem;padding:1.1rem 1.2rem;
+    border-bottom:1px solid rgba(232,224,210,.1)}
+  .sheet .phead h2{font-family:var(--display);font-size:1.1rem;color:var(--linen)}
+  .sheet .phead button{margin-inline-start:auto;color:var(--on-night-dim);font-size:1.1rem}
+  .sheet .pfoot{padding:1rem 1.2rem}
+  .sheet .pfoot .cta{display:block;text-align:center;width:100%}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebPage","name":"AHS — Beyond Catering, a Qevik concept",
+"url":"https://sites.qevik.ai/sample-ahs/",
+"creator":{"@type":"Organization","name":"Asia Link Internet Content Provider LLC","alternateName":"Qevik"},
+"description":"An unsolicited concept site built by Qevik for AHS Catering & Events, Dubai. Not a client website, not affiliated with AHS, and not their official site."}
+</script>
+</head>
+<body>
+
+<div class="page">
+
+<!-- ============ 1 · hero, dark cinematic ============ -->
+<section class="hero dark" id="top">
+  <div class="plate c"><span class="note">Composed treatment · AHS event photography would sit here</span></div>
+  <header class="masthead">
+    <a href="#top" class="mark">AHS<small>Beyond Catering</small></a>
+    <nav>
+      <a href="#corporate">Corporate</a>
+      <a href="#private">Private</a>
+      <a href="#live">Experiences</a>
+      <a href="#eatlux">EATLUX</a>
+      <a href="#about">About</a>
+      <a href="#brief">Brief</a>
+    </nav>
+    <a href="#brief" class="call">Call us</a>
+  </header>
+  <div class="inner wrap">
+    <div class="eyebrow">
+      <span class="engraved">Dubai · Event catering</span><hr class="rule">
+      <span class="engraved dim" id="hero-ctx">Corporate &amp; private</span>
+    </div>
+    <h1 class="deck">Your dream event, <em>our signature cuisine</em>.</h1>
+    <p class="sub">Backed by 20+ years of culinary mastery, halal-certified kitchens and a
+      planning team that perfects every detail of your celebration.</p>
+    <div class="acts">
+      <a href="#brief" class="cta">Plan your event</a>
+      <a href="#live" class="cta ghost">See the experiences</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 · the two arms ============ -->
+<section class="arms dark">
+  <a class="arm" href="#brief" id="corporate" data-arm="corporate">
+    <span class="marker">Matches your brief</span>
+    <div class="plate"><span class="note">Composed treatment</span></div>
+    <span class="engraved">One of two arms</span>
+    <h2>Corporate events</h2>
+    <p>Launches, conferences and company celebrations, catered and staffed end to end.</p>
+    <div class="types">
+      <span data-type="corporate">Corporate</span>
+      <span data-type="gala">Gala</span>
+      <span data-type="live">Live stations</span>
+      <span data-type="canape">Canapé &amp; dessert</span>
+    </div>
+  </a>
+  <a class="arm" href="#brief" id="private" data-arm="private">
+    <span class="marker">Matches your brief</span>
+    <div class="plate b"><span class="note">Composed treatment</span></div>
+    <span class="engraved">One of two arms</span>
+    <h2>Private events</h2>
+    <p>Weddings, family celebrations and private dining, planned around the occasion.</p>
+    <div class="types">
+      <span data-type="wedding">Wedding</span>
+      <span data-type="private">Private</span>
+      <span data-type="ramadan">Ramadan</span>
+      <span data-type="canape">Canapé &amp; dessert</span>
+    </div>
+  </a>
+</section>
+
+<!-- ============ 3 · about, linen editorial ============ -->
+<section class="light about" id="about">
+  <div class="wrap grid">
+    <div>
+      <span class="engraved" style="color:var(--sage)">About</span>
+      <h2 class="deck">Catering is the part you taste. The rest is planning.</h2>
+      <p>AHS is a Dubai event caterer working across two arms — corporate and private —
+        with food, décor and staffing handled by one team rather than three suppliers.</p>
+      <p>Every event is quoted bespoke. There is no package to pick from, because a gala
+        for four hundred and a wedding for eighty are not the same job. What stays constant
+        is the kitchen behind it: halal-certified, HACCP-certified, and used to working to
+        someone else's timings.</p>
+      <div class="stat">
+        <div><b>20+</b><span>Years of culinary work, as stated by AHS</span></div>
+        <div><b>Two</b><span>Arms — corporate and private — under one planning team</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="plate d"><span class="note">Composed treatment · kitchen &amp; service</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4 · live stations, the signature sequence ============ -->
+<section class="dark live" id="live">
+  <div class="wrap head">
+    <div>
+      <span class="engraved">The signature experience</span>
+      <h2 class="deck" style="margin-top:.7rem">Live stations</h2>
+    </div>
+    <p class="said">Food becomes part of the event rather than something carried in from
+      a kitchen nobody sees. Chefs work in front of guests, and the room changes because
+      of it.</p>
+  </div>
+  <div class="seq" id="seq"></div>
+  <div class="wrap"><p class="hint">Scroll the sequence →</p></div>
+</section>
+
+<!-- ============ 5 · proof, linen ============ -->
+<section class="light proof">
+  <div class="wrap">
+    <span class="engraved" style="color:var(--sage)">What sits behind the food</span>
+    <div class="row" id="proof" style="margin-top:1.4rem"></div>
+  </div>
+</section>
+
+<!-- ============ 6 · gallery as evidence ============ -->
+<section class="dark gallery" id="gallery">
+  <div class="wrap">
+    <div class="head">
+      <div>
+        <span class="engraved">Recent events</span>
+        <h2 class="deck" style="margin-top:.6rem">Evidence, not a portfolio grid</h2>
+      </div>
+      <div class="filters" id="filters"></div>
+    </div>
+  </div>
+  <div class="wrap"><div class="frames" id="frames"></div></div>
+</section>
+
+<!-- ============ 7 · EATLUX, its own chapter ============ -->
+<section class="light eatlux" id="eatlux">
+  <div class="inner">
+    <span class="engraved" style="color:var(--sage)">A signature concept</span>
+    <p class="lux">EATLUX</p>
+    <p class="by">By AHS · Beyond Catering</p>
+    <p>AHS's own concept, run by the founder alongside the catering business. It is the
+      reason the two arms share a kitchen and a standard rather than a name.</p>
+    <div class="plate b" style="position:relative">
+      <span class="note">Composed treatment · EATLUX</span></div>
+  </div>
+</section>
+
+<!-- ============ 8 · founder ============ -->
+<section class="light founder">
+  <div class="wrap grid">
+    <div class="plate" style="position:relative">
+      <span class="note">Composed treatment · founder portrait</span></div>
+    <div>
+      <span class="engraved" style="color:var(--sage)">The founder</span>
+      <blockquote>“The planning is the product. The food is how you prove you did it
+        properly.”</blockquote>
+      <p class="who">Managing Partner and Founder of EATLUX<br>
+        <span style="opacity:.7;text-transform:none;letter-spacing:0;font-size:.8rem">
+        Role as published by AHS. Concept copy — not a quotation from any individual.</span></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9 · the brief, completed ============ -->
+<section class="dark enquiry" id="brief">
+  <div class="wrap">
+    <span class="engraved">Step five</span>
+    <h2 class="deck" style="margin-top:.7rem">Your brief, already written.</h2>
+    <p class="lead">Everything you chose while reading is below. Add how to reach you and
+      we will come back with a bespoke offer — AHS prices every event individually, so
+      nothing here quotes a figure.</p>
+
+    <div class="summary" id="summary"></div>
+
+    <form class="fields" id="form" novalidate>
+      <label><span>Name</span><input name="name" autocomplete="name"></label>
+      <label><span>Company or occasion</span><input name="org"></label>
+      <label><span>Email</span><input name="email" type="email" autocomplete="email"></label>
+      <label><span>Phone</span><input name="phone" type="tel" autocomplete="tel"></label>
+      <label class="full"><span>Anything else about the event</span>
+        <textarea name="notes" rows="2"></textarea></label>
+      <div class="full" style="margin-top:.6rem">
+        <button type="submit" class="cta">Get a custom offer</button>
+      </div>
+    </form>
+    <p class="disclaim" id="formnote">This is a demonstration interaction. Nothing is sent,
+      no enquiry is created, and no event is booked or held.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap grid">
+    <div>
+      <p><b>Concept / sample site built by Qevik. Not a client website.</b><br>
+        Not affiliated with, commissioned by, or connected to AHS Catering &amp; Events, and
+        not their official site. Built from information AHS publishes about itself, to show
+        what a different structure could look like.</p>
+      <p class="src">Photography: none of AHS's photographs are reproduced here. Every image
+        region is a composed treatment and says so. Their pictures remain theirs.</p>
+    </div>
+    <div>
+      <p><b>Qevik</b> — by Asia Link Internet Content Provider LLC<br>
+        Office 301, Al Othman Building, Deiram, Dubai<br>
+        <span class="docket">+971 50 102 9104</span></p>
+    </div>
+  </div>
+</footer>
+
+</div><!-- /page -->
+
+<!-- ============ the Event Brief rail ============ -->
+<aside class="brief" aria-label="Event brief">
+  <div class="top">
+    <span class="engraved">The event brief</span>
+    <h2>What are you planning?</h2>
+    <p>Set these as you read. The page answers, and your enquiry writes itself.</p>
+  </div>
+  <div class="steps" id="steps"></div>
+  <div class="foot">
+    <div class="progress" id="progress"><i></i><i></i><i></i><i></i></div>
+    <a href="#brief" class="cta">Plan your event</a>
+  </div>
+</aside>
+
+<!-- ============ mobile dock + sheet ============ -->
+<div class="dock">
+  <button class="bar" id="dockbar" aria-expanded="false">
+    <span class="t"><span class="lbl">Your event brief</span>
+      <span class="val" id="dockval">Tap to start</span></span>
+    <span class="chev">▲</span>
+  </button>
+</div>
+<div class="sheet" id="sheet" data-open="false">
+  <div class="panel">
+    <div class="phead">
+      <span class="engraved">The event brief</span>
+      <h2 style="margin-inline-start:.4rem">Your event</h2>
+      <button id="sheetclose" aria-label="Close">✕</button>
+    </div>
+    <div id="msteps"></div>
+    <div class="pfoot"><a href="#brief" class="cta" id="sheetgo">Plan your event</a></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* --------------------------------------------------------------------------
+ * Everything below is driven by one small state object: the brief. Changing it
+ * re-renders the rail, the dock, the gallery, the arms, the proof strip and the
+ * enquiry summary — which is the point. The page is supposed to answer.
+ *
+ * No price is ever computed. AHS publishes none and quotes every event
+ * individually, so a number here would be an invention.
+ * ------------------------------------------------------------------------ */
+
+/* The four questions, in the order somebody actually answers them. Numerals are
+ * used here and nowhere else on the page, because this genuinely is a sequence. */
+var STEPS = [
+  {k:"occasion", q:"Occasion", opts:[
+    ["wedding","Wedding"],["gala","Gala"],["corporate","Corporate"],
+    ["private","Private"],["ramadan","Ramadan"],["canape","Canapé & dessert"]]},
+  {k:"guests", q:"Guests", opts:[
+    ["40","Up to 50"],["120","50–150"],["300","150–400"],["600","400+"]]},
+  {k:"month", q:"Date", opts:[
+    ["Jan","January"],["Mar","March"],["Jun","June"],["Sep","September"],
+    ["Nov","November"],["tbc","Not fixed"]]},
+  {k:"style", q:"Style", opts:[
+    ["seated","Seated"],["standing","Standing"],["stations","Live stations"],
+    ["canape","Canapé"]]}
+];
+
+/* Which arm each occasion belongs to — taken from AHS's own two-arm split. */
+var ARM = {wedding:"private", private:"private", ramadan:"private",
+           gala:"corporate", corporate:"corporate", canape:"both"};
+
+/* The five capability statements AHS publishes. Not a generic trust bar. */
+var PROOF = [
+  {k:"capacity", h:"Capacity", p:"Scaled to the event rather than a fixed maximum. Tell us the number and we plan to it."},
+  {k:"haccp", h:"HACCP certified", p:"Food safety management in the kitchens behind every event."},
+  {k:"sustainability", h:"Sustainability", p:"Considered across sourcing, service and what is left at the end."},
+  {k:"local", h:"Local products", p:"Local sourcing where the menu and the season allow it."},
+  {k:"dietary", h:"Special dietary needs", p:"Handled at planning, not improvised on the night. Halal-certified kitchens throughout."}
+];
+
+/* The live-station sequence — their signature service, given a full passage. */
+var SEQ = [
+  {n:"01", h:"The station arrives", p:"Built into the room rather than hidden behind it, positioned where guests will gather.", c:""},
+  {n:"02", h:"Preparation in view", p:"Chefs work in front of guests. Nothing is plated somewhere else and carried in.", c:"b"},
+  {n:"03", h:"Service begins", p:"Guests choose at the counter, and the pace of the room follows the pace of the station.", c:"c"},
+  {n:"04", h:"It becomes the event", p:"People stay near it. That is the point of a live station and the reason to place it well.", c:"d"},
+  {n:"05", h:"Reset and repeat", p:"Stations turn over through the evening so the last guest is served like the first.", c:""}
+];
+
+/* Gallery categories match the service pages AHS actually publishes. */
+var CATS = [["all","All"],["corporate","Corporate"],["live","Live station"],
+            ["canape","Canapé"],["private","Private"],["gala","Gala"]];
+var FRAMES = [
+  {cat:"live",      t:"Live station",        s:"Interactive service", c:"c"},
+  {cat:"corporate", t:"Corporate",           s:"Conference catering", c:"b"},
+  {cat:"private",   t:"Private",             s:"Family celebration",  c:"d"},
+  {cat:"canape",    t:"Canapé & dessert",    s:"Reception service",   c:""},
+  {cat:"gala",      t:"Gala",                s:"Seated dinner",       c:"b"},
+  {cat:"live",      t:"Live station",        s:"Chef counter",        c:"d"},
+  {cat:"corporate", t:"Corporate",           s:"Product launch",      c:""},
+  {cat:"private",   t:"Wedding",             s:"Private dining",      c:"c"}
+];
+
+var brief = {occasion:"", guests:"", month:"", style:""};
+var filter = "all";
+var $ = function(id){ return document.getElementById(id); };
+var esc = function(s){ return String(s == null ? "" : s)
+  .replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); };
+var labelOf = function(key, value){
+  var step = STEPS.filter(function(s){ return s.k === key; })[0];
+  var hit = step.opts.filter(function(o){ return o[0] === value; })[0];
+  return hit ? hit[1] : "";
+};
+
+/* ---------------------------------------------------------------- rail */
+function drawSteps(target){
+  target.innerHTML = STEPS.map(function(s, i){
+    return '<div class="stepq"><span class="n">0' + (i + 1) + '</span>'
+      + '<p class="q">' + esc(s.q) + "</p>"
+      + '<div class="opts">' + s.opts.map(function(o){
+          return '<button type="button" data-k="' + s.k + '" data-v="' + esc(o[0]) + '" '
+            + 'aria-pressed="' + (brief[s.k] === o[0]) + '">' + esc(o[1]) + "</button>";
+        }).join("") + "</div></div>";
+  }).join("");
+}
+
+function drawProgress(){
+  var set = STEPS.filter(function(s){ return brief[s.k]; }).length;
+  $("progress").querySelectorAll("i").forEach(function(el, i){
+    el.className = i < set ? "on" : "";
+  });
+}
+
+/* --------------------------------------------------------- the answers */
+function drawArms(){
+  var arm = ARM[brief.occasion] || "";
+  ["corporate", "private"].forEach(function(name){
+    var el = document.querySelector('[data-arm="' + name + '"]');
+    el.dataset.live = String(!!arm && (arm === name || arm === "both"));
+    el.querySelectorAll(".types span").forEach(function(t){
+      t.classList.toggle("hit", !!brief.occasion && t.dataset.type === brief.occasion);
+    });
+  });
+  var ctx = $("hero-ctx");
+  ctx.textContent = brief.occasion
+    ? labelOf("occasion", brief.occasion) + (brief.guests ? " · " + labelOf("guests", brief.guests) : "")
+    : "Corporate & private";
+}
+
+function drawProof(){
+  /* The capability that matters most to what they picked comes forward. Large
+   * numbers make capacity the question; a stated dietary need makes it that. */
+  var lead = brief.guests === "300" || brief.guests === "600" ? "capacity"
+           : brief.style === "stations" ? "capacity"
+           : brief.occasion === "ramadan" ? "dietary" : "";
+  $("proof").innerHTML = PROOF.map(function(p){
+    return '<div class="cell" data-live="' + (p.k === lead) + '">'
+      + "<h3>" + esc(p.h) + "</h3><p>" + esc(p.p) + "</p></div>";
+  }).join("");
+}
+
+function drawGallery(){
+  var rows = FRAMES.filter(function(f){ return filter === "all" || f.cat === filter; });
+  $("filters").innerHTML = CATS.map(function(c){
+    return '<button type="button" data-cat="' + c[0] + '" aria-pressed="'
+      + (filter === c[0]) + '">' + esc(c[1]) + "</button>";
+  }).join("");
+  $("frames").innerHTML = rows.length ? rows.map(function(f){
+    return '<div class="frame"><div class="plate ' + f.c + '">'
+      + '<span class="note">Composed treatment</span></div>'
+      + '<div class="cap"><b>' + esc(f.t) + "</b>"
+      + '<span style="font-size:.72rem;color:var(--on-night-dim)">' + esc(f.s) + "</span></div></div>";
+  }).join("") : '<div class="empty">Nothing in that category yet.</div>';
+}
+
+function drawSummary(){
+  $("summary").innerHTML = STEPS.map(function(s){
+    var v = brief[s.k];
+    return '<div class="line"><span class="k">' + esc(s.q) + "</span>"
+      + '<span class="v' + (v ? "" : " unset") + '">'
+      + esc(v ? labelOf(s.k, v) : "not set yet — choose in the brief")
+      + "</span></div>";
+  }).join("");
+}
+
+function drawDock(){
+  var parts = STEPS.map(function(s){ return brief[s.k] ? labelOf(s.k, brief[s.k]) : ""; })
+                   .filter(Boolean);
+  $("dockval").textContent = parts.length ? parts.join(" · ") : "Tap to start";
+}
+
+function render(){
+  drawSteps($("steps"));
+  drawSteps($("msteps"));
+  drawProgress(); drawArms(); drawProof(); drawGallery(); drawSummary(); drawDock();
+}
+
+/* ------------------------------------------------------------- statics */
+$("seq").innerHTML = SEQ.map(function(s){
+  return '<article class="step"><div class="plate ' + s.c + '">'
+    + '<span class="note">Composed treatment</span></div>'
+    + '<div class="body"><span class="n">' + s.n + "</span><h3>" + esc(s.h) + "</h3>"
+    + "<p>" + esc(s.p) + "</p></div></article>";
+}).join("");
+
+/* -------------------------------------------------------------- events */
+document.addEventListener("click", function(event){
+  var opt = event.target.closest("[data-k]");
+  if (opt){
+    var k = opt.dataset.k;
+    brief[k] = brief[k] === opt.dataset.v ? "" : opt.dataset.v;
+    return render();
+  }
+  var cat = event.target.closest("[data-cat]");
+  if (cat){ filter = cat.dataset.cat; return drawGallery(); }
+  if (event.target.closest("#dockbar")){
+    $("sheet").dataset.open = "true";
+    $("dockbar").setAttribute("aria-expanded", "true");
+    return;
+  }
+  if (event.target.closest("#sheetclose") || event.target.id === "sheet"
+      || event.target.closest("#sheetgo")){
+    $("sheet").dataset.open = "false";
+    $("dockbar").setAttribute("aria-expanded", "false");
+  }
+});
+
+/* Selecting an occasion also filters the evidence to that kind of event. */
+document.addEventListener("click", function(event){
+  var opt = event.target.closest('[data-k="occasion"]');
+  if (!opt) return;
+  var map = {wedding:"private", private:"private", ramadan:"private",
+             gala:"gala", corporate:"corporate", canape:"canape"};
+  filter = brief.occasion ? (map[brief.occasion] || "all") : "all";
+  drawGallery();
+});
+
+$("form").addEventListener("submit", function(event){
+  event.preventDefault();
+  var note = $("formnote");
+  note.innerHTML = "<b style='color:var(--gold-lift)'>Nothing was sent.</b> This is a "
+    + "demonstration interaction on a concept page — no enquiry was created, nothing "
+    + "reached AHS, and no event is booked or held.";
+  note.scrollIntoView({block:"center", behavior:"smooth"});
+});
+
+document.addEventListener("keydown", function(e){
+  if (e.key === "Escape"){ $("sheet").dataset.open = "false"; }
+});
+
+render();
+</script>
+</body>
+</html>

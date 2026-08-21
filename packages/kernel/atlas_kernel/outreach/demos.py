@@ -394,6 +394,31 @@ DEMOS: tuple[Demo, ...] = (
          does_not_prove="It has no search or saved list — Meridian is the sample for that.",
          show_this=("Open it on a phone", "Switch to Arabic", "Read the service pages",
                     "Tap the call button")),
+    # Built from one real business's published information, for that business.
+    # `serves` is empty on purpose: this is not a category demo and must never be
+    # auto-selected for anybody else. It reaches AHS through their own
+    # prospect demo link, not through category matching.
+    Demo("sample-ahs", "AHS — Beyond Catering", "Event catering",
+         frozenset(), "event catering concept",
+         "a persistent event brief that filters the page as you set occasion, guests, "
+         "date and style, with no prices anywhere because AHS quotes bespoke",
+         frozenset({"arabic", "click_to_call", "contact_form", "structured_data"}),
+         product_type="Concept", business_class="a full-service event caterer",
+         primary="an event brief that writes the enquiry while you read",
+         secondary=("two-arm corporate/private structure taken from their own site",
+                    "live stations as a cinematic sequence, not a service card",
+                    "EATLUX as its own chapter",
+                    "their five real capability statements",
+                    "gallery filtered by the occasion you chose"),
+         proves="Qevik studies a specific business and builds around how it actually "
+                "operates, rather than fitting it to an industry template.",
+         does_not_prove="It is unsolicited, it is not AHS's website, no AHS photograph is "
+                        "reproduced in it, and the enquiry submits nowhere.",
+         show_this=("Set an occasion in the brief and watch the gallery filter",
+                    "Set 400+ guests and watch Capacity come forward",
+                    "Scroll the live-station sequence",
+                    "Show the enquiry already written from what you chose",
+                    "Open it on a phone and pull up the brief bar")),
     Demo("sample-hire360", "HIRE360", "Hospitality recruitment",
          frozenset({"recruitment", "staffing", "hospitality"}), "hospitality recruitment platform",
          "a two-sided talent marketplace — search and filter candidates, open a profile, "
