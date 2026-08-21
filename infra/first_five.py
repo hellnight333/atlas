@@ -37,10 +37,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "kernel"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from atlas_kernel.outreach import experiment, identity, offer, scoring  # noqa: E402
+from atlas_kernel.outreach import (  # noqa: E402
+    consistency, demos, experiment, identity, offer, scoring,
+)
 from atlas_kernel.opportunity.repository import OpportunityRepository  # noqa: E402
 
-from score_prospects import SAMPLE_FOR, load, scored  # noqa: E402
+from score_prospects import load, scored  # noqa: E402
 
 #: The five, and why each is here. Chosen after re-verification, not before:
 #: three of Malabar's five recorded weaknesses turned out to be already fixed,
@@ -154,14 +156,14 @@ def short_name(name: str) -> str:
 #: be implied to be.
 DEMO_LINE_OWN = ("So I built you a working example, using only your own details from "
                  "your Google listing — nothing invented:")
-DEMO_LINE_SAMPLE = ("Here's something we built for a {trade} — it's our own sample, "
-                    "not a client's:")
-
-TRADE = {
-    "food": "restaurant", "professional": "property company", "beauty": "salon",
-    "automotive": "detailing shop", "home": "home-services company",
-    "retail": "shop", "dental": "clinic", "health": "clinic",
-}
+#: Names the sample and its trade, both read off the selected Demo. The trade
+#: used to come from a separate table keyed on the *prospect's* category, which
+#: is how a staffing agency was told about "a property company".
+DEMO_LINE_SAMPLE = ("Here's one of our own samples — {name}, a {trade} site. "
+                    "It's ours, not a client's:")
+#: When nothing in the portfolio is genuinely their trade, no demo is offered
+#: and no relevance is implied.
+DEMO_LINE_NONE = ""
 
 
 def pick(ranked: list[scoring.Score]) -> list[tuple[scoring.Score, str]]:
@@ -174,13 +176,22 @@ def pick(ranked: list[scoring.Score]) -> list[tuple[scoring.Score, str]]:
     return chosen
 
 
-#: Demos that exist in Arabic as well. The dental vertical renders both
-#: languages; the hand-built portfolio samples are English-only.
-def bilingual(demo_url: str) -> bool:
-    return "/demo-" in demo_url
+def demo_lines(chosen: demos.Selection) -> list[str]:
+    """The sentence and the URL, both from the same Selection.
+
+    There is no template holding its own URL: everything about the demo — the
+    link, the name and the trade it is described as — comes off one object, so
+    the message and the dashboard cannot disagree about which demo this is.
+    """
+    if not chosen.url:
+        return []
+    if chosen.kind == "prospect":
+        return [DEMO_LINE_OWN, chosen.url]
+    return [DEMO_LINE_SAMPLE.format(name=chosen.demo.name, trade=chosen.demo.trade), chosen.url]
 
 
-def observations(score: scoring.Score, limit: int = 2, *, demo_url: str = "") -> list[str]:
+def observations(score: scoring.Score, limit: int = 2, *,
+                 chosen: demos.Selection | None = None) -> list[str]:
     """The sentences this prospect's evidence permits, most costly first.
 
     Only `speakable` is consulted. That list is already filtered to confirmed,
@@ -193,19 +204,18 @@ def observations(score: scoring.Score, limit: int = 2, *, demo_url: str = "") ->
     invites exactly the reply it deserves, and the next confirmed weakness is
     a better first sentence than one we cannot yet answer.
     """
-    speakable = list(score.speakable)
-    if demo_url and not bilingual(demo_url):
-        speakable = [f for f in speakable if f != "arabic"]
+    speakable = list(
+        demos.leadable(chosen, score.speakable) if chosen is not None else score.speakable
+    )
     lines = [OBSERVATION[f] for f in speakable if f in OBSERVATION]
     return lines[:limit]
 
 
-def whatsapp(score: scoring.Score, demo_url: str, category: str) -> str:
-    own = "/demo-" in demo_url
-    trade = TRADE.get(category, "small")
+def whatsapp(score: scoring.Score, chosen: demos.Selection, category: str) -> str:
+    demo_url = chosen.url
     # One observation only. The brief asks for five to seven short lines, and a
     # list of faults is not an opening message.
-    seen = observations(score, limit=1, demo_url=demo_url)
+    seen = observations(score, limit=1, chosen=chosen)
     name = short_name(score.name)
     praise = compliment(score, category)
     lines = [
@@ -219,8 +229,7 @@ def whatsapp(score: scoring.Score, demo_url: str, category: str) -> str:
     ]
     lines += [
         "",
-        DEMO_LINE_OWN if own else DEMO_LINE_SAMPLE.format(trade=trade),
-        demo_url,
+        *demo_lines(chosen),
         "",
         "No charge for looking. If it's useful we can talk; if not, keep the link.",
         "",
@@ -229,14 +238,14 @@ def whatsapp(score: scoring.Score, demo_url: str, category: str) -> str:
     return "\n".join(lines)
 
 
-def email(score: scoring.Score, demo_url: str, category: str) -> tuple[str, str]:
-    own = "/demo-" in demo_url
-    trade = TRADE.get(category, "small")
-    seen = observations(score, limit=3, demo_url=demo_url)
+def email(score: scoring.Score, chosen: demos.Selection, category: str) -> tuple[str, str]:
+    demo_url = chosen.url
+    seen = observations(score, limit=3, chosen=chosen)
     name = short_name(score.name)
     praise = compliment(score, category)
     subject = (f"{name} — a working example of your site, in Arabic and English"
-               if own else f"{name} — one thing I noticed on your website")
+               if chosen.kind == "prospect"
+               else f"{name} — one thing I noticed on your website")
     body = "\n\n".join(
         [
             "Hello,",
@@ -245,8 +254,9 @@ def email(score: scoring.Score, demo_url: str, category: str) -> tuple[str, str]
              if praise else
              "I work on websites for businesses in Dubai, and I looked at yours this week."),
             *seen,
-            (DEMO_LINE_OWN if own else DEMO_LINE_SAMPLE.format(trade=trade))
-            + f"\n\n    {demo_url}",
+            "\n\n    ".join(demo_lines(chosen)) if chosen.url else
+            "I have not attached an example — nothing in our portfolio is genuinely your "
+            "trade, and I would rather say that than send you something irrelevant.",
             "One thing I should say plainly: the enquiry form on that example is a "
             "placeholder. It does not send anywhere yet, and it says so on the page "
             "itself. Connecting it to something real is a decision for later, not "
@@ -259,23 +269,30 @@ def email(score: scoring.Score, demo_url: str, category: str) -> tuple[str, str]
     return subject, body
 
 
-def audit_message(text: str, score: scoring.Score) -> list[str]:
-    """Everything about this message that would be a false or unsayable claim."""
-    problems = [f"presents Qevik as a company: {c!r}" for c in identity.entity_claims(text)]
-    lowered = text.lower()
-    for feature in score.unfixable:
-        phrase = OBSERVATION.get(feature, "")
-        if phrase and phrase.lower() in lowered:
-            problems.append(f"offers to fix {feature}, which Qevik does not build")
-    for feature in score.unverified:
-        if feature.replace("_", " ") in lowered:
-            problems.append(f"mentions {feature}, which is NOT_VERIFIED")
-    if "book" in lowered and "placeholder" not in lowered:
-        problems.append("mentions booking without the placeholder disclaimer")
-    for token in (str(offer.SETUP_AED), str(offer.MONTHLY_AED), "aed"):
-        if token in lowered:
-            problems.append(f"names a price ({token}) in a first message")
-    return problems
+def audit_message(text: str, score: scoring.Score, *,
+                  chosen: demos.Selection | None = None,
+                  category: str = "",
+                  others: list[dict] | None = None) -> list[str]:
+    """Every reason this draft is not safe to copy.
+
+    Delegates to `outreach.consistency`, which the dashboard uses too — a draft
+    that passes here and fails there (or the reverse) would be worse than no
+    check at all.
+    """
+    return consistency.check(
+        text,
+        business_id=score.business_id,
+        speakable=score.speakable,
+        unfixable=score.unfixable,
+        unverified=score.unverified,
+        chosen=chosen or demos.Selection(demo=None),
+        category=category,
+        others=tuple(
+            consistency.Other(business_id=o["id"], name=o["name"], phone=o["phone"],
+                              host=o["host"], demo_url=o["demo"])
+            for o in (others or [])
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -286,18 +303,34 @@ def main(argv: list[str] | None = None) -> int:
 
     candidates = {c["id"]: c for c in load()}
     ranked = [s for s in scored(load()) if s.verified]
-    chosen = pick(ranked)
+    picked = pick(ranked)
 
     repo = OpportunityRepository()
     sheet = []
-    for score, why in chosen:
+    # Every other prospect's identifying details, so a message can be checked
+    # for carrying any of them.
+    others = [
+        {"id": c["id"], "name": short_name(c["name"]), "phone": c["phone"],
+         "host": re.sub(r"^https?://(www\.)?", "", c["website"]).split("/")[0],
+         "demo": c["demo_url"]}
+        for c in candidates.values()
+    ]
+    for score, why in picked:
         business = candidates[score.business_id]
-        demo = business["demo_url"] or f"https://sites.qevik.ai/{SAMPLE_FOR.get(business['category'], 'sample')}/"
+        chosen = demos.select(
+            business["category"],
+            prospect_demo_url=business["demo_url"],
+            weaknesses=score.speakable,
+        )
+        demo = chosen.url
         channel = "whatsapp" if score.contact_kind == "mobile" else "phone call"
-        body = whatsapp(score, demo, business["category"])
-        subject, mail = email(score, demo, business["category"])
+        body = whatsapp(score, chosen, business["category"])
+        subject, mail = email(score, chosen, business["category"])
 
-        problems = audit_message(body, score) + audit_message(mail, score)
+        problems = (audit_message(body, score, chosen=chosen,
+                                  category=business["category"], others=others)
+                    + audit_message(mail, score, chosen=chosen,
+                                    category=business["category"], others=others))
         sheet.append((score, why, business, demo, channel, subject, body, mail, problems))
 
         if args.full:
@@ -350,17 +383,17 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def store_drafts(sheet: list) -> int:
-    """Put the message body where the dashboard reads bodies from.
+    """Put the message body where the dashboard reads bodies from, and keep it true.
 
     `experiment_prepared` carries a digest of the wording, not the wording — it
-    exists to tell two versions apart, not to be read. The body belongs in
-    `atlas_outreach_messages`, which is the existing outreach table and already
-    holds the ten dental drafts.
+    exists to tell two versions apart. The body belongs in
+    `atlas_outreach_messages`, which is the existing outreach table.
 
-    Only businesses with no message at all get one. The two approved rows and
-    the eight earlier drafts are real history and are never rewritten; a second
-    row for the same business would present the operator with two messages and
-    no way to tell which is live.
+    Rows this generator wrote are *rewritten* rather than added to. The first
+    run stored a message telling a staffing agency about a property company;
+    leaving that row in place and inserting a corrected one beside it would give
+    the operator two drafts and no way to tell which was safe. Rows written by
+    anything else — the two approved messages above all — are never touched.
     """
     from sqlalchemy import text
 
@@ -368,20 +401,38 @@ def store_drafts(sheet: list) -> int:
 
     written = 0
     with SessionLocal() as session:
-        existing = {row[0] for row in session.execute(text(
-            "select distinct business_id from atlas_outreach_messages"))}
-        for score, _why, _business, _demo, channel, subject, body, mail, _p in sheet:
-            if score.business_id in existing or channel != "whatsapp":
-                continue
+        for score, _why, _business, _demo, channel, subject, body, mail, problems in sheet:
+            if channel != "whatsapp" or problems:
+                continue                       # never store a draft that failed its checks
             for kind, subj, text_body in (("whatsapp", "", body), ("email", subject, mail)):
-                # proposal_id is NOT NULL with no foreign key, and every
-                # existing row carries an empty string. These drafts come from
-                # evidence rather than a proposal, so they do the same.
+                mine = session.execute(text(
+                    "select id from atlas_outreach_messages "
+                    "where business_id = :b and channel = :c and status = 'draft' "
+                    "and detail = 'first_five'"),
+                    {"b": score.business_id, "c": kind}).first()
+                if mine:
+                    session.execute(text(
+                        "update atlas_outreach_messages set subject = :s, body = :y, "
+                        "created_at = now() where id = :id"),
+                        {"s": subj, "y": text_body, "id": mine[0]})
+                    written += 1
+                    continue
+                # Only where this business has no message at all. A prospect
+                # with an approved message keeps it.
+                existing = session.execute(text(
+                    "select count(*) from atlas_outreach_messages where business_id = :b"),
+                    {"b": score.business_id}).scalar()
+                if existing:
+                    continue
+                # proposal_id is NOT NULL with no foreign key, and every existing
+                # row carries an empty string. These come from evidence, not a
+                # proposal, so they do the same.
                 session.execute(text(
                     "insert into atlas_outreach_messages "
                     "(id, proposal_id, business_id, channel, recipient, subject, body, "
-                    " status, created_at) "
-                    "values (gen_random_uuid()::text, '', :b, :c, :r, :s, :y, 'draft', now())"),
+                    " status, detail, created_at) "
+                    "values (gen_random_uuid()::text, '', :b, :c, :r, :s, :y, 'draft', "
+                    " 'first_five', now())"),
                     {"b": score.business_id, "c": kind,
                      "r": score.contact if kind == "whatsapp" else "",
                      "s": subj, "y": text_body})

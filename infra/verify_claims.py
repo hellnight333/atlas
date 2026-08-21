@@ -44,7 +44,7 @@ from atlas_kernel.browser import PlaywrightSession  # noqa: E402
 from atlas_kernel.opportunity.models import BusinessEvent  # noqa: E402
 from atlas_kernel.opportunity.repository import OpportunityRepository  # noqa: E402
 
-from score_prospects import SAMPLE_FOR, load, scored  # noqa: E402
+from score_prospects import load, scored  # noqa: E402
 
 CONFIRMED, REFUTED, UNKNOWN = "CONFIRMED", "REFUTED", "NOT_VERIFIED"
 

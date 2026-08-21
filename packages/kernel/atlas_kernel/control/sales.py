@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ..auth import Scope, User, requires
-from ..outreach import scoring
+from ..outreach import consistency, demos, scoring
 
 #: Where `capture_evidence.py` writes screenshots. Served through this API
 #: rather than by the web server: the console's CSP is `img-src 'self'`, and
@@ -191,6 +191,30 @@ class ReplyRecord(BaseModel):
     objection: str = Field(default="", max_length=400)
 
 
+def _demo_view(folded: dict) -> dict:
+    """The demo, its wording and its justification — all from one Selection.
+
+    Everything a message could say about the demo is read from here, so the
+    URL in the message and the URL on the card cannot come apart.
+    """
+    chosen: demos.Selection = folded["chosen"]
+    leads = demos.leadable(chosen, folded["score"].speakable)
+    strongest = leads[0] if leads else ""
+    return {
+        "url": chosen.url,
+        "slug": chosen.demo.slug if chosen.demo else "",
+        "name": chosen.demo.name if chosen.demo else "",
+        "industry": chosen.demo.industry if chosen.demo else "",
+        "trade": chosen.demo.trade if chosen.demo else "",
+        "shows": chosen.demo.shows if chosen.demo else "",
+        "kind": chosen.kind,
+        "matched": chosen.matched,
+        "label": chosen.label,
+        "bilingual": chosen.bilingual,
+        "why": demos.relevance(chosen, folded["category"], strongest),
+    }
+
+
 def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
     router = APIRouter(prefix="/control/sales", tags=["sales"])
 
@@ -288,11 +312,18 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 verified,
             )
 
+        chosen = demos.select(
+            category,
+            prospect_demo_url=demo,
+            weaknesses=tuple(
+                f["feature"] for f in _observations(merged) if f.get("status") == "not_found"
+            ),
+        )
         score = scoring.score(
             business_id=business["id"], name=business["name"], website=business["website"],
             phone=business["phone"], email=business["email"], category=category,
             audit=merged, audit_count=audits, demo_url=demo,
-            sample_slug=SAMPLE_FOR.get(category, ""),
+            sample_slug=(chosen.demo.slug if chosen.demo else ""),
         )
 
         fresh_hours = _hours_since(verified_at or audited_at)
@@ -300,7 +331,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             "business": business, "category": category, "score": score,
             "audit": merged, "raw_audit": audit, "verified": verified, "live": live,
             "audited_at": audited_at, "verified_at": verified_at,
-            "demo": demo, "shots": shots, "shots_at": shots_at,
+            "demo": demo, "chosen": chosen, "shots": shots, "shots_at": shots_at,
             "drafts": drafts, "messages": messages, "sent": sent, "replies": replies,
             "timeline": timeline, "fresh_hours": fresh_hours,
             "stale": fresh_hours is None or fresh_hours > STALE_AFTER_HOURS,
@@ -403,13 +434,14 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             "last_verified": _age(folded["fresh_hours"]),
             "contact": business["phone"] or business["email"],
             "contactability": contact,
-            "strongest": (LABEL.get(score.speakable[0], score.speakable[0])
-                          if score.speakable else ""),
+            "strongest": (lambda ls: LABEL.get(ls[0], ls[0]) if ls else "")(
+                demos.leadable(folded["chosen"], score.speakable)),
             "speakable": [LABEL.get(f, f) for f in score.speakable],
             "demo": folded["demo"],
-            "demo_kind": ("prospect" if folded["demo"] else
-                          "sample" if SAMPLE_FOR.get(folded["category"]) else "none"),
-            "sample": SAMPLE_FOR.get(folded["category"], ""),
+            "demo_kind": folded["chosen"].kind,
+            "demo_matched": folded["chosen"].matched,
+            "demo_name": (folded["chosen"].demo.name if folded["chosen"].demo
+                          else "built for them" if folded["chosen"].prospect_url else ""),
             "stage": _stage(folded),
             "has_shot": bool(folded["shots"].get("desktop", {}).get("captured")),
             "load_ms": (folded["live"].get("load_ms") or folded["audit"].get("load_ms") or 0),
@@ -503,8 +535,9 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         claim may already be false; already-contacted means this is a follow-up
         and a different message.
         """
+        pool = _all()
         out, blocked = [], []
-        for folded in _all():
+        for folded in pool:
             card = _card(folded)
             reasons = []
             if not folded["score"].audit_complete:
@@ -519,24 +552,69 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 reasons.append(f"already {card['stage'].lower()} — this would be a follow-up")
             if not (folded["drafts"] or folded["messages"]):
                 reasons.append("no draft prepared")
+            elif folded["messages"]:
+                others = tuple(
+                    consistency.Other(
+                        business_id=f["business"]["id"], name=f["business"]["name"],
+                        phone=f["business"]["phone"],
+                        host=re.sub(r"^https?://(www\.)?", "",
+                                    f["business"]["website"]).split("/")[0],
+                        demo_url=f["demo"])
+                    for f in pool
+                )
+                faults = {p for m in folded["messages"]
+                          for p in consistency.check(
+                              m["body"], business_id=folded["business"]["id"],
+                              speakable=folded["score"].speakable,
+                              unfixable=folded["score"].unfixable,
+                              unverified=folded["score"].unverified,
+                              chosen=folded["chosen"], category=folded["category"],
+                              others=others)}
+                if faults:
+                    reasons.append("draft requires review: " + "; ".join(sorted(faults)[:2]))
+            if not folded["chosen"].matched and folded["chosen"].kind != "prospect":
+                reasons.append("no Qevik sample genuinely matches this trade")
             (blocked if reasons else out).append({**card, "blocked_by": reasons})
         return {"ready": out[:limit], "blocked": blocked[:40],
                 "ready_total": len(out), "blocked_total": len(blocked)}
 
     @router.get("/prospects/{business_id}", dependencies=[Depends(requires(Scope.READ))])
     def prospect(business_id: str) -> dict:
-        for folded in _all():
+        everything = _all()
+        for folded in everything:
             if folded["business"]["id"] != business_id:
                 continue
             score, business = folded["score"], folded["business"]
             findings = _findings(folded)
+            # The angle the message can actually open with, by the same rule the
+            # generator uses — so the headline and the draft never disagree.
+            leads = demos.leadable(folded["chosen"], score.speakable)
+            lead = leads[0] if leads else ""
             contact = contactability(business["phone"], business["email"])
+            others = tuple(
+                consistency.Other(
+                    business_id=f["business"]["id"], name=f["business"]["name"],
+                    phone=f["business"]["phone"],
+                    host=re.sub(r"^https?://(www\.)?", "", f["business"]["website"]).split("/")[0],
+                    demo_url=f["demo"],
+                )
+                for f in everything
+            )
             drafts = [
                 {"channel": m["channel"], "status": m["status"], "recipient": m["recipient"],
                  "subject": m["subject"], "body": m["body"],
                  "created_at": m["created_at"].isoformat() if m["created_at"] else "",
                  "sent_at": m["sent_at"].isoformat() if m["sent_at"] else "",
-                 "provider_message_id": m["provider_message_id"]}
+                 "provider_message_id": m["provider_message_id"],
+                 # Validated on the way out, with the same checker that wrote it.
+                 # A draft that looks fine and is about two businesses at once is
+                 # worse than one that is obviously unfinished.
+                 "problems": consistency.check(
+                     m["body"], business_id=business["id"],
+                     speakable=score.speakable, unfixable=score.unfixable,
+                     unverified=score.unverified, chosen=folded["chosen"],
+                     category=folded["category"], others=others),
+                 }
                 for m in folded["messages"]
             ]
             return {
@@ -575,13 +653,18 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                                    for c in score.components],
                 },
                 "strongest": ({
-                    "feature": score.speakable[0],
-                    "label": LABEL.get(score.speakable[0], score.speakable[0]),
-                    "impact": IMPACT.get(score.speakable[0], ""),
-                    "remedy": REMEDY.get(score.speakable[0], ""),
+                    "feature": lead,
+                    "label": LABEL.get(lead, lead),
+                    "impact": IMPACT.get(lead, ""),
+                    "remedy": REMEDY.get(lead, ""),
                     "evidence": next((f["evidence"] for f in findings
-                                      if f["feature"] == score.speakable[0]), ""),
-                } if score.speakable else None),
+                                      if f["feature"] == lead), ""),
+                    # A bigger gap exists that the linked demo cannot answer.
+                    # Say so, rather than headlining something the message
+                    # deliberately does not raise.
+                    "deferred": [LABEL.get(f, f) for f in score.speakable
+                                 if f not in leads],
+                } if lead else None),
                 "strengths": [f for f in findings
                               if f["state"] == "CONFIRMED_PRESENT" and not f["refuted"]],
                 "opportunities": [f for f in findings
@@ -598,22 +681,13 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 } or {"desktop": {"captured": False, "reason": "not captured"},
                       "mobile": {"captured": False, "reason": "not captured"}},
                 "screenshots_at": folded["shots_at"].isoformat() if folded["shots_at"] else "",
-                "demo": {
-                    "url": folded["demo"] or (f"https://sites.qevik.ai/{SAMPLE_FOR[folded['category']]}/"
-                                              if SAMPLE_FOR.get(folded["category"]) else ""),
-                    "kind": "prospect" if folded["demo"] else
-                            "sample" if SAMPLE_FOR.get(folded["category"]) else "none",
-                    "label": ("Prospect-specific unsolicited demo" if folded["demo"]
-                              else "Relevant Qevik sample" if SAMPLE_FOR.get(folded["category"])
-                              else "No demo matches this industry"),
-                    "why": (f"Built for {business['name']} from their own public listing details."
-                            if folded["demo"] else
-                            SAMPLE_WHY.get(SAMPLE_FOR.get(folded["category"], ""), "")),
-                },
+                "demo": _demo_view(folded),
                 "outreach": {
                     "channel": contact["channel"], "why": contact["why"],
                     "contactability": contact, "drafts": drafts,
                     "do_not_say": _do_not_say(folded),
+                    "ready": bool(drafts) and not any(d["problems"] for d in drafts),
+                    "problems": sorted({p for d in drafts for p in d["problems"]}),
                 },
                 "timeline": folded["timeline"],
                 "stage": _stage(folded),
@@ -681,27 +755,6 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         return {"recorded": True}
 
     return router
-
-
-#: Kept in step with `infra/score_prospects.py`. Duplicated deliberately: the
-#: kernel may not import from `infra/`, and a shared constants module for two
-#: dictionaries would be indirection for its own sake.
-SAMPLE_FOR = {
-    "dental": "sample", "health": "sample", "food": "sample-nar",
-    "beauty": "sample-atelier", "automotive": "sample-apex", "home": "sample-homefix",
-    "professional": "sample-meridian", "retail": "sample-verdant", "fitness": "sample-kilo",
-}
-
-SAMPLE_WHY = {
-    "sample": "A bilingual clinic site with verified hours and tap-to-call.",
-    "sample-nar": "An editorial restaurant page — a premium experience rather than a generic template.",
-    "sample-atelier": "A salon treatment list with real durations and prices.",
-    "sample-apex": "A four-step quote configurator that prices live.",
-    "sample-homefix": "Built for someone on a phone who wants a number and a human.",
-    "sample-meridian": "Property search with filters, a saved list and a call-back request.",
-    "sample-verdant": "A filterable catalogue with a working basket.",
-    "sample-kilo": "A mobile-first member app: bookings, sessions and progress.",
-}
 
 
 def install(app) -> None:

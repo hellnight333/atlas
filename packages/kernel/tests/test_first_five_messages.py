@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from atlas_kernel.outreach import identity, offer, scoring
+from atlas_kernel.outreach import demos, identity, offer, scoring
 
 INFRA = Path(__file__).resolve().parents[3] / "infra"
 
@@ -48,8 +48,11 @@ def make(category="dental", absent=("arabic", "whatsapp"), present=("contact_for
     )
 
 
-DEMO = "https://sites.qevik.ai/demo-test-business/"
-SAMPLE = "https://sites.qevik.ai/sample-nar/"
+#: The generator takes a Selection rather than a bare URL, so the link, the
+#: demo's name and the trade it is described as cannot come apart.
+DEMO = demos.Selection(demo=None, matched=True,
+                       prospect_url="https://sites.qevik.ai/demo-test-business/")
+SAMPLE = demos.Selection(demo=demos.BY_SLUG["sample-nar"], matched=True)
 
 
 # --- what may never appear -------------------------------------------------
@@ -59,7 +62,7 @@ def test_no_message_offers_to_fix_booking(first_five) -> None:
     for text in (first_five.whatsapp(score, DEMO, "dental"),
                  first_five.email(score, DEMO, "dental")[1]):
         assert "booking_link" not in text
-        assert first_five.audit_message(text, score) == []
+        assert first_five.audit_message(text, score, chosen=DEMO, category="dental") == []
 
 
 def test_no_message_mentions_a_not_verified_feature(first_five) -> None:
@@ -105,7 +108,7 @@ def test_arabic_is_not_raised_when_the_linked_demo_is_english_only(first_five) -
 def test_a_sample_is_never_implied_to_be_their_own_site(first_five) -> None:
     score = make()
     sample = first_five.whatsapp(score, SAMPLE, "food")
-    assert "our own sample, not a client's" in sample
+    assert "It's ours, not a client's" in sample
     assert "built you a working example" not in sample
 
     theirs = first_five.whatsapp(score, DEMO, "dental")
@@ -165,13 +168,25 @@ def test_the_listing_headline_is_trimmed_to_a_usable_name(first_five, listing, e
     ],
 )
 def test_the_guard_rejects_a_message_that_oversteps(first_five, text) -> None:
-    assert first_five.audit_message(text, make()) != [], f"guard let through: {text!r}"
+    assert first_five.audit_message(text, make(), chosen=DEMO, category="dental") != [], \
+        f"guard let through: {text!r}"
+
+
+def test_a_link_nobody_selected_is_itself_a_fault(first_five) -> None:
+    """A message may not carry a demo URL the context never chose."""
+    nothing = demos.Selection(demo=None)
+    problems = first_five.audit_message(
+        "Hello.\n\nhttps://sites.qevik.ai/sample-nar/", make(),
+        chosen=nothing, category="dental")
+    assert any("none was selected" in p for p in problems), problems
 
 
 def test_the_guard_passes_a_genuinely_generated_message(first_five) -> None:
     """A check that rejects everything is not a check."""
     score = make()
-    assert first_five.audit_message(first_five.whatsapp(score, DEMO, "dental"), score) == []
+    assert first_five.audit_message(
+        first_five.whatsapp(score, DEMO, "dental"), score,
+        chosen=DEMO, category="dental") == []
 
 
 def test_the_whatsapp_draft_stays_short(first_five) -> None:

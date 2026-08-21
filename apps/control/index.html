@@ -485,8 +485,10 @@ function card(c) {
           : `<p class="gap muted">${c.audit_complete ? "No confirmed gap we fix" : "Audit did not complete"}</p>`}
         <div class="foot">
           <span>${esc(c.contact || "no contact")}</span>
-          <span style="margin-left:auto">${c.demo_kind === "prospect" ? "Demo built" :
-            c.demo_kind === "sample" ? "Sample matches" : "No demo"}</span>
+          <span style="margin-left:auto">${
+            c.demo_kind === "prospect" ? "Demo built for them"
+            : c.demo_kind === "sample" ? esc(c.demo_name) + " matches"
+            : "No matched demo"}</span>
         </div>
       </div>
     </button>`;
@@ -618,6 +620,9 @@ async function drawProspect(id) {
       <p>${esc(d.strongest.impact)}</p>
       ${d.strongest.evidence ? `<div class="ev">${esc(d.strongest.evidence)}</div>` : ""}
       ${d.strongest.remedy ? `<p class="fix"><b>Qevik can show:</b> ${esc(d.strongest.remedy)}</p>` : ""}
+      ${d.strongest.deferred && d.strongest.deferred.length ? `<p class="small" style="color:#9AA5B8;margin-top:.7rem">
+        Also confirmed missing, but not raised in the message because the linked demo does not
+        demonstrate it: ${esc(d.strongest.deferred.join(", "))}.</p>` : ""}
     </div>` : ""}
 
     <div class="cols">
@@ -679,10 +684,17 @@ async function drawProspect(id) {
               <div class="row" style="margin-bottom:.5rem">
                 <span class="eyebrow">First message</span>
                 <span class="tag ${wa.status === "approved" ? "present" : "flat"}">${esc(wa.status)}</span>
+                ${d.outreach.ready ? `<span class="tag present">✓ Ready to copy</span>`
+                  : `<span class="tag absent">✕ Requires review</span>`}
               </div>
+              ${d.outreach.ready ? "" : `<div class="card pad" style="border-color:var(--absent);margin-bottom:.6rem">
+                <b class="small" style="color:var(--absent)">This draft is not safe to send.</b>
+                <ul class="dns" style="margin-top:.4rem">${
+                  d.outreach.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul></div>`}
               <div class="msg">${esc(wa.body)}</div>
               <div class="row" style="margin-top:.6rem">
-                ${copyBtn(wa.body, "Copy message")}
+                ${d.outreach.ready ? copyBtn(wa.body, "Copy message")
+                  : `<span class="small muted">Copy is withheld until the draft passes its checks.</span>`}
                 ${con.whatsapp === "REACHABLE" && con.wa_link
                   ? `<a class="btn sm" href="${esc(con.wa_link)}" target="_blank" rel="noopener">Open WhatsApp</a>`
                   : `<span class="small muted">No WhatsApp — ${esc(con.why)}</span>`}
@@ -706,17 +718,33 @@ async function drawProspect(id) {
 
         <section class="card">
           <div class="pad" style="border-bottom:1px solid var(--rule)">
-            <p class="eyebrow">Recommended demonstration</p>
+            <p class="eyebrow">What Qevik can show</p>
           </div>
           <div class="pad stack">
-            <div>
-              <b>${esc(d.demo.label)}</b>
-              <p class="small muted" style="margin-top:.25rem">${esc(d.demo.why)}</p>
-            </div>
-            ${d.demo.url ? `<div class="row">
-              <a class="btn sm" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Open demo</a>
-              ${copyBtn(d.demo.url, "Copy URL")}</div>` : ""}
-            <p class="small muted">Qevik has no customers. A sample is Qevik's own work, never a client's.</p>
+            ${d.demo.url ? `
+              <div>
+                <h3 style="font-size:1.1rem">${esc(d.demo.name || "Built for them")}</h3>
+                <p class="small muted" style="margin-top:.2rem">
+                  ${esc(d.demo.industry || "This business")} ·
+                  <span class="tag ${d.demo.kind === "prospect" ? "accent" : "flat"}">${esc(d.demo.label)}</span>
+                </p>
+              </div>
+              <div>
+                <p class="eyebrow" style="margin-bottom:.3rem">Why this is relevant</p>
+                <p class="small">${esc(d.demo.why)}</p>
+              </div>
+              <p class="small mono muted" style="word-break:break-all">${esc(d.demo.url)}</p>
+              <div class="row">
+                <a class="btn sm" href="${esc(d.demo.url)}" target="_blank" rel="noopener">Open demo</a>
+                ${copyBtn(d.demo.url, "Copy URL")}</div>
+            ` : `
+              <div>
+                <h3 style="font-size:1.05rem">No directly matched demo</h3>
+                <p class="small muted" style="margin-top:.3rem">${esc(d.demo.why)}</p>
+              </div>`}
+            <p class="small muted" style="border-top:1px solid var(--rule);padding-top:.6rem">
+              Qevik has no customers. A sample is Qevik's own work, never a client's, and only a
+              demo built for this business is described that way.</p>
           </div>
         </section>
 

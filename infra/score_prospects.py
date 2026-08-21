@@ -30,25 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "kerne
 
 from atlas_kernel.opportunity.models import BusinessEvent  # noqa: E402
 from atlas_kernel.opportunity.repository import OpportunityRepository  # noqa: E402
-from atlas_kernel.outreach import scoring  # noqa: E402
+from atlas_kernel.outreach import demos, scoring  # noqa: E402
 
 FACTORY = "sales_experiment"
-
-#: The nearest thing Qevik has actually built, per industry. Showing a prospect
-#: one page that resembles their own business beats showing them ten that do
-#: not — and a sample we did not build for their trade is worth less than one
-#: we did, which is what `relevance` scores.
-SAMPLE_FOR = {
-    "dental": "sample",
-    "health": "sample",
-    "food": "sample-nar",
-    "beauty": "sample-atelier",
-    "automotive": "sample-apex",
-    "home": "sample-homefix",
-    "professional": "sample-meridian",
-    "retail": "sample-verdant",
-    "fitness": "sample-kilo",
-}
 
 #: Businesses invented by the test suite before test isolation landed. They have
 #: generated domains and no phone, and they are not prospects.
@@ -124,6 +108,18 @@ def load() -> list[dict]:
     return out
 
 
+def _slug(candidate: dict) -> str:
+    """The sample this prospect would actually be shown, or nothing.
+
+    Chosen by `outreach.demos`, which is the only place demo relevance is
+    decided. The scorer used to keep its own category->sample map beside two
+    others; they drifted, and professional services ended up pointed at the
+    real-estate sample.
+    """
+    selection = demos.select(candidate["category"])
+    return selection.demo.slug if selection.demo else ""
+
+
 def scored(candidates: list[dict]) -> list[scoring.Score]:
     return sorted(
         (
@@ -131,7 +127,7 @@ def scored(candidates: list[dict]) -> list[scoring.Score]:
                 business_id=c["id"], name=c["name"], website=c["website"],
                 phone=c["phone"], email=c["email"], category=c["category"],
                 audit=c["audit"], audit_count=c["audit_count"],
-                demo_url=c["demo_url"], sample_slug=SAMPLE_FOR.get(c["category"], ""),
+                demo_url=c["demo_url"], sample_slug=_slug(c),
             )
             for c in candidates
         ),
