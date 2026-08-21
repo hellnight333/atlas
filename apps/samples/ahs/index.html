@@ -309,9 +309,45 @@ aside.brief .progress{display:flex;gap:3px;margin-bottom:.9rem}
 aside.brief .progress i{flex:1 1 0;height:2px;background:rgba(232,224,210,.16)}
 aside.brief .progress i.on{background:var(--gold)}
 
+/* ---------- the contact block, inside the enquiry ---------- */
+/* Their phone and email are plain text on all twelve of their pages — not one
+ * tel: or mailto: anywhere. Making them tappable is the single cheapest
+ * conversion fix on their site, so the concept has to show it working. */
+.reach{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-top:1.6rem;
+  background:rgba(201,162,39,.24)}
+.reach a{background:var(--night);padding:1.1rem 1.2rem;display:block;transition:background .18s}
+.reach a:hover{background:var(--night-2)}
+.reach .k{display:block;font-size:.62rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--on-night-dim)}
+.reach .v{display:block;font-family:var(--display);font-size:1.02rem;color:var(--gold-lift);
+  margin-top:.35rem;word-break:break-word}
+.reach .wa .v{color:#7BD98F}
+.enquiry .split{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:center;
+  margin-top:1.4rem}
+.enquiry .or{font-size:.66rem;letter-spacing:.2em;text-transform:uppercase;color:var(--on-night-dim)}
+.cta.wa{background:#1F7A3A;color:#F2FBF4}
+.cta.wa:hover{background:#248F45}
+
 /* ---------- footer / disclosure ---------- */
-footer{background:var(--night-2);padding:2.6rem 0;border-top:1px solid rgba(201,162,39,.2)}
-footer .grid{display:grid;grid-template-columns:1.4fr 1fr;gap:2rem;align-items:start}
+footer{background:var(--night-2);padding:3rem 0 2.4rem;border-top:1px solid rgba(201,162,39,.2)}
+footer .cols{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:2.4rem;align-items:start;
+  padding-bottom:2.2rem;border-bottom:1px solid rgba(232,224,210,.1)}
+footer .mark{font-size:1rem}
+footer .blurb{margin-top:1rem;font-size:.85rem;line-height:1.7;color:var(--on-night-dim);
+  max-width:38ch}
+footer h3{font-family:var(--display);font-size:.68rem;letter-spacing:.26em;text-transform:uppercase;
+  color:var(--gold);margin-bottom:.9rem}
+footer .list li{margin-bottom:.5rem}
+footer .list a{font-size:.86rem;color:var(--on-night-dim)}
+footer .list a:hover{color:var(--gold-lift)}
+footer .who{margin-top:.4rem;font-size:.86rem;line-height:1.9;color:var(--on-night-dim)}
+footer .who a{color:var(--on-night)}
+footer .who a:hover{color:var(--gold-lift)}
+footer .social{display:flex;gap:.5rem;margin-top:1rem}
+footer .social a{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;
+  border:1px solid rgba(201,162,39,.4);padding:.4rem .7rem;color:var(--gold)}
+footer .social a:hover{background:var(--gold);color:var(--night)}
+footer .fine{padding-top:1.6rem;display:grid;grid-template-columns:1.6fr 1fr;gap:2rem}
 footer p{font-size:.8rem;line-height:1.7;color:var(--on-night-dim)}
 footer b{color:var(--gold-lift);font-weight:600}
 footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(--on-night-dim);
@@ -367,6 +403,9 @@ footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(-
   .founder{padding-bottom:3.6rem}
   .enquiry{padding:3.6rem 0 8rem}
   .fields{grid-template-columns:1fr}
+  .reach{grid-template-columns:1fr}
+  .enquiry .split{grid-template-columns:1fr}
+  footer .cols,footer .fine{grid-template-columns:1fr;gap:1.6rem}
   .summary .k{flex:0 0 92px}
   footer{padding:2rem 0 7rem}
   footer .grid{grid-template-columns:1fr}
@@ -387,6 +426,15 @@ footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(-
   .dock .bar .val{font-family:var(--display);font-size:.98rem;color:var(--gold-lift);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.15rem}
   .dock .bar .chev{color:var(--gold);font-size:.8rem}
+  /* The brief must not be the only thing reachable at the bottom of a phone.
+   * Call and WhatsApp sit beside it rather than behind it. */
+  .dock{display:flex;align-items:center;gap:.5rem}
+  .dock .bar{flex:1 1 auto;min-width:0}
+  .dock .quick{display:flex;gap:.4rem;flex:0 0 auto}
+  .dock .quick a{width:42px;height:42px;display:grid;place-items:center;border-radius:2px;
+    font-size:.62rem;letter-spacing:.06em;font-weight:700}
+  .dock .quick .tel{border:1px solid rgba(201,162,39,.5);color:var(--gold)}
+  .dock .quick .wa{background:#1F7A3A;color:#F2FBF4}
   .sheet{position:fixed;inset:0;z-index:40;background:rgba(8,7,6,.72);display:none}
   .sheet[data-open=true]{display:block}
   .sheet .panel{position:absolute;left:0;right:0;bottom:0;background:var(--night-2);
@@ -426,7 +474,7 @@ footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(-
       <a href="#about">About</a>
       <a href="#brief">Brief</a>
     </nav>
-    <a href="#brief" class="call">Call us</a>
+    <a href="tel:+971557492608" class="call">Call us</a>
   </header>
   <div class="inner wrap">
     <div class="eyebrow">
@@ -580,29 +628,85 @@ footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(-
       <label><span>Phone</span><input name="phone" type="tel" autocomplete="tel"></label>
       <label class="full"><span>Anything else about the event</span>
         <textarea name="notes" rows="2"></textarea></label>
-      <div class="full" style="margin-top:.6rem">
+      <div class="full" style="margin-top:.6rem;display:flex;gap:.7rem;flex-wrap:wrap">
         <button type="submit" class="cta">Get a custom offer</button>
+        <a class="cta wa" id="wabrief" href="https://wa.me/971557492608"
+           target="_blank" rel="noopener">WhatsApp AHS</a>
       </div>
     </form>
+    <div class="split">
+      <span class="or">Or reach AHS directly — these are their own published details</span>
+    </div>
+    <div class="reach">
+      <a href="tel:+971557492608">
+        <span class="k">Call</span><span class="v">+971 55 749 2608</span></a>
+      <a class="wa" href="https://wa.me/971557492608" target="_blank" rel="noopener">
+        <span class="k">WhatsApp</span><span class="v">+971 55 749 2608</span></a>
+      <a href="mailto:Info@ahscatering.com">
+        <span class="k">Email</span><span class="v">Info@ahscatering.com</span></a>
+    </div>
+    <p class="disclaim" id="formstatus"></p>
     <p class="disclaim" id="formnote">This is a demonstration interaction. Nothing is sent,
-      no enquiry is created, and no event is booked or held.</p>
+      no enquiry is created, and no event is booked or held. The call, WhatsApp and email
+      links above go to AHS's own published contact details and are not routed through
+      Qevik.</p>
   </div>
 </section>
 
 <footer>
-  <div class="wrap grid">
-    <div>
-      <p><b>Concept / sample site built by Qevik. Not a client website.</b><br>
-        Not affiliated with, commissioned by, or connected to AHS Catering &amp; Events, and
-        not their official site. Built from information AHS publishes about itself, to show
-        what a different structure could look like.</p>
-      <p class="src">Photography: none of AHS's photographs are reproduced here. Every image
-        region is a composed treatment and says so. Their pictures remain theirs.</p>
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <span class="mark">AHS<small>Beyond Catering</small></span>
+        <p class="blurb">Our team of qualified and experienced personnel is always prepared
+          to provide a comprehensive service for a unique experience.</p>
+        <div class="social">
+          <a href="https://www.instagram.com/ahscatering" target="_blank" rel="noopener">Instagram</a>
+          <a href="https://www.linkedin.com/company/ahs-catering-and-events" target="_blank" rel="noopener">LinkedIn</a>
+        </div>
+      </div>
+      <div>
+        <h3>What we do</h3>
+        <ul class="list">
+          <li><a href="#corporate">Corporate catering</a></li>
+          <li><a href="#private">Private catering</a></li>
+          <li><a href="#live">Live station catering</a></li>
+          <li><a href="#private">Wedding catering</a></li>
+          <li><a href="#corporate">Gala catering</a></li>
+          <li><a href="#corporate">Canapé &amp; dessert catering</a></li>
+          <li><a href="#private">Ramadan</a></li>
+          <li><a href="#eatlux">EATLUX</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Get in touch</h3>
+        <p class="who">
+          <a href="tel:+971557492608">+971 55 749 2608</a><br>
+          <a href="https://wa.me/971557492608" target="_blank" rel="noopener">WhatsApp</a><br>
+          <a href="mailto:Info@ahscatering.com">Info@ahscatering.com</a><br>
+          <span>Dubai Investment Park 2</span>
+        </p>
+        <p class="who" style="margin-top:.9rem"><a href="#about">About</a> ·
+          <a href="#brief">Plan your event</a></p>
+      </div>
     </div>
-    <div>
-      <p><b>Qevik</b> — by Asia Link Internet Content Provider LLC<br>
-        Office 301, Al Othman Building, Deiram, Dubai<br>
-        <span class="docket">+971 50 102 9104</span></p>
+    <div class="fine">
+      <div>
+        <p><b>Concept / sample site built by Qevik. Not a client website.</b><br>
+          Not affiliated with, commissioned by, or connected to AHS Catering &amp; Events, and
+          not their official site. Built from information AHS publishes about itself, to show
+          what a different structure could look like. The official site is
+          <a href="https://ahscatering.com/" target="_blank" rel="noopener"
+             style="color:var(--gold-lift)">ahscatering.com</a>.</p>
+        <p class="src">Contact details, address and social accounts above are AHS's own, as
+          published on their site. Photography: none of their photographs are reproduced
+          here — every image region is a composed treatment and says so.</p>
+      </div>
+      <div>
+        <p><b>Qevik</b> — by Asia Link Internet Content Provider LLC<br>
+          Office 301, Al Othman Building, Deiram, Dubai<br>
+          <span class="docket">+971 50 102 9104</span></p>
+      </div>
     </div>
   </div>
 </footer>
@@ -630,6 +734,11 @@ footer .src{margin-top:1rem;font-family:var(--mono);font-size:.68rem;color:var(-
       <span class="val" id="dockval">Tap to start</span></span>
     <span class="chev">▲</span>
   </button>
+  <span class="quick">
+    <a class="tel" href="tel:+971557492608" aria-label="Call AHS">CALL</a>
+    <a class="wa" href="https://wa.me/971557492608" target="_blank" rel="noopener"
+       aria-label="WhatsApp AHS">WA</a>
+  </span>
 </div>
 <div class="sheet" id="sheet" data-open="false">
   <div class="panel">
@@ -842,11 +951,14 @@ document.addEventListener("click", function(event){
 
 $("form").addEventListener("submit", function(event){
   event.preventDefault();
-  var note = $("formnote");
-  note.innerHTML = "<b style='color:var(--gold-lift)'>Nothing was sent.</b> This is a "
+  /* Writes to its own node. Replacing the standing note used to erase the line
+   * saying the contact links are AHS's own and not routed through Qevik —
+   * exactly the sentence that must survive somebody pressing the button. */
+  var status = $("formstatus");
+  status.innerHTML = "<b style='color:var(--gold-lift)'>Nothing was sent.</b> This is a "
     + "demonstration interaction on a concept page — no enquiry was created, nothing "
     + "reached AHS, and no event is booked or held.";
-  note.scrollIntoView({block:"center", behavior:"smooth"});
+  status.scrollIntoView({block:"center", behavior:"smooth"});
 });
 
 document.addEventListener("keydown", function(e){
