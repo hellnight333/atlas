@@ -58,19 +58,23 @@ def load() -> list[dict]:
         }
         rows = list(connection.execute(text(
             "select business_id, kind, detail, at from atlas_business_events "
-            "where kind in ('website_audited', 'website_demo_published', 'claims_verified') "
+            "where kind in ('website_audited', 'website_demo_published', "
+            "'claims_verified', 'business_classified') "
             "order by at")))
 
     audits: dict[str, dict] = {}
     counts: dict[str, int] = {}
-    demos: dict[str, str] = {}
+    demo_urls: dict[str, str] = {}
     verified: dict[str, dict] = {}
     live: dict[str, dict] = {}
+    classified: dict[str, str] = {}
     for business_id, kind, detail, _ in rows:
         data = _detail(detail)
         if kind == "website_audited":
             audits[business_id] = data          # last one wins; the list is ordered
             counts[business_id] = counts.get(business_id, 0) + 1
+        elif kind == "business_classified":
+            classified[business_id] = data.get("category", "")
         elif kind == "claims_verified":
             # Merged, not replaced. A later run only re-tests what is still
             # flagged, so treating the newest event as the whole truth silently
@@ -81,7 +85,7 @@ def load() -> list[dict]:
                 {c["feature"]: c["verdict"] for c in data.get("claims", [])})
             live[business_id] = data
         else:
-            demos[business_id] = data.get("demo_url", "")
+            demo_urls[business_id] = data.get("demo_url", "")
 
     out = []
     for business_id, audit in audits.items():
@@ -90,7 +94,10 @@ def load() -> list[dict]:
             continue
         if _FIXTURE_HOST.search(business["website"]):
             continue                            # test fixture, not a prospect
-        category = audit.get("category") or ("dental" if demos.get(business_id) else "")
+        # An evidenced classification beats the discovery query's bucket.
+        category = (classified.get(business_id)
+                    or audit.get("category")
+                    or ("dental" if demo_urls.get(business_id) else ""))
         checks = verified.get(business_id, {})
         if checks:
             audit = {**audit,
@@ -103,7 +110,7 @@ def load() -> list[dict]:
             "verified": bool(checks),
             "audit": audit,
             "audit_count": counts[business_id],
-            "demo_url": demos.get(business_id, ""),
+            "demo_url": demo_urls.get(business_id, ""),
         })
     return out
 

@@ -43,7 +43,7 @@ class Demo:
     industry: str
     #: Prospect categories this genuinely suits. Empty means "never auto-select".
     serves: frozenset[str]
-    #: The bare noun a message uses — "restaurant", "B2B software". The article
+    #: The bare noun a message uses — "restaurant site", "B2B software". The article
     #: belongs to the sentence, not the data.
     #: Comes from the demo, not from a table keyed on the prospect's category —
     #: that separation is what produced "property company" for a staffing agency.
@@ -65,56 +65,66 @@ class Demo:
 #: Every sample, and the only place any of them is described.
 DEMOS: tuple[Demo, ...] = (
     Demo("sample", "the bilingual clinic sample", "Healthcare",
-         frozenset({"health", "dental"}), "clinic",
+         frozenset({"health", "dental"}), "bilingual clinic site",
          "English and Arabic side by side, verified opening hours and tap-to-call",
          frozenset({"arabic", "click_to_call", "whatsapp", "opening_hours",
                     "google_maps", "structured_data", "contact_form"}), bilingual=True),
     Demo("sample-nar", "NAR", "Fine dining",
-         frozenset({"food"}), "restaurant",
+         frozenset({"food"}), "restaurant site",
          "a priced menu, a room gallery and a table request that says plainly it is not connected",
          frozenset({"contact_form", "opening_hours", "structured_data"})),
     Demo("sample-atelier", "Atelier", "Luxury salon",
-         frozenset({"beauty"}), "salon",
+         frozenset({"beauty"}), "salon site",
          "a treatment list with real durations and prices, and today's opening hours",
          frozenset({"opening_hours", "structured_data", "contact_form"})),
     Demo("sample-apex", "APEX Detailing", "Automotive",
-         frozenset({"automotive"}), "car detailing",
+         frozenset({"automotive"}), "car detailing site",
          "a four-step quote configurator that prices the job live",
          frozenset({"contact_form", "structured_data"})),
     Demo("sample-homefix", "HomeFix", "Home services",
-         frozenset({"home"}), "home services",
+         frozenset({"home"}), "home services site",
          "an estimator above the fold and two thumb-sized buttons pinned to the bottom of the phone",
          frozenset({"click_to_call", "whatsapp", "opening_hours", "contact_form"})),
     Demo("sample-meridian", "Meridian", "Real estate",
-         frozenset({"real_estate", "property"}), "estate agency",
+         frozenset({"real_estate", "property"}), "estate agency site",
          "property search with filters, a saved list and a call-back request",
          frozenset({"contact_form", "google_maps"})),
     Demo("sample-verdant", "Verdant", "Retail",
-         frozenset({"retail"}), "shop",
+         frozenset({"retail"}), "retail site",
          "a filterable catalogue, live search and a working basket",
          frozenset({"contact_form", "structured_data"})),
-    Demo("sample-ledgerloop", "LedgerLoop", "B2B software",
-         frozenset({"professional"}), "B2B software",
+    Demo("sample-ledgerloop", "LedgerLoop", "B2B software site",
+         frozenset({"professional"}), "B2B software site",
          "a business site with the product itself running inside the page, and clear pricing",
          frozenset({"contact_form", "structured_data", "meta_description"})),
     Demo("sample-foundry", "Foundry", "AI and automation",
-         frozenset({"technology", "ai"}), "workflow automation",
+         frozenset({"technology", "ai"}), "workflow automation concept",
          "a workflow product with explicit states and the evidence behind each one",
          frozenset({"opening_hours", "structured_data"})),
     Demo("sample-pulse", "Pulse", "Fitness analytics",
-         frozenset(), "training log",
+         frozenset(), "training log app",
          "a product interface rather than a marketing page — charts, goals and a session history",
          frozenset()),
     Demo("sample-kilo", "Kilo", "Gym membership",
-         frozenset({"fitness"}), "gym",
+         frozenset({"fitness"}), "gym member app",
          "a member app: class booking that takes a seat, a workout runner and a membership card",
          frozenset({"opening_hours", "click_to_call"})),
     Demo("sample-carrot", "Carrot Dash", "Games",
          frozenset({"games"}), "browser game",
          "a genuinely playable one-button game — physics, rising difficulty and a kept score",
          frozenset()),
+    # Recruitment is its own category, deliberately not folded into
+    # "professional". A staffing business and an accountancy practice are both
+    # professional services and need completely different products; collapsing
+    # them is how the real-estate sample reached a staffing agency.
+    Demo("sample-hire360", "HIRE360", "Hospitality recruitment",
+         frozenset({"recruitment", "staffing", "hospitality"}), "hospitality recruitment platform",
+         "a two-sided talent marketplace — search and filter candidates, open a profile, "
+         "shortlist, compare people side by side, and raise a hiring brief",
+         frozenset({"arabic", "click_to_call", "contact_form", "structured_data"}),
+         bilingual=True),
     Demo("sample-wordrush", "Word Rush", "Education",
-         frozenset({"education"}), "bilingual learning",
+         frozenset({"education"}), "bilingual learning app",
          "an interface that switches language and direction at runtime, not at build time",
          frozenset({"arabic"}), bilingual=True),
 )
@@ -246,3 +256,8 @@ def leadable(selection: Selection, weaknesses: tuple[str, ...]) -> tuple[str, ..
     if selection.url and not selection.bilingual:
         return tuple(w for w in weaknesses if w != "arabic")
     return weaknesses
+
+
+def article(noun: str) -> str:
+    """"a" or "an", for a noun the registry supplies."""
+    return "an" if noun[:1].lower() in "aeiou" else "a"

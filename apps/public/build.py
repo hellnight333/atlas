@@ -172,6 +172,26 @@ SHOWCASE = {
         "pitch": "For an agency whose site is a WordPress theme with a contact form.",
         "bilingual": False,
     },
+    "hire360": {
+        "slug": "sample-hire360", "name": "HIRE360", "industry": "Hospitality recruitment",
+        "shot": "sample-hire360-m.png",
+        "concept": "A two-sided talent marketplace. Search forty hospitality professionals "
+                   "across eight cities, open a profile, shortlist, compare people side by "
+                   "side, then raise a hiring brief — and switch to the candidate's side of "
+                   "the same product. Every candidate is invented.",
+        "design": "Hotel lobby rather than HR software: deep teal and brass on warm paper, "
+                  "with a serif reserved for people's names and a grotesk for the system "
+                  "around them. Four columns on a desktop — rail, filters, results, shortlist "
+                  "dock — and a genuine mobile app underneath, not a shrunken dashboard.",
+        "real": ["Search, six filters, sorting and a live result count",
+                 "Candidate profiles, shortlist and side-by-side comparison",
+                 "A seven-step hiring brief that records what you entered",
+                 "Employer and candidate modes, and a full Arabic RTL interface"],
+        "needs": ["Accounts and real candidate data", "Messaging between the two sides",
+                  "Applicant tracking — not implemented"],
+        "pitch": "For a recruiter whose website is a brochure and whose product lives elsewhere.",
+        "bilingual": False,
+    },
     "carrot": {
         "slug": "sample-carrot", "name": "Carrot Dash", "industry": "Game",
         "shot": "sample-carrot-m.png",
@@ -405,6 +425,11 @@ SHOWCASE_TABS = (
      "منتج واحد يعمل باللغتين، ويبدّل التخطيط والاتجاه في مكانه.",
      "Play a round, then tap عربي to flip the whole interface.",
      "العب جولة، ثم اضغط EN لتبديل الواجهة بالكامل."),
+    ("marketplace", "Marketplace", "سوق إلكتروني", "hire360",
+     "A two-sided hospitality talent marketplace: search, shortlist, compare, hire.",
+     "سوق ثنائي الأطراف لكفاءات الضيافة: ابحث، اختر، قارن، ووظّف.",
+     "Filter to available chefs in Dubai, then shortlist two and compare them.",
+     "صفِّ الطهاة المتاحين في دبي، ثم اختر اثنين وقارن بينهما."),
     ("game", "Game", "لعبة", "carrot",
      "A one-button browser game with real physics and a score.",
      "لعبة متصفّح بزرّ واحد، بفيزياء حقيقية ونقاط.",

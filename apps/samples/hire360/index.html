@@ -1,0 +1,1209 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HIRE360 — hospitality talent marketplace, a Qevik concept</title>
+<meta name="description" content="A concept for a two-sided hospitality recruitment platform, built by Qevik as a sample. Not affiliated with any recruitment company. All candidates are fictional.">
+<meta name="theme-color" content="#0F3D3A">
+<style>
+/* HIRE360 — a concept for a two-sided hospitality talent marketplace.
+ *
+ * Built to answer one question a recruitment business asks about an agency:
+ * can you build the *product*, or only the brochure in front of it? So this is
+ * deliberately not a marketing page with a screenshot on it. The search is the
+ * product, it is the first thing on screen, and every filter genuinely narrows
+ * a real dataset.
+ *
+ * Everyone in it is invented. The names are first-name-plus-initial precisely
+ * so they cannot be mistaken for real people, there are no photographs of
+ * anybody, and no phone number or email appears anywhere.
+ *
+ * Visually it is built to look like hospitality rather than HR software: a
+ * hotel-lobby palette of deep teal and brass on warm paper, a serif reserved
+ * exclusively for people's names — the humans get the editorial treatment, the
+ * system gets the utilitarian one — and a four-column app shell (rail, filters,
+ * results, shortlist dock) that no other sample in this portfolio uses.
+ */
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none !important}
+
+:root{
+  --paper:#F7F5F1; --card:#FFFFFF; --sunk:#EFEBE4;
+  --ink:#16130F; --ink-2:#443C33; --mute:#7A7065; --rule:#E3DCD1;
+  --teal:#0F3D3A; --teal-2:#14514D; --teal-soft:#E4EEEC;
+  --brass:#A97C2F; --brass-soft:#F6EEDD;
+  --sage:#3F7D4E; --sage-soft:#E7F1E9;
+  --clay:#A8452A; --clay-soft:#F8E9E4;
+  --serif:"Georgia","Iowan Old Style","Palatino Linotype",serif;
+  --sans:"Avenir Next","Segoe UI Variable","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --ar:"Noto Naskh Arabic","Geeza Pro","Al Bayan",serif;
+  --rail:60px; --filters:274px; --dock:296px;
+}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+h1,h2,h3{margin:0;letter-spacing:-.015em}
+p{margin:0}
+ul{list-style:none;margin:0;padding:0}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--brass);outline-offset:2px;border-radius:4px}
+.n{font-variant-numeric:tabular-nums}
+.serif{font-family:var(--serif)}
+[dir=rtl] body,[dir=rtl] .ar-face{font-family:var(--ar)}
+.eyebrow{font-size:.63rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+.ltr{direction:ltr;unicode-bidi:isolate}
+
+/* ---------------- intro ---------------- */
+.intro{position:fixed;inset:0;z-index:60;background:var(--teal);color:#F3EFE7;
+  display:flex;flex-direction:column;justify-content:center;padding:2rem 1.6rem;
+  background-image:radial-gradient(1100px 460px at 15% -10%,rgba(169,124,47,.30),transparent 60%),
+                   radial-gradient(760px 420px at 105% 110%,rgba(63,125,78,.26),transparent 62%)}
+.intro .wrap{max-width:620px;margin:0 auto;width:100%}
+.intro .badge{display:inline-block;border:1px solid rgba(243,239,231,.34);border-radius:999px;
+  padding:.28rem .7rem;font-size:.66rem;letter-spacing:.15em;text-transform:uppercase;color:#D7CFBF}
+.intro h1{font-family:var(--serif);font-size:clamp(2.4rem,8vw,4rem);line-height:1.02;margin:1.1rem 0 .2rem;
+  letter-spacing:-.03em}
+.intro h1 em{font-style:normal;color:#D9A94F}
+.intro .tag{font-size:1.02rem;color:#C6BDAC;margin-bottom:1.5rem;line-height:1.5}
+.intro .lines{display:grid;gap:.5rem;margin-bottom:1.9rem}
+.intro .lines div{display:flex;gap:.6rem;font-size:.9rem;color:#DDD5C6}
+.intro .lines b{color:#D9A94F;font-weight:700;flex:0 0 auto}
+.intro .go{background:#D9A94F;color:#1B1406;border-radius:11px;padding:.95rem 1.5rem;
+  font-size:1rem;font-weight:800}
+.intro .go:active{transform:translateY(1px)}
+.intro .note{margin-top:1.5rem;font-size:.76rem;color:#A79C89;line-height:1.6;
+  border-top:1px solid rgba(243,239,231,.16);padding-top:1rem}
+
+/* ---------------- app shell ---------------- */
+.app{display:flex;height:100vh;overflow:hidden}
+
+nav.rail{width:var(--rail);flex:0 0 var(--rail);background:var(--teal);color:#CFC6B5;
+  display:flex;flex-direction:column;align-items:center;padding:.85rem 0;gap:.2rem}
+nav.rail .mark{font-family:var(--serif);font-size:1.02rem;color:#D9A94F;font-weight:700;
+  margin-bottom:.9rem;letter-spacing:-.02em}
+nav.rail button{width:42px;height:42px;border-radius:11px;display:grid;place-items:center;color:inherit}
+nav.rail button svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+nav.rail button[aria-current=true]{background:rgba(217,169,79,.18);color:#E8C87E}
+nav.rail button:hover{color:#F0E9DC}
+nav.rail .sp{margin-top:auto}
+nav.rail .lang{font-size:.68rem;font-weight:800;letter-spacing:.04em;width:42px;height:32px;
+  border:1px solid rgba(207,198,181,.3);border-radius:9px}
+
+.work{flex:1 1 auto;display:flex;min-width:0}
+
+/* ---------------- filters ---------------- */
+aside.filters{width:var(--filters);flex:0 0 var(--filters);background:var(--card);
+  border-inline-end:1px solid var(--rule);overflow-y:auto;padding:1.05rem}
+aside.filters h2{font-size:.92rem;margin-bottom:.15rem}
+.fgroup{margin-top:1.15rem}
+.fgroup > .eyebrow{margin-bottom:.45rem;display:block}
+.chips{display:flex;flex-wrap:wrap;gap:.32rem}
+.chip{border:1px solid var(--rule);background:var(--paper);border-radius:999px;
+  padding:.3rem .62rem;font-size:.76rem;font-weight:600;color:var(--ink-2)}
+.chip:hover{border-color:var(--brass)}
+.chip[aria-pressed=true]{background:var(--teal);border-color:var(--teal);color:#F3EFE7}
+.chip.brass[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:#1B1406}
+.slider{width:100%;margin:.4rem 0 .1rem;accent-color:var(--teal)}
+.reset{margin-top:1.3rem;width:100%;border:1px solid var(--rule);border-radius:9px;
+  padding:.52rem;font-size:.8rem;font-weight:650;color:var(--mute)}
+.reset:hover{color:var(--clay);border-color:var(--clay)}
+
+/* ---------------- map ---------------- */
+.map{background:var(--teal);border-radius:12px;padding:.8rem;margin-top:.3rem;position:relative}
+.map svg{width:100%;height:132px;display:block}
+.map .pin{cursor:pointer}
+.map .pin circle{fill:rgba(217,169,79,.28);stroke:#D9A94F;stroke-width:1.2;transition:fill .15s}
+.map .pin:hover circle,.map .pin[aria-pressed=true] circle{fill:#D9A94F}
+.map .pin text{fill:#F3EFE7;font-size:5.6px;font-family:var(--sans);font-weight:700}
+.map .pin .cnt{fill:#0F3D3A;font-size:5.2px;font-weight:800}
+.map .cap{font-size:.66rem;color:#A79C89;margin-top:.35rem}
+
+/* ---------------- results ---------------- */
+main.results{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.searchbar{padding:1rem 1.2rem .8rem;border-bottom:1px solid var(--rule);background:var(--paper)}
+.searchbar .row{display:flex;gap:.6rem;align-items:center}
+.seek{flex:1 1 auto;display:flex;align-items:center;gap:.55rem;background:var(--card);
+  border:1px solid var(--rule);border-radius:12px;padding:.15rem .85rem;min-width:0}
+.seek input{flex:1 1 auto;border:0;background:none;padding:.7rem 0;font-size:.98rem;min-width:0}
+.seek input:focus{outline:none}
+.seek svg{width:17px;height:17px;stroke:var(--mute);fill:none;stroke-width:2;flex:0 0 auto}
+.sortsel{border:1px solid var(--rule);background:var(--card);border-radius:11px;
+  padding:.62rem .7rem;font-size:.84rem;font-weight:600}
+.counts{display:flex;align-items:baseline;gap:.55rem;margin-top:.75rem;flex-wrap:wrap}
+.counts b{font-family:var(--serif);font-size:1.32rem}
+.counts span{font-size:.83rem;color:var(--mute)}
+.active{display:flex;gap:.3rem;flex-wrap:wrap;margin-inline-start:auto}
+.active button{background:var(--brass-soft);border:1px solid #E7D6B4;color:#7A5A1C;
+  border-radius:999px;padding:.18rem .5rem;font-size:.72rem;font-weight:700}
+
+.list{flex:1 1 auto;overflow-y:auto;padding:.9rem 1.2rem 2rem;display:flex;flex-direction:column;gap:.6rem}
+
+.cand{display:flex;align-items:flex-start;gap:.9rem;background:var(--card);border:1px solid var(--rule);border-radius:14px;
+  padding:.85rem;text-align:start;width:100%;transition:border-color .13s,box-shadow .13s,transform .13s}
+.cand:hover{border-color:#CFC2AC;box-shadow:0 3px 16px rgba(22,19,15,.07)}
+.cand .av{width:58px;height:58px;border-radius:12px;flex:0 0 auto;display:grid;place-items:center;
+  font-family:var(--serif);font-size:1.16rem;font-weight:700;color:#FBF8F2;position:relative}
+.cand .av .vt{position:absolute;right:-4px;bottom:-4px;width:18px;height:18px;border-radius:50%;
+  background:var(--sage);color:#fff;font-size:.62rem;display:grid;place-items:center;
+  border:2px solid var(--card);font-family:var(--sans)}
+[dir=rtl] .cand .av .vt{right:auto;left:-4px}
+.cand .who{flex:1 1 auto;min-width:0}
+.cand .who .name{display:block;font-family:var(--serif);font-size:1.06rem;font-weight:700;
+  letter-spacing:-.01em;line-height:1.25}
+.cand .who .role{display:block;font-size:.73rem;font-weight:750;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--brass);margin-top:.12rem}
+.cand .who .meta{display:block;font-size:.81rem;color:var(--mute);margin-top:.3rem}
+.cand .who .tags{display:flex;gap:.28rem;flex-wrap:wrap;margin-top:.5rem}
+.tg{border-radius:6px;padding:.14rem .42rem;font-size:.69rem;font-weight:650;
+  background:var(--sunk);color:var(--ink-2)}
+.tg.lang{background:var(--teal-soft);color:var(--teal)}
+.cand .who .bar{display:block;max-width:200px}
+.cand .side{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:.45rem}
+.avail{border-radius:999px;padding:.2rem .55rem;font-size:.7rem;font-weight:800;white-space:nowrap}
+.avail.now{background:var(--sage-soft);color:var(--sage)}
+.avail.soon{background:var(--brass-soft);color:#7A5A1C}
+.avail.later{background:var(--sunk);color:var(--mute)}
+.star{width:32px;height:32px;border:1px solid var(--rule);border-radius:9px;display:grid;
+  place-items:center;font-size:.9rem;color:var(--mute);background:var(--card)}
+.star[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:#1B1406}
+.bar{height:3px;background:var(--sunk);border-radius:2px;overflow:hidden;margin-top:.55rem}
+.bar i{display:block;height:100%;background:var(--teal)}
+
+.empty{text-align:center;padding:3rem 1.5rem;color:var(--mute)}
+.empty h3{font-family:var(--serif);font-size:1.3rem;color:var(--ink);margin-bottom:.4rem}
+.empty button{margin-top:1rem;background:var(--teal);color:#F3EFE7;border-radius:10px;
+  padding:.6rem 1.1rem;font-weight:700;font-size:.86rem}
+
+/* ---------------- shortlist dock ---------------- */
+aside.dock{width:var(--dock);flex:0 0 var(--dock);background:var(--card);
+  border-inline-start:1px solid var(--rule);display:flex;flex-direction:column}
+aside.dock .top{padding:1rem;border-bottom:1px solid var(--rule)}
+aside.dock .top h2{font-size:.92rem}
+aside.dock .body{flex:1 1 auto;overflow-y:auto;padding:.7rem}
+.slrow{display:flex;align-items:center;gap:.6rem;padding:.5rem;border-radius:10px}
+.slrow:hover{background:var(--paper)}
+.slrow .av{width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+  font-family:var(--serif);font-size:.8rem;font-weight:700;color:#FBF8F2}
+.slrow .t{flex:1 1 auto;min-width:0}
+.slrow .t b{display:block;font-family:var(--serif);font-size:.9rem}
+.slrow .t span{font-size:.72rem;color:var(--mute)}
+.slrow .x{color:var(--mute);font-size:1rem;padding:.2rem .3rem}
+.slrow .x:hover{color:var(--clay)}
+aside.dock .foot{padding:.85rem;border-top:1px solid var(--rule);display:grid;gap:.45rem}
+.btn{border-radius:10px;padding:.68rem;font-size:.87rem;font-weight:750;text-align:center;display:block;width:100%}
+.btn.teal{background:var(--teal);color:#F3EFE7}
+.btn.brass{background:var(--brass);color:#1B1406}
+.btn.ghost{border:1px solid var(--rule);color:var(--ink-2);background:var(--card)}
+.btn:active{transform:translateY(1px)}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+
+/* ---------------- overlays ---------------- */
+.scrim{position:fixed;inset:0;background:rgba(22,19,15,.42);z-index:40;
+  backdrop-filter:blur(2px);animation:fade .16s ease-out}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes slidein{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+@keyframes riseup{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+
+.sheet{position:fixed;top:0;bottom:0;inset-inline-end:0;width:min(460px,100%);background:var(--paper);
+  z-index:50;display:flex;flex-direction:column;animation:slidein .2s ease-out;overflow:hidden}
+.sheet .shead{padding:1.1rem 1.2rem;border-bottom:1px solid var(--rule);background:var(--card)}
+.sheet .shead .x{position:absolute;inset-inline-end:1rem;top:1rem;width:32px;height:32px;
+  border:1px solid var(--rule);border-radius:50%;background:var(--paper)}
+.sheet .sbody{flex:1 1 auto;overflow-y:auto;padding:1.1rem 1.2rem 1.6rem}
+.sheet .sfoot{padding:.9rem 1.2rem;border-top:1px solid var(--rule);background:var(--card);
+  display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+.sheet .sfoot .wide{grid-column:1 / -1}
+
+.phead{display:flex;gap:1rem;align-items:flex-start}
+.phead .av{width:72px;height:72px;border-radius:15px;flex:0 0 auto;display:grid;place-items:center;
+  font-family:var(--serif);font-size:1.5rem;font-weight:700;color:#FBF8F2}
+.phead h2{font-family:var(--serif);font-size:1.5rem;letter-spacing:-.02em}
+.phead .role{font-size:.75rem;font-weight:750;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--brass);margin-top:.2rem}
+.phead .meta{font-size:.85rem;color:var(--mute);margin-top:.35rem}
+.sec{margin-top:1.35rem}
+.sec > .eyebrow{display:block;margin-bottom:.5rem}
+.sec p{font-size:.9rem;line-height:1.62;color:var(--ink-2)}
+.tl{position:relative;padding-inline-start:1.1rem}
+.tl::before{content:"";position:absolute;inset-inline-start:4px;top:.5rem;bottom:.5rem;width:2px;
+  background:var(--rule)}
+.tl li{position:relative;padding:.42rem 0}
+.tl li::before{content:"";position:absolute;inset-inline-start:-1.1rem;top:.85rem;width:10px;height:10px;
+  border-radius:50%;background:var(--paper);border:2px solid var(--brass)}
+.tl li b{font-size:.9rem;font-weight:700}
+.tl li span{display:block;font-size:.78rem;color:var(--mute)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:.4rem .9rem;font-size:.87rem}
+.kv dt{color:var(--mute)}
+.kv dd{margin:0;font-weight:600}
+
+/* ---------------- compare ---------------- */
+.compare{position:fixed;inset:0;z-index:50;background:var(--paper);display:flex;flex-direction:column;
+  animation:riseup .2s ease-out}
+.compare .chead{padding:1.05rem 1.2rem;border-bottom:1px solid var(--rule);background:var(--card);
+  display:flex;align-items:center;gap:.8rem}
+.compare .cbody{flex:1 1 auto;overflow:auto;padding:1rem}
+table.cmp{width:100%;border-collapse:collapse;min-width:520px}
+table.cmp th,table.cmp td{padding:.68rem .8rem;border-bottom:1px solid var(--rule);
+  text-align:start;font-size:.87rem;vertical-align:top}
+table.cmp thead th{background:var(--card);position:sticky;top:0}
+table.cmp thead .av{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;
+  font-family:var(--serif);font-weight:700;color:#FBF8F2;margin-bottom:.35rem}
+table.cmp thead b{font-family:var(--serif);font-size:1rem;display:block}
+table.cmp thead span{font-size:.72rem;color:var(--brass);font-weight:700;text-transform:uppercase;
+  letter-spacing:.07em}
+table.cmp tbody th{font-weight:600;color:var(--mute);white-space:nowrap;font-size:.8rem}
+.best{background:var(--sage-soft);color:var(--sage);border-radius:6px;padding:.08rem .38rem;
+  font-size:.68rem;font-weight:800;margin-inline-start:.35rem}
+
+/* ---------------- hiring request wizard ---------------- */
+.wiz{position:fixed;inset:0;z-index:50;background:var(--paper);display:flex;flex-direction:column;
+  animation:riseup .2s ease-out}
+.wiz .whead{padding:1.05rem 1.2rem;border-bottom:1px solid var(--rule);background:var(--card)}
+.wiz .steps{display:flex;gap:.25rem;margin-top:.75rem}
+.wiz .steps i{flex:1 1 0;height:3px;border-radius:2px;background:var(--sunk)}
+.wiz .steps i.on{background:var(--brass)}
+.wiz .wbody{flex:1 1 auto;overflow-y:auto;padding:1.4rem 1.2rem;max-width:620px;width:100%;
+  margin:0 auto}
+.wiz h2{font-family:var(--serif);font-size:1.55rem;margin-bottom:.3rem}
+.wiz .hint{font-size:.88rem;color:var(--mute);margin-bottom:1.3rem;line-height:1.55}
+.wiz .wfoot{padding:.9rem 1.2rem;border-top:1px solid var(--rule);background:var(--card);
+  display:flex;gap:.5rem;max-width:620px;width:100%;margin:0 auto}
+.wiz .wfoot .btn{flex:1 1 0}
+.field{width:100%;border:1px solid var(--rule);background:var(--card);border-radius:11px;
+  padding:.75rem .85rem;font-size:.95rem;margin-bottom:.6rem}
+.review{background:var(--card);border:1px solid var(--rule);border-radius:12px;padding:1rem}
+.done{text-align:center;padding:2rem 0}
+.done .tick{width:64px;height:64px;border-radius:50%;background:var(--sage-soft);color:var(--sage);
+  display:grid;place-items:center;font-size:1.8rem;margin:0 auto 1rem}
+
+/* ---------------- candidate mode ---------------- */
+.cmode{padding:1.2rem;overflow-y:auto;flex:1 1 auto}
+.cmode .hero{background:var(--teal);color:#F3EFE7;border-radius:16px;padding:1.3rem;
+  background-image:radial-gradient(600px 260px at 90% -20%,rgba(217,169,79,.3),transparent 60%)}
+.cmode .hero h2{font-family:var(--serif);font-size:1.6rem;margin:.35rem 0 .2rem}
+.cmode .hero p{color:#C6BDAC;font-size:.88rem}
+.cmode .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.7rem;
+  margin-top:.9rem}
+.panel{background:var(--card);border:1px solid var(--rule);border-radius:13px;padding:1rem}
+.panel h3{font-size:.95rem;margin-bottom:.6rem}
+.opp{display:flex;gap:.7rem;padding:.6rem 0;border-bottom:1px solid var(--rule)}
+.opp:last-child{border-bottom:0}
+.opp .logo{width:38px;height:38px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;
+  font-family:var(--serif);font-weight:700;color:#FBF8F2;font-size:.85rem}
+.opp .t{flex:1 1 auto;min-width:0}
+.opp .t b{display:block;font-size:.9rem}
+.opp .t span{font-size:.76rem;color:var(--mute)}
+.toggle{display:flex;background:var(--sunk);border-radius:10px;padding:3px;gap:2px}
+.toggle button{flex:1 1 0;border-radius:8px;padding:.42rem;font-size:.8rem;font-weight:700;color:var(--mute)}
+.toggle button[aria-pressed=true]{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.07)}
+
+/* ---------------- disclosure ---------------- */
+/* Starts after the rail and takes no pointer events. It sat over the language
+ * button at the foot of the rail, which a browser test found by being unable to
+ * click it — and a real user would have found the same way, silently. */
+.disclose{position:fixed;inset-inline-start:var(--rail);bottom:0;z-index:30;
+  background:rgba(22,19,15,.9);color:#D8D0C2;font-size:.7rem;padding:.4rem .8rem;
+  border-start-end-radius:9px;line-height:1.45;max-width:min(560px,100%);pointer-events:none}
+.disclose b{color:#E8C87E}
+
+/* ---------------- mobile ---------------- */
+.mob{display:none}
+@media (max-width:1080px){ :root{--dock:0px} aside.dock{display:none} }
+@media (max-width:860px){
+  body{font-size:14.5px}
+  .app{flex-direction:column}
+  nav.rail{display:none}
+  .work{flex-direction:column;flex:1 1 auto;min-height:0}
+  aside.filters{display:none}
+  main.results{flex:1 1 auto;min-height:0}
+  .searchbar{padding:max(.8rem,env(safe-area-inset-top)) .9rem .7rem}
+  .list{padding:.7rem .9rem calc(76px + env(safe-area-inset-bottom))}
+  .mob{display:flex}
+  nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:35;height:calc(62px + env(safe-area-inset-bottom));
+    padding-bottom:env(safe-area-inset-bottom);background:rgba(247,245,241,.96);
+    backdrop-filter:blur(10px);border-top:1px solid var(--rule)}
+  nav.tabs button{flex:1 1 0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:.15rem;font-size:.62rem;font-weight:700;color:var(--mute);position:relative}
+  nav.tabs button svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;
+    stroke-linecap:round;stroke-linejoin:round}
+  nav.tabs button[aria-current=true]{color:var(--teal)}
+  nav.tabs .badge{position:absolute;top:6px;inset-inline-start:calc(50% + 6px);background:var(--brass);
+    color:#1B1406;font-size:.58rem;font-weight:800;border-radius:999px;padding:0 .3rem;min-width:15px;
+    text-align:center}
+  .sheet{width:100%;inset-inline:0}
+  .drawer{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--paper);
+    border-radius:18px 18px 0 0;max-height:86vh;display:flex;flex-direction:column;
+    animation:riseup .2s ease-out}
+  .drawer .dhead{padding:.9rem 1.1rem;border-bottom:1px solid var(--rule);background:var(--card);
+    border-radius:18px 18px 0 0}
+  .drawer .dbody{overflow-y:auto;padding:1rem 1.1rem}
+  .drawer .dfoot{padding:.85rem 1.1rem calc(.85rem + env(safe-area-inset-bottom));
+    border-top:1px solid var(--rule);background:var(--card);display:flex;gap:.5rem}
+  .drawer .dfoot .btn{flex:1 1 0}
+  .cand .av{width:50px;height:50px;font-size:1rem}
+  .cand .who .name{font-size:1rem}
+  .compare .cbody,.wiz .wbody{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+  .disclose{font-size:.66rem;bottom:calc(62px + env(safe-area-inset-bottom));
+    inset-inline-start:0}
+  .cmode{padding:.9rem .9rem calc(76px + env(safe-area-inset-bottom))}
+}
+@media (min-width:861px){ nav.tabs,.fabrow{display:none} }
+@media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"HIRE360",
+"applicationCategory":"BusinessApplication","operatingSystem":"Web browser",
+"inLanguage":["en","ar"],"url":"https://sites.qevik.ai/sample-hire360/",
+"author":{"@type":"Organization","name":"Asia Link Internet Content Provider LLC","alternateName":"Qevik"},
+"description":"A concept for a two-sided hospitality talent marketplace, built by Qevik as a sample. All candidates are fictional."}
+</script>
+</head>
+<body>
+
+<div class="intro" id="intro">
+  <div class="wrap">
+    <span class="badge" id="i-badge">Concept · built by Qevik</span>
+    <h1 id="i-title">HIRE<em>360</em></h1>
+    <p class="tag" id="i-tag">Hospitality talent, without the hiring noise.</p>
+    <div class="lines" id="i-lines"></div>
+    <button class="go" id="launch">Launch the product</button>
+    <p class="note" id="i-note"></p>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <nav class="rail" aria-label="Sections">
+    <span class="mark">H360</span>
+    <button data-view="discover" aria-current="true" title="Discover">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg></button>
+    <button data-view="shortlist" title="Shortlist">
+      <svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8L3.5 9.7l5.9-.9z"/></svg></button>
+    <button data-view="requests" title="Requests">
+      <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg></button>
+    <button data-view="account" title="Account">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></button>
+    <div class="sp"></div>
+    <button class="lang" id="lang-d">عربي</button>
+  </nav>
+
+  <div class="work">
+    <aside class="filters" id="filters"></aside>
+
+    <main class="results">
+      <div class="searchbar">
+        <div class="row">
+          <label class="seek">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+            <input id="q" type="search" autocomplete="off">
+          </label>
+          <button class="chip mob" id="openfilters" style="padding:.62rem .8rem"></button>
+          <select class="sortsel" id="sort"></select>
+        </div>
+        <div class="counts">
+          <b class="n" id="count">0</b><span id="countlabel"></span>
+          <div class="active" id="activefilters"></div>
+        </div>
+      </div>
+      <div class="list" id="list"></div>
+      <div class="cmode" id="cmode" hidden></div>
+    </main>
+
+    <aside class="dock">
+      <div class="top">
+        <h2 id="dock-title">Shortlist</h2>
+        <p class="eyebrow" id="dock-sub" style="margin-top:.2rem"></p>
+      </div>
+      <div class="body" id="dock-body"></div>
+      <div class="foot">
+        <button class="btn teal" id="compare-btn" disabled></button>
+        <button class="btn ghost" id="request-btn"></button>
+      </div>
+    </aside>
+  </div>
+
+  <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+</div>
+
+<p class="disclose" id="disclose"></p>
+<div id="layer"></div>
+
+<script>
+"use strict";
+/* ---------------------------------------------------------------------------
+ * Fictional data. Every person here is invented — first name plus an initial,
+ * no photographs, no contact details of any kind. The variation is deliberate:
+ * filters only feel like a product when they genuinely change what is on
+ * screen, and that needs a dataset with real spread across every axis.
+ * ------------------------------------------------------------------------- */
+var DEPTS = ["kitchen", "fnb", "bar", "front", "house", "guest", "mgmt"];
+var CITIES = ["Dubai", "Abu Dhabi", "Doha", "Riyadh", "Jeddah", "London", "Paris", "Singapore"];
+
+var C = [
+  ["Amelia R.","Sous Chef","kitchen",7,"Dubai",14,["French Cuisine","Fine Dining","Team Leadership"],["EN","FR","AR"],1,92],
+  ["Youssef K.","Head Chef","kitchen",12,"Doha",30,["Levantine","Menu Design","Cost Control"],["EN","AR","FR"],1,97],
+  ["Marta S.","Chef de Partie","kitchen",5,"Dubai",0,["Pastry","Plating","Banqueting"],["EN","ES"],1,84],
+  ["Dmitri V.","Commis Chef","kitchen",2,"Abu Dhabi",0,["Prep","Grill","Hygiene"],["EN","RU"],0,61],
+  ["Chiara B.","Pastry Chef","kitchen",9,"Paris",45,["Viennoiserie","Chocolate","Plated Desserts"],["EN","FR","IT"],1,95],
+  ["Rahul M.","Chef de Partie","kitchen",6,"Dubai",14,["Indian","Tandoor","Volume Service"],["EN","HI","AR"],1,79],
+  ["Sofia L.","Head Chef","kitchen",14,"London",60,["Modern British","Michelin","Team Building"],["EN","IT"],1,99],
+  ["Ahmed N.","Sous Chef","kitchen",8,"Riyadh",30,["Arabic Cuisine","Buffet","Training"],["EN","AR"],1,88],
+  ["Elena P.","Commis Chef","kitchen",1,"Dubai",0,["Cold Section","Salads","Prep"],["EN","RU","AR"],0,55],
+  ["Marco T.","Chef de Partie","kitchen",4,"Singapore",21,["Italian","Pasta","Sauces"],["EN","IT"],1,76],
+
+  ["Nadia H.","Restaurant Manager","fnb",10,"Dubai",30,["P&L","Service Standards","Rostering"],["EN","AR","FR"],1,94],
+  ["Tomás G.","F&B Supervisor","fnb",6,"Abu Dhabi",14,["Upselling","Floor Management","POS"],["EN","ES","AR"],1,81],
+  ["Priya S.","Waitress","fnb",3,"Dubai",0,["Fine Dining","Wine Service","Guest Care"],["EN","HI"],0,68],
+  ["Lukas W.","Waiter","fnb",4,"Doha",7,["Silver Service","Banqueting","Allergen Awareness"],["EN","DE"],1,72],
+  ["Farah A.","F&B Supervisor","fnb",7,"Jeddah",30,["Team Training","Stock Control","Compliance"],["EN","AR"],1,86],
+  ["Jon P.","Restaurant Manager","fnb",11,"London",45,["Concept Launch","Recruitment","Budgeting"],["EN","FR"],1,93],
+  ["Aisha M.","Waitress","fnb",2,"Dubai",0,["Breakfast Service","Barista Basics","Guest Care"],["EN","AR"],0,59],
+  ["Ricardo N.","Waiter","fnb",5,"Paris",21,["Fine Dining","Wine Pairing","Silver Service"],["EN","FR","PT"],1,77],
+
+  ["Karim D.","Head Bartender","bar",9,"Dubai",14,["Mixology","Cocktail Menus","Bar Cost"],["EN","AR","FR"],1,91],
+  ["Ines F.","Bartender","bar",4,"Doha",0,["Classics","Speed Pouring","Inventory"],["EN","FR","ES"],1,74],
+  ["Oliver H.","Barista","bar",3,"London",7,["Latte Art","Speciality Coffee","Grinding"],["EN"],0,66],
+  ["Leila Z.","Bartender","bar",6,"Abu Dhabi",30,["Mocktails","Guest Engagement","Stock"],["EN","AR"],1,83],
+  ["Sam O.","Head Bartender","bar",11,"Singapore",60,["Bar Programmes","Training","Award Menus"],["EN","ZH"],1,96],
+  ["Yara T.","Barista","bar",2,"Riyadh",0,["Speciality Coffee","Latte Art","Guest Care"],["EN","AR"],0,58],
+
+  ["Hassan B.","Front Office Supervisor","front",8,"Dubai",21,["PMS Opera","Upselling","Night Audit"],["EN","AR","FR"],1,89],
+  ["Anna K.","Receptionist","front",3,"Doha",0,["Opera","Check-in","Guest Requests"],["EN","RU","AR"],0,70],
+  ["Miguel A.","Night Auditor","front",5,"Jeddah",30,["Reconciliation","Reporting","Security"],["EN","ES","AR"],1,78],
+  ["Sara W.","Receptionist","front",2,"Dubai",0,["Front Desk","Reservations","Guest Care"],["EN","AR"],0,63],
+  ["Daniel R.","Front Office Supervisor","front",10,"Paris",45,["Team Leadership","PMS","VIP Handling"],["EN","FR","DE"],1,92],
+
+  ["Grace O.","Housekeeping Supervisor","house",9,"Dubai",30,["Room Standards","Inventory","Team Training"],["EN","AR"],1,87],
+  ["Rina P.","Room Attendant","house",4,"Abu Dhabi",0,["Deep Cleaning","Turndown","Linen"],["EN","HI"],0,64],
+  ["Josef M.","Housekeeping Supervisor","house",12,"London",60,["Quality Audits","Scheduling","Budgets"],["EN","DE"],1,90],
+  ["Mona E.","Room Attendant","house",2,"Riyadh",0,["Turndown","Amenities","Linen"],["EN","AR"],0,56],
+
+  ["Laila S.","Guest Relations Officer","guest",6,"Dubai",14,["VIP Handling","Complaint Recovery","Arabic Hosting"],["EN","AR","FR"],1,88],
+  ["Henri C.","Concierge","guest",13,"Paris",45,["Clefs d'Or","City Knowledge","VIP Requests"],["EN","FR","IT"],1,98],
+  ["Naomi T.","Guest Relations Officer","guest",4,"Singapore",21,["Loyalty Programmes","Guest Feedback","Hosting"],["EN","ZH"],1,75],
+
+  ["Omar F.","Hotel Manager","mgmt",16,"Doha",60,["Pre-opening","Owner Relations","Commercial Strategy"],["EN","AR","FR"],1,99],
+  ["Beatrice L.","F&B Director","mgmt",15,"Dubai",45,["Multi-outlet","Concept Development","P&L"],["EN","IT","FR"],1,97],
+  ["Viktor S.","Operations Manager","mgmt",11,"Riyadh",30,["SOPs","Cost Control","Team Development"],["EN","RU","AR"],1,91],
+  ["Nour A.","Operations Manager","mgmt",9,"Jeddah",14,["Quality Systems","Recruitment","Training"],["EN","AR"],1,85]
+].map(function(r, i){
+  return {id:i+1, name:r[0], role:r[1], dept:r[2], years:r[3], city:r[4],
+          days:r[5], skills:r[6], langs:r[7], verified:!!r[8], profile:r[9]};
+});
+
+/* --------------------------------------------------------------------------
+ * Two authored languages. The Arabic is written, not machine-substituted, and
+ * the whole document flips direction — a hospitality product in this region
+ * that only mirrors its layout is a product nobody uses twice.
+ * ------------------------------------------------------------------------ */
+var T = {
+  en: {
+    dir:"ltr", other:"عربي",
+    badge:"Concept · built by Qevik",
+    tag:"Hospitality talent, without the hiring noise.",
+    lines:[["Search","36 hospitality professionals across 8 cities"],
+           ["Shortlist","Compare people side by side before you approach anyone"],
+           ["Request","Raise a hiring brief in seven steps"]],
+    launch:"Launch the product",
+    note:"A concept built by Qevik to show what we can make. Not affiliated with, commissioned by, or connected to any recruitment company. Every candidate below is fictional — no real people, photographs or contact details appear anywhere.",
+    search:"Search by name, role or skill", sort:"Sort", count:"candidates match",
+    filters:"Filters", dept:"Department", city:"Location", exp:"Experience",
+    avail:"Availability", langs:"Languages", reset:"Clear all filters",
+    any:"Any", anyexp:"Any experience", plus:"+ years",
+    now:"Available now", weeks:"Within a month", later:"Later",
+    shortlist:"Shortlist", shortsub:"Compare before you approach",
+    empty:"Nobody matches that", emptysub:"Try widening the experience range or clearing a filter.",
+    clear:"Clear filters", compare:"Compare", request:"Create hiring request",
+    view:"View profile", none:"No one shortlisted yet",
+    nonesub:"Tap the star on a candidate to add them here.",
+    summary:"Profile summary", experience:"Experience", skills:"Skills",
+    languages:"Languages", certs:"Certifications", prefs:"Preferred locations",
+    availability:"Availability", contact:"Contact", sendopp:"Send opportunity",
+    remove:"Remove from shortlist", add:"Add to shortlist",
+    yrs:"years", inCity:"in", verified:"Verified profile",
+    complete:"profile complete", sampleData:"Sample data — fictional candidate",
+    cmpTitle:"Compare candidates", close:"Close",
+    role:"Role", location:"Location", dailyRate:"Indicative day rate",
+    wizTitle:"Create a hiring request", wizSteps:[
+      ["Position","Which role are you hiring for?"],
+      ["Location","Where is the role based?"],
+      ["Department","Which part of the operation?"],
+      ["Experience","How much experience do you need?"],
+      ["Start date","When would they start?"],
+      ["Requirements","Anything specific that matters?"],
+      ["Review","Check it over before you submit."]],
+    back:"Back", next:"Next", submit:"Submit request",
+    doneTitle:"Demo request created", doneSub:"Nothing was submitted anywhere. This is a demonstration interaction — no recruitment request, message or candidate contact was created.",
+    doneBtn:"Back to search",
+    modeEmployer:"Employer", modeCandidate:"Candidate",
+    candHero:"Your profile is visible to employers", candHeroSub:"One profile, seen by hotels and restaurants worldwide.",
+    candOpps:"Opportunities", candApps:"Applications", candPrefs:"Preferences",
+    candAvail:"Availability", candOppsSub:"Sent to you directly by employers",
+    sent:"sent", applied:"applied", interview:"interview",
+    openTo:"Open to", updateAvail:"Update availability",
+    discover:"Discover", requests:"Requests", account:"Account",
+    reqNone:"No hiring requests yet", reqNoneSub:"Create one from the shortlist or here.",
+    reqDemo:"Demo request", disclose:"<b>Qevik concept — not a real product.</b> Every candidate is fictional. Nothing here submits, sends or contacts anyone. Not affiliated with any recruitment company.",
+    depts:{kitchen:"Kitchen",fnb:"F&B",bar:"Bar",front:"Front Office",house:"Housekeeping",guest:"Guest Relations",mgmt:"Management"},
+    sorts:[["relevance","Best match"],["exp","Most experience"],["soon","Soonest available"],["profile","Most complete"]],
+  },
+  ar: {
+    dir:"rtl", other:"EN",
+    badge:"نموذج مفاهيمي · من إنتاج Qevik",
+    tag:"كفاءات الضيافة، بلا ضجيج التوظيف.",
+    lines:[["ابحث","٣٦ متخصصاً في الضيافة عبر ٨ مدن"],
+           ["اختر","قارن المرشحين جنباً إلى جنب قبل التواصل مع أحد"],
+           ["اطلب","أنشئ طلب توظيف في سبع خطوات"]],
+    launch:"ابدأ التجربة",
+    note:"نموذج بناه فريق Qevik لعرض ما يمكننا صنعه. غير مرتبط بأي شركة توظيف ولم يُطلب من أحد. جميع المرشحين خياليون — لا توجد أسماء حقيقية ولا صور ولا بيانات تواصل.",
+    search:"ابحث بالاسم أو المسمى أو المهارة", sort:"ترتيب", count:"مرشحاً مطابقاً",
+    filters:"عوامل التصفية", dept:"القسم", city:"الموقع", exp:"الخبرة",
+    avail:"التوفّر", langs:"اللغات", reset:"مسح كل عوامل التصفية",
+    any:"الكل", anyexp:"أي خبرة", plus:"+ سنوات",
+    now:"متاح الآن", weeks:"خلال شهر", later:"لاحقاً",
+    shortlist:"القائمة المختصرة", shortsub:"قارن قبل أن تتواصل",
+    empty:"لا أحد يطابق ذلك", emptysub:"جرّب توسيع نطاق الخبرة أو إزالة أحد عوامل التصفية.",
+    clear:"مسح عوامل التصفية", compare:"قارن", request:"أنشئ طلب توظيف",
+    view:"عرض الملف", none:"لم تختر أحداً بعد",
+    nonesub:"اضغط النجمة على أي مرشح لإضافته هنا.",
+    summary:"نبذة عن المرشح", experience:"الخبرة العملية", skills:"المهارات",
+    languages:"اللغات", certs:"الشهادات", prefs:"المواقع المفضّلة",
+    availability:"التوفّر", contact:"تواصل", sendopp:"أرسل فرصة عمل",
+    remove:"إزالة من القائمة", add:"أضف إلى القائمة",
+    yrs:"سنوات", inCity:"في", verified:"ملف موثّق",
+    complete:"اكتمال الملف", sampleData:"بيانات نموذجية — مرشح خيالي",
+    cmpTitle:"مقارنة المرشحين", close:"إغلاق",
+    role:"المسمى", location:"الموقع", dailyRate:"الأجر اليومي التقريبي",
+    wizTitle:"إنشاء طلب توظيف", wizSteps:[
+      ["المسمى","ما الوظيفة التي توظّف لها؟"],
+      ["الموقع","أين مقر الوظيفة؟"],
+      ["القسم","أي جزء من العمليات؟"],
+      ["الخبرة","كم سنة خبرة تحتاج؟"],
+      ["تاريخ المباشرة","متى يبدأ العمل؟"],
+      ["المتطلبات","هل هناك شيء محدد يهمّك؟"],
+      ["المراجعة","راجع الطلب قبل الإرسال."]],
+    back:"رجوع", next:"التالي", submit:"إرسال الطلب",
+    doneTitle:"تم إنشاء طلب تجريبي", doneSub:"لم يُرسل أي شيء إلى أي جهة. هذا تفاعل تجريبي — لم يُنشأ أي طلب توظيف أو رسالة أو تواصل مع مرشح.",
+    doneBtn:"العودة إلى البحث",
+    modeEmployer:"صاحب عمل", modeCandidate:"مرشح",
+    candHero:"ملفك ظاهر لأصحاب العمل", candHeroSub:"ملف واحد تراه الفنادق والمطاعم حول العالم.",
+    candOpps:"الفرص", candApps:"الطلبات المقدّمة", candPrefs:"التفضيلات",
+    candAvail:"التوفّر", candOppsSub:"تصلك مباشرة من أصحاب العمل",
+    sent:"مُرسلة", applied:"تقدّمت", interview:"مقابلة",
+    openTo:"منفتح على", updateAvail:"تحديث التوفّر",
+    discover:"اكتشف", requests:"الطلبات", account:"الحساب",
+    reqNone:"لا توجد طلبات توظيف بعد", reqNoneSub:"أنشئ طلباً من القائمة المختصرة أو من هنا.",
+    reqDemo:"طلب تجريبي",
+    disclose:"<b>نموذج من Qevik — ليس منتجاً حقيقياً.</b> جميع المرشحين خياليون. لا شيء هنا يُرسل أو يتواصل مع أحد. غير مرتبط بأي شركة توظيف.",
+    depts:{kitchen:"المطبخ",fnb:"الأطعمة والمشروبات",bar:"البار",front:"الاستقبال",house:"التدبير الفندقي",guest:"علاقات الضيوف",mgmt:"الإدارة"},
+    sorts:[["relevance","الأنسب"],["exp","الأكثر خبرة"],["soon","الأقرب توفراً"],["profile","الأكثر اكتمالاً"]],
+  }
+};
+
+var ROLE_AR = {
+  "Sous Chef":"مساعد رئيس طهاة","Head Chef":"رئيس طهاة","Chef de Partie":"رئيس قسم طهي",
+  "Commis Chef":"طاهٍ مساعد","Pastry Chef":"طاهي حلويات","Restaurant Manager":"مدير مطعم",
+  "F&B Supervisor":"مشرف أطعمة ومشروبات","Waitress":"نادلة","Waiter":"نادل",
+  "Head Bartender":"رئيس بارمان","Bartender":"بارمان","Barista":"باريستا",
+  "Front Office Supervisor":"مشرف استقبال","Receptionist":"موظف استقبال","Night Auditor":"مدقق ليلي",
+  "Housekeeping Supervisor":"مشرف تدبير فندقي","Room Attendant":"عامل غرف",
+  "Guest Relations Officer":"موظف علاقات ضيوف","Concierge":"كونسيرج",
+  "Hotel Manager":"مدير فندق","F&B Director":"مدير الأطعمة والمشروبات","Operations Manager":"مدير عمليات"
+};
+var CITY_AR = {"Dubai":"دبي","Abu Dhabi":"أبوظبي","Doha":"الدوحة","Riyadh":"الرياض",
+  "Jeddah":"جدة","London":"لندن","Paris":"باريس","Singapore":"سنغافورة"};
+
+/* ------------------------------------------------------------------ state */
+var S = {
+  lang:"en", mode:"employer", view:"discover",
+  q:"", dept:"", city:"", minYears:0, avail:"", lang_f:"", sort:"relevance",
+  shortlist:[], requests:[], open:null, drawer:false, wizard:null,
+};
+var t = function(){ return T[S.lang]; };
+var $ = function(id){ return document.getElementById(id); };
+var esc = function(s){ return String(s == null ? "" : s)
+  .replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); };
+
+/* Deterministic hotel-lobby gradients, so a candidate always looks the same
+ * and nothing depends on an image nobody can see. */
+function skin(id){
+  var hues = [168, 34, 200, 14, 140, 42, 186, 24];
+  var h = hues[id % hues.length], h2 = (h + 26) % 360;
+  return "background:linear-gradient(140deg,hsl(" + h + " 42% 30%),hsl(" + h2 + " 46% 22%))";
+}
+function initials(name){
+  var parts = name.split(" ");
+  return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+}
+function roleOf(c){ return S.lang === "ar" ? (ROLE_AR[c.role] || c.role) : c.role; }
+function cityOf(c){ return S.lang === "ar" ? (CITY_AR[c.city] || c.city) : c.city; }
+function availClass(d){ return d === 0 ? "now" : d <= 30 ? "soon" : "later"; }
+function availText(c){
+  if (c.days === 0) return t().now;
+  if (c.days <= 30) return S.lang === "ar" ? c.days + " يوماً" : c.days + " days";
+  return S.lang === "ar" ? "شهران" : "2 months";
+}
+/* Clearly labelled as indicative sample figures wherever it is shown. */
+function rate(c){ return 380 + c.years * 46 + (c.dept === "mgmt" ? 620 : 0); }
+
+/* ---------------------------------------------------------------- filtering */
+function matches(c){
+  if (S.dept && c.dept !== S.dept) return false;
+  if (S.city && c.city !== S.city) return false;
+  if (S.minYears && c.years < S.minYears) return false;
+  if (S.avail === "now" && c.days !== 0) return false;
+  if (S.avail === "soon" && c.days > 30) return false;
+  if (S.avail === "later" && c.days <= 30) return false;
+  if (S.lang_f && c.langs.indexOf(S.lang_f) < 0) return false;
+  if (S.q){
+    var hay = (c.name + " " + c.role + " " + c.city + " " + c.skills.join(" ") + " "
+               + (ROLE_AR[c.role] || "")).toLowerCase();
+    if (hay.indexOf(S.q.toLowerCase()) < 0) return false;
+  }
+  return true;
+}
+function found(){
+  var out = C.filter(matches);
+  var by = {
+    relevance:function(a,b){ return (b.profile + (b.verified ? 12 : 0)) - (a.profile + (a.verified ? 12 : 0)); },
+    exp:function(a,b){ return b.years - a.years; },
+    soon:function(a,b){ return a.days - b.days; },
+    profile:function(a,b){ return b.profile - a.profile; }
+  }[S.sort];
+  return out.sort(by);
+}
+
+/* ------------------------------------------------------------------ chrome */
+function applyLang(){
+  var T2 = t();
+  document.documentElement.lang = S.lang;
+  document.documentElement.dir = T2.dir;
+  $("lang-d").textContent = T2.other;
+  $("q").placeholder = T2.search;
+  $("openfilters").textContent = T2.filters;
+  $("dock-title").textContent = T2.shortlist;
+  $("dock-sub").textContent = T2.shortsub;
+  $("request-btn").textContent = T2.request;
+  $("countlabel").textContent = T2.count;
+  $("disclose").innerHTML = T2.disclose;
+  $("sort").innerHTML = T2.sorts.map(function(s){
+    return '<option value="' + s[0] + '"' + (s[0] === S.sort ? " selected" : "") + ">" + esc(s[1]) + "</option>";
+  }).join("");
+  drawIntro(); drawFilters(); drawTabs(); render();
+}
+
+function drawIntro(){
+  var T2 = t();
+  $("i-badge").textContent = T2.badge;
+  $("i-tag").textContent = T2.tag;
+  $("i-note").textContent = T2.note;
+  $("launch").textContent = T2.launch;
+  $("i-lines").innerHTML = T2.lines.map(function(l){
+    return "<div><b>" + esc(l[0]) + "</b><span>" + esc(l[1]) + "</span></div>";
+  }).join("");
+}
+
+function drawTabs(){
+  var T2 = t();
+  var items = [
+    ["discover", T2.discover, '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>'],
+    ["shortlist", T2.shortlist, '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8L3.5 9.7l5.9-.9z"/>'],
+    ["requests", T2.requests, '<path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/>'],
+    ["account", T2.account, '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>']
+  ];
+  $("tabs").innerHTML = items.map(function(i){
+    var badge = i[0] === "shortlist" && S.shortlist.length
+      ? '<span class="badge n">' + S.shortlist.length + "</span>" : "";
+    return '<button data-view="' + i[0] + '" aria-current="' + (S.view === i[0]) + '">'
+      + badge + '<svg viewBox="0 0 24 24" aria-hidden="true">' + i[2] + "</svg>" + esc(i[1]) + "</button>";
+  }).join("");
+  document.querySelectorAll("nav.rail button[data-view]").forEach(function(b){
+    b.setAttribute("aria-current", String(S.view === b.dataset.view));
+  });
+}
+
+function chipRow(name, options, current, brass){
+  return '<div class="chips">' + options.map(function(o){
+    return '<button class="chip' + (brass ? " brass" : "") + '" data-f="' + name + '" data-v="'
+      + esc(o[0]) + '" aria-pressed="' + (String(current) === String(o[0])) + '">' + esc(o[1]) + "</button>";
+  }).join("") + "</div>";
+}
+
+function drawFilters(target){
+  var T2 = t();
+  var counts = {};
+  CITIES.forEach(function(city){ counts[city] = C.filter(function(c){ return c.city === city; }).length; });
+  var html =
+    '<h2>' + esc(T2.filters) + "</h2>"
+    + '<div class="fgroup"><span class="eyebrow">' + esc(T2.city) + "</span>"
+    + '<div class="map"><svg viewBox="0 0 200 100" role="img" aria-label="' + esc(T2.city) + '">'
+    + [["London",26,20],["Paris",44,34],["Doha",104,30],["Riyadh",84,48],
+       ["Jeddah",66,64],["Dubai",134,50],["Abu Dhabi",122,72],["Singapore",178,84]].map(function(p){
+        var on = S.city === p[0];
+        return '<g class="pin" data-f="city" data-v="' + p[0] + '" aria-pressed="' + on + '">'
+          + '<circle cx="' + p[1] + '" cy="' + p[2] + '" r="6.4"/>'
+          + '<text class="cnt" x="' + p[1] + '" y="' + (p[2] + 1.9) + '" text-anchor="middle">'
+          + counts[p[0]] + "</text>"
+          + '<text x="' + p[1] + '" y="' + (p[2] + 13) + '" text-anchor="middle">'
+          + esc(S.lang === "ar" ? CITY_AR[p[0]] : p[0]) + "</text></g>";
+      }).join("")
+    + '</svg><p class="cap">' + esc(S.lang === "ar"
+        ? "خريطة توضيحية — اضغط مدينة للتصفية" : "Illustrative map — tap a city to filter") + "</p></div></div>"
+
+    + '<div class="fgroup"><span class="eyebrow">' + esc(T2.dept) + "</span>"
+    + chipRow("dept", [["", T2.any]].concat(DEPTS.map(function(d){ return [d, T2.depts[d]]; })), S.dept) + "</div>"
+
+    + '<div class="fgroup"><span class="eyebrow">' + esc(T2.exp) + "</span>"
+    + '<input class="slider" type="range" min="0" max="14" step="1" value="' + S.minYears + '" id="years">'
+    + '<p style="font-size:.8rem;color:var(--mute)" id="yearsout"></p></div>'
+
+    + '<div class="fgroup"><span class="eyebrow">' + esc(T2.avail) + "</span>"
+    + chipRow("avail", [["", T2.any], ["now", T2.now], ["soon", T2.weeks], ["later", T2.later]], S.avail, true) + "</div>"
+
+    + '<div class="fgroup"><span class="eyebrow">' + esc(T2.langs) + "</span>"
+    + chipRow("lang_f", [["", T2.any]].concat(["EN","AR","FR","RU","ES","IT","DE","HI","ZH","PT"]
+        .map(function(l){ return [l, l]; })), S.lang_f) + "</div>"
+
+    + '<button class="reset" data-reset>' + esc(T2.reset) + "</button>";
+
+  (target || $("filters")).innerHTML = html;
+  var out = (target || document).querySelector("#yearsout");
+  if (out) out.textContent = S.minYears ? S.minYears + " " + t().plus : t().anyexp;
+}
+
+/* ------------------------------------------------------------------ render */
+function render(){
+  var T2 = t();
+  $("cmode").hidden = !(S.mode === "candidate" && S.view === "account");
+  var showList = !(S.mode === "candidate" && S.view === "account");
+  $("list").hidden = !showList;
+  document.querySelector(".searchbar").hidden = !(S.view === "discover" && S.mode === "employer");
+
+  if (S.mode === "candidate" && S.view === "account") { drawCandidateMode(); drawTabs(); return; }
+  if (S.view === "shortlist") { drawShortlistView(); drawTabs(); drawDock(); return; }
+  if (S.view === "requests") { drawRequests(); drawTabs(); drawDock(); return; }
+  if (S.view === "account") { drawAccount(); drawTabs(); drawDock(); return; }
+
+  var rows = found();
+  $("count").textContent = rows.length;
+  var active = [];
+  if (S.dept) active.push(["dept", T2.depts[S.dept]]);
+  if (S.city) active.push(["city", S.lang === "ar" ? CITY_AR[S.city] : S.city]);
+  if (S.minYears) active.push(["minYears", S.minYears + " " + T2.plus]);
+  if (S.avail) active.push(["avail", {now:T2.now, soon:T2.weeks, later:T2.later}[S.avail]]);
+  if (S.lang_f) active.push(["lang_f", S.lang_f]);
+  $("activefilters").innerHTML = active.map(function(a){
+    return '<button data-clear="' + a[0] + '">' + esc(a[1]) + " ✕</button>";
+  }).join("");
+
+  $("list").innerHTML = rows.length ? rows.map(card).join("")
+    : '<div class="empty"><h3>' + esc(T2.empty) + "</h3><p>" + esc(T2.emptysub)
+      + '</p><button data-reset>' + esc(T2.clear) + "</button></div>";
+  drawTabs(); drawDock();
+}
+
+function card(c){
+  var on = S.shortlist.indexOf(c.id) >= 0;
+  return '<button class="cand" data-open="' + c.id + '">'
+    + '<span class="av" style="' + skin(c.id) + '">' + initials(c.name)
+    + (c.verified ? '<span class="vt" title="' + esc(t().verified) + '">✓</span>' : "") + "</span>"
+    + '<span class="who"><span class="name">' + esc(c.name) + "</span>"
+    + '<span class="role">' + esc(roleOf(c)) + "</span>"
+    + '<span class="meta">' + esc(cityOf(c)) + " · " + c.years + " " + esc(t().yrs) + "</span>"
+    + '<span class="tags">'
+    + c.skills.slice(0, 2).map(function(s){ return '<span class="tg">' + esc(s) + "</span>"; }).join("")
+    + c.langs.map(function(l){ return '<span class="tg lang ltr">' + esc(l) + "</span>"; }).join("")
+    + "</span>"
+    + '<span class="bar"><i style="width:' + c.profile + '%"></i></span></span>'
+    + '<span class="side">'
+    + '<span class="avail ' + availClass(c.days) + '">' + esc(availText(c)) + "</span>"
+    + '<span class="star" data-star="' + c.id + '" aria-pressed="' + on + '" role="button" '
+    + 'aria-label="' + esc(on ? t().remove : t().add) + '">★</span></span></button>';
+}
+
+function drawDock(){
+  var T2 = t();
+  var picked = S.shortlist.map(function(id){ return C.filter(function(c){ return c.id === id; })[0]; });
+  $("dock-body").innerHTML = picked.length ? picked.map(function(c){
+    return '<div class="slrow"><span class="av" style="' + skin(c.id) + '">' + initials(c.name) + "</span>"
+      + '<span class="t"><b>' + esc(c.name) + "</b><span>" + esc(roleOf(c)) + " · " + esc(cityOf(c)) + "</span></span>"
+      + '<button class="x" data-star="' + c.id + '" aria-label="' + esc(T2.remove) + '">✕</button></div>';
+  }).join("") : '<div class="empty" style="padding:1.6rem .8rem"><h3 style="font-size:1rem">'
+      + esc(T2.none) + '</h3><p style="font-size:.83rem">' + esc(T2.nonesub) + "</p></div>";
+  $("compare-btn").textContent = T2.compare + (picked.length ? " (" + picked.length + ")" : "");
+  $("compare-btn").disabled = picked.length < 2;
+}
+
+function drawShortlistView(){
+  var T2 = t();
+  var picked = S.shortlist.map(function(id){ return C.filter(function(c){ return c.id === id; })[0]; });
+  $("list").innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:.6rem;margin-bottom:.3rem">'
+    + '<h2 class="serif" style="font-size:1.35rem">' + esc(T2.shortlist) + "</h2>"
+    + '<span style="color:var(--mute);font-size:.85rem" class="n">' + picked.length + "</span></div>"
+    + (picked.length
+        ? picked.map(card).join("")
+          + '<div style="display:grid;gap:.5rem;margin-top:.8rem">'
+          + '<button class="btn teal" data-compare' + (picked.length < 2 ? " disabled" : "") + ">"
+          + esc(T2.compare) + "</button>"
+          + '<button class="btn ghost" data-request>' + esc(T2.request) + "</button></div>"
+        : '<div class="empty"><h3>' + esc(T2.none) + "</h3><p>" + esc(T2.nonesub) + "</p></div>");
+}
+
+function drawRequests(){
+  var T2 = t();
+  $("list").innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:.6rem;margin-bottom:.6rem">'
+    + '<h2 class="serif" style="font-size:1.35rem">' + esc(T2.requests) + "</h2>"
+    + '<span style="color:var(--mute);font-size:.85rem" class="n">' + S.requests.length + "</span></div>"
+    + (S.requests.length ? S.requests.map(function(r, i){
+        return '<div class="panel" style="margin-bottom:.55rem">'
+          + '<div style="display:flex;align-items:flex-start;gap:.7rem">'
+          + '<div><h3 class="serif" style="font-size:1.05rem">' + esc(r.position || "—") + "</h3>"
+          + '<p style="font-size:.82rem;color:var(--mute);margin-top:.2rem">'
+          + esc(r.city) + " · " + esc(T2.depts[r.dept] || r.dept) + " · " + esc(r.years) + " " + esc(T2.plus)
+          + "</p></div>"
+          + '<span class="avail soon" style="margin-inline-start:auto">' + esc(T2.reqDemo) + "</span></div>"
+          + (r.notes ? '<p style="font-size:.85rem;color:var(--ink-2);margin-top:.6rem">' + esc(r.notes) + "</p>" : "")
+          + "</div>";
+      }).join("") : '<div class="empty"><h3>' + esc(T2.reqNone) + "</h3><p>" + esc(T2.reqNoneSub) + "</p></div>")
+    + '<button class="btn teal" data-request style="margin-top:.5rem">' + esc(T2.request) + "</button>";
+}
+
+function drawAccount(){
+  var T2 = t();
+  $("list").innerHTML =
+    '<h2 class="serif" style="font-size:1.35rem;margin-bottom:.7rem">' + esc(T2.account) + "</h2>"
+    + '<div class="panel"><h3>' + esc(S.lang === "ar" ? "وضع الاستخدام" : "You are using HIRE360 as")
+    + "</h3><div class='toggle' id='modeswitch'>"
+    + '<button data-mode="employer" aria-pressed="' + (S.mode === "employer") + '">' + esc(T2.modeEmployer) + "</button>"
+    + '<button data-mode="candidate" aria-pressed="' + (S.mode === "candidate") + '">' + esc(T2.modeCandidate) + "</button>"
+    + "</div><p style='font-size:.83rem;color:var(--mute);margin-top:.7rem'>"
+    + esc(S.lang === "ar"
+        ? "منصة ذات طرفين: أصحاب العمل يبحثون ويختارون، والمرشحون يديرون ملفاتهم وفرصهم."
+        : "A two-sided platform: employers search and shortlist, candidates manage a profile and the opportunities sent to them.")
+    + "</p></div>"
+    + '<div class="panel" style="margin-top:.6rem"><h3>' + esc(S.lang === "ar" ? "اللغة" : "Language")
+    + "</h3><div class='toggle'>"
+    + '<button data-setlang="en" aria-pressed="' + (S.lang === "en") + '">English</button>'
+    + '<button data-setlang="ar" aria-pressed="' + (S.lang === "ar") + '" class="ar-face">عربي</button>'
+    + "</div></div>";
+}
+
+function drawCandidateMode(){
+  var T2 = t();
+  var me = C[0];
+  $("cmode").innerHTML =
+    '<div class="hero"><span class="eyebrow" style="color:#A79C89">' + esc(T2.modeCandidate) + "</span>"
+    + "<h2>" + esc(T2.candHero) + "</h2><p>" + esc(T2.candHeroSub) + "</p>"
+    + '<div style="display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap">'
+    + '<span class="avail now">' + esc(T2.now) + "</span>"
+    + '<span class="tg lang ltr">EN</span><span class="tg lang ltr">FR</span><span class="tg lang ltr">AR</span>'
+    + "</div></div>"
+    + '<div class="grid2">'
+    + '<div class="panel"><h3>' + esc(T2.candOpps) + "</h3>"
+    + '<p class="eyebrow" style="margin-bottom:.5rem">' + esc(T2.candOppsSub) + "</p>"
+    + [["Beach Club, Dubai","Sous Chef",T2.sent],["Boutique Hotel, Doha","Chef de Partie",T2.applied],
+       ["Fine Dining, Paris","Sous Chef",T2.interview]].map(function(o, i){
+        return '<div class="opp"><span class="logo" style="' + skin(i + 3) + '">'
+          + esc(o[0][0]) + "</span><span class='t'><b>" + esc(o[1]) + "</b><span>" + esc(o[0])
+          + "</span></span><span class='avail " + ["soon","later","now"][i] + "'>" + esc(o[2]) + "</span></div>";
+      }).join("") + "</div>"
+    + '<div class="panel"><h3>' + esc(S.lang === "ar" ? "وضع الاستخدام" : "You are using HIRE360 as")
+    + "</h3><div class='toggle'>"
+    + '<button data-mode="employer" aria-pressed="false">' + esc(T2.modeEmployer) + "</button>"
+    + '<button data-mode="candidate" aria-pressed="true">' + esc(T2.modeCandidate) + "</button>"
+    + "</div><p style='font-size:.8rem;color:var(--mute);margin-top:.6rem'>"
+    + esc(S.lang === "ar"
+        ? "بدّل في أي وقت — المنصة ذات طرفين."
+        : "Switch back at any time — this is a two-sided platform.")
+    + "</p></div>"
+    + '<div class="panel"><h3>' + esc(T2.candPrefs) + "</h3><dl class='kv'>"
+    + "<dt>" + esc(T2.openTo) + "</dt><dd>" + esc(S.lang === "ar" ? "دبي · الدوحة · باريس" : "Dubai · Doha · Paris") + "</dd>"
+    + "<dt>" + esc(T2.candAvail) + "</dt><dd>" + esc(availText(me)) + "</dd>"
+    + "<dt>" + esc(T2.languages) + "</dt><dd class='ltr'>EN · FR · AR</dd>"
+    + "<dt>" + esc(T2.complete) + "</dt><dd class='n'>" + me.profile + "%</dd></dl>"
+    + '<button class="btn ghost" style="margin-top:.8rem" data-noop>' + esc(T2.updateAvail) + "</button>"
+    + "<p style='font-size:.75rem;color:var(--mute);margin-top:.5rem'>" + esc(T2.sampleData) + "</p></div>"
+    + "</div>";
+}
+
+/* ------------------------------------------------------------------ profile */
+function openProfile(id){
+  var c = C.filter(function(x){ return x.id === id; })[0];
+  if (!c) return;
+  var T2 = t(), on = S.shortlist.indexOf(c.id) >= 0;
+  var years = c.years;
+  var steps = [
+    [c.role, c.city, years >= 3 ? (S.lang === "ar" ? "٣ سنوات" : "3 yrs") : (S.lang === "ar" ? "سنة" : "1 yr")],
+    [S.lang === "ar" ? "الوظيفة السابقة" : "Previous role", CITIES[(c.id * 3) % CITIES.length],
+     Math.max(1, Math.round(years / 2)) + " " + (S.lang === "ar" ? "سنوات" : "yrs")],
+    [S.lang === "ar" ? "البداية المهنية" : "First hospitality role", CITIES[(c.id * 5) % CITIES.length],
+     Math.max(1, years - Math.max(1, Math.round(years / 2)) - 3) + " " + (S.lang === "ar" ? "سنوات" : "yrs")]
+  ];
+  layer(
+    '<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-modal="true">'
+    + '<div class="shead" style="position:relative">'
+    + '<button class="x" data-close aria-label="' + esc(T2.close) + '">✕</button>'
+    + '<div class="phead"><span class="av" style="' + skin(c.id) + '">' + initials(c.name) + "</span>"
+    + "<div><h2>" + esc(c.name) + "</h2>"
+    + '<p class="role">' + esc(roleOf(c)) + "</p>"
+    + '<p class="meta">' + esc(cityOf(c)) + " · " + c.years + " " + esc(T2.yrs)
+    + (c.verified ? ' · <span style="color:var(--sage);font-weight:700">✓ ' + esc(T2.verified) + "</span>" : "")
+    + "</p></div></div>"
+    + '<div style="display:flex;gap:.4rem;margin-top:.9rem;flex-wrap:wrap">'
+    + '<span class="avail ' + availClass(c.days) + '">' + esc(availText(c)) + "</span>"
+    + '<span class="tg">' + esc(T2.depts[c.dept]) + "</span>"
+    + '<span class="tg"><span class="n">' + c.profile + "</span>% " + esc(T2.complete) + "</span></div></div>"
+
+    + '<div class="sbody">'
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.summary) + "</span><p>"
+    + esc(summaryOf(c)) + "</p></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.experience) + "</span><ul class='tl'>"
+    + steps.map(function(s){ return "<li><b>" + esc(s[0]) + "</b><span>" + esc(s[1]) + " · " + esc(s[2]) + "</span></li>"; }).join("")
+    + "</ul></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.skills) + '</span><div class="tags" style="display:flex;gap:.3rem;flex-wrap:wrap">'
+    + c.skills.map(function(s){ return '<span class="tg">' + esc(s) + "</span>"; }).join("") + "</div></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.languages) + '</span><div style="display:flex;gap:.3rem">'
+    + c.langs.map(function(l){ return '<span class="tg lang ltr">' + esc(l) + "</span>"; }).join("") + "</div></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.certs) + "</span><p>"
+    + esc(S.lang === "ar" ? "شهادة سلامة الغذاء (مستوى ٢) · بيانات نموذجية" : "Food Safety Level 2 · sample data")
+    + "</p></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.prefs) + "</span><p>"
+    + esc([c.city, CITIES[(c.id * 2) % CITIES.length]].map(function(x){
+        return S.lang === "ar" ? CITY_AR[x] : x; }).join(" · ")) + "</p></div>"
+    + '<div class="sec"><span class="eyebrow">' + esc(T2.dailyRate) + '</span><p class="n ltr">AED '
+    + rate(c) + '</p><p style="font-size:.76rem;color:var(--mute);margin-top:.3rem">'
+    + esc(T2.sampleData) + "</p></div></div>"
+
+    + '<div class="sfoot">'
+    + '<button class="btn ' + (on ? "ghost" : "brass") + '" data-star="' + c.id + '">'
+    + esc(on ? T2.remove : T2.add) + "</button>"
+    + '<button class="btn ghost" data-noop>' + esc(T2.contact) + "</button>"
+    + '<button class="btn teal wide" data-noop>' + esc(T2.sendopp) + "</button></div></aside>"
+  );
+}
+
+function summaryOf(c){
+  if (S.lang === "ar"){
+    return c.name + " متخصص في " + (T.ar.depts[c.dept] || "") + " بخبرة " + c.years
+      + " سنوات، يعمل حالياً في " + (CITY_AR[c.city] || c.city)
+      + ". نقاط القوة: " + c.skills.join("، ") + ". (ملف نموذجي — مرشح خيالي.)";
+  }
+  return c.name + " is a " + c.role.toLowerCase() + " with " + c.years
+    + " years in hospitality, currently based in " + c.city + ". Strengths across "
+    + c.skills.join(", ").toLowerCase() + ". (Sample profile — fictional candidate.)";
+}
+
+/* ------------------------------------------------------------------ compare */
+function openCompare(){
+  var T2 = t();
+  var picked = S.shortlist.map(function(id){ return C.filter(function(c){ return c.id === id; })[0]; });
+  if (picked.length < 2) return;
+  var mostExp = Math.max.apply(null, picked.map(function(c){ return c.years; }));
+  var soonest = Math.min.apply(null, picked.map(function(c){ return c.days; }));
+  var rows = [
+    [T2.role, function(c){ return esc(roleOf(c)); }],
+    [T2.experience, function(c){ return '<span class="n">' + c.years + "</span> " + esc(T2.yrs)
+        + (c.years === mostExp ? '<span class="best">MAX</span>' : ""); }],
+    [T2.location, function(c){ return esc(cityOf(c)); }],
+    [T2.availability, function(c){ return esc(availText(c))
+        + (c.days === soonest ? '<span class="best">' + esc(S.lang === "ar" ? "الأقرب" : "FIRST") + "</span>" : ""); }],
+    [T2.languages, function(c){ return '<span class="ltr">' + c.langs.join(" · ") + "</span>"; }],
+    [T2.skills, function(c){ return c.skills.join(", "); }],
+    [T2.dept, function(c){ return esc(T2.depts[c.dept]); }],
+    [T2.dailyRate, function(c){ return '<span class="n ltr">AED ' + rate(c) + "</span>"; }]
+  ];
+  layer(
+    '<div class="compare" role="dialog" aria-modal="true"><div class="chead">'
+    + '<h2 class="serif" style="font-size:1.25rem">' + esc(T2.cmpTitle) + "</h2>"
+    + '<span class="n" style="color:var(--mute)">' + picked.length + "</span>"
+    + '<button class="btn ghost" data-close style="width:auto;margin-inline-start:auto;padding:.45rem .9rem">'
+    + esc(T2.close) + "</button></div>"
+    + '<div class="cbody"><table class="cmp"><thead><tr><th></th>'
+    + picked.map(function(c){
+        return '<th><span class="av" style="' + skin(c.id) + '">' + initials(c.name) + "</span>"
+          + "<b>" + esc(c.name) + "</b><span>" + esc(roleOf(c)) + "</span></th>";
+      }).join("") + "</tr></thead><tbody>"
+    + rows.map(function(r){
+        return "<tr><th>" + esc(r[0]) + "</th>"
+          + picked.map(function(c){ return "<td>" + r[1](c) + "</td>"; }).join("") + "</tr>";
+      }).join("")
+    + '</tbody></table><p style="font-size:.76rem;color:var(--mute);margin-top:.9rem">'
+    + esc(T2.sampleData) + "</p></div></div>"
+  );
+}
+
+/* ------------------------------------------------------------------ wizard */
+function openWizard(){
+  S.wizard = {step:0, position:"", city:CITIES[0], dept:DEPTS[0], years:3,
+              start:"", notes:"", done:false};
+  drawWizard();
+}
+function drawWizard(){
+  var T2 = t(), w = S.wizard;
+  if (w.done){
+    layer('<div class="wiz" role="dialog" aria-modal="true"><div class="wbody"><div class="done">'
+      + '<div class="tick">✓</div><h2>' + esc(T2.doneTitle) + "</h2>"
+      + '<p class="hint" style="margin-top:.5rem">' + esc(T2.doneSub) + "</p>"
+      + '<button class="btn teal" data-close style="max-width:260px;margin:0 auto">'
+      + esc(T2.doneBtn) + "</button></div></div></div>");
+    return;
+  }
+  var step = T2.wizSteps[w.step];
+  var body = "";
+  if (w.step === 0) body = '<input class="field" id="w-position" placeholder="'
+    + esc(S.lang === "ar" ? "مثال: رئيس طهاة" : "e.g. Head Chef") + '" value="' + esc(w.position) + '">';
+  else if (w.step === 1) body = chipRow("w-city", CITIES.map(function(c){
+    return [c, S.lang === "ar" ? CITY_AR[c] : c]; }), w.city);
+  else if (w.step === 2) body = chipRow("w-dept", DEPTS.map(function(d){ return [d, T2.depts[d]]; }), w.dept);
+  else if (w.step === 3) body = '<input class="slider" type="range" min="0" max="14" value="' + w.years
+    + '" id="w-years"><p style="font-size:.9rem" id="w-yearsout"><span class="n">' + w.years + "</span> "
+    + esc(T2.plus) + "</p>";
+  else if (w.step === 4) body = chipRow("w-start", [
+      ["now", T2.now], ["month", T2.weeks], ["later", T2.later]], w.start, true);
+  else if (w.step === 5) body = '<textarea class="field" id="w-notes" rows="4" placeholder="'
+    + esc(S.lang === "ar" ? "متطلبات إضافية (اختياري)" : "Anything specific (optional)") + '">'
+    + esc(w.notes) + "</textarea>";
+  else body = '<div class="review"><dl class="kv">'
+    + "<dt>" + esc(T2.wizSteps[0][0]) + "</dt><dd>" + esc(w.position || "—") + "</dd>"
+    + "<dt>" + esc(T2.wizSteps[1][0]) + "</dt><dd>" + esc(S.lang === "ar" ? CITY_AR[w.city] : w.city) + "</dd>"
+    + "<dt>" + esc(T2.wizSteps[2][0]) + "</dt><dd>" + esc(T2.depts[w.dept]) + "</dd>"
+    + "<dt>" + esc(T2.wizSteps[3][0]) + "</dt><dd><span class='n'>" + w.years + "</span> " + esc(T2.plus) + "</dd>"
+    + "<dt>" + esc(T2.wizSteps[4][0]) + "</dt><dd>"
+    + esc({now:T2.now, month:T2.weeks, later:T2.later}[w.start] || "—") + "</dd>"
+    + (w.notes ? "<dt>" + esc(T2.wizSteps[5][0]) + "</dt><dd>" + esc(w.notes) + "</dd>" : "")
+    + "</dl></div>";
+
+  layer('<div class="wiz" role="dialog" aria-modal="true"><div class="whead">'
+    + '<div style="display:flex;align-items:center;gap:.7rem">'
+    + '<h2 class="serif" style="font-size:1.1rem">' + esc(T2.wizTitle) + "</h2>"
+    + '<span class="n" style="color:var(--mute);font-size:.85rem">' + (w.step + 1) + "/7</span>"
+    + '<button class="btn ghost" data-close style="width:auto;margin-inline-start:auto;padding:.4rem .85rem">'
+    + esc(T2.close) + "</button></div>"
+    + '<div class="steps">' + T2.wizSteps.map(function(_, i){
+        return '<i class="' + (i <= w.step ? "on" : "") + '"></i>'; }).join("") + "</div></div>"
+    + '<div class="wbody"><h2>' + esc(step[0]) + '</h2><p class="hint">' + esc(step[1]) + "</p>"
+    + body + "</div>"
+    + '<div class="wfoot">'
+    + '<button class="btn ghost" data-wiz="back"' + (w.step === 0 ? " disabled" : "") + ">" + esc(T2.back) + "</button>"
+    + '<button class="btn teal" data-wiz="next">' + esc(w.step === 6 ? T2.submit : T2.next) + "</button></div></div>");
+}
+
+/* ------------------------------------------------------------------ layers */
+function layer(html){ $("layer").innerHTML = html; }
+function closeLayer(){ $("layer").innerHTML = ""; S.wizard = null; }
+
+/* ------------------------------------------------------------------ events */
+document.addEventListener("click", function(e){
+  var el;
+
+  if ((el = e.target.closest("[data-close]"))) return closeLayer();
+
+  if ((el = e.target.closest("[data-star]"))){
+    e.stopPropagation();
+    var id = +el.dataset.star, at = S.shortlist.indexOf(id);
+    if (at >= 0) S.shortlist.splice(at, 1); else S.shortlist.push(id);
+    render();
+    if ($("layer").innerHTML.indexOf("sheet") >= 0) openProfile(id);
+    return;
+  }
+  if ((el = e.target.closest("[data-open]"))) return openProfile(+el.dataset.open);
+  if ((el = e.target.closest("[data-compare]")) || e.target.closest("#compare-btn")) return openCompare();
+  if ((el = e.target.closest("[data-request]")) || e.target.closest("#request-btn")) return openWizard();
+
+  if ((el = e.target.closest("[data-f]"))){
+    var f = el.dataset.f, v = el.dataset.v;
+    if (f.indexOf("w-") === 0){
+      S.wizard[f.slice(2)] = v; return drawWizard();
+    }
+    S[f] = (S[f] === v) ? "" : v;
+    drawFilters(); if (S.drawer) drawFilters(document.querySelector(".drawer .dbody"));
+    return render();
+  }
+  if ((el = e.target.closest("[data-clear]"))){
+    S[el.dataset.clear] = el.dataset.clear === "minYears" ? 0 : "";
+    drawFilters(); return render();
+  }
+  if (e.target.closest("[data-reset]")){
+    S.q = ""; S.dept = ""; S.city = ""; S.minYears = 0; S.avail = ""; S.lang_f = "";
+    $("q").value = ""; drawFilters();
+    if (S.drawer) drawFilters(document.querySelector(".drawer .dbody"));
+    return render();
+  }
+  if ((el = e.target.closest("[data-view]"))){
+    S.view = el.dataset.view; closeLayer(); return render();
+  }
+  if ((el = e.target.closest("[data-mode]"))){
+    S.mode = el.dataset.mode;
+    S.view = S.mode === "candidate" ? "account" : "discover";
+    return render();
+  }
+  if ((el = e.target.closest("[data-setlang]"))){
+    S.lang = el.dataset.setlang; return applyLang();
+  }
+  if ((el = e.target.closest("[data-wiz]"))){
+    var w = S.wizard;
+    if (el.dataset.wiz === "back"){ if (w.step > 0) w.step--; return drawWizard(); }
+    var input = document.getElementById("w-position");
+    if (input) w.position = input.value;
+    var notes = document.getElementById("w-notes");
+    if (notes) w.notes = notes.value;
+    if (w.step === 6){
+      S.requests.unshift({position:w.position, city:w.city, dept:w.dept,
+                          years:w.years, start:w.start, notes:w.notes});
+      w.done = true; return drawWizard();
+    }
+    w.step++; return drawWizard();
+  }
+  if (e.target.closest("#openfilters")){
+    S.drawer = true;
+    layer('<div class="scrim" data-close></div><div class="drawer" role="dialog" aria-modal="true">'
+      + '<div class="dhead" style="display:flex;align-items:center;gap:.6rem">'
+      + '<h2 class="serif" style="font-size:1.1rem">' + esc(t().filters) + "</h2>"
+      + '<button class="btn ghost" data-close style="width:auto;margin-inline-start:auto;padding:.4rem .8rem">'
+      + esc(t().close) + '</button></div><div class="dbody"></div>'
+      + '<div class="dfoot"><button class="btn ghost" data-reset>' + esc(t().reset) + "</button>"
+      + '<button class="btn teal" data-close>' + esc(t().count) + " (" + found().length + ")</button></div></div>");
+    drawFilters(document.querySelector(".drawer .dbody"));
+    return;
+  }
+  if (e.target.closest("#lang-d")){ S.lang = S.lang === "en" ? "ar" : "en"; return applyLang(); }
+  if (e.target.closest("[data-noop]")){
+    var b = e.target.closest("[data-noop]"), was = b.textContent;
+    b.textContent = S.lang === "ar" ? "تفاعل تجريبي فقط" : "Demo only — nothing sent";
+    setTimeout(function(){ b.textContent = was; }, 1800);
+    return;
+  }
+});
+
+document.addEventListener("input", function(e){
+  if (e.target.id === "q"){ S.q = e.target.value; return render(); }
+  if (e.target.id === "years"){
+    S.minYears = +e.target.value;
+    var out = document.querySelectorAll("#yearsout");
+    out.forEach(function(o){ o.textContent = S.minYears ? S.minYears + " " + t().plus : t().anyexp; });
+    return render();
+  }
+  if (e.target.id === "w-years"){
+    S.wizard.years = +e.target.value;
+    document.getElementById("w-yearsout").innerHTML =
+      '<span class="n">' + S.wizard.years + "</span> " + esc(t().plus);
+  }
+});
+document.addEventListener("change", function(e){
+  if (e.target.id === "sort"){ S.sort = e.target.value; render(); }
+});
+document.addEventListener("keydown", function(e){ if (e.key === "Escape") closeLayer(); });
+
+$("launch").addEventListener("click", function(){
+  $("intro").hidden = true; $("app").hidden = false; render();
+});
+$("openfilters").addEventListener("click", function(){});
+
+applyLang();
+</script>
+</body>
+</html>

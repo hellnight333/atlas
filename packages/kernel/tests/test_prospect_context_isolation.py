@@ -276,3 +276,45 @@ def test_a_prospect_with_no_matched_demo_may_still_lead_with_anything() -> None:
     none = demos.select("places", weaknesses=("arabic", "https"))
     assert none.url == ""
     assert demos.leadable(none, ("arabic", "https")) == ("arabic", "https")
+
+
+def test_every_trade_noun_says_what_kind_of_thing_it_is() -> None:
+    """A message says "one of our own samples — NAR, a restaurant site".
+
+    The noun has to complete that sentence and say what the thing is. Some
+    samples are websites and some are products; an editing slip once left
+    LedgerLoop reading "a B2B software", and HIRE360 — a talent marketplace —
+    was briefly described as a website.
+    """
+    endings = ("site", "app", "platform", "game", "concept")
+    for demo in demos.DEMOS:
+        assert demo.trade.endswith(endings), f"{demo.slug}: {demo.trade!r} names no product type"
+        assert not demo.trade.startswith(("a ", "an ")), f"{demo.slug} carries its own article"
+        assert demos.article(demo.trade) in ("a", "an")
+
+
+def test_hire360_is_the_recruitment_demo_and_only_that() -> None:
+    hire = demos.BY_SLUG["sample-hire360"]
+    assert hire.serves == frozenset({"recruitment", "staffing", "hospitality"})
+    assert hire.bilingual is True
+    # It must not leak into neighbouring professional categories.
+    for category in ("professional", "retail", "food", "automotive", "beauty",
+                     "home", "health", "dental", ""):
+        chosen = demos.select(category)
+        assert chosen.demo is None or chosen.demo.slug != "sample-hire360", category
+    # And a recruitment business must get it rather than the B2B SaaS sample.
+    assert demos.select("recruitment").demo.slug == "sample-hire360"
+
+
+def test_a_recruitment_message_never_mentions_the_saas_or_property_samples() -> None:
+    chosen = demos.select("recruitment", weaknesses=("arabic",))
+    text = (f"Here's one of our own samples — {chosen.demo.name}, "
+            f"{demos.article(chosen.demo.trade)} {chosen.demo.trade}. "
+            f"It's ours, not a client's:\n{chosen.url}")
+    problems = consistency.check(
+        text, business_id="x", speakable=("arabic",), unfixable=(), unverified=(),
+        chosen=chosen, category="recruitment", others=(),
+    )
+    assert problems == [], problems
+    for forbidden in ("ledgerloop", "meridian", "property", "estate agency", "B2B"):
+        assert forbidden.lower() not in text.lower(), forbidden

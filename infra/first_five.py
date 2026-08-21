@@ -159,7 +159,7 @@ DEMO_LINE_OWN = ("So I built you a working example, using only your own details 
 #: Names the sample and its trade, both read off the selected Demo. The trade
 #: used to come from a separate table keyed on the *prospect's* category, which
 #: is how a staffing agency was told about "a property company".
-DEMO_LINE_SAMPLE = ("Here's one of our own samples — {name}, a {trade} site. "
+DEMO_LINE_SAMPLE = ("Here's one of our own samples — {name}, {article} {trade}. "
                     "It's ours, not a client's:")
 #: When nothing in the portfolio is genuinely their trade, no demo is offered
 #: and no relevance is implied.
@@ -187,7 +187,8 @@ def demo_lines(chosen: demos.Selection) -> list[str]:
         return []
     if chosen.kind == "prospect":
         return [DEMO_LINE_OWN, chosen.url]
-    return [DEMO_LINE_SAMPLE.format(name=chosen.demo.name, trade=chosen.demo.trade), chosen.url]
+    return [DEMO_LINE_SAMPLE.format(name=chosen.demo.name, trade=chosen.demo.trade,
+                                    article=demos.article(chosen.demo.trade)), chosen.url]
 
 
 def observations(score: scoring.Score, limit: int = 2, *,

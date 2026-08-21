@@ -33,6 +33,7 @@ PORTFOLIO = {
     "carrot": "sample-carrot",
     "wordrush": "sample-wordrush",
     "kilo": "sample-kilo",
+    "hire360": "sample-hire360",
     "foundry": "sample-foundry",
     "atelier": "sample-atelier",
 }

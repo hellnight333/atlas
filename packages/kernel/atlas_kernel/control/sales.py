@@ -268,6 +268,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
         verified_at = None
         live: dict = {}
         demo = ""
+        classified = ""
         shots: dict = {}
         shots_at = None
         drafts: list[dict] = []
@@ -285,6 +286,8 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                 live, verified_at = detail, at
             elif kind == "website_demo_published":
                 demo = detail.get("demo_url", "")
+            elif kind == "business_classified":
+                classified = detail.get("category", "")
             elif kind == "screenshot_captured":
                 shots, shots_at = detail.get("shots", {}), at
             elif kind == "experiment_prepared":
@@ -302,7 +305,11 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
 
         if not audit:
             return None
-        category = audit.get("category") or ("dental" if demo else "")
+        # An explicit, evidenced classification beats the discovery query's
+        # guess. 360 Agency was filed under "professional" because that is the
+        # bucket it was found in; its own homepage says it is a hospitality
+        # recruitment agency, which is a different product entirely.
+        category = classified or audit.get("category") or ("dental" if demo else "")
 
         merged = dict(audit)
         if verified:

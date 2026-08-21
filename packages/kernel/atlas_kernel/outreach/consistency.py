@@ -98,8 +98,8 @@ def check(
         if f"/{demo.slug}/" in text:
             problems.append(f"links {demo.slug}, which is not the selected demo")
         if chosen.demo is not None and demo.trade != chosen.demo.trade \
-                and f"a {demo.trade} site" in lowered:
-            problems.append(f"describes the demo as a {demo.trade} site")
+                and demo.trade.lower() in lowered:
+            problems.append(f"describes the demo as {demos.article(demo.trade)} {demo.trade}")
     if chosen.demo is not None and category and category not in chosen.demo.serves:
         problems.append(f"offers the {chosen.demo.name} sample to a {category} business, "
                         f"which it does not serve")
