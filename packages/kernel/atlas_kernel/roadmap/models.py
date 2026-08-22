@@ -47,6 +47,10 @@ class RoadmapTask(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
+    #: Denormalised, exactly as P1.1 did for businesses and P1.2 for
+    #: recommendations: the execution gate scopes a single task without needing
+    #: the roadmap it came from, and a task with no tenant belongs to nobody.
+    tenant_id: str | None = None
     #: The existing vocabulary, reused whole.
     task: Task
     horizon: Horizon

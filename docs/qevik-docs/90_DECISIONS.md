@@ -23,3 +23,13 @@ D010 — Readiness scores eight dimensions, not the nineteen listed in `03_QEVIK
 D011 — A confirmed weakness Qevik has no capability for is still shown, marked `NO_CAPABILITY`. Omitting it would make every plan capability-shaped — only the weaknesses Qevik sells against would appear, which reads to a customer as an audit and is not one.
 
 D012 — Every customer-visible sentence in a roadmap passes the P1.4 attribution gate at `Attribution.UNKNOWN`. A plan is written before anything is measured, so nothing in it may license a causal claim. Enforced by the structured attribution model, not a string blacklist.
+
+D013 — A roadmap task has no stored status. `TaskState` is folded from `RecommendationState`, `ApprovalState`, `JobStatus` and the roadmap's dependency graph. A stored status can disagree with the job it describes, and when it does nobody can tell which is lying.
+
+D014 — `EXECUTORS` is the authority on what Qevik can execute, not the offer catalogue. An offer existing is not the same as something being able to perform it, and the roadmap presented five capabilities as executable that no executor exists for.
+
+D015 — Approval fingerprints cover what the act *is* — capability, recommendation, evidence, title — and deliberately not the horizon. Invalidating a decision because a task was rescheduled would train people to re-approve without reading.
+
+D016 — A baseline with no source raises rather than recording zero. A zero is a reading, and a reading nobody took makes every later comparison show improvement.
+
+D017 — `portfolio_depth` is a defect signal, not a strength. `research/cms/base.py` emits it PRESENT meaning "N pages are photographs with almost no text", and `outreach/opportunity.py` uses that PRESENT as the trigger for the proof opportunity. Held in `readiness.INVERTED` rather than renamed, because three modules already agree on the name.

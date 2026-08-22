@@ -42,6 +42,21 @@ class Confidence(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+#: Features whose PRESENT means a defect rather than a strength.
+#:
+#: The research pipeline normalises polarity almost everywhere — `orphan_pages`
+#: is PRESENT when there are none, `broken_links` PRESENT when nothing is
+#: broken. `portfolio_depth` is the exception: `research/cms/base.py` emits it
+#: PRESENT with the evidence "N pages are photographs with almost no text", and
+#: `outreach/opportunity.py` uses that same PRESENT as the trigger for the
+#: proof opportunity. Reading it as a strength scored AHS's proof as already
+#: strong and suppressed the one opportunity their research actually found.
+#:
+#: Held as an explicit set rather than by renaming the feature, because three
+#: other modules already agree on the name and the meaning; what was wrong was
+#: only this module's reading of it.
+INVERTED: frozenset[str] = frozenset({"portfolio_depth"})
+
 #: Which research features speak to which dimension. Only features the audit and
 #: research engine genuinely emit — a dimension fed by nothing scores UNKNOWN
 #: rather than zero.
@@ -196,8 +211,13 @@ def assess(*, business_id: str, observations: list[dict], business_model: str = 
 
     scores: list[DimensionScore] = []
     for dimension, features in SIGNALS.items():
-        present = [f for f in features if by_feature.get(f) == "present"]
-        absent = [f for f in features if by_feature.get(f) == "not_found"]
+        # A feature's polarity decides which column it lands in, so an
+        # inverted one counts against the dimension exactly as a missing
+        # ordinary feature does.
+        present = [f for f in features
+                   if by_feature.get(f) == ("not_found" if f in INVERTED else "present")]
+        absent = [f for f in features
+                  if by_feature.get(f) == ("present" if f in INVERTED else "not_found")]
         unverified = [f for f in features if by_feature.get(f) == "unverified"]
         confirmed = len(present) + len(absent)
         score = round(100 * len(present) / confirmed) if confirmed else None

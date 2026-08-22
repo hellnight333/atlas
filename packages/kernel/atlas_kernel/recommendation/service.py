@@ -16,7 +16,8 @@ from __future__ import annotations
 import logging
 
 from ..opportunity.models import BusinessEvent
-from ..opportunity.tenancy import TenantId, require as _require_tenant
+from ..opportunity.tenancy import TenantId
+from ..opportunity.tenancy import require as _require_tenant
 from ..outreach.opportunity import Opportunity
 from .models import (
     CustomerTask,
@@ -33,6 +34,11 @@ log = logging.getLogger(__name__)
 FACTORY = "recommendation"
 PROPOSED = "recommendation_proposed"
 DECIDED = "recommendation_decided"
+#: A customer did the thing only they could do. An event rather than a field
+#: because `Recommendation.waiting_on_customer` reads the tasks as written and
+#: has no way to know one was since completed — and a stored flag beside it
+#: would be a second answer to the same question.
+CUSTOMER_TASK_DONE = "customer_task_completed"
 
 #: Work every offer needs from the customer before anything can be published.
 #: Held here rather than per-offer because it is the same consent every time,
@@ -201,3 +207,40 @@ def fold(events: list, *, tenant: TenantId | None = None) -> list[dict]:
                 existing["state"] = detail["state"]
                 existing["decided_note"] = detail.get("note", "")
     return list(current.values())
+
+
+def customer_task_event(recommendation_id: str, business_id: str, title: str,
+                        *, tenant_id: str | None = None,
+                        actor: str = "customer") -> BusinessEvent:
+    """Record that the customer completed one of their tasks.
+
+    The actor matters and is not defaulted to Qevik: this is the customer
+    reporting that they did something outside the system, and the timeline
+    should not later read as though we did it for them.
+    """
+    return BusinessEvent(
+        business_id=business_id, factory=FACTORY, kind=CUSTOMER_TASK_DONE,
+        actor=actor,
+        detail={"recommendation_id": recommendation_id, "title": title,
+                "tenant_id": tenant_id})
+
+
+def completed_customer_tasks(events: list, *, recommendation_id: str = "",
+                             tenant: TenantId | None = None) -> frozenset[str]:
+    """Titles the customer has reported done, folded from the timeline."""
+    tenant = _require_tenant(tenant, method="recommendation.completed_customer_tasks")
+    from ..opportunity.tenancy import owns
+
+    done: set[str] = set()
+    for event in events:
+        kind = getattr(event, "kind", None) or event.get("kind")
+        if kind != CUSTOMER_TASK_DONE:
+            continue
+        detail = getattr(event, "detail", None) or event.get("detail") or {}
+        if not owns(detail.get("tenant_id"), tenant):
+            continue
+        if recommendation_id and detail.get("recommendation_id") != recommendation_id:
+            continue
+        if title := detail.get("title"):
+            done.add(title)
+    return frozenset(done)

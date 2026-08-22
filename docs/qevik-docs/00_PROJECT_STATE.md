@@ -92,7 +92,7 @@ Reported by Claude:
 - Suppressed addresses were blocked.
 - Secrets were kept outside the repository and logging was hardened.
 
-## P1 execution & growth layer — P1.1 through P1.5 complete (2026-08-22)
+## P1 execution & growth layer — P1.1 through P1.6 complete (2026-08-22)
 
 Five phases, each gated on review, all in `packages/kernel/atlas_kernel/`:
 
@@ -103,13 +103,25 @@ Five phases, each gated on review, all in `packages/kernel/atlas_kernel/`:
 | P1.3 | `execution/` | One complete vertical slice ending at `READY_TO_PUBLISH`; six QA gates; `publish()` deliberately raises |
 | P1.4 | `measurement/` | Attribution scale (UNKNOWN/OBSERVED/ASSOCIATED/ATTRIBUTED) where the level licenses the permitted language |
 | P1.5 | `roadmap/` | 0→100 readiness + the plan derived from it — see [`P1_5_ROADMAP_ENGINE.md`](P1_5_ROADMAP_ENGINE.md) |
+| P1.6 | `roadmap/{lifecycle,gate,crossing,presentation}.py` | The plan crosses into work through the existing approval and job machinery — see [`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) |
 
 **P1.5 in one line:** two real businesses put through the same code path share
 exactly one task, and it is a measurement task true of both.
 
-Nothing in P1 publishes, sends, bills or connects a provider. Next crossing —
-turning an approved roadmap task into a Job — is P1.6 and is deliberately still
-explicit.
+**P1.6 in one line:** the loop closes — Research → … → Roadmap → Task →
+Approval → Job → Execution → Asset → QA → READY_TO_PUBLISH → Measurement →
+Re-evaluation — with the task's state derived from states that already exist
+rather than stored in a tenth place.
+
+Nothing in P1 publishes, sends, bills or connects a provider. `publish()` still
+raises. Publication is P2: it needs a target, a credential and a second approval
+on the artefact itself.
+
+**Two real bugs P1.6 surfaced**, both documented in
+[`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) §10: five
+capabilities were being presented as executable that no executor exists for, and
+`portfolio_depth` — a *defect* signal everywhere else in the codebase — was
+being scored as a strength, which suppressed AHS's biggest opportunity.
 
 ## Capabilities added since the Gmail milestone
 
@@ -139,8 +151,8 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-22 on the Mac: 2087 passed, 25 skipped**,
-ruff and mypy at their pre-existing counts (43 / 135 — P1.5 adds none).
+**Full suite is GREEN as of 2026-08-22 on the Mac: 2123 passed, 25 skipped**,
+ruff 35 (down from 43) and mypy 135 — P1.5 and P1.6 add none of either.
 - The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
   read production read-only and skip when no production URL is configured. They
   were verified to still **fail** when one is, so the detector is live rather

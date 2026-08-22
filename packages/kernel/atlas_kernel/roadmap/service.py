@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from ..execution.capabilities import EXECUTORS
 from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId, owns
 from ..opportunity.tenancy import require as _require_tenant
@@ -169,7 +170,7 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
         task = (CustomerTask(title, customer_action, why=why) if customer_action
                 else QevikTask(title, why=why))
         tasks.append(RoadmapTask(
-            id=_id(), task=task, horizon=Horizon.DAY_7,
+            id=_id(), tenant_id=tenant_id, task=task, horizon=Horizon.DAY_7,
             # Measurement, whoever performs it. `blocked_by_customer` reads the
             # task's kind, so one that needs a grant is still shown as waiting.
             executability=Executability.MEASURE_FIRST,
@@ -193,6 +194,19 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
             return 1.0  # no basis to rank it above something measured weak
         return score.score / max(score.weight, 0.01)
 
+    def _executable(recommendation: Recommendation) -> bool:
+        """Whether something can actually perform this today.
+
+        An offer existing is not the same as an executor existing. `EXECUTORS`
+        is the registry of what Qevik can run, and reading the offer catalogue
+        alone presented five capabilities as executable that nothing could
+        perform — a promise the execution gate would then refuse, after the
+        customer had read it as a plan.
+        """
+        return (bool(recommendation.capability_id)
+                and offer_for(recommendation.offer_id) is not None
+                and recommendation.offer_id in EXECUTORS)
+
     surviving = sorted(
         (r for r in recommendations
          if not (lambda s: s is not None and s.strong)(_score_for(r))),
@@ -202,13 +216,19 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
     by_title: dict[str, str] = {}
     prerequisites: dict[str, list[str]] = {}
     for recommendation in surviving:
+        # Only for work that can actually run. Asking a customer to gather
+        # material for a capability nothing can perform wastes their time on
+        # our behalf, and it is the same defect as asking them to prepare work
+        # for a dimension that was already strong.
+        if not _executable(recommendation):
+            continue
         dimension = OFFER_DIMENSION.get(recommendation.offer_id)
         for task in recommendation.customer_tasks:
             if task.title not in by_title:
                 task_id = _id()
                 by_title[task.title] = task_id
                 tasks.append(RoadmapTask(
-                    id=task_id, task=task, horizon=Horizon.DAY_7,
+                    id=task_id, tenant_id=tenant_id, task=task, horizon=Horizon.DAY_7,
                     executability=Executability.CUSTOMER_MUST_ACT,
                     dimension=dimension.value if dimension else "",
                     why=task.why or recommendation.rationale,
@@ -223,15 +243,14 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
 
     # --- 4. the work itself, worst dimension first ---------------------------
     for index, recommendation in enumerate(surviving):
-        offer = offer_for(recommendation.offer_id)
         dimension = OFFER_DIMENSION.get(recommendation.offer_id)
-        executable = bool(recommendation.capability_id) and offer is not None
+        executable = _executable(recommendation)
         metric = DIMENSION_METRIC.get(dimension, "") if dimension else ""
         # Only what this piece of work is actually waiting for. Depending on
         # every outstanding customer task would stall each one behind all of them.
         depends_on = tuple(prerequisites.get(recommendation.id, ()))
         tasks.append(RoadmapTask(
-            id=_id(),
+            id=_id(), tenant_id=tenant_id,
             task=QevikTask(recommendation.title, why=recommendation.rationale),
             horizon=_horizon(index),
             executability=(Executability.QEVIK_CAN_EXECUTE if executable
@@ -262,7 +281,8 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
             continue
         title, why = finding
         tasks.append(RoadmapTask(
-            id=_id(), task=QevikTask(title, why=why), horizon=_horizon(index),
+            id=_id(), tenant_id=tenant_id, task=QevikTask(title, why=why),
+            horizon=_horizon(index),
             executability=Executability.NO_CAPABILITY,
             dimension=score.dimension.value, why=why,
             # The confirmed-absent features themselves. A finding with no
@@ -323,23 +343,86 @@ def read(events: list, *, tenant: TenantId | None = None) -> list[dict]:
 
 
 def changed(previous: Roadmap, current: Roadmap) -> dict:
-    """What re-evaluation actually changed, and why.
+    """What re-evaluation changed, and why it changed.
 
     A plan that silently regenerates invalidates work a customer is part-way
-    through, so the difference is reported rather than assumed.
+    through, so the difference is reported rather than assumed — and each part
+    of it is traced back to the evidence that moved. "Your roadmap changed" with
+    no reason is indistinguishable from a system that reshuffles itself, which
+    is how a customer stops believing any of it.
+
+    Neither roadmap is modified. History lives in the event timeline: both plans
+    remain as they were recorded, and this is a reading across them.
     """
-    before = {t.task.title for t in previous.tasks}
-    after = {t.task.title for t in current.tasks}
-    moved = {t.task.title: (p.horizon.value, t.horizon.value)
-             for t in current.tasks
-             for p in previous.tasks
-             if p.task.title == t.task.title and p.horizon is not t.horizon}
+    before = {t.task.title: t for t in previous.tasks}
+    after = {t.task.title: t for t in current.tasks}
+    moved = {title: (before[title].horizon.value, task.horizon.value)
+             for title, task in after.items()
+             if title in before and before[title].horizon is not task.horizon}
+
+    was = previous.derived_from.get("readiness") or {}
+    now = current.derived_from.get("readiness") or {}
+    dimensions = {
+        d: {"from": was.get(d), "to": now.get(d)}
+        for d in set(was) | set(now) if was.get(d) != now.get(d)}
+
+    newly_measured = (set(current.derived_from.get("measured_metrics") or ())
+                      - set(previous.derived_from.get("measured_metrics") or ()))
+
+    added, removed = sorted(set(after) - set(before)), sorted(set(before) - set(after))
     return {
-        "added": sorted(after - before),
-        "removed": sorted(before - after),
+        "added": added,
+        "removed": removed,
         "rescheduled": moved,
         "readiness": (previous.readiness_overall, current.readiness_overall),
+        "dimensions_moved": dimensions,
+        "newly_measured": sorted(newly_measured),
         "newly_left_alone": sorted(set(current.left_alone) - set(previous.left_alone)),
-        "changed": bool((after - before) or (before - after) or moved
+        "why": _why(added, removed, moved, dimensions, newly_measured,
+                    previous, current, before, after),
+        "changed": bool(added or removed or moved
                         or previous.readiness_overall != current.readiness_overall),
     }
+
+
+def _why(added: list, removed: list, moved: dict, dimensions: dict,
+         newly_measured: set, previous: Roadmap, current: Roadmap,
+         before: dict, after: dict) -> list[str]:
+    """One sentence per change, naming the evidence that caused it.
+
+    Phrased to assert nothing beyond what happened. "X is no longer proposed
+    because the site now serves Arabic" is a statement about the site; "X worked"
+    would be a claim about a result, and the roadmap has no standing to make one.
+    """
+    reasons: list[str] = []
+    for title in removed:
+        task = before[title]
+        moved_to = dimensions.get(task.dimension)
+        if task.dimension in current.left_alone:
+            reasons.append(f"{title!r} is no longer proposed: {task.dimension} is now "
+                           "confirmed in place, so there is nothing to do there.")
+        elif moved_to:
+            reasons.append(f"{title!r} is no longer proposed: {task.dimension} moved "
+                           f"from {moved_to['from']} to {moved_to['to']}.")
+        elif task.metric_key in newly_measured:
+            reasons.append(f"{title!r} is no longer proposed: {task.metric_key} now has "
+                           "a source, so it no longer needs establishing.")
+        else:
+            reasons.append(f"{title!r} is no longer proposed: it was not derived from "
+                           "the current evidence.")
+    for title in added:
+        task = after[title]
+        moved_to = dimensions.get(task.dimension)
+        if moved_to:
+            reasons.append(f"{title!r} is newly proposed: {task.dimension} moved from "
+                           f"{moved_to['from']} to {moved_to['to']}.")
+        else:
+            reasons.append(f"{title!r} is newly proposed: {task.why}")
+    for title, (was_h, now_h) in moved.items():
+        reasons.append(f"{title!r} moved from the {was_h} to the {now_h} horizon "
+                       "as the ranking of what is weakest changed.")
+    if not reasons and previous.readiness_overall != current.readiness_overall:
+        reasons.append(
+            f"The plan is unchanged; readiness moved from "
+            f"{previous.readiness_overall} to {current.readiness_overall}.")
+    return reasons

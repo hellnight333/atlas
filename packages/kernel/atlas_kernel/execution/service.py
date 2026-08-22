@@ -33,8 +33,6 @@ from .models import (
     ExecutionOutcome,
     NotApproved,
     PublicationState,
-    QAResult,
-    QAVerdict,
     UnsupportedCapability,
 )
 from .qa import Context, run_gates
@@ -51,8 +49,15 @@ def _digest(artefact: str) -> str:
     return hashlib.sha256(artefact.encode("utf-8")).hexdigest()
 
 
-def may_execute(recommendation: Recommendation, *, approved: bool) -> None:
-    """Raise unless every condition for doing the work is met."""
+def may_execute(recommendation: Recommendation, *, approved: bool,
+                customer_done: frozenset[str] = frozenset()) -> None:
+    """Raise unless every condition for doing the work is met.
+
+    `customer_done` names customer tasks the customer has since reported
+    complete, folded from the event timeline. It defaults to empty, so a caller
+    that does not know refuses rather than proceeds — an unrecorded permission
+    is not a granted one.
+    """
     if not approved:
         raise NotApproved(
             f"{recommendation.id} has not been approved. Acceptance records that a "
@@ -61,8 +66,9 @@ def may_execute(recommendation: Recommendation, *, approved: bool) -> None:
     if recommendation.state is not RecommendationState.ACCEPTED:
         raise NotApproved(
             f"{recommendation.id} is {recommendation.state.value}, not accepted")
-    if recommendation.waiting_on_customer:
-        outstanding = [t.title for t in recommendation.customer_tasks if t.blocks]
+    outstanding = [t.title for t in recommendation.customer_tasks
+                   if t.blocks and t.title not in customer_done]
+    if outstanding:
         raise NotApproved(
             f"{recommendation.id} is waiting on the customer: {', '.join(outstanding)}")
     if recommendation.offer_id not in EXECUTORS:
@@ -73,14 +79,15 @@ def may_execute(recommendation: Recommendation, *, approved: bool) -> None:
 
 def execute(recommendation: Recommendation, *, approved: bool, research: dict,
             business_name: str, repository=None, project_id: str = "",
-            actor: str = "execution") -> ExecutionOutcome:
+            actor: str = "execution",
+            customer_done: frozenset[str] = frozenset()) -> ExecutionOutcome:
     """Run one approved recommendation and report what came of it.
 
     Returns an outcome even when the work fails: a failure is a result, and a
     job that raises past its caller leaves no record of having been attempted.
     """
     started = datetime.now(UTC)
-    may_execute(recommendation, approved=approved)
+    may_execute(recommendation, approved=approved, customer_done=customer_done)
 
     offer = offer_for(recommendation.offer_id)
     executor = EXECUTORS[recommendation.offer_id]

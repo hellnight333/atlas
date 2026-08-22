@@ -15,11 +15,18 @@ nobody.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from ..opportunity.models import BusinessEvent
-from ..opportunity.tenancy import TenantId, owns, require as _require_tenant
+from ..opportunity.tenancy import TenantId, owns
+from ..opportunity.tenancy import require as _require_tenant
 from .attribution import Attribution, refuse
-from .models import BaselineState, Measurement, Window
+from .models import BY_KEY, BaselineState, Measurement, Observation, Window
+
+# roadmap imports measurement, not the other way round, so this stays a hint.
+if TYPE_CHECKING:
+    from ..roadmap.models import Roadmap
 
 log = logging.getLogger(__name__)
 
@@ -156,3 +163,102 @@ def vet(sentence: str, level: Attribution) -> str:
     presentation layer calls.
     """
     return refuse(level, sentence)
+
+
+# --- baselines ---------------------------------------------------------------
+#
+# The gap P1.5 left: a roadmap could say "connect Search Console" and nothing
+# could act on the answer. These turn that into a baseline the moment a source
+# exists, and — just as importantly — report honestly while it does not.
+
+
+class SourceUnavailable(Exception):
+    """A baseline was requested for a metric with nothing to read it from.
+
+    Raised rather than returning a zero-valued baseline. A zero is a reading,
+    and a reading nobody took is the single most damaging thing this layer can
+    invent: every later comparison against it would show improvement.
+    """
+
+
+def open_baseline(*, business_id: str, tenant_id: str | None, metric_key: str,
+                  value: float | None, source: str, observed_at: datetime | None = None,
+                  covering_days: int = 30, recommendation_id: str = "",
+                  roadmap_task_id: str = "", detail: str = "") -> Measurement:
+    """Record what a metric read *before* anything was done to it.
+
+    `value=None` is allowed and is not a failure: it records that the source was
+    reachable and had nothing to report, which is different from not having
+    looked. The resulting measurement reports NO_BASELINE and UNKNOWN
+    confidence, and says so in its own statement.
+    """
+    if not source:
+        raise SourceUnavailable(
+            f"{metric_key}: a baseline needs a source. Without one there is "
+            "nothing to record, and recording zero would invent a reading.")
+    if metric_key not in BY_KEY:
+        raise SourceUnavailable(f"{metric_key!r} is not in the metric catalogue")
+
+    end = observed_at or datetime.now(UTC)
+    start = end - timedelta(days=covering_days)
+    return Measurement(
+        business_id=business_id, tenant_id=tenant_id, metric_key=metric_key,
+        recommendation_id=recommendation_id,
+        window=Window(baseline_start=start, baseline_end=end),
+        baseline=Observation(value=value, source=source, observed_at=end,
+                             detail=detail or f"baseline over {covering_days} days"),
+        notes=f"roadmap_task={roadmap_task_id}" if roadmap_task_id else "")
+
+
+def close_measurement(baseline: Measurement, *, value: float | None, source: str,
+                      intervention_at: datetime, observed_at: datetime | None = None,
+                      covering_days: int = 30, job_id: str = "",
+                      asset_ids: tuple[str, ...] = (), attribution_source: str = "",
+                      detail: str = "") -> Measurement:
+    """Take the later reading against an existing baseline.
+
+    The intervention timestamp is required rather than defaulted, because
+    whether the work preceded the observation is what separates OBSERVED from
+    ASSOCIATED — and a default would silently supply the ordering that
+    distinction exists to check.
+    """
+    end = observed_at or datetime.now(UTC)
+    start = end - timedelta(days=covering_days)
+    return baseline.model_copy(update={
+        "window": baseline.window.model_copy(update={
+            "intervention_at": intervention_at,
+            "observation_start": start, "observation_end": end}),
+        "observed": Observation(value=value, source=source, observed_at=end,
+                                detail=detail or f"observed over {covering_days} days"),
+        "job_id": job_id or baseline.job_id,
+        "asset_ids": asset_ids or baseline.asset_ids,
+        "attribution_source": attribution_source or baseline.attribution_source,
+    })
+
+
+def awaiting_source(roadmap: Roadmap, *,
+                    measured: frozenset[str] = frozenset()) -> tuple[dict, ...]:
+    """Which of a roadmap's measurement tasks still have nothing to read from.
+
+    The honest answer to "why is there no number here yet", phrased so it cannot
+    be read as poor performance: a metric with no source is unmeasured, and
+    unmeasured is not zero and not bad.
+    """
+    from ..roadmap.models import Executability
+
+    waiting = []
+    for task in roadmap.tasks:
+        if task.executability is not Executability.MEASURE_FIRST:
+            continue
+        if not task.metric_key or task.metric_key in measured:
+            continue
+        metric = BY_KEY.get(task.metric_key)
+        waiting.append({
+            "task_id": task.id, "metric": task.metric_key,
+            "label": metric.label if metric else task.metric_key,
+            "needs": task.task.action or "a source Qevik can read",
+            "state": BaselineState.NO_BASELINE.value,
+            "statement": f"{metric.label if metric else task.metric_key}: "
+                         "no baseline yet — nothing has been connected to read it from.",
+        })
+    return tuple(waiting)

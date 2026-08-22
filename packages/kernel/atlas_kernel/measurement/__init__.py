@@ -7,6 +7,7 @@ summary built later cannot claim more than the evidence carries.
 
 from .attribution import Attribution, Claim, at_least, permits, phrasing, refuse
 from .models import (
+    METRICS,
     AIVisibilityObservation,
     BaselineState,
     Confidence,
@@ -16,7 +17,6 @@ from .models import (
     MetricFamily,
     Observation,
     Window,
-    METRICS,
     window_around,
 )
 from .service import OutsideWindow, ProvenanceMissing, read, record, summarise, vet

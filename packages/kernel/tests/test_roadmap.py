@@ -128,15 +128,27 @@ def test_two_different_businesses_do_not_get_the_same_roadmap(ahs, clinic) -> No
 
 
 def test_each_plan_addresses_what_that_business_is_actually_missing(ahs, clinic) -> None:
+    """The dimensions each plan touches follow that business's own research.
+
+    AHS's proof reads as a weakness on purpose, and it took a bug to see why.
+    `portfolio_depth` is emitted PRESENT by `research/cms/base.py` to mean "N
+    pages are photographs with almost no text", and `outreach/opportunity.py`
+    uses that same PRESENT as the trigger for the proof opportunity — so it is a
+    defect signal, and reading it as a strength scored AHS strong on the one
+    thing their audit calls their biggest gap. See `readiness.INVERTED`.
+    """
     ahs_dimensions = {t.dimension for t in ahs.tasks}
     clinic_dimensions = {t.dimension for t in clinic.tasks}
 
-    # AHS: no Arabic, no tappable number. Its proof is the best thing it has.
+    # AHS: no Arabic, no tappable number, and world-class work with no proof
+    # system around it. Their site is fast and their enquiry form works.
     assert Dimension.MULTILINGUAL.value in ahs_dimensions
-    assert Dimension.PROOF.value not in ahs_dimensions
+    assert Dimension.PROOF.value in ahs_dimensions
+    assert Dimension.TECHNICAL_HEALTH.value not in ahs_dimensions
+    assert Dimension.CONVERSION.value not in ahs_dimensions
 
-    # The clinic is the inverse on every one of those.
-    assert Dimension.PROOF.value in clinic_dimensions
+    # The clinic is the inverse: already bilingual and reachable, broken site.
+    assert Dimension.TECHNICAL_HEALTH.value in clinic_dimensions
     assert Dimension.MULTILINGUAL.value not in clinic_dimensions
     assert Dimension.REACHABILITY.value not in clinic_dimensions
 
@@ -347,10 +359,22 @@ def test_work_depends_only_on_its_own_prerequisites(ahs_case) -> None:
                 f"{task.task.title!r} waits on {by_id[dependency].task.title!r}, " \
                 "which its own recommendation never asked for"
 
-    # And the converse: not everything waits on everything.
-    blocking = {t.id for t in ahs.customer_tasks if t.task.blocks}
-    assert any(set(t.depends_on) < blocking for t in ahs.qevik_tasks if t.depends_on), \
-        "every task waits on every obligation, which is one lump, not a plan"
+    # And the converse, stated as equality rather than as a proper subset: a
+    # task waits on exactly its own recommendation's blocking obligations and
+    # nothing else. Equality is the stronger claim and, unlike a subset check,
+    # it still means something when only one recommendation is schedulable.
+    # Only work that is actually scheduled. A NO_CAPABILITY finding has no
+    # prerequisites by construction — its customer obligations are deliberately
+    # not requested, because nothing would consume them.
+    by_title = {t.task.title: t.id for t in ahs.customer_tasks}
+    for task in ahs.qevik_tasks:
+        if (not task.recommendation_id
+                or task.executability is not Executability.QEVIK_CAN_EXECUTE):
+            continue
+        expected = {by_title[title] for title in needed[task.recommendation_id]
+                    if title in by_title}
+        assert set(task.depends_on) == expected, \
+            f"{task.task.title!r} waits on {task.depends_on}, expected {sorted(expected)}"
 
 
 def test_the_first_week_is_measurement_and_customer_obligations(ahs) -> None:

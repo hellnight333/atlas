@@ -15,7 +15,7 @@ from .models import (
     TaskKind,
     Unsupported,
 )
-from .offers import CapabilityOffer, OFFERS, offer_for, offers_for_opportunity
+from .offers import OFFERS, CapabilityOffer, offer_for, offers_for_opportunity
 
 __all__ = [
     "CapabilityOffer", "CustomerTask", "OFFERS", "QevikTask", "Recommendation",
