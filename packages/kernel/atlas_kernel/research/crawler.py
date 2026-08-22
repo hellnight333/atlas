@@ -16,7 +16,7 @@ import re
 from collections import deque
 from urllib.parse import urljoin
 
-from .net import Budget, Fetcher, Page, crawlable, normalise
+from .net import Fetcher, Page, crawlable, normalise
 
 _HREF = re.compile(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\'#]+)', re.I)
 _NEXT = re.compile(r'<link\b[^>]*\brel\s*=\s*["\']next["\'][^>]*\bhref\s*=\s*["\']([^"\']+)', re.I)

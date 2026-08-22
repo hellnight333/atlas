@@ -29,7 +29,7 @@ from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId, owns
 from ..opportunity.tenancy import require as _require_tenant
 from ..recommendation.models import CustomerTask, QevikTask, Recommendation
-from ..recommendation.offers import offer_for
+from ..recommendation.offers import OFFERS, offer_for
 from .models import Executability, Horizon, Roadmap, RoadmapTask
 from .readiness import Confidence, Dimension, DimensionScore, Readiness, assess
 
@@ -48,7 +48,18 @@ OFFER_DIMENSION: dict[str, Dimension] = {
     "offer-imagery": Dimension.CONTENT,
     "offer-one-tap-contact": Dimension.REACHABILITY,
     "offer-enquiry-builder": Dimension.CONVERSION,
+    "offer-website": Dimension.TECHNICAL_HEALTH,
 }
+
+#: Every offer must appear above. Without this, adding an offer produces tasks
+#: with no dimension and no metric — they schedule, they are approved, they
+#: execute, and nothing can ever be measured about them. Checked at import so a
+#: missing entry is a failure to start rather than a quiet loss of measurement.
+_uncovered = {o.id for o in OFFERS} - set(OFFER_DIMENSION)
+if _uncovered:                                          # pragma: no cover - guard
+    raise RuntimeError(
+        f"offers with no dimension: {sorted(_uncovered)}. Add them to "
+        "OFFER_DIMENSION, or a roadmap task for them carries no metric.")
 
 #: What would show that work on a dimension had any effect. Metric keys from the
 #: measurement catalogue, so a roadmap task and a later measurement agree on

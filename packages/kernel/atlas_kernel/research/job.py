@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..opportunity.website_audit import Finding, Status
 
+
 #: A research job's life. Deliberately not the ten build states — research never
 #: designs, builds or produces media, and a lifecycle carrying states a job can
 #: never reach tells an operator nothing.

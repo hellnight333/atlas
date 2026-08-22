@@ -21,7 +21,7 @@ Two rules hold the thing honest:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 #: §3's controlled vocabulary. A product family is a real capability boundary —
 #: what Qevik would have to build — not a marketing category.

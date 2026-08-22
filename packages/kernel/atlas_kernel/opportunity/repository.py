@@ -23,13 +23,6 @@ from sqlalchemy import text
 
 from ..db import SessionLocal
 from .identity import place_id, strong_keys, with_identity
-from .tenancy import (
-    ALL_TENANTS,
-    TenantId,
-    check as _check_owner,
-    predicate as _tenant_predicate,
-    require as _require_tenant,
-)
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -42,6 +35,15 @@ from .models import (
     ProposalClaim,
 )
 from .outreach import ContactHistory, SuppressionList
+from .tenancy import (
+    TenantId,
+)
+from .tenancy import (
+    predicate as _tenant_predicate,
+)
+from .tenancy import (
+    require as _require_tenant,
+)
 
 
 def _now() -> datetime:

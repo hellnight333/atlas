@@ -1,15 +1,28 @@
 """Executors, keyed by the offer they fulfil.
 
-One entry. A registry with one member looks like over-engineering and is not:
-the lookup is what makes "no executor for that capability" a refusal rather than
-a crash, which is one of the negative controls this phase was gated on.
+Two entries. The lookup is what makes "no executor for that capability" a
+refusal rather than a crash, and it is the authority the roadmap consults before
+telling a customer that Qevik can do something — an offer existing is not the
+same as something being able to perform it.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 from .portfolio import build_portfolio_index
+from .website import NothingToBuild, WebsiteMode, build_website
+
+#: What every executor is. A capability produces one document or a bundle of
+#: files, plus the provenance saying what it was built from — declared once so a
+#: new executor with a different shape is a type error rather than a surprise at
+#: the point of execution.
+Executor = Callable[..., tuple[str | dict[str, str], dict[str, Any]]]
 
 #: offer id -> executor. An offer with no entry cannot be executed.
-EXECUTORS = {
+EXECUTORS: dict[str, Executor] = {
     "offer-portfolio-system": build_portfolio_index,
+    "offer-website": build_website,
 }
 
-__all__ = ["EXECUTORS", "build_portfolio_index"]
+__all__ = ["EXECUTORS", "Executor", "NothingToBuild", "WebsiteMode", "build_portfolio_index",
+           "build_website"]

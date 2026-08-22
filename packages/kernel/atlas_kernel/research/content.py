@@ -13,7 +13,6 @@ the others, and each failure has a different remedy.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 from ..opportunity.website_audit import Category, Finding, Status

@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from atlas_kernel import db
 from atlas_kernel.approval.models import ApprovalState
 from atlas_kernel.composition_root import create_runtime
+from atlas_kernel.execution.artefacts import bundle_hash
 from atlas_kernel.execution.capabilities.portfolio import build_portfolio_index
 from atlas_kernel.execution.models import PublicationState, QAResult, QAVerdict
 from atlas_kernel.measurement.attribution import Attribution, permits
@@ -179,7 +180,11 @@ def test_ready_to_publish_becomes_published_once_and_traceably(executed, wiring)
     assert record.published and record.external_id and record.external_url
     live = root / DESTINATION.slug / "current" / "index.html"
     assert live.exists(), "the artefact is actually on disk and served"
-    assert hashlib.sha256(live.read_text().encode()).hexdigest() == asset.content_hash
+    # Hashed as a bundle, by the same function execution used. A capability may
+    # produce one document or a whole site, and a single document is a bundle
+    # with one entry — one hashing rule, so the gate and the executor cannot
+    # disagree about what was approved.
+    assert bundle_hash({"index.html": live.read_text()}) == asset.content_hash
 
 
 def test_the_record_carries_every_link_in_the_chain(executed, wiring) -> None:

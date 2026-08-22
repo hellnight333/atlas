@@ -16,11 +16,11 @@ destination. Not a second approval system: a second question.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 
 from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
 from ..approval.service import ApprovalService
+from ..execution.artefacts import bundle_hash
 from ..execution.models import ExecutionOutcome, PublicationState
 from ..models import Asset
 from ..opportunity.tenancy import TenantId, owns
@@ -143,11 +143,11 @@ def unmet(*, outcome: ExecutionOutcome, asset: Asset | None, target: str,
         # And the bytes about to go out must be the bytes that were approved.
         # The fingerprint covers the asset's content hash, so without this an
         # approval for one artefact could publish a different one — the files
-        # are a separate argument and nothing else compares them.
+        # are a separate argument and nothing else compares them. Hashed by the
+        # same function execution used, because two hashing rules would either
+        # refuse everything or, far worse, refuse nothing.
         if files is not None and asset.content_hash:
-            digests = {hashlib.sha256(body.encode("utf-8")).hexdigest()
-                       for body in files.values()}
-            if asset.content_hash not in digests:
+            if bundle_hash(files) != asset.content_hash:
                 reasons.append(
                     "the files to publish do not match the approved asset's "
                     "content hash")

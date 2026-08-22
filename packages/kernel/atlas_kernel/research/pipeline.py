@@ -28,7 +28,7 @@ from . import classify, content, discovery, journeys, position, presence, seo, t
 from .cms import read_cms
 from .cms.base import CMSFacts
 from .crawler import Crawl, crawl
-from .job import JobState, ResearchResult, StageResult, StageState, fold
+from .job import ResearchResult, StageResult, StageState, fold
 from .net import USER_AGENT, Budget, Fetcher
 
 log = logging.getLogger(__name__)

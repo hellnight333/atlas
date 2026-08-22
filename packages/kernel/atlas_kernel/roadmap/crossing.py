@@ -24,18 +24,23 @@ Three properties, all inherited rather than reinvented:
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope
 from ..approval.service import ApprovalService
 from ..execution.models import ExecutionOutcome
 from ..execution.service import execute as _execute
-from ..opportunity.models import BusinessEvent
+from ..opportunity.models import Business, BusinessEvent
 from ..opportunity.tenancy import TenantId
 from ..recommendation.models import Recommendation
-from ..repository import AtlasRepository
 from . import gate
 from .lifecycle import TaskFacts
 from .models import RoadmapTask
+
+# `repository` imports its way back to this package, so the annotation stays a
+# hint. Importing it for real turned test ordering into an import error.
+if TYPE_CHECKING:
+    from ..repository import AtlasRepository
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +97,8 @@ def execute_task(task: RoadmapTask, *, recommendation: Recommendation,
                  approval: ApprovalRequest | None, facts: TaskFacts,
                  tenant: TenantId | None, research: dict, business_name: str,
                  repository: AtlasRepository | None = None, project_id: str = "",
-                 actor: str = "roadmap") -> ExecutionOutcome:
+                 actor: str = "roadmap",
+                 business: Business | None = None) -> ExecutionOutcome:
     """Carry an approved task into execution, or refuse and say why.
 
     Raises `NotExecutable` with every unmet condition rather than executing
@@ -106,7 +112,8 @@ def execute_task(task: RoadmapTask, *, recommendation: Recommendation,
     return _execute(recommendation, approved=True, research=research,
                     business_name=business_name, repository=repository,
                     project_id=project_id, actor=actor,
-                    customer_done=facts.completed_customer_tasks)
+                    customer_done=facts.completed_customer_tasks,
+                    business=business)
 
 
 def requested_event(task: RoadmapTask, approval: ApprovalRequest,

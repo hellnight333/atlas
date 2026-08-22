@@ -120,11 +120,21 @@ def test_two_different_businesses_do_not_get_the_same_roadmap(ahs, clinic) -> No
     assert ahs.fingerprint() != clinic.fingerprint()
     assert ahs.readiness_overall != clinic.readiness_overall
 
+    # Some tasks are shared by construction rather than by coincidence: a
+    # measurement neither business has ever had done, and the standing "approve
+    # the result" obligation that `recommendation.service._ALWAYS` attaches to
+    # every offer. Both are true of any two businesses and say nothing about
+    # whether the evidence was read.
+    #
+    # Asserting a literal set here broke the moment a capability was added,
+    # which is the wrong signal — the claim worth making is that no *work* is
+    # shared, because work is what should differ.
     shared = {t.task.title for t in ahs.tasks} & {t.task.title for t in clinic.tasks}
-    # One measurement task is legitimately shared: neither has ever been checked
-    # for AI visibility, and that is a fact about both. Anything beyond it would
-    # mean the generator is filling space rather than reading evidence.
-    assert shared == {"Measure AI search visibility"}, shared
+    by_title = {t.task.title: t for t in (*ahs.tasks, *clinic.tasks)}
+    universal = {t for t in shared
+                 if by_title[t].executability in (Executability.MEASURE_FIRST,
+                                                  Executability.CUSTOMER_MUST_ACT)}
+    assert shared == universal, sorted(shared - universal)
 
 
 def test_each_plan_addresses_what_that_business_is_actually_missing(ahs, clinic) -> None:
@@ -293,11 +303,19 @@ def test_a_weakness_with_no_offer_is_shown_and_not_promised(clinic) -> None:
     sells against would ever appear."""
     uncovered = [t for t in clinic.tasks
                  if t.executability is Executability.NO_CAPABILITY]
-    assert {t.dimension for t in uncovered} >= {Dimension.PROOF.value,
-                                                Dimension.TECHNICAL_HEALTH.value}
+    assert uncovered, "the clinic has weaknesses nothing can sell against"
+    # Named rather than enumerated: which dimensions are uncovered changes every
+    # time a capability is added, and the invariant is that an uncovered one is
+    # still *shown* — not which ones they happen to be today.
+    assert Dimension.PROOF.value in {t.dimension for t in uncovered}
     for task in uncovered:
         assert not task.capability_id
         assert task.evidence, "a finding must still rest on something observed"
+    # And the converse: a dimension that now has a capability is not shown as
+    # having none. This is what broke when the website capability was added.
+    covered = {t.dimension for t in clinic.tasks
+               if t.executability is Executability.QEVIK_CAN_EXECUTE}
+    assert not (covered & {t.dimension for t in uncovered})
 
 
 def test_the_capability_claim_cannot_be_faked() -> None:

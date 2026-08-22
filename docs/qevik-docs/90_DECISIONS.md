@@ -41,3 +41,11 @@ D019 — A `Connection` holds the *name* of a credential, never the credential. 
 D020 — A failed publication is a record, not an exception. Losing it would leave a customer's site in an unknown state with nothing written down. A retry is a new record; the failed one stays.
 
 D021 — The bytes published must hash to the approved asset's content hash. The approval fingerprint covers the hash and the files are a separate argument — without this check an approval for one artefact could publish another.
+
+D022 — A capability's output is a *bundle* — a mapping of path to text — and a single document is a bundle with one entry. `execution/artefacts.bundle_hash` is the only identity function for one. Two hashing rules would drift, and the publication gate compares published bytes against the approved hash, so the drift would either refuse everything or refuse nothing.
+
+D023 — The website capability's mode (CREATE / MODIFY) is derived from whether research could read a site, and `build_website` has no mode parameter. Letting a caller declare "create" is how a business with a working website gets a new one built over the top of it.
+
+D024 — `build_website` raises when a site already does everything the capability could add. A strong website is a finding, not a reason to rebuild it, and the refusal means no artefact exists to approve, publish or bill for.
+
+D025 — Every `CapabilityOffer` must have an `OFFER_DIMENSION` entry, checked at import. Without it a new offer produces roadmap tasks with no dimension and no metric — they schedule, are approved, execute, and nothing can ever be measured about them.

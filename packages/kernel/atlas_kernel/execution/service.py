@@ -19,15 +19,16 @@ Nothing here publishes. `READY_TO_PUBLISH` is where the path ends by design.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from ..models import Asset, Job, JobStatus, Run
+from ..opportunity.models import Business
 from ..opportunity.tenancy import owns
 from ..recommendation.models import Recommendation, RecommendationState
 from ..recommendation.offers import offer_for
+from .artefacts import bundle_hash, normalise
 from .capabilities import EXECUTORS
 from .models import (
     ExecutionOutcome,
@@ -43,10 +44,6 @@ log = logging.getLogger(__name__)
 #: produces the same location and a changed artefact cannot silently overwrite
 #: the one that was reviewed.
 URI = "atlas://qevik/{business_id}/{capability}/{digest}.html"
-
-
-def _digest(artefact: str) -> str:
-    return hashlib.sha256(artefact.encode("utf-8")).hexdigest()
 
 
 def may_execute(recommendation: Recommendation, *, approved: bool,
@@ -80,7 +77,8 @@ def may_execute(recommendation: Recommendation, *, approved: bool,
 def execute(recommendation: Recommendation, *, approved: bool, research: dict,
             business_name: str, repository=None, project_id: str = "",
             actor: str = "execution",
-            customer_done: frozenset[str] = frozenset()) -> ExecutionOutcome:
+            customer_done: frozenset[str] = frozenset(),
+            business: Business | None = None) -> ExecutionOutcome:
     """Run one approved recommendation and report what came of it.
 
     Returns an outcome even when the work fails: a failure is a result, and a
@@ -108,19 +106,22 @@ def execute(recommendation: Recommendation, *, approved: bool, research: dict,
                        "capability_id": recommendation.capability_id},
               status=JobStatus.RUNNING)
 
-    artefact, provenance, error = "", {}, ""
+    artefact: str | dict[str, str] = ""
+    provenance: dict = {}
+    error = ""
     try:
         artefact, provenance = executor(
             business_name=business_name, research=research,
-            strengths=recommendation.strengths)
+            strengths=recommendation.strengths, business=business)
     except Exception as failure:                  # noqa: BLE001 - a failure is data
         log.exception("execution: %s failed for %s", recommendation.offer_id,
                       recommendation.business_id)
         error = f"{type(failure).__name__}: {failure}"[:300]
 
+    files = normalise(artefact)
     assets: list[Asset] = []
-    if artefact:
-        digest = _digest(artefact)
+    if files:
+        digest = bundle_hash(files)
         assets.append(Asset(
             type="document",
             project_id=project_id or "project-unassigned",
@@ -128,7 +129,7 @@ def execute(recommendation: Recommendation, *, approved: bool, research: dict,
             uri=URI.format(business_id=recommendation.business_id,
                            capability=recommendation.offer_id, digest=digest[:16]),
             mime_type="text/html",
-            file_size=len(artefact.encode("utf-8")),
+            file_size=sum(len(body.encode("utf-8")) for body in files.values()),
             content_hash=digest,
             metadata={
                 # Provenance the QA gates and any later measurement read. An
@@ -142,13 +143,19 @@ def execute(recommendation: Recommendation, *, approved: bool, research: dict,
                 "tenant_id": recommendation.tenant_id,
                 "evidence": list(recommendation.evidence),
                 "built_from": provenance,
+                # The bundle's shape, so a reviewer can see a site was produced
+                # rather than a page without fetching it.
+                "files": sorted(files),
                 "publication_state": PublicationState.DRAFT.value,
             },
         ))
 
+    # Every page, not just the index. A gate that reads one document of a
+    # bundle would pass a site whose third page says something forbidden.
     results = run_gates(Context(outcome_error=error, assets=assets,
                                 recommendation=recommendation, offer=offer,
-                                artefact=artefact))
+                                artefact="\n".join(
+                                    files[path] for path in sorted(files))))
     blocked = [r for r in results if r.blocks]
     state = PublicationState.REJECTED if blocked else PublicationState.READY_TO_PUBLISH
     job = job.model_copy(update={

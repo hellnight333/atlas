@@ -134,6 +134,24 @@ ownership because a `Connection` is a value that can be passed anywhere.
 `execution.service.publish()` still refuses, and now says where publication
 actually lives.
 
+## P2.2 — Website creation / modification (2026-08-22)
+
+The first capability to run the **whole loop** — research to a published page —
+see [`P2_2_WEBSITE_CAPABILITY.md`](P2_2_WEBSITE_CAPABILITY.md). One executor and
+one offer; every other stage already existed.
+
+`offer-website` answers `performance`, `broken` and `thin_content`, the three
+website opportunities that previously had no offer at all. Two modes, neither
+chosen by a caller: CREATE when research could not read a site, MODIFY when one
+exists — and MODIFY adds only what research **confirmed absent**.
+
+`build_website` raises rather than producing an artefact when a site already
+does everything it could add. That is STRONG WEBSITE + LIMITED OPPORTUNITY where
+it cannot be argued with: nothing exists to approve, publish or bill for.
+
+Generation reuses the M015 Website Factory whole, including its rule that there
+is no `FactSource` meaning "a model wrote it".
+
 **Two real bugs P1.6 surfaced**, both documented in
 [`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) §10: five
 capabilities were being presented as executable that no executor exists for, and
@@ -168,8 +186,8 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-22 on the Mac: 2161 passed, 25 skipped**,
-ruff 35 (down from 43) and mypy 135 — P1.5, P1.6 and P2.1 add none of either.
+**Full suite is GREEN as of 2026-08-22 on the Mac: 2185 passed, 25 skipped**,
+ruff 26 (down from 43) and mypy 135 — P1.5, P1.6, P2.1 and P2.2 add none.
 - The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
   read production read-only and skip when no production URL is configured. They
   were verified to still **fail** when one is, so the detector is live rather

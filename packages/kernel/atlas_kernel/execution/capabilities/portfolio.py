@@ -47,7 +47,8 @@ def _facts(research: dict) -> dict:
 
 
 def build_portfolio_index(*, business_name: str, research: dict,
-                          strengths: tuple[str, ...] = ()) -> tuple[str, dict]:
+                          strengths: tuple[str, ...] = (),
+                          business=None) -> tuple[str, dict]:
     """Return the artefact and what it was built from.
 
     Raises when there is nothing to build from. A capability that produces an

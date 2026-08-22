@@ -13,7 +13,6 @@ The allow-list is short on purpose and every entry has a reason.
 from __future__ import annotations
 
 import logging
-
 import time
 from collections import defaultdict
 

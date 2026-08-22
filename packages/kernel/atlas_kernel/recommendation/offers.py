@@ -169,6 +169,29 @@ OFFERS: tuple[CapabilityOffer, ...] = (
         estimated_units=10,
     ),
     CapabilityOffer(
+        id="offer-website",
+        capability_id="cap-code-generation",
+        name="Website",
+        summary="A site built from the facts the business has supplied or published, "
+                "with nothing on it that nobody stands behind. Creates one where "
+                "there is none, and rebuilds the structure where there is.",
+        # The three website opportunities nothing else answered. A site that is
+        # slow, broken or empty is one artefact's problem, not three.
+        answers=frozenset({"performance", "broken", "thin_content"}),
+        required_inputs=("the business name, and any contact details to publish",),
+        # Only what every build carries. The QA gate checks each declared
+        # output is actually in the artefact, so declaring a contact section
+        # would fail for a business that has recorded no contact details — and
+        # the honest response to that is a shorter declaration, not a weaker
+        # gate. What the site contains beyond this depends on what was supplied,
+        # which is the whole point of `website/content.py`.
+        outputs=("a page with a title",),
+        qa_layers=("browser", "content", "link", "accessibility", "seo"),
+        publication_target="website",
+        measurement=("sessions", "enquiries"),
+        estimated_units=30,
+    ),
+    CapabilityOffer(
         id="offer-enquiry-builder",
         capability_id="cap-code-generation",
         name="Structured enquiry",

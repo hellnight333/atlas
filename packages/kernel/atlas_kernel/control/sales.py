@@ -39,7 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ..auth import Scope, User, requires
-from ..outreach import consistency, demos, opportunity, offer, scoring
+from ..outreach import consistency, demos, offer, opportunity, scoring
 
 #: Where `capture_evidence.py` writes screenshots. Served through this API
 #: rather than by the web server: the console's CSP is `img-src 'self'`, and
