@@ -33,3 +33,11 @@ D015 — Approval fingerprints cover what the act *is* — capability, recommend
 D016 — A baseline with no source raises rather than recording zero. A zero is a reading, and a reading nobody took makes every later comparison show improvement.
 
 D017 — `portfolio_depth` is a defect signal, not a strength. `research/cms/base.py` emits it PRESENT meaning "N pages are photographs with almost no text", and `outreach/opportunity.py` uses that PRESENT as the trigger for the proof opportunity. Held in `readiness.INVERTED` rather than renamed, because three modules already agree on the name.
+
+D018 — Publication requires a second approval, distinct from the execution approval. "Should Qevik do this work" and "may this exact output go to this exact destination" are different questions, asked at different times, and answerable differently by the same person. Different action names, so a policy can require a different approver for publication.
+
+D019 — A `Connection` holds the *name* of a credential, never the credential. Construction refuses a reference that looks like a secret, because that value is written to events and reports. Resolution happens at the moment of use and re-checks tenant ownership, since a `Connection` is an ordinary value that can be passed anywhere.
+
+D020 — A failed publication is a record, not an exception. Losing it would leave a customer's site in an unknown state with nothing written down. A retry is a new record; the failed one stays.
+
+D021 — The bytes published must hash to the approved asset's content hash. The approval fingerprint covers the hash and the files are a separate argument — without this check an approval for one artefact could publish another.

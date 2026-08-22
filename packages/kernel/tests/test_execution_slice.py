@@ -245,7 +245,7 @@ def test_nothing_in_this_package_can_reach_published() -> None:
 # --- 9. unauthorized publication attempt ----------------------------------
 
 def test_attempting_to_publish_raises(outcome) -> None:
-    with pytest.raises(NotImplementedError, match="not part of P1.3"):
+    with pytest.raises(NotImplementedError, match="not happen in the execution layer"):
         service.publish(outcome)
 
 

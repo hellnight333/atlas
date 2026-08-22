@@ -113,9 +113,26 @@ Approval → Job → Execution → Asset → QA → READY_TO_PUBLISH → Measure
 Re-evaluation — with the task's state derived from states that already exist
 rather than stored in a tenth place.
 
-Nothing in P1 publishes, sends, bills or connects a provider. `publish()` still
-raises. Publication is P2: it needs a target, a credential and a second approval
-on the artefact itself.
+Nothing in P1 publishes, sends, bills or connects a provider.
+
+## P2.1 — Publication Foundation (2026-08-22)
+
+`READY_TO_PUBLISH` now becomes `PUBLISHED` through a **second approval** — see
+[`P2_1_PUBLICATION_FOUNDATION.md`](P2_1_PUBLICATION_FOUNDATION.md).
+
+The execution approval asks *"should Qevik perform this work?"*; the artefact
+approval asks *"may this exact output go to this exact destination?"* Somebody
+can want a portfolio system and reject the one that was built, so the two
+decisions stay separate and are fingerprinted differently.
+
+One real target is connected: a local directory a web server serves, reusing
+`website/targets/` publish-then-promote. Credentials are held as **references**
+— an environment variable name, a vault key — never as secrets; construction
+refuses a reference that looks like a token, and `resolve()` re-checks tenant
+ownership because a `Connection` is a value that can be passed anywhere.
+
+`execution.service.publish()` still refuses, and now says where publication
+actually lives.
 
 **Two real bugs P1.6 surfaced**, both documented in
 [`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) §10: five
@@ -151,8 +168,8 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-22 on the Mac: 2123 passed, 25 skipped**,
-ruff 35 (down from 43) and mypy 135 — P1.5 and P1.6 add none of either.
+**Full suite is GREEN as of 2026-08-22 on the Mac: 2161 passed, 25 skipped**,
+ruff 35 (down from 43) and mypy 135 — P1.5, P1.6 and P2.1 add none of either.
 - The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
   read production read-only and skip when no production URL is configured. They
   were verified to still **fail** when one is, so the detector is live rather

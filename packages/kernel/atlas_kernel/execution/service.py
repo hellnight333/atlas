@@ -188,14 +188,20 @@ def visible_to(outcome: ExecutionOutcome, tenant) -> bool:
 
 
 def publish(outcome: ExecutionOutcome) -> None:
-    """Deliberately not implemented.
+    """Deliberately not implemented **here**, and not going to be.
 
-    Present so the boundary is visible in the code rather than only in a
-    document. Publication needs a target, a credential and a second approval on
-    the artefact itself — none of which exists in P1.3, and inventing them here
-    is exactly how READY_TO_PUBLISH quietly becomes PUBLISHED.
+    Publication exists now — `atlas_kernel.publication` has the target, the
+    connection and the second approval on the artefact itself. It is a separate
+    package on purpose: this layer has no way to reach the outside world, and a
+    test asserts that by reading its imports. Adding a publish path here would
+    make that true only until somebody changed it.
+
+    Kept as a refusal rather than deleted so the boundary stays visible at the
+    place a caller would look for it.
     """
     raise NotImplementedError(
-        "publication is not part of P1.3. READY_TO_PUBLISH means an artefact "
-        "passed its gates and is waiting for a human, not that anything was "
-        "published.")
+        "publication does not happen in the execution layer. READY_TO_PUBLISH "
+        "means an artefact passed its gates and is waiting for a human. Use "
+        "atlas_kernel.publication.publish(), which requires a registered "
+        "target, a tenant-owned connection and a second approval on this "
+        "exact artefact.")
