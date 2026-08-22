@@ -255,9 +255,10 @@ def test_a_sample_is_never_presented_as_client_work() -> None:
 def test_every_demo_the_registry_can_select_actually_exists() -> None:
     """Demo choice lives in one registry now; nothing here may point at a gap.
 
-    A demo is either a hand-built single file under `apps/samples/`, or rendered
-    by the vertical generator in `infra/samples.py`. Anything in neither is
-    selectable and unbuildable.
+    Three shapes are legitimate, and the third was added by the AHS concept:
+    a hand-built single file, a directory with its own generator writing into
+    `dist/`, or a slug rendered by the vertical generator in `infra/samples.py`.
+    Anything in none of them is selectable and unbuildable.
     """
     from atlas_kernel.outreach import demos
 
@@ -267,9 +268,16 @@ def test_every_demo_the_registry_can_select_actually_exists() -> None:
     for demo in demos.DEMOS:
         if demo.slug == "sample":
             continue                      # rendered by the dental vertical
-        by_hand = (built / demo.slug.replace("sample-", "") / "index.html").exists()
+        directory = built / demo.slug.replace("sample-", "")
+        by_hand = (directory / "index.html").exists()
+        # A multi-page concept has a build script and a rendered tree rather
+        # than one file. Requiring both is what keeps this a real check: a
+        # build script that has never produced output still fails.
+        by_own_build = ((directory / "build.py").exists()
+                        and (directory / "dist" / "index.html").exists())
         by_generator = f'"{demo.slug}"' in generated
-        assert by_hand or by_generator, f"{demo.slug} is selectable but built by nothing"
+        assert by_hand or by_own_build or by_generator, \
+            f"{demo.slug} is selectable but built by nothing"
 
 
 def test_the_dashboard_keeps_no_demo_map_of_its_own() -> None:

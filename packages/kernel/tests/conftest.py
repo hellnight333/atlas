@@ -31,12 +31,30 @@ import os
 # Redirecting here rather than asking each test to opt in is deliberate. An
 # opt-in is a thing a new test forgets, and the failure is silent: the test
 # passes, and the damage shows up weeks later in a number nobody trusts.
-_PRODUCTION_URL = os.environ.get("ATLAS_DATABASE_URL", "")
-if _PRODUCTION_URL:
-    # Kept so the guard test can look at production and confirm it stays clean.
-    os.environ.setdefault("QEVIK_PRODUCTION_DATABASE_URL", _PRODUCTION_URL)
-    if not _PRODUCTION_URL.rstrip("/").endswith("_test"):
-        os.environ["ATLAS_DATABASE_URL"] = _PRODUCTION_URL.rstrip("/") + "_test"
+# Redirecting only when the variable is already set left the case it was most
+# needed in uncovered: with nothing set, `db.py` falls back to its own default
+# and that default is named `atlas`. On a developer machine that is the local
+# working database, and on the server it is production — so the unset case is
+# not the safe one, and the guard in `db_safety` correctly refused to collect
+# the suite at all until this handled it.
+# Read from db_safety rather than repeated here: a second copy of the default
+# would drift, and the failure mode is the suite quietly pointing at the real
+# database again. db_safety builds no engine, so importing it is safe this early.
+from atlas_kernel.db_safety import DEFAULT_DATABASE_URL  # noqa: E402
+
+_CONFIGURED = os.environ.get("ATLAS_DATABASE_URL", "")
+_SOURCE_URL = _CONFIGURED or DEFAULT_DATABASE_URL
+if not _SOURCE_URL.rstrip("/").endswith("_test"):
+    os.environ["ATLAS_DATABASE_URL"] = _SOURCE_URL.rstrip("/") + "_test"
+
+# Only a URL somebody deliberately configured is production. The two uses pull
+# in opposite directions and must not share a value: the *refusal* above treats
+# an unrecognised database as production because that is the safe way to be
+# wrong, while the detector in test_production_is_not_a_test_fixture asserts
+# that production is clean — and pointing that at a developer's local scratch
+# database makes it fail on rows that were never production's.
+if _CONFIGURED:
+    os.environ.setdefault("QEVIK_PRODUCTION_DATABASE_URL", _CONFIGURED)
 
 import pytest  # noqa: E402
 

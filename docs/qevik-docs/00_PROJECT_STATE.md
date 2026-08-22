@@ -92,6 +92,25 @@ Reported by Claude:
 - Suppressed addresses were blocked.
 - Secrets were kept outside the repository and logging was hardened.
 
+## P1 execution & growth layer — P1.1 through P1.5 complete (2026-08-22)
+
+Five phases, each gated on review, all in `packages/kernel/atlas_kernel/`:
+
+| Phase | Module | What it establishes |
+|---|---|---|
+| P1.1 | `opportunity/tenancy.py`, `db_safety.py` | Tenant isolation at the repository layer; 352 real businesses migrated to the Qevik house org; 1,683 fixture rows quarantined reversibly; the test suite can no longer write to production |
+| P1.2 | `recommendation/` | `Recommendation` + `CapabilityOffer` bridging Opportunity → Job without a sixth job-state registry |
+| P1.3 | `execution/` | One complete vertical slice ending at `READY_TO_PUBLISH`; six QA gates; `publish()` deliberately raises |
+| P1.4 | `measurement/` | Attribution scale (UNKNOWN/OBSERVED/ASSOCIATED/ATTRIBUTED) where the level licenses the permitted language |
+| P1.5 | `roadmap/` | 0→100 readiness + the plan derived from it — see [`P1_5_ROADMAP_ENGINE.md`](P1_5_ROADMAP_ENGINE.md) |
+
+**P1.5 in one line:** two real businesses put through the same code path share
+exactly one task, and it is a measurement task true of both.
+
+Nothing in P1 publishes, sends, bills or connects a provider. Next crossing —
+turning an approved roadmap task into a Job — is P1.6 and is deliberately still
+explicit.
+
 ## Capabilities added since the Gmail milestone
 
 **Browser operation** — `packages/kernel/atlas_kernel/browser/`. A `BrowserSession`
@@ -120,7 +139,18 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-17: 1136 passed, 4 skipped, 91.88% coverage**
+**Full suite is GREEN as of 2026-08-22 on the Mac: 2087 passed, 25 skipped**,
+ruff and mypy at their pre-existing counts (43 / 135 — P1.5 adds none).
+- The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
+  read production read-only and skip when no production URL is configured. They
+  were verified to still **fail** when one is, so the detector is live rather
+  than quietly disabled.
+- Two unrelated blockers were fixed to get here, both documented in
+  [`P1_5_ROADMAP_ENGINE.md`](P1_5_ROADMAP_ENGINE.md) §8: the conftest database
+  redirect did not cover the case where `ATLAS_DATABASE_URL` is unset, and the
+  demo-registry guard knew two of the three ways a demo can be built.
+
+**Earlier baseline — 2026-08-17: 1136 passed, 4 skipped, 91.88% coverage**
 (gate 90%), ruff clean.
 - Earlier in the same day, on `qevik-core-01`: 1040 passed, coverage 92.16%.
 - On the Mac the two agreed to within 0.03%.

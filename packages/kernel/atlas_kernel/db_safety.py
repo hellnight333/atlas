@@ -28,6 +28,12 @@ import sys
 #: production stayed clean. Deliberately verbose: nobody sets this by accident.
 ESCAPE_HATCH = "QEVIK_ALLOW_PRODUCTION_DB_IN_TESTS"
 
+#: Where `db.py` connects when `ATLAS_DATABASE_URL` is unset. It lives here
+#: rather than in `db.py` so the test conftest can read it without importing the
+#: module that builds an engine — the conftest has to know this value in order
+#: to redirect away from it, and a second hand-written copy would drift.
+DEFAULT_DATABASE_URL = "postgresql+psycopg://atlas:atlas@localhost:5432/atlas"
+
 #: Names that unambiguously identify a throwaway database.
 _TEST_DB = re.compile(r"(^|[_\-/])test($|[_\-])|_test$|^test_|(^|/)tmp", re.I)
 

@@ -6,11 +6,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from .db_safety import DEFAULT_DATABASE_URL
 from .db_safety import check as _refuse_production_in_tests
 
-DATABASE_URL = os.getenv(
-    "ATLAS_DATABASE_URL", "postgresql+psycopg://atlas:atlas@localhost:5432/atlas"
-)
+DATABASE_URL = os.getenv("ATLAS_DATABASE_URL", DEFAULT_DATABASE_URL)
 
 # Every caller reaches the database through this engine, so the boundary is
 # here rather than in a conftest a caller may never load. See db_safety.

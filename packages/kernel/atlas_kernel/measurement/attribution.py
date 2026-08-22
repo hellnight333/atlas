@@ -90,10 +90,18 @@ _AGENCY = re.compile(
     r"\b(qevik (increased|caused|improved|grew|drove|delivered|boosted)"
     r"|because of qevik|thanks to qevik|we increased|we caused|we grew"
     r"|(this|the campaign|the intervention|it) (caused|generated|resulted in|drove)"
+    # A promise is an agency claim in the future tense, and it is the form a
+    # roadmap naturally reaches for — "this will drive more leads" asserts
+    # exactly what "this drove more leads" does, before any evidence exists.
+    r"|(will|would|should|is going to) (increase|drive|generate|boost|grow"
+    r"|improve|deliver|bring|lift|raise|double|convert)"
     r"|responsible for the (increase|growth|improvement))\b", re.I)
 _ATTRIBUTION = re.compile(
+    # "because of Qevik" was covered and bare "because of" was not, so the same
+    # causal claim passed whenever it credited something other than us.
     r"\b(attributed to|driven by|came from|sourced from|via the .*campaign"
-    r"|referred by)\b", re.I)
+    r"|referred by|because of|due to the|as a result of|thanks to"
+    r"|(grew|rose|fell|dropped|improved) because)\b", re.I)
 _SEQUENCE = re.compile(
     r"\b(after the (intervention|change|work|launch)|following the"
     r"|since the (intervention|change)|subsequent to)\b", re.I)
