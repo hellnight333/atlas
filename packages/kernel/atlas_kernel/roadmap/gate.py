@@ -14,6 +14,7 @@ rather than growing a second opinion about the same question.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..approval.models import ApprovalRequest, ApprovalState
 from ..execution.models import NotApproved, UnsupportedCapability
@@ -22,6 +23,9 @@ from ..opportunity.tenancy import TenantId, owns
 from ..recommendation.models import Recommendation, TaskKind
 from .lifecycle import TaskFacts, blockers
 from .models import Executability, RoadmapTask
+
+if TYPE_CHECKING:                       # credits imports recommendation, which
+    from ..credits.service import CreditService  # this package also imports
 
 #: What the approval carries so a decision can be shown to describe this task
 #: and no other. Same mechanism as the outreach gate's proposal fingerprint.
@@ -83,7 +87,8 @@ def fingerprint(task: RoadmapTask) -> str:
 
 def unmet(task: RoadmapTask, *, recommendation: Recommendation | None,
           approval: ApprovalRequest | None, facts: TaskFacts,
-          tenant: TenantId | None) -> tuple[str, ...]:
+          tenant: TenantId | None,
+          credits: CreditService | None = None) -> tuple[str, ...]:
     """Every condition this task does not satisfy. Empty means it may execute."""
     reasons: list[str] = []
 
@@ -141,7 +146,21 @@ def unmet(task: RoadmapTask, *, recommendation: Recommendation | None,
             reasons.append("the task changed after it was approved; "
                            "re-request approval for the new version")
 
-    # 8. And whatever P1.3 already refuses. Called rather than restated so the
+    # 8. The allowance, when credit enforcement is switched on. Optional
+    #    because plans are not assigned yet — but *fail-closed once supplied*: a
+    #    tenant with no plan is refused rather than treated as unlimited, which
+    #    is the failure mode that makes a plan meaningless.
+    if credits is not None and recommendation is not None:
+        try:
+            if credits.balance(tenant) < credits.units_for(recommendation.offer_id):
+                reasons.append(
+                    f"the {credits.plan_of(tenant).value} plan has "
+                    f"{credits.balance(tenant):g} units left and this needs "
+                    f"{credits.units_for(recommendation.offer_id):g}")
+        except Exception as refusal:              # noqa: BLE001 - reported, not raised
+            reasons.append(f"credits: {refusal}")
+
+    # 9. And whatever P1.3 already refuses. Called rather than restated so the
     #    two cannot drift into disagreeing about the same recommendation.
     if recommendation is not None:
         try:
@@ -157,18 +176,20 @@ def unmet(task: RoadmapTask, *, recommendation: Recommendation | None,
 
 def check(task: RoadmapTask, *, recommendation: Recommendation | None,
           approval: ApprovalRequest | None, facts: TaskFacts,
-          tenant: TenantId | None) -> Readiness:
+          tenant: TenantId | None,
+          credits: CreditService | None = None) -> Readiness:
     """Non-raising form, for showing a customer why something is waiting."""
     reasons = unmet(task, recommendation=recommendation, approval=approval,
-                    facts=facts, tenant=tenant)
+                    facts=facts, tenant=tenant, credits=credits)
     return Readiness(executable=not reasons, reasons=reasons)
 
 
 def require(task: RoadmapTask, *, recommendation: Recommendation | None,
             approval: ApprovalRequest | None, facts: TaskFacts,
-            tenant: TenantId | None) -> None:
+            tenant: TenantId | None,
+            credits: CreditService | None = None) -> None:
     """Raise unless every condition is satisfied."""
     reasons = unmet(task, recommendation=recommendation, approval=approval,
-                    facts=facts, tenant=tenant)
+                    facts=facts, tenant=tenant, credits=credits)
     if reasons:
         raise NotExecutable(task.id, reasons)

@@ -40,6 +40,7 @@ from .models import RoadmapTask
 # `repository` imports its way back to this package, so the annotation stays a
 # hint. Importing it for real turned test ordering into an import error.
 if TYPE_CHECKING:
+    from ..credits.service import CreditService
     from ..repository import AtlasRepository
 
 log = logging.getLogger(__name__)
@@ -98,7 +99,8 @@ def execute_task(task: RoadmapTask, *, recommendation: Recommendation,
                  tenant: TenantId | None, research: dict, business_name: str,
                  repository: AtlasRepository | None = None, project_id: str = "",
                  actor: str = "roadmap",
-                 business: Business | None = None) -> ExecutionOutcome:
+                 business: Business | None = None,
+                 credits: CreditService | None = None) -> ExecutionOutcome:
     """Carry an approved task into execution, or refuse and say why.
 
     Raises `NotExecutable` with every unmet condition rather than executing
@@ -106,14 +108,43 @@ def execute_task(task: RoadmapTask, *, recommendation: Recommendation,
     provider cost on work that was never allowed to start.
     """
     gate.require(task, recommendation=recommendation, approval=approval,
-                 facts=facts, tenant=tenant)
+                 facts=facts, tenant=tenant, credits=credits)
     log.info("roadmap: executing %s (%s) for %s", task.id, task.capability_id,
              recommendation.business_id)
-    return _execute(recommendation, approved=True, research=research,
-                    business_name=business_name, repository=repository,
-                    project_id=project_id, actor=actor,
-                    customer_done=facts.completed_customer_tasks,
-                    business=business)
+
+    # Reserve before acting. Discovering the limit afterwards means the provider
+    # was already called and the artefact already exists, and nobody can say
+    # whether it counted.
+    reservation = None
+    if credits is not None:
+        reservation = credits.reserve(
+            tenant=tenant, action=recommendation.offer_id,
+            business_id=recommendation.business_id,
+            note=f"roadmap task {task.id}")
+
+    try:
+        outcome = _execute(recommendation, approved=True, research=research,
+                           business_name=business_name, repository=repository,
+                           project_id=project_id, actor=actor,
+                           customer_done=facts.completed_customer_tasks,
+                           business=business)
+    except Exception:
+        # The work did not happen, so it costs nothing.
+        if reservation is not None and credits is not None:
+            credits.release(reservation.id, tenant=tenant, reason="execution raised")
+        raise
+
+    if reservation is not None and credits is not None:
+        if outcome.succeeded and not outcome.failed_gates:
+            credits.settle(reservation.id, tenant=tenant, job_id=outcome.job_id,
+                           actual_units=outcome.actual_units)
+        else:
+            # A failed job must not cost a customer anything: no artefact
+            # reached them, and charging for that is how a plan runs out on
+            # work nobody received.
+            credits.release(reservation.id, tenant=tenant,
+                            reason=f"execution {outcome.state.value}")
+    return outcome
 
 
 def requested_event(task: RoadmapTask, approval: ApprovalRequest,
