@@ -6,9 +6,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from .db_safety import check as _refuse_production_in_tests
+
 DATABASE_URL = os.getenv(
     "ATLAS_DATABASE_URL", "postgresql+psycopg://atlas:atlas@localhost:5432/atlas"
 )
+
+# Every caller reaches the database through this engine, so the boundary is
+# here rather than in a conftest a caller may never load. See db_safety.
+_refuse_production_in_tests(DATABASE_URL)
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
