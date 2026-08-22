@@ -69,6 +69,13 @@ class CMSFacts:
             "categories": self.categories[:20],
             "newest_post": newest, "oldest_post": oldest,
             "notes": self.notes[:10],
+            # The pages themselves, not just how many. The portfolio capability
+            # builds from these, and a summary that counted them and threw them
+            # away would force a second crawl to recover what was already read.
+            "image_page_list": [
+                {"slug": p.slug, "title": p.title, "url": p.url, "images": p.images}
+                for p in sorted(self.image_pages, key=lambda x: -x.images)[:80]
+            ],
         }
 
 
