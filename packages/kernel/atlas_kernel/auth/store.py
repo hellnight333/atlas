@@ -43,6 +43,11 @@ SCHEMA = (
         disabled BOOLEAN NOT NULL DEFAULT FALSE
     )
     """,
+    # Added for the customer surface. Defaults to empty, which means "no tenant
+    # established" — the customer routes refuse on that rather than guessing,
+    # so an existing operator account keeps working on the internal surfaces
+    # and reaches none of the customer ones.
+    "ALTER TABLE qevik_users ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT ''",
     """
     CREATE TABLE IF NOT EXISTS qevik_sessions (
         id TEXT PRIMARY KEY,
@@ -71,6 +76,7 @@ def _to_user(row) -> User:
         id=row.id,
         username=row.username,
         password_hash=row.password_hash,
+        tenant_id=getattr(row, "tenant_id", "") or "",
         scopes=frozenset(Scope(s) for s in row.scopes.split(",") if s),
         created_at=row.created_at.replace(tzinfo=row.created_at.tzinfo or UTC),
         disabled=row.disabled,
@@ -81,7 +87,8 @@ class AuthStore:
     """Users and sessions. The only place a password verifier is written."""
 
     def create_user(
-        self, username: str, password: str, scopes: frozenset[Scope] | None = None
+        self, username: str, password: str, scopes: frozenset[Scope] | None = None,
+        tenant_id: str = "",
     ) -> User:
         username = username.strip().lower()
         if not username:
@@ -89,6 +96,7 @@ class AuthStore:
         user = User(
             username=username,
             password_hash=hash_password(password),
+            tenant_id=tenant_id.strip(),
             scopes=scopes if scopes is not None else User.model_fields["scopes"].default,
         )
         with engine.begin() as conn:
@@ -100,7 +108,8 @@ class AuthStore:
             conn.execute(
                 text(
                     "INSERT INTO qevik_users (id, username, password_hash, scopes,"
-                    " created_at, disabled) VALUES (:id, :u, :p, :s, :c, :d)"
+                    " created_at, disabled, tenant_id)"
+                    " VALUES (:id, :u, :p, :s, :c, :d, :t)"
                 ),
                 {
                     "id": user.id,
@@ -109,6 +118,7 @@ class AuthStore:
                     "s": ",".join(sorted(str(s) for s in user.scopes)),
                     "c": user.created_at,
                     "d": user.disabled,
+                    "t": user.tenant_id,
                 },
             )
         return user
@@ -156,6 +166,23 @@ class AuthStore:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM qevik_users ORDER BY created_at")).all()
         return [_to_user(r) for r in rows]
+
+    def set_tenant(self, username: str, tenant_id: str) -> User:
+        """Attach a user to the tenant they act for.
+
+        Separate from `set_scopes` because they answer different questions —
+        what someone may do, and whose data they may do it to. Granting a scope
+        must never move somebody between tenants as a side effect.
+        """
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE qevik_users SET tenant_id = :t WHERE username = :u"),
+                {"t": tenant_id.strip(), "u": username.strip().lower()},
+            )
+        found = self.get_user(username)
+        if found is None:
+            raise AuthError(f"no user {username!r}")
+        return found
 
     def set_scopes(self, username: str, scopes: frozenset[Scope]) -> User:
         """Grant or revoke. Reachable only from an ADMIN-scoped caller, which is

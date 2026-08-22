@@ -151,6 +151,14 @@ class User(BaseModel):
     id: str = Field(default_factory=lambda: f"usr_{secrets.token_hex(6)}")
     username: str
     password_hash: str
+    #: Which tenant this person acts for. Empty means **not established**, and
+    #: every customer-facing read refuses rather than falling back — a default
+    #: tenant is how one customer reads another's data, and the failure is
+    #: silent because the query succeeds.
+    #:
+    #: An operator running Qevik itself is a user with no tenant: they use the
+    #: internal surfaces, which name a tenant explicitly.
+    tenant_id: str = ""
     scopes: frozenset[Scope] = DEFAULT_SCOPES
     created_at: datetime = Field(default_factory=_now)
     disabled: bool = False
@@ -172,6 +180,7 @@ class User(BaseModel):
         return {
             "id": self.id,
             "username": self.username,
+            "tenant_id": self.tenant_id,
             "scopes": sorted(str(s) for s in self.scopes),
             "disabled": self.disabled,
         }

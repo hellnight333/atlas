@@ -72,6 +72,13 @@ class ExecutionOutcome(BaseModel):
     tenant_id: str | None = None
     capability_id: str = ""
 
+    #: What the offer declared this would cost, and what it actually took where
+    #: a capability can say. Carried so P1/P2 work can be metered later without
+    #: reopening the execution path — recording nothing now would mean every
+    #: job run before billing exists is unbillable and unauditable.
+    estimated_units: int = 0
+    actual_units: int | None = None
+
     succeeded: bool = False
     error: str = ""
     asset_ids: tuple[str, ...] = ()

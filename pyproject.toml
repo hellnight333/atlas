@@ -76,6 +76,8 @@ ignore = ["E501"]
 "packages/kernel/atlas_kernel/api.py" = ["B008"]
 "packages/kernel/atlas_kernel/auth/api.py" = ["B008"]
 "packages/kernel/atlas_kernel/control/api.py" = ["B008"]
+# FastAPI's Depends() belongs in the signature; same reason as the routers above.
+"packages/kernel/atlas_kernel/customer/api.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"

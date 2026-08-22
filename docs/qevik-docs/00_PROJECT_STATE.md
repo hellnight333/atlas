@@ -177,6 +177,30 @@ required — with the historical plan left untouched.
 **Offered ≠ executable** is now visible: two offers have executors, five do not,
 and the customer view says so.
 
+## P2.4 — the customer boundary (2026-08-23)
+
+Nine read routes under `/api/customer`, four small kernel modules, one field on
+`User` — see [`P2_4_CUSTOMER_WORKFLOW.md`](P2_4_CUSTOMER_WORKFLOW.md).
+
+**One schema change**, genuinely required: `qevik_users.tenant_id`. Nothing else
+could turn an authenticated request into a `TenantId`. Empty means *not
+established*, so operator accounts keep the internal surfaces and reach none of
+the customer ones.
+
+The tenant is resolved from the user and never from the request — no route takes
+one in a path, query or header. Another tenant's resource is **absent, not
+forbidden**: identical 404 and identical body, because 403-vs-404 tells an
+attacker which ids exist.
+
+**A checkbox is not proof.** Customer task completion records how it was
+established — observed, an approval, an artefact, or a signed attestation — and
+`complete()` refuses a Qevik task outright.
+
+`strategy.summarise()` produces the paragraph a customer reads, derived from
+their own evidence and passed through the claim gate. `public.py` is an
+allow-list, not a redaction. `measurement/schedule.py` answers "what is due"
+without being a scheduler.
+
 **Two real bugs P1.6 surfaced**, both documented in
 [`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) §10: five
 capabilities were being presented as executable that no executor exists for, and
@@ -211,8 +235,8 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-22 on the Mac: 2211 passed, 25 skipped**,
-ruff 22 (down from 43) and mypy 135 — P1.5 through P2.3 add none of either.
+**Full suite is GREEN as of 2026-08-23 on the Mac: 2261 passed, 25 skipped**,
+ruff 22 (down from 43) and mypy 135 — P1.5 through P2.4 add none of either.
 - The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
   read production read-only and skip when no production URL is configured. They
   were verified to still **fail** when one is, so the detector is live rather

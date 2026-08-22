@@ -59,3 +59,13 @@ D028 — STAGED is a distinct state from PUBLISHED and is checkable, not assumed
 D029 — A publication record's `completed_at` is the measurement's `intervention_at`. A failed publication is never an intervention: nothing went live, so a window opened against it would measure work that never happened.
 
 D030 — Re-evaluation classifies each change (improved / worsened / resolved / no longer required) from the scores rather than from whether a task disappeared. Work leaves a plan for three different reasons and only one of them is good news.
+
+D031 — A user carries the tenant they act for, and an empty value means *not established* rather than *any*. `current_tenant` refuses instead of falling back: an implicit default would make every downstream ownership check pass for whichever tenant it named, and each one would look correct in review.
+
+D032 — Another tenant's resource is absent, not forbidden. Identical 404 and identical body for "does not exist" and "not yours", because the difference tells an attacker which ids exist and enumerating ids is the cheapest attack there is.
+
+D033 — A customer task is complete only with proof, and the proof kind is recorded. An attestation is legitimate where a thing genuinely cannot be checked, and it must name who attested — an unsigned one is an unsourced claim in the customer's file.
+
+D034 — The public boundary is an allow-list, not a redaction. A deny-list silently passes whatever field was added last, and the cost of being wrong is a stranger's private data on a marketing page. The public audit counts findings rather than naming them.
+
+D035 — `measurement/schedule.py` answers "what is due" and is not a scheduler. Building a worker before anything needs one produces a background process that runs forever doing nothing; the query is the part that would still be needed afterwards.
