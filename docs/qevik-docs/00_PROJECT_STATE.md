@@ -152,6 +152,31 @@ it cannot be argued with: nothing exists to approve, publish or bill for.
 Generation reuses the M015 Website Factory whole, including its rule that there
 is no `FactSource` meaning "a model wrote it".
 
+## P2.3 — the Website vertical, complete (2026-08-22)
+
+No new capability; the loop closes — see
+[`P2_3_WEBSITE_VERTICAL.md`](P2_3_WEBSITE_VERTICAL.md).
+
+**Four website states, not two.** Research now emits a `website` finding, and
+DNS separates "no such host" (conclusive) from "did not answer" (establishes
+nothing). ABSENT enters through a `no_website` opportunity; UNVERIFIED produces
+no opportunity at all and the capability refuses to build against it.
+
+**Staging is wired into approval.** GENERATED / READY_TO_STAGE / STAGED /
+APPROVED / PUBLISHED are distinct and derived, an approver gets the preview URL
+of the real page, and `is_live()` asks the target whether anybody is being
+served it. Staging before QA passes is refused.
+
+**Publication is an intervention.** `from_publication()` makes the record's
+completion time the measurement's `intervention_at`, and `Progress` gives the
+five honest answers to "what do you know yet".
+
+**Re-evaluation is classified** — improved, worsened, resolved, no longer
+required — with the historical plan left untouched.
+
+**Offered ≠ executable** is now visible: two offers have executors, five do not,
+and the customer view says so.
+
 **Two real bugs P1.6 surfaced**, both documented in
 [`P1_6_ROADMAP_TO_EXECUTION.md`](P1_6_ROADMAP_TO_EXECUTION.md) §10: five
 capabilities were being presented as executable that no executor exists for, and
@@ -186,8 +211,8 @@ cannot run. Env vars: `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_ANTHROPIC_API_KEY`.
 **No Qwen key has been supplied yet.**
 
 ## Test state
-**Full suite is GREEN as of 2026-08-22 on the Mac: 2185 passed, 25 skipped**,
-ruff 26 (down from 43) and mypy 135 — P1.5, P1.6, P2.1 and P2.2 add none.
+**Full suite is GREEN as of 2026-08-22 on the Mac: 2211 passed, 25 skipped**,
+ruff 22 (down from 43) and mypy 135 — P1.5 through P2.3 add none of either.
 - The 25 skips include 6 in `test_production_is_not_a_test_fixture.py`, which
   read production read-only and skip when no production URL is configured. They
   were verified to still **fail** when one is, so the detector is live rather

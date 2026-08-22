@@ -19,7 +19,6 @@ from atlas_kernel import db
 from atlas_kernel.approval.models import ApprovalScope, ApprovalState
 from atlas_kernel.composition_root import create_runtime
 from atlas_kernel.opportunity.detectors.base import DetectorRegistry
-from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 from atlas_kernel.opportunity.detectors.website import WebsiteDetector
 from atlas_kernel.opportunity.gate import (
     OUTREACH_ACTION,
@@ -40,6 +39,7 @@ from atlas_kernel.opportunity.outreach import (
 )
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
 from atlas_kernel.opportunity.service import OpportunityService
+from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
 BARE_PAGE = "<html><body><p>Coming soon</p></body></html>"
 SEED_CSV = "name,website,email\nAl Noor Dental Clinic,https://alnoor.test,hello@alnoor.test\n"

@@ -220,6 +220,23 @@ RULES: tuple[Rule, ...] = (
          interaction="Sees the work while reading about it",
          value="Uses an asset already paid for.",
          absent=frozenset({"blog_media"})),
+    # The only rule that fires on a business having nothing rather than
+    # something. `website` is CONFIRMED_ABSENT only when no site is recorded or
+    # DNS reports no such host — a site that resolves and did not answer is
+    # UNVERIFIED, and UNVERIFIED never reaches this set. See research/discovery.
+    # "Landing experience" rather than a new product name: a first site for a
+    # business with none is exactly that, and the product list is derived from
+    # what the build queue can actually accept.
+    Rule("no_website", "No website", "Landing experience", "website", "HIGH", "HIGH",
+         why="The business has no website. Everything a search, a listing or a "
+             "referral leads to belongs to somebody else.",
+         builds="A site carrying the facts the business has supplied, and nothing "
+                "it has not.",
+         user="Anyone who looks the business up",
+         interaction="Finds the business's own page rather than a directory entry",
+         value="Gives the business somewhere of its own for every other channel "
+               "to point at.",
+         absent=frozenset({"website"})),
     Rule("performance", "Site speed", "Landing experience", "website", "HIGH", "HIGH",
          why="Pages are slow enough that visitors leave before they render.",
          builds="A rebuilt front end with the images and scripts brought under control.",

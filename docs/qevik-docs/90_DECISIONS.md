@@ -49,3 +49,13 @@ D023 — The website capability's mode (CREATE / MODIFY) is derived from whether
 D024 — `build_website` raises when a site already does everything the capability could add. A strong website is a finding, not a reason to rebuild it, and the refusal means no artefact exists to approve, publish or bill for.
 
 D025 — Every `CapabilityOffer` must have an `OFFER_DIMENSION` entry, checked at import. Without it a new offer produces roadmap tasks with no dimension and no metric — they schedule, are approved, execute, and nothing can ever be measured about them.
+
+D026 — A website has four states, not two: ABSENT, UNVERIFIED, WEAK, STRONG. DNS separates the first two — a name server answering "no such host" is conclusive, a timeout establishes nothing. UNVERIFIED produces no opportunity and no build; missing research stays UNKNOWN rather than becoming a weakness.
+
+D027 — DNS is asked only after the HTTP request has failed. Asking first spends a lookup on every healthy site and overrides a caller's injected HTTP transport with the real network.
+
+D028 — STAGED is a distinct state from PUBLISHED and is checkable, not assumed: `is_live()` asks the target which version visitors get. Staging before QA passes is refused, because a fetchable link to a rejected page inside an approval request is one somebody will approve.
+
+D029 — A publication record's `completed_at` is the measurement's `intervention_at`. A failed publication is never an intervention: nothing went live, so a window opened against it would measure work that never happened.
+
+D030 — Re-evaluation classifies each change (improved / worsened / resolved / no longer required) from the scores rather than from whether a task disappeared. Work leaves a plan for three different reasons and only one of them is good news.

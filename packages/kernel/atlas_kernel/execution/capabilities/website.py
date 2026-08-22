@@ -79,18 +79,47 @@ def _observed(research: dict) -> tuple[frozenset[str], frozenset[str]]:
     return frozenset(present), frozenset(absent)
 
 
-def mode_for(research: dict) -> WebsiteMode:
-    """Derived from whether research could read a site, never passed in.
+class SiteState(StrEnum):
+    """What research established about the site's existence. Four answers.
 
-    An unreachable site and a site with problems are different situations, and
-    letting a caller declare which one applies is how a business with a working
+    The middle two are the ones that matter. Treating UNVERIFIED as ABSENT
+    offers a business a website it already has; treating it as PRESENT builds a
+    modification against evidence nobody gathered.
+    """
+
+    #: No site recorded, or DNS says no such host. Conclusive.
+    ABSENT = "absent"
+    #: A site is recorded and research could not read it. Establishes nothing.
+    UNVERIFIED = "unverified"
+    #: Read, and confirmed short of what this capability could add.
+    WEAK = "weak"
+    #: Read, and already doing everything this capability could add.
+    STRONG = "strong"
+
+
+def site_state(research: dict) -> SiteState:
+    """The four-way answer, read from the `website` observation.
+
+    Read from the observation rather than inferred from an HTTP status: a status
+    of zero means "we did not get one", which is exactly the case that must not
+    become "there is no website".
+    """
+    present, absent = _observed(research)
+    if "website" in absent:
+        return SiteState.ABSENT
+    if "website" not in present:
+        return SiteState.UNVERIFIED
+    return SiteState.WEAK if improvable(research) else SiteState.STRONG
+
+
+def mode_for(research: dict) -> WebsiteMode:
+    """Derived from what research established, never passed in.
+
+    Letting a caller declare which mode applies is how a business with a working
     website gets a new one built over the top of it.
     """
-    status = int(research.get("http_status") or 0)
-    reachable = 200 <= status < 400
-    if not reachable or not research.get("website"):
-        return WebsiteMode.CREATE
-    return WebsiteMode.MODIFY
+    return (WebsiteMode.CREATE if site_state(research) is SiteState.ABSENT
+            else WebsiteMode.MODIFY)
 
 
 def improvable(research: dict) -> tuple[str, ...]:
@@ -164,10 +193,16 @@ def build_website(*, business_name: str, research: dict,
     Raises rather than producing an artefact when there is nothing to do — a
     capability that always produces something is one whose output means nothing.
     """
+    state = site_state(research)
     mode = mode_for(research)
     gaps = improvable(research)
     present, _absent = _observed(research)
 
+    if state is SiteState.UNVERIFIED:
+        raise NothingToBuild(
+            f"research could not establish whether {business_name} has a website. "
+            "That is a gap in what we checked, not a gap in their business, and "
+            "building against it would be inventing the finding.")
     if mode is WebsiteMode.MODIFY and not gaps:
         addressable = ", ".join(sorted(FIXES)) or "nothing"
         raise NothingToBuild(
@@ -181,6 +216,7 @@ def build_website(*, business_name: str, research: dict,
     provenance = {
         **provenance,
         "mode": mode.value,
+        "site_state": state.value,
         # What the build is a response to. A reviewer can check every one of
         # these against the research record.
         "addresses": list(gaps),

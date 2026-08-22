@@ -18,17 +18,16 @@ from atlas_kernel.composition_root import _register_default_capabilities
 from atlas_kernel.opportunity.tenancy import ALL_TENANTS, TenantRequired
 from atlas_kernel.outreach import opportunity as opp
 from atlas_kernel.recommendation import (
+    OFFERS,
     CapabilityOffer,
     CustomerTask,
-    OFFERS,
-    QevikTask,
     Recommendation,
     RecommendationState,
     TaskKind,
     Unsupported,
     offers_for_opportunity,
+    service,
 )
-from atlas_kernel.recommendation import service
 from atlas_kernel.recommendation.offers import Availability
 from atlas_kernel.registry import Registry
 

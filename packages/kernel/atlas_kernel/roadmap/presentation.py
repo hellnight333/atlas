@@ -22,8 +22,10 @@ Answering, for a customer, in their order:
 
 from __future__ import annotations
 
+from ..execution.capabilities import EXECUTORS
 from ..measurement.attribution import Attribution, permits, refuse
 from ..measurement.models import BY_KEY
+from ..recommendation.offers import OFFERS
 from .lifecycle import TaskFacts, TaskState, blockers, state_of
 from .models import Executability, Horizon, Roadmap, RoadmapTask
 
@@ -51,6 +53,37 @@ def vet(sentence: str, *, where: str) -> str:
     if sentence and not permits(LEVEL, sentence):
         raise Overclaim(f"{where}: {refuse(LEVEL, sentence)}")
     return sentence
+
+
+def capabilities() -> dict:
+    """What Qevik offers, and what Qevik can actually run. Two different lists.
+
+    An offer is a description of work. An executor is something that performs
+    it. Four of the six offers have no executor, and a customer reading a
+    catalogue has no way to tell — so the distinction is stated rather than left
+    to be inferred from whether a task happens to appear on their roadmap.
+
+    Derived from the two registries at call time. A hand-maintained list of
+    "what works" is the thing that goes stale on the day somebody ships an
+    executor and forgets it.
+    """
+    entries = [{
+        "offer_id": offer.id,
+        "name": offer.name,
+        "summary": offer.summary,
+        "offered": True,
+        "executable": offer.id in EXECUTORS,
+        # Said in the customer's terms rather than as a flag they must decode.
+        "state": ("Qevik can build this today" if offer.id in EXECUTORS
+                  else "described, not yet buildable — Qevik will not schedule it"),
+    } for offer in OFFERS]
+    return {
+        "executable": [e for e in entries if e["executable"]],
+        "offered_only": [e for e in entries if not e["executable"]],
+        "note": "Everything under 'offered only' is real work Qevik has scoped "
+                "and cannot yet perform. It is listed so nothing on a plan is a "
+                "promise, and it never becomes a scheduled task.",
+    }
 
 
 def _measurement(task: RoadmapTask) -> dict:
@@ -136,5 +169,8 @@ def view(roadmap: Roadmap, *, facts: TaskFacts | None = None,
                              if t["who"] == OWNERSHIP[Executability.MEASURE_FIRST]],
         "blocked": [t for t in tasks if t["state"] == TaskState.BLOCKED.value],
         "by_state": by_state,
+        # What Qevik offers versus what Qevik can run, so a customer reading a
+        # plan can see the boundary rather than inferring it.
+        "capabilities": capabilities(),
         "generated_at": roadmap.generated_at,
     }

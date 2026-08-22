@@ -33,12 +33,8 @@ from ..models import Asset
 from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId, owns
 from ..opportunity.tenancy import require as _require_tenant
-from ..website.targets.base import (
-    DeploymentError,
-    DeploymentTargetRegistry,
-    PublishedVersion,
-)
-from . import gate
+from ..website.targets.base import DeploymentError, DeploymentTargetRegistry
+from . import gate, staging
 from .connections import ConnectionStore
 from .models import (
     Connection,
@@ -53,19 +49,6 @@ log = logging.getLogger(__name__)
 FACTORY = "publication"
 PUBLISHED = "artefact_published"
 FAILED = "artefact_publication_failed"
-
-
-def stage(*, target_name: str, registry: DeploymentTargetRegistry,
-          destination: Destination, files: dict[str, str]) -> PublishedVersion:
-    """Put the artefact at the target without serving it to anyone.
-
-    Returns the target's `PublishedVersion`, whose `preview_url` is the real
-    thing on the real host. Pass that into `request_artefact_approval` so the
-    person deciding is looking at what visitors would get rather than at a
-    description of it.
-    """
-    registration = registry.resolve(target_name)
-    return registration.target.publish(destination.slug, files)
 
 
 def publish(*, outcome: ExecutionOutcome, asset: Asset, files: dict[str, str],
@@ -121,11 +104,16 @@ def publish(*, outcome: ExecutionOutcome, asset: Asset, files: dict[str, str],
     connections.resolve(connection, tenant=tenant)
 
     try:
-        version = stage(target_name=target_name, registry=registry,
-                        destination=destination, files=files)
+        # The same staging step a preview uses, so what gets promoted is what an
+        # approver could have looked at. Two ways to put files at a target would
+        # eventually differ, and the difference would be invisible.
+        version = staging.stage(
+            outcome=outcome, asset_id=asset.id, files=files,
+            target_name=target_name, destination=destination, registry=registry,
+            tenant=tenant, content_hash=asset.content_hash or "")
         live_url = registry.resolve(target_name).target.promote(
-            destination.slug, version.id)
-    except (DeploymentError, OSError, ValueError) as failure:
+            destination.slug, version.version_id)
+    except (DeploymentError, OSError, ValueError, PermissionError) as failure:
         # The host refused or broke. A record, and never PUBLISHED — the type
         # name and message only, because a provider's error body can echo a
         # request, and a request can carry a token.
@@ -135,7 +123,7 @@ def publish(*, outcome: ExecutionOutcome, asset: Asset, files: dict[str, str],
                        error=f"{type(failure).__name__}: {failure}"[:300])
 
     return _record(PublicationStatus.PUBLISHED,
-                   external_id=version.id, external_url=live_url)
+                   external_id=version.version_id, external_url=live_url)
 
 
 def to_event(record: PublicationRecord, *, actor: str = "publication") -> BusinessEvent:

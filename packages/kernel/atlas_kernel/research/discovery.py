@@ -19,7 +19,18 @@ from urllib.parse import urljoin
 import httpx
 
 from ..opportunity.website_audit import Category, Finding, Status
-from .net import REQUEST_TIMEOUT_S, USER_AGENT, Fetcher, Robots, load_robots, normalise, tls_state
+from .net import (
+    REQUEST_TIMEOUT_S,
+    USER_AGENT,
+    Fetcher,
+    Resolution,
+    Robots,
+    host_of,
+    load_robots,
+    normalise,
+    resolution,
+    tls_state,
+)
 
 #: Where sitemaps live when robots.txt does not say.
 COMMON_SITEMAPS = ("/sitemap.xml", "/sitemap_index.xml", "/wp-sitemap.xml",
@@ -44,6 +55,7 @@ class Discovery:
         self.redirect_chain: tuple[str, ...] = ()
         self.tls_valid = False
         self.tls_note = ""
+        self.dns: Resolution = Resolution.UNKNOWN
         self.robots: Robots | None = None
         self.robots_available = False
         self.sitemaps: list[str] = []
@@ -56,6 +68,7 @@ class Discovery:
         return {
             "requested": self.requested, "canonical": self.canonical,
             "reachable": self.reachable, "http_status": self.http_status,
+            "dns": self.dns.value,
             "redirects": list(self.redirect_chain), "tls_valid": self.tls_valid,
             "tls": self.tls_note, "robots_txt": self.robots_available,
             "sitemaps": self.sitemaps[:10], "sitemap_routes": len(self.routes),
@@ -100,6 +113,13 @@ def discover(website: str, *, client: httpx.Client | None = None) -> tuple[Disco
         headers={"User-Agent": USER_AGENT})
     found = Discovery(website)
     findings: list[Finding] = []
+
+    # Nothing on file is a confirmed absence and needs no lookup.
+    if not (website or "").strip():
+        findings.append(_finding("website", Status.NOT_FOUND, Category.TECHNICAL,
+                                 "no website recorded for this business"))
+        return found, findings
+
     try:
         candidate = website if "://" in website else f"https://{website}"
         try:
@@ -112,7 +132,30 @@ def discover(website: str, *, client: httpx.Client | None = None) -> tuple[Disco
             found.notes.append(f"{type(error).__name__}: {error}"[:180])
             findings.append(_finding("https", Status.UNVERIFIED, Category.TECHNICAL,
                                      f"site did not answer: {found.notes[-1]}"))
+            # Now, and only now, ask DNS. Everything downstream — the CREATE
+            # opportunity, the readiness score, what a customer is told — turns
+            # on the difference between "this business has no website" and "we
+            # could not reach theirs", and a name server answering *no such
+            # host* is the one signal that settles it. A timeout does not.
+            #
+            # Asked here rather than before the request for two reasons: the
+            # happy path spends no lookup, and a caller supplying its own HTTP
+            # transport is not silently overruled by the real network.
+            found.dns = resolution(host_of(website))
+            conclusive = found.dns is Resolution.NO_SUCH_HOST
+            findings.append(_finding(
+                "website",
+                Status.NOT_FOUND if conclusive else Status.UNVERIFIED,
+                Category.TECHNICAL,
+                f"DNS reports no such host for {host_of(website)}" if conclusive
+                else f"{host_of(website)} did not answer: {found.notes[-1]}"))
             return found, findings
+
+        findings.append(_finding(
+            "website",
+            Status.PRESENT if found.reachable else Status.UNVERIFIED,
+            Category.TECHNICAL,
+            f"{found.canonical} answered {found.http_status}"))
 
         found.tls_valid, found.tls_note = tls_state(found.canonical)
         findings.append(_finding(

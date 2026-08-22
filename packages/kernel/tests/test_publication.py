@@ -17,7 +17,6 @@ architecture rather than having grown a third one beside it.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -709,7 +708,7 @@ def test_only_a_target_reporting_success_can_write_published(executed, wiring) -
     # And the one place it is written sits after the host has returned, so no
     # failure path can reach it.
     before, _, _after = source.partition(marker)
-    assert "version = stage(" in before
+    assert "version = staging.stage(" in before
     assert "except (DeploymentError" in before, \
         "PUBLISHED is written before the failure path, so a failure could reach it"
 

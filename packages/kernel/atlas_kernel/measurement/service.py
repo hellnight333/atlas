@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from ..opportunity.models import BusinessEvent
@@ -26,6 +27,7 @@ from .models import BY_KEY, BaselineState, Measurement, Observation, Window
 
 # roadmap imports measurement, not the other way round, so this stays a hint.
 if TYPE_CHECKING:
+    from ..publication.models import PublicationRecord
     from ..roadmap.models import Roadmap
 
 log = logging.getLogger(__name__)
@@ -262,3 +264,129 @@ def awaiting_source(roadmap: Roadmap, *,
                          "no baseline yet — nothing has been connected to read it from.",
         })
     return tuple(waiting)
+
+
+# --- publication as an intervention ------------------------------------------
+#
+# A publication is the moment something changed in the world. The measurement
+# layer already knows what to do with that timestamp; what was missing was
+# anything joining the two, so a site could go live and no baseline was ever
+# closed against it.
+
+
+class Progress(StrEnum):
+    """What can honestly be said about a metric right now.
+
+    Five answers, because "no number yet" has four different causes and telling
+    a customer the wrong one is how a system looks broken or dishonest:
+    nothing was connected, nothing was read before the work, the work has not
+    happened, or it is too soon to look.
+    """
+
+    #: No source. Not zero, not bad — unmeasured.
+    UNAVAILABLE = "measurement_unavailable"
+    #: A source exists and a reading was taken before the work.
+    BASELINE_AVAILABLE = "baseline_available"
+    #: The work happened. The window has not closed.
+    INTERVENTION_OCCURRED = "intervention_occurred"
+    #: Waiting out the window before reading again.
+    PENDING = "measurement_pending"
+    #: Both ends exist. What may be *said* about it is the attribution level's
+    #: business, not this enum's.
+    OBSERVED_CHANGE = "observed_change"
+
+
+def progress_of(measurement: Measurement, *, now: datetime | None = None) -> Progress:
+    """Where a metric has got to, folded from the measurement's own evidence."""
+    at = now or datetime.now(UTC)
+    state = measurement.state
+    if state is BaselineState.NO_BASELINE:
+        return Progress.UNAVAILABLE
+    if state is BaselineState.MEASUREMENT_AVAILABLE:
+        return Progress.OBSERVED_CHANGE
+    intervention = measurement.window.intervention_at
+    if intervention is None:
+        return Progress.BASELINE_AVAILABLE
+    end = measurement.window.observation_end
+    if end is not None and at < end:
+        return Progress.PENDING
+    return Progress.INTERVENTION_OCCURRED
+
+
+def record_intervention(baseline: Measurement, *, at: datetime, job_id: str = "",
+                        asset_ids: tuple[str, ...] = (), observe_after_days: int = 30,
+                        ) -> Measurement:
+    """Mark that the work happened, and when the next reading is due.
+
+    Takes the timestamp rather than defaulting to now: the moment that matters
+    is when the artefact went live, which the publication record already knows,
+    and a default here would quietly substitute the moment somebody remembered
+    to call this.
+    """
+    if baseline.baseline is None or not baseline.baseline.available:
+        raise ProvenanceMissing(
+            f"{baseline.metric_key}: no baseline was taken before this "
+            "intervention, so there is nothing to compare a later reading "
+            "against. A baseline captured afterwards is not a baseline.")
+    return baseline.model_copy(update={
+        "window": baseline.window.model_copy(update={
+            "intervention_at": at,
+            "observation_start": at,
+            "observation_end": at + timedelta(days=observe_after_days)}),
+        "job_id": job_id or baseline.job_id,
+        "asset_ids": asset_ids or baseline.asset_ids,
+    })
+
+
+def from_publication(baseline: Measurement, record: PublicationRecord, *,
+                     observe_after_days: int = 30) -> Measurement:
+    """Join a publication to the metric it was meant to move.
+
+    The record's `completed_at` is the intervention. Refuses a record that did
+    not publish: a failed attempt changed nothing in the world, and treating it
+    as an intervention would start a measurement window against work that never
+    happened.
+    """
+    if not getattr(record, "published", False):
+        raise ProvenanceMissing(
+            f"publication {getattr(record, 'id', '?')} is "
+            f"{getattr(record, 'status', '?')}, so nothing went live and there "
+            "is no intervention to measure.")
+    if record.completed_at is None:
+        raise ProvenanceMissing("the publication record has no completion time")
+    return record_intervention(
+        baseline, at=record.completed_at, job_id=record.job_id,
+        asset_ids=(record.asset_id,), observe_after_days=observe_after_days)
+
+
+def report(measurement: Measurement, *, now: datetime | None = None) -> dict:
+    """What may be said, and the sentence that says it.
+
+    The statement comes from the measurement's own attribution level, so this
+    cannot describe an improvement the evidence does not support — and `vet`
+    runs over it before it is returned, so a wording change that overstepped
+    would fail here rather than in front of a customer.
+    """
+    progress = progress_of(measurement, now=now)
+    sentence = measurement.statement()
+    problem = vet(sentence, measurement.attribution)
+    if problem:                                        # pragma: no cover - guard
+        raise OverstatedClaim(f"{measurement.metric_key}: {problem}")
+    return {
+        "metric": measurement.metric_key,
+        "progress": progress.value,
+        "baseline_state": measurement.state.value,
+        "attribution": measurement.attribution.value,
+        "confidence": measurement.confidence.value,
+        "change": measurement.change,
+        "improved": measurement.improved,
+        "intervention_at": (measurement.window.intervention_at.isoformat()
+                            if measurement.window.intervention_at else None),
+        "reading_due": (measurement.window.observation_end.isoformat()
+                        if measurement.window.observation_end else None),
+        "statement": sentence,
+    }
+
+
+class OverstatedClaim(Exception):
+    """A sentence about a measurement asserted more than its evidence allows."""

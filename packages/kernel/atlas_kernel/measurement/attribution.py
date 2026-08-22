@@ -90,6 +90,10 @@ _AGENCY = re.compile(
     r"\b(qevik (increased|caused|improved|grew|drove|delivered|boosted)"
     r"|because of qevik|thanks to qevik|we increased|we caused|we grew"
     r"|(this|the campaign|the intervention|it) (caused|generated|resulted in|drove)"
+    # Any subject, not an enumerated one. Listing the subjects meant "the new
+    # website caused the increase" passed while "it caused the increase" did
+    # not, and the first is the sentence a website capability actually invites.
+    r"|\b(caused|resulted in|led to|brought about)\b"
     # A promise is an agency claim in the future tense, and it is the form a
     # roadmap naturally reaches for — "this will drive more leads" asserts
     # exactly what "this drove more leads" does, before any evidence exists.

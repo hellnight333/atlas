@@ -177,7 +177,10 @@ OFFERS: tuple[CapabilityOffer, ...] = (
                 "there is none, and rebuilds the structure where there is.",
         # The three website opportunities nothing else answered. A site that is
         # slow, broken or empty is one artefact's problem, not three.
-        answers=frozenset({"performance", "broken", "thin_content"}),
+        # `no_website` is the CREATE path; the other three are MODIFY. One
+        # capability, because "build a site" and "rebuild this site's structure"
+        # produce the same artefact from the same facts.
+        answers=frozenset({"no_website", "performance", "broken", "thin_content"}),
         required_inputs=("the business name, and any contact details to publish",),
         # Only what every build carries. The QA gate checks each declared
         # output is actually in the artefact, so declaring a contact section

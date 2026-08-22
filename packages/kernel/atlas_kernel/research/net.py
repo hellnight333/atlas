@@ -13,9 +13,11 @@ second fetcher.
 
 from __future__ import annotations
 
+import socket
 import ssl
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from urllib.parse import urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
@@ -104,6 +106,49 @@ class Page:
     @property
     def is_html(self) -> bool:
         return "html" in self.content_type.lower()
+
+
+class Resolution(StrEnum):
+    """What DNS said about a host, in three answers rather than two.
+
+    The two-answer version — resolved or not — is what makes a system report a
+    business as having no website because its own DNS was flaky for a second.
+    A name server that says *no such host* has answered; one that times out has
+    not, and those are different facts about the world.
+    """
+
+    #: The name resolves. A site may still be down.
+    RESOLVED = "resolved"
+    #: Authoritatively no such host. Conclusive: nothing is published there.
+    NO_SUCH_HOST = "no_such_host"
+    #: The lookup itself failed. Establishes nothing either way.
+    UNKNOWN = "unknown"
+
+
+def host_of(url: str) -> str:
+    """The hostname, with no scheme, port or path."""
+    parsed = urlparse(url if "://" in (url or "") else f"https://{url or ''}")
+    return (parsed.hostname or "").lower()
+
+
+def resolution(host: str) -> Resolution:
+    """Ask DNS, and distinguish "no" from "no answer".
+
+    `EAI_NONAME` is the name server saying the host does not exist. Anything
+    else — a timeout, a refused query, a broken resolver — is our problem and
+    must not be recorded as a fact about the business.
+    """
+    if not host:
+        return Resolution.UNKNOWN
+    try:
+        socket.getaddrinfo(host, None)
+    except socket.gaierror as failure:
+        if failure.errno in (socket.EAI_NONAME, socket.EAI_NODATA):
+            return Resolution.NO_SUCH_HOST
+        return Resolution.UNKNOWN
+    except Exception:                            # noqa: BLE001
+        return Resolution.UNKNOWN
+    return Resolution.RESOLVED
 
 
 def normalise(url: str) -> str:

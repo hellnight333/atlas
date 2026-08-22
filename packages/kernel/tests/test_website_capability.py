@@ -40,7 +40,7 @@ from atlas_kernel.publication import (
     Destination,
     PublicationStatus,
     publish,
-    stage,
+    staging,
 )
 from atlas_kernel.publication import (
     gate as publication_gate,
@@ -62,12 +62,14 @@ BUSINESS = Business(id="biz-sunrise", name="Sunrise Logistics",
                     geography="Dubai", website="https://sunrise.test")
 
 #: A site that exists and is failing: slow, broken, untitled, thin.
+#: `website: present` is what research records when it read the site — without
+#: it the state is UNVERIFIED, and the capability refuses rather than guessing.
 FAILING = {
     "website": "https://sunrise.test", "http_status": 200,
     "observations": [{"feature": f, "status": "not_found"} for f in
                      ("page_speed", "broken_links", "thin_pages", "page_title", "h1")]
     + [{"feature": f, "status": "present"} for f in
-       ("viewport_meta", "contact_form", "https", "meta_description")],
+       ("website", "viewport_meta", "contact_form", "https", "meta_description")],
     "facts": {"cms": {"service_page_list": [
         {"title": "Freight forwarding", "url": "https://sunrise.test/freight/"},
         {"title": "Customs clearance", "url": "https://sunrise.test/customs/"}]}},
@@ -76,11 +78,17 @@ FAILING = {
 #: A site that does everything this capability could add.
 STRONG = {
     "website": "https://strong.test", "http_status": 200,
-    "observations": [{"feature": f, "status": "present"} for f in FIXES],
+    "observations": [{"feature": f, "status": "present"} for f in (*FIXES, "website")],
 }
 
-#: No readable site at all.
-NONE_YET = {"website": "", "http_status": 0, "observations": []}
+#: No site at all — recorded as a confirmed absence, which is what research
+#: emits when nothing is on file or DNS reports no such host.
+NONE_YET = {"website": "", "http_status": 0,
+            "observations": [{"feature": "website", "status": "not_found"}]}
+
+#: A site that exists and could not be read. Neither absent nor weak.
+UNVERIFIED = {"website": "https://down.test", "http_status": 0,
+              "observations": [{"feature": "website", "status": "unverified"}]}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -115,10 +123,11 @@ def test_it_does_not_claim_a_gap_another_offer_already_answers() -> None:
 
 # ============================================== mode is derived, not chosen
 
-def test_the_mode_is_derived_from_whether_a_site_could_be_read() -> None:
+def test_the_mode_is_derived_from_what_research_established() -> None:
     assert mode_for(NONE_YET) is WebsiteMode.CREATE
     assert mode_for(FAILING) is WebsiteMode.MODIFY
-    assert mode_for({"website": "https://x.test", "http_status": 500}) is WebsiteMode.CREATE
+    # An unreachable site is not an absent one, so it is never CREATE.
+    assert mode_for(UNVERIFIED) is WebsiteMode.MODIFY
 
 
 def test_a_caller_cannot_declare_the_mode() -> None:
@@ -147,7 +156,8 @@ def test_a_strong_website_produces_no_roadmap_task() -> None:
     readiness = assess(business_id="strong", observations=observations,
                        business_model="LOGISTICS")
     ranked = opp.for_host("strong.test", category="logistics",
-                          absent=frozenset(), present=frozenset({"page_speed"}))
+                          absent=frozenset(),
+                          present=frozenset({"page_speed", "website"}))
     recommendations = rec_service.propose(
         business_id="strong", tenant_id=TENANT, opportunities=ranked,
         business_model="LOGISTICS", plan="ADVANCED")
@@ -163,8 +173,8 @@ def test_a_strong_website_produces_no_roadmap_task() -> None:
 def test_only_confirmed_absent_features_are_addressed() -> None:
     """Unverified is not a gap. Building against it manufactures a weakness."""
     unchecked = {"website": "https://x.test", "http_status": 200,
-                 "observations": [{"feature": f, "status": "unverified"}
-                                  for f in FIXES]}
+                 "observations": [{"feature": "website", "status": "present"}]
+                 + [{"feature": f, "status": "unverified"} for f in FIXES]}
     assert improvable(unchecked) == ()
     with pytest.raises(NothingToBuild):
         build_website(business_name="Unknown Co", research=unchecked, business=BUSINESS)
@@ -345,8 +355,10 @@ def test_research_to_published_website(wiring) -> None:
     # --- stage: the real artefact on the real host, serving nobody --------
     destination = Destination(slug="sunrise",
                               url="http://localhost:8080/sunrise/")
-    version = stage(target_name="local", registry=registry,
-                    destination=destination, files=files)
+    version = staging.stage(outcome=outcome, asset_id=asset.id, files=files,
+                            target_name="local", destination=destination,
+                            registry=registry, tenant=TENANT,
+                            content_hash=asset.content_hash)
     assert version.preview_url
     assert not (root / destination.slug / "current").exists(), \
         "staging must not make anything live"
@@ -404,7 +416,9 @@ def test_nothing_is_published_without_the_artefact_approval(wiring) -> None:
 
     destination = Destination(slug="sunrise")
     # Staging is not publishing, and the execution approval does not authorise it.
-    stage(target_name="local", registry=registry, destination=destination, files=files)
+    staging.stage(outcome=outcome, asset_id=asset.id, files=files,
+                  target_name="local", destination=destination, registry=registry,
+                  tenant=TENANT, content_hash=asset.content_hash)
     reasons = publication_gate.unmet(
         outcome=outcome, asset=asset, target="local", destination=destination,
         registry=registry, connection=connection, connections=store,

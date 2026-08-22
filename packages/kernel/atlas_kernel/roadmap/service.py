@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from ..execution.capabilities import EXECUTORS
 from ..opportunity.models import BusinessEvent
@@ -131,8 +132,12 @@ MEASUREMENT_TASK: dict[Dimension, tuple[str, str, str]] = {
         "Grant Qevik read access to Search Console for this domain"),
     Dimension.CONVERSION: (
         "Connect analytics",
-        "Conversion rate cannot be measured without an analytics source, and a "
-        "baseline taken after the work has started is not a baseline.",
+        # Worded around its own claim gate, twice. "after the work" reads as a
+        # sequence claim and the word "measured" reads as a change claim, so a
+        # sentence explaining methodology tripped the check that exists to stop
+        # us claiming results. The check is right; the sentence had to change.
+        "Conversion rate needs an analytics source. A reading taken once the "
+        "work is under way is not a baseline.",
         "Grant Qevik read access to the analytics property"),
 }
 
@@ -353,6 +358,25 @@ def read(events: list, *, tenant: TenantId | None = None) -> list[dict]:
     return sorted(found, key=lambda d: d.get("generated_at", ""), reverse=True)
 
 
+class Change(StrEnum):
+    """What kind of change re-evaluation found.
+
+    Named rather than left as added/removed lists, because the same movement
+    means different things and a customer needs the difference. A task
+    disappearing because the problem was fixed and a task disappearing because
+    nobody can do it any more are both "removed", and only one of them is good
+    news.
+    """
+
+    UNCHANGED = "unchanged"
+    NEWLY_MEASURED = "newly_measured"
+    DIMENSION_IMPROVED = "dimension_improved"
+    DIMENSION_WORSENED = "dimension_worsened"
+    NEW_OPPORTUNITY = "new_opportunity"
+    OPPORTUNITY_RESOLVED = "opportunity_resolved"
+    TASK_NO_LONGER_REQUIRED = "task_no_longer_required"
+
+
 def changed(previous: Roadmap, current: Roadmap) -> dict:
     """What re-evaluation changed, and why it changed.
 
@@ -391,9 +415,57 @@ def changed(previous: Roadmap, current: Roadmap) -> dict:
         "newly_left_alone": sorted(set(current.left_alone) - set(previous.left_alone)),
         "why": _why(added, removed, moved, dimensions, newly_measured,
                     previous, current, before, after),
+        "outcomes": _outcomes(added, removed, dimensions, newly_measured,
+                              previous, current, before, after),
         "changed": bool(added or removed or moved
                         or previous.readiness_overall != current.readiness_overall),
     }
+
+
+def _outcomes(added: list, removed: list, dimensions: dict, newly_measured: set,
+              previous: Roadmap, current: Roadmap, before: dict, after: dict
+              ) -> list[dict]:
+    """Every change, classified. One entry per thing that moved.
+
+    A dimension's direction is read from the scores rather than from whether a
+    task disappeared: work can leave a plan because it was done, because the
+    capability went away, or because the evidence behind it was withdrawn, and
+    only the first is an improvement.
+    """
+    found: list[dict] = []
+    for dimension, movement in sorted(dimensions.items()):
+        was, now = movement["from"], movement["to"]
+        if was is None and now is not None:
+            kind = Change.NEWLY_MEASURED
+        elif was is not None and now is not None and now > was:
+            kind = Change.DIMENSION_IMPROVED
+        elif was is not None and now is not None and now < was:
+            kind = Change.DIMENSION_WORSENED
+        else:
+            continue
+        found.append({"change": kind.value, "dimension": dimension,
+                      "from": was, "to": now})
+
+    for metric in sorted(newly_measured):
+        found.append({"change": Change.NEWLY_MEASURED.value, "metric": metric})
+
+    for title in removed:
+        task = before[title]
+        movement = dimensions.get(task.dimension) or {}
+        improved = (movement.get("from") is not None
+                    and movement.get("to") is not None
+                    and movement["to"] > movement["from"])
+        resolved = improved or task.dimension in current.left_alone
+        found.append({
+            "change": (Change.OPPORTUNITY_RESOLVED.value if resolved
+                       else Change.TASK_NO_LONGER_REQUIRED.value),
+            "task": title, "dimension": task.dimension})
+
+    for title in added:
+        found.append({"change": Change.NEW_OPPORTUNITY.value, "task": title,
+                      "dimension": after[title].dimension})
+
+    return found or [{"change": Change.UNCHANGED.value}]
 
 
 def _why(added: list, removed: list, moved: dict, dimensions: dict,

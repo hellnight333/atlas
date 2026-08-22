@@ -9,9 +9,9 @@ from . import crossing, gate, presentation
 from .lifecycle import TaskFacts, TaskState, blockers, facts_for, state_of
 from .models import Executability, Horizon, Roadmap, RoadmapTask
 from .readiness import Confidence, Dimension, DimensionScore, Readiness, assess
-from .service import changed, generate, read, to_event
+from .service import Change, changed, generate, read, to_event
 
 __all__ = ["Confidence", "Dimension", "DimensionScore", "Executability", "Horizon",
-           "Readiness", "Roadmap", "RoadmapTask", "TaskFacts", "TaskState", "assess",
+           "Change", "Readiness", "Roadmap", "RoadmapTask", "TaskFacts", "TaskState", "assess",
            "blockers", "changed", "crossing", "facts_for", "gate", "generate",
            "presentation", "read", "state_of", "to_event"]
