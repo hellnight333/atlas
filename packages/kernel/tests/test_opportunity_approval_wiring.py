@@ -19,6 +19,7 @@ from atlas_kernel import db
 from atlas_kernel.approval.models import ApprovalScope, ApprovalState
 from atlas_kernel.composition_root import create_runtime
 from atlas_kernel.opportunity.detectors.base import DetectorRegistry
+from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 from atlas_kernel.opportunity.detectors.website import WebsiteDetector
 from atlas_kernel.opportunity.gate import (
     OUTREACH_ACTION,
@@ -237,10 +238,10 @@ class TestDurableRun:
 
         # A fresh repository stands in for a restarted process.
         reloaded = OpportunityRepository()
-        assert reloaded.get_business(business.id) is not None
+        assert reloaded.get_business(business.id, tenant=ALL_TENANTS) is not None
         assert reloaded.list_findings(business.id)
-        assert reloaded.load_contact_history().within_cooldown(
+        assert reloaded.load_contact_history(tenant=ALL_TENANTS).within_cooldown(
             business.id, EXAMPLE_PROFILE.contact_cooldown_days
         )
-        stored = [e for e in reloaded.list_events() if e.opportunity_id == opportunity.id]
+        stored = [e for e in reloaded.list_events(tenant=ALL_TENANTS) if e.opportunity_id == opportunity.id]
         assert PipelineEventKind.SENT in [e.kind for e in stored]

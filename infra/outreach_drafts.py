@@ -241,12 +241,13 @@ def record_draft(dossier_row: dict, draft: dict) -> None:
         OutreachStatus,
     )
     from atlas_kernel.opportunity.repository import OpportunityRepository
+    from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
     repo = OpportunityRepository()
     match = next(
         (
             b
-            for b in repo.list_businesses()
+            for b in repo.list_businesses(tenant=ALL_TENANTS)
             if b.name == dossier_row["name"]
         ),
         None,

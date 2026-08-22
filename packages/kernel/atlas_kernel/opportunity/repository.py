@@ -23,6 +23,13 @@ from sqlalchemy import text
 
 from ..db import SessionLocal
 from .identity import place_id, strong_keys, with_identity
+from .tenancy import (
+    ALL_TENANTS,
+    TenantId,
+    check as _check_owner,
+    predicate as _tenant_predicate,
+    require as _require_tenant,
+)
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -124,8 +131,13 @@ class OpportunityRepository:
         self.save_business(stamped)
         return stamped, True
 
-    def find_possible_duplicates(self, business: Business) -> list[Business]:
-        """Companies sharing a name and place but nothing stronger.
+    def find_possible_duplicates(self, business: Business, *,
+                                 tenant: TenantId | None = None) -> list[Business]:
+        """TENANT_SCOPED. Companies sharing a name and place but nothing stronger.
+
+        The most dangerous read in this module. Unscoped it answers "does anyone
+        else in the system know this company", which discloses another tenant's
+        customer list one probe at a time.
 
         Surfaced for a human. Never merged automatically -- two branches of one
         clinic and two unrelated companies with a common name look identical
@@ -133,12 +145,15 @@ class OpportunityRepository:
         """
         from .identity import normalise_name
 
+        tenant = _require_tenant(tenant, method="find_possible_duplicates")
+        where, params = _tenant_predicate(tenant)
         key = f"name:{normalise_name(business.name, business.geography)}"
         with SessionLocal() as session:
             rows = (
                 session.execute(
-                    text("SELECT * FROM atlas_businesses WHERE identity_keys ? :key"),
-                    {"key": key},
+                    text(f"SELECT * FROM atlas_businesses WHERE identity_keys ? :key "
+                         f"AND {where}"),
+                    {"key": key, **params},
                 )
                 .mappings()
                 .all()
@@ -190,7 +205,14 @@ class OpportunityRepository:
             session.commit()
         return business
 
-    def get_business(self, business_id: str) -> Business | None:
+    def get_business(self, business_id: str, *,
+                     tenant: TenantId | None = None) -> Business | None:
+        """TENANT_SCOPED. Returns None for another tenant's business.
+
+        None rather than a refusal on purpose: the caller turns it into a 404,
+        and a 403 would confirm the record exists.
+        """
+        tenant = _require_tenant(tenant, method="get_business")
         with SessionLocal() as session:
             row = (
                 session.execute(
@@ -199,18 +221,27 @@ class OpportunityRepository:
                 .mappings()
                 .first()
             )
-        return self._business_from_row(row) if row else None
+        if row is None:
+            return None
+        from .tenancy import owns
+        if not owns(row.get("tenant_id"), tenant):
+            return None
+        return self._business_from_row(row)
 
-    def list_businesses(self) -> list[Business]:
-        """Every company Atlas knows about.
+    def list_businesses(self, *, tenant: TenantId | None = None) -> list[Business]:
+        """TENANT_SCOPED. Every company *this tenant* knows about.
 
         Not filtered by niche: a Business has no niche. It is a company, which
         may be qualified under several niches over its life — the niche lives on
         the Opportunity, which is the thing that has one.
         """
+        tenant = _require_tenant(tenant, method="list_businesses")
+        where, params = _tenant_predicate(tenant)
         with SessionLocal() as session:
             rows = (
-                session.execute(text("SELECT * FROM atlas_businesses ORDER BY first_seen_at DESC"))
+                session.execute(
+                    text(f"SELECT * FROM atlas_businesses WHERE {where} "
+                         "ORDER BY first_seen_at DESC"), params)
                 .mappings()
                 .all()
             )
@@ -486,23 +517,30 @@ class OpportunityRepository:
             at=row["at"],
         )
 
-    def list_events(self, niche: str | None = None) -> list[BusinessEvent]:
-        """Outreach events, optionally for one niche. Feeds the funnel.
+    def list_events(self, niche: str | None = None, *,
+                    tenant: TenantId | None = None) -> list[BusinessEvent]:
+        """TENANT_SCOPED. Outreach events, optionally for one niche.
+
+        Scoped through the business, which is where ownership lives — an event
+        has no tenant of its own and must not grow one.
 
         Scoped to this factory. The timeline is shared, and counting a website
         deployment as a funnel stage would corrupt every rate downstream the
         moment a second factory starts writing to it.
         """
-        query = "SELECT e.* FROM atlas_business_events e"
-        params: dict[str, object] = {"factory": OPPORTUNITY_FACTORY}
+        tenant = _require_tenant(tenant, method="list_events")
+        where, tenant_params = _tenant_predicate(tenant, alias="b")
+        query = ("SELECT e.* FROM atlas_business_events e "
+                 "JOIN atlas_businesses b ON b.id = e.business_id")
+        params: dict[str, object] = {"factory": OPPORTUNITY_FACTORY, **tenant_params}
         if niche:
             query += (
                 " JOIN atlas_opportunities o ON o.id = e.opportunity_id"
-                " WHERE o.niche = :niche AND e.factory = :factory"
+                f" WHERE o.niche = :niche AND e.factory = :factory AND {where}"
             )
             params["niche"] = niche
         else:
-            query += " WHERE e.factory = :factory"
+            query += f" WHERE e.factory = :factory AND {where}"
         query += " ORDER BY e.at, e.id"
         with SessionLocal() as session:
             rows = session.execute(text(query), params).mappings().all()
@@ -527,21 +565,29 @@ class OpportunityRepository:
             rows = session.execute(text("SELECT entry FROM atlas_outreach_suppressions")).all()
         return SuppressionList(row[0] for row in rows)
 
-    def load_contact_history(self) -> ContactHistory:
-        """When each business was last successfully contacted.
+    def load_contact_history(self, *, tenant: TenantId | None = None) -> ContactHistory:
+        """TENANT_SCOPED. When each business was last successfully contacted.
 
         Read from sent messages rather than a separate counter, so the cooldown
         cannot drift away from what was actually delivered.
+
+        Scoped, unlike suppression. Contact history describes *a tenant's* own
+        activity — who they have written to and when — and one tenant inferring
+        another's outreach volume from a shared cooldown would be a disclosure.
+        Suppression is the deliberate opposite: see `load_suppression`.
         """
+        tenant = _require_tenant(tenant, method="load_contact_history")
+        where, params = _tenant_predicate(tenant, alias="b")
         with SessionLocal() as session:
             rows = (
                 session.execute(
-                    text("""
-                SELECT business_id, MAX(sent_at) AS last_sent
-                FROM atlas_outreach_messages
-                WHERE status = 'sent' AND sent_at IS NOT NULL
-                GROUP BY business_id
-                """)
+                    text(f"""
+                SELECT m.business_id, MAX(m.sent_at) AS last_sent
+                FROM atlas_outreach_messages m
+                JOIN atlas_businesses b ON b.id = m.business_id
+                WHERE m.status = 'sent' AND m.sent_at IS NOT NULL AND {where}
+                GROUP BY m.business_id
+                """), params
                 )
                 .mappings()
                 .all()

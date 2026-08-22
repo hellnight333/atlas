@@ -35,6 +35,7 @@ from atlas_kernel.opportunity.models import (
     PipelineEventKind,
 )
 from atlas_kernel.opportunity.repository import OpportunityRepository
+from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -174,7 +175,7 @@ class TestOtherFactoriesDoNotCorruptTheFunnel:
         repo.record_event(
             BusinessEvent(business_id=business.id, factory="website", kind="deployed")
         )
-        assert all(e.factory == OPPORTUNITY_FACTORY for e in repo.list_events())
+        assert all(e.factory == OPPORTUNITY_FACTORY for e in repo.list_events(tenant=ALL_TENANTS))
 
 
 class TestConservatismIsAnInvariantNotAPreference:

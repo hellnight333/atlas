@@ -34,6 +34,7 @@ from atlas_kernel.opportunity.models import (
     Severity,
 )
 from atlas_kernel.opportunity.repository import OpportunityRepository
+from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -78,7 +79,7 @@ def _finding(business_id: str) -> Finding:
 class TestBusinesses:
     def test_round_trip(self, repo: OpportunityRepository) -> None:
         saved = repo.save_business(_business())
-        loaded = repo.get_business(saved.id)
+        loaded = repo.get_business(saved.id, tenant=ALL_TENANTS)
         assert loaded is not None
         assert loaded.name == saved.name
         assert loaded.metadata == {"area": "Jumeirah"}
@@ -88,11 +89,11 @@ class TestBusinesses:
     ) -> None:
         business = repo.save_business(_business())
         repo.save_business(business.model_copy(update={"email": "new@clinic.test"}))
-        loaded = repo.get_business(business.id)
+        loaded = repo.get_business(business.id, tenant=ALL_TENANTS)
         assert loaded is not None and loaded.email == "new@clinic.test"
 
     def test_unknown_business_is_none(self, repo: OpportunityRepository) -> None:
-        assert repo.get_business("does-not-exist") is None
+        assert repo.get_business("does-not-exist", tenant=ALL_TENANTS) is None
 
 
 class TestFindings:
@@ -158,7 +159,7 @@ class TestProposalsAndMessages:
             }
         )
         repo.save_message(sent)
-        history = repo.load_contact_history()
+        history = repo.load_contact_history(tenant=ALL_TENANTS)
         assert history.last_contacted(business.id) is not None
 
 
@@ -176,7 +177,7 @@ class TestEvents:
         # that will fail for a reason unrelated to the code it is testing.
         events = [
             event
-            for event in repo.list_events(niche="event-niche")
+            for event in repo.list_events(niche="event-niche", tenant=ALL_TENANTS)
             if event.opportunity_id == opportunity.id
         ]
         assert [e.kind for e in events] == [
@@ -194,7 +195,7 @@ class TestEvents:
                 detail={"message_id": "recorded-1"},
             )
         )
-        stored = [e for e in repo.list_events() if e.business_id == business.id]
+        stored = [e for e in repo.list_events(tenant=ALL_TENANTS) if e.business_id == business.id]
         assert any(e.detail.get("message_id") == "recorded-1" for e in stored)
 
 
@@ -239,7 +240,7 @@ class TestNoSpamGuaranteesAreDurable:
             )
         )
 
-        history = repo.load_contact_history()
+        history = repo.load_contact_history(tenant=ALL_TENANTS)
         assert history.within_cooldown(contacted.id, days=90)
         assert not history.within_cooldown(attempted.id, days=90)
 
@@ -340,7 +341,7 @@ class TestIdentityResolutionSurvivesRestarts:
         other, _ = repo.resolve_business(
             Business(name=name, geography="Sharjah", website=f"https://look-two-{unique}.ae")
         )
-        assert [b.name for b in repo.find_possible_duplicates(other)] == [name]
+        assert [b.name for b in repo.find_possible_duplicates(other, tenant=ALL_TENANTS)] == [name]
 
     def test_a_business_with_no_contact_details_still_gets_stored(
         self, repo: OpportunityRepository, unique: str
@@ -351,7 +352,7 @@ class TestIdentityResolutionSurvivesRestarts:
             Business(name=f"No Details Trading {unique}", geography="Dubai")
         )
         assert is_new is True
-        assert repo.get_business(business.id) is not None
+        assert repo.get_business(business.id, tenant=ALL_TENANTS) is not None
 
     def test_a_sighting_matching_two_records_resolves_the_same_way_every_time(
         self, repo: OpportunityRepository, unique: str, unique_digits: str
@@ -393,7 +394,7 @@ class TestIdentityResolutionSurvivesRestarts:
         business, _ = repo.resolve_business(
             Business(name="Keys Clinic", geography="Dubai", website=f"https://keys-{unique}.ae")
         )
-        loaded = repo.get_business(business.id)
+        loaded = repo.get_business(business.id, tenant=ALL_TENANTS)
         assert loaded is not None
         assert f"domain:keys-{unique}.ae" in loaded.identity_keys
 

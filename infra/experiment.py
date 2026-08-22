@@ -28,7 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "kernel"))
 
-from atlas_kernel.opportunity.repository import OpportunityRepository  # noqa: E402
+from atlas_kernel.opportunity.repository import OpportunityRepository
+from atlas_kernel.opportunity.tenancy import ALL_TENANTS  # noqa: E402
 from atlas_kernel.outreach import experiment as ex  # noqa: E402
 
 DRAFTS = Path(os.environ.get("QEVIK_DRAFTS", "/var/lib/qevik/outreach"))
@@ -60,7 +61,7 @@ def drafts() -> dict[str, dict]:
 
 
 def business_for(repo: OpportunityRepository, name: str):
-    return next((b for b in repo.list_businesses() if b.name == name), None)
+    return next((b for b in repo.list_businesses(tenant=ALL_TENANTS) if b.name == name), None)
 
 
 def resolve(repo: OpportunityRepository, slug: str) -> tuple[str, dict]:
