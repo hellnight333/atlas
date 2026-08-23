@@ -1,0 +1,235 @@
+"""Everything waiting on a human, as structured records rather than a TODO list.
+
+A blocker written in Markdown is a blocker nobody can act on: it has no status,
+no owner, no verification, and no way to tell whether it still applies. §3 of the
+master directive asks for the opposite — a first-class action with an id, a
+reason, exact instructions, and the capabilities it holds up.
+
+**Actions are derived, not stored.** They are folded from state that already
+exists: an integration with no connection, an approval nobody has decided, a
+customer task with no proof. Storing them would create a second copy of each of
+those facts, and the copy would still say "connect Search Console" the day after
+somebody connected it.
+
+That choice has one consequence worth stating: an action's identity has to be
+stable across derivations, or a UI cannot tell "the same action, still open"
+from "a new action". So the id is derived from what the action is *about*, not
+from when it was generated.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..approval.models import ApprovalRequest, ApprovalState
+from ..integrations.registry import INTEGRATIONS, IntegrationStatus
+from ..opportunity.tenancy import TenantId
+from ..opportunity.tenancy import require as _require_tenant
+from ..publication.connections import ConnectionStore
+
+
+class ActionKind(StrEnum):
+    """What sort of human input is wanted. Different kinds go to different
+    people — a credential is an operator's job, an approval is the customer's."""
+
+    CREDENTIAL = "credential"
+    APPROVAL = "approval"
+    CUSTOMER_TASK = "customer_task"
+
+
+class ActionStatus(StrEnum):
+    OPEN = "open"
+    #: Somebody acted and the system confirmed it. Derived, so an action that is
+    #: done simply stops being produced — this exists for a UI that wants to
+    #: show the transition rather than have rows vanish.
+    SATISFIED = "satisfied"
+
+
+#: How long before an open action is worth chasing. Not a deadline anybody
+#: agreed to — a threshold for surfacing, so a list of thirty actions can be
+#: ordered by which have been ignored longest.
+STALE_AFTER = timedelta(days=7)
+
+
+class HumanAction(BaseModel):
+    """One thing a person has to do, with everything needed to do it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    kind: ActionKind
+    title: str
+    #: The provider or subject this concerns.
+    service: str
+    #: Roadmap phase, where the action belongs to one.
+    phase: str = ""
+    tenant_id: str = ""
+    #: True when work is stopped until this happens. False when it is merely
+    #: worth doing — the distinction is what stops a list of thirty actions
+    #: reading as thirty emergencies.
+    blocking: bool = True
+    reason: str = ""
+    #: What to actually do. Written for the person, not for the system.
+    instructions: str = ""
+    #: What they will be asked for. Names of things, never values.
+    requires: tuple[str, ...] = ()
+    setup_url: str = ""
+    #: Capability or measurement ids held up by this.
+    affects: tuple[str, ...] = ()
+    status: ActionStatus = ActionStatus.OPEN
+    #: How the system will know it is done. Every action has one, or it is a
+    #: request with no way to close it.
+    verification: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    due_at: datetime | None = None
+
+    @property
+    def stale(self) -> bool:
+        return datetime.now(UTC) - self.created_at > STALE_AFTER
+
+    def summary(self) -> dict:
+        return {
+            "id": self.id, "kind": self.kind.value, "title": self.title,
+            "service": self.service, "phase": self.phase,
+            "tenant_id": self.tenant_id, "blocking": self.blocking,
+            "reason": self.reason, "instructions": self.instructions,
+            "requires": list(self.requires), "setup_url": self.setup_url,
+            "affects": list(self.affects), "status": self.status.value,
+            "verification": self.verification,
+            "created_at": self.created_at.isoformat(),
+            "due_at": self.due_at.isoformat() if self.due_at else None,
+            "stale": self.stale,
+        }
+
+
+def _identity(kind: ActionKind, service: str, tenant: str, subject: str = "") -> str:
+    """Stable across derivations. The same open action keeps the same id."""
+    parts = [kind.value, service, tenant, subject]
+    return "action-" + "-".join(p for p in parts if p).replace(" ", "-").lower()[:96]
+
+
+def credential_actions(store: ConnectionStore, *, tenant: TenantId | None,
+                       created_at: datetime | None = None) -> tuple[HumanAction, ...]:
+    """One action per integration this tenant has not connected.
+
+    `adapter_ready=False` produces nothing: "we have not built this" is our
+    move, not the customer's, and putting it on their list would ask them to
+    supply a credential for something that could not use it yet.
+    """
+    tenant = _require_tenant(tenant, method="controlplane.credential_actions")
+    at = created_at or datetime.now(UTC)
+    found = []
+    for integration in INTEGRATIONS:
+        state = integration.status(store, tenant=tenant)
+        if state is not IntegrationStatus.PENDING_CREDENTIAL:
+            continue
+        found.append(HumanAction(
+            id=_identity(ActionKind.CREDENTIAL, integration.id, str(tenant)),
+            kind=ActionKind.CREDENTIAL,
+            title=f"Connect {integration.name}",
+            service=integration.id, tenant_id=str(tenant),
+            # Blocking only when something actually depends on it.
+            blocking=bool(integration.blocks),
+            reason=integration.purpose,
+            instructions=(f"Add {integration.credential}"
+                          + (f" — get one at {integration.setup_url}"
+                             if integration.setup_url else "")
+                          + ". The value is stored as a reference and is never "
+                            "shown again."),
+            requires=(integration.credential,),
+            setup_url=integration.setup_url,
+            affects=integration.blocks,
+            verification=f"a connection to {integration.id} exists for this tenant",
+            created_at=at))
+    return tuple(found)
+
+
+def approval_actions(pending: list[ApprovalRequest], *, tenant: TenantId | None,
+                     created_at: datetime | None = None) -> tuple[HumanAction, ...]:
+    """One action per approval nobody has decided.
+
+    Reads approvals rather than creating them: this module has no way to approve
+    anything, and a control plane that could satisfy its own approvals would be
+    a control plane with no control in it.
+    """
+    tenant = _require_tenant(tenant, method="controlplane.approval_actions")
+    at = created_at or datetime.now(UTC)
+    found = []
+    for request in pending:
+        if request.state is not ApprovalState.PENDING:
+            continue
+        if request.metadata.get("tenant_id") not in (None, "", str(tenant)):
+            continue
+        found.append(HumanAction(
+            id=_identity(ActionKind.APPROVAL, request.action or "approval",
+                         str(tenant), request.id),
+            kind=ActionKind.APPROVAL,
+            title=request.title or "Approve work",
+            service=request.action or "approval", tenant_id=str(tenant),
+            blocking=True,
+            reason="Work is waiting on a decision.",
+            instructions="Review what is proposed and approve or reject it.",
+            affects=(request.action,) if request.action else (),
+            verification=f"approval {request.id} leaves PENDING",
+            created_at=request.created_at or at,
+            due_at=request.expires_at))
+    return tuple(found)
+
+
+def customer_task_actions(outstanding: tuple[dict, ...], *, tenant: TenantId | None,
+                          created_at: datetime | None = None) -> tuple[HumanAction, ...]:
+    """One action per customer obligation with no proof yet.
+
+    Takes what `customer.tasks.outstanding` already computed rather than
+    recomputing it, so the control plane and the customer's own task list cannot
+    disagree about what is outstanding.
+    """
+    tenant = _require_tenant(tenant, method="controlplane.customer_task_actions")
+    at = created_at or datetime.now(UTC)
+    return tuple(
+        HumanAction(
+            id=_identity(ActionKind.CUSTOMER_TASK, "roadmap", str(tenant),
+                         entry.get("task_id", "")),
+            kind=ActionKind.CUSTOMER_TASK,
+            title=entry.get("title", "Customer task"),
+            service="roadmap", tenant_id=str(tenant),
+            blocking=bool(entry.get("unblocks")),
+            reason=entry.get("why", ""),
+            instructions=entry.get("do", ""),
+            affects=tuple(entry.get("unblocks") or ()),
+            verification="the task is recorded complete with proof",
+            created_at=at)
+        for entry in outstanding)
+
+
+def centre(*, store: ConnectionStore, tenant: TenantId | None,
+           pending_approvals: list[ApprovalRequest] | None = None,
+           outstanding_tasks: tuple[dict, ...] = ()) -> dict:
+    """Everything waiting on a person, ordered by what it holds up.
+
+    Blocking first, then by how long it has been ignored. A list ordered by
+    creation puts the oldest harmless request above the one stopping today's
+    work, which is how action centres get abandoned.
+    """
+    actions = (
+        credential_actions(store, tenant=tenant)
+        + approval_actions(pending_approvals or [], tenant=tenant)
+        + customer_task_actions(outstanding_tasks, tenant=tenant)
+    )
+    ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))
+    return {
+        "open": [a.summary() for a in ordered],
+        "blocking": [a.summary() for a in ordered if a.blocking],
+        "counts": {
+            "total": len(ordered),
+            "blocking": sum(1 for a in ordered if a.blocking),
+            "stale": sum(1 for a in ordered if a.stale),
+            **{kind.value: sum(1 for a in ordered if a.kind is kind)
+               for kind in ActionKind},
+        },
+        "note": "Nothing here holds a credential value. An action names what is "
+                "needed; the value is stored as a reference once supplied.",
+    }

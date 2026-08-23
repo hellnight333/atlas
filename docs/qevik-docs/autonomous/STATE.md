@@ -17,7 +17,9 @@ No P9+ exists and none has been invented.
 | P2 Multi-page website | TODO | — |
 | P2 Media | TODO | — |
 | P3 SEO | PARTIAL — detection + execution exist via `offer-website` | — |
-| P3 AI visibility | IN PROGRESS | — |
+| P3 AI visibility | COMPLETE (adapter + fake; live collection PENDING_CREDENTIAL) | `46d618e` |
+| Credential centre (`integrations/`) | COMPLETE | `46d618e` |
+| Blocker-first action centre (`controlplane/`) | COMPLETE | this commit |
 | P4 Public audit route | COMPLETE | `41f47b4` |
 | P4 Plans surface | TODO | — |
 | P5 Marketplace | TODO | — |
@@ -26,6 +28,16 @@ No P9+ exists and none has been invented.
 | P8 Agency/white label | TODO | — |
 | Roadmap completeness audit | TODO | — |
 | Business re-evaluation | TODO | — |
+
+## Governing documents (read before resuming)
+
+- `01_QEVIK_PHASE_ROADMAP.md` — the numbered roadmap, P1.2–P8.
+- `QEVIK_MASTER_AUTONOMOUS_EXECUTION_V2.md` — extends it with the control
+  plane, credential centre, agent orchestration and mission control. 2,894
+  lines; §3 (blocker-first) and §15/16 are the largest unimplemented parts.
+- `QEVIK_PENDING_IMPLEMENTATION_DOCS/` — 13 further specs, **not yet read in
+  full**. Contains browser-agent, worker, factory, control-plane and acceptance
+  specs that may already define work counted as "remaining" below.
 
 ## Standing constraints (do not re-derive)
 
@@ -43,5 +55,5 @@ No P9+ exists and none has been invented.
 
 ## Baselines
 
-Full suite 2302 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
+Full suite 2334 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
 ruff or mypy above these has regressed.

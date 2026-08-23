@@ -27,11 +27,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from .. import controlplane
 from ..auth.api import current_user, requires
 from ..auth.models import Scope, User
 from ..customer import public
 from ..customer import strategy as strategy_service
 from ..customer import tasks as task_service
+from ..integrations import registry as integration_registry
 from ..measurement import service as measurement_service
 from ..opportunity.tenancy import TenantId
 from ..publication import service as publication_service
@@ -230,6 +232,34 @@ def build_router() -> APIRouter:
         return {"business_id": business_id,
                 "publications": [r for r in records
                                  if r.get("business_id") == business_id]}
+
+    @router.get("/actions", dependencies=[Depends(requires(Scope.READ))])
+    def actions(request: Request,
+                tenant: TenantId = Depends(current_tenant)) -> dict:
+        """Everything waiting on a person, for this tenant.
+
+        Derived from integrations, approvals and outstanding customer tasks
+        rather than stored, so an action that has been satisfied stops being
+        produced instead of needing to be closed by hand.
+        """
+        store = getattr(request.app.state, "connections", None)
+        if store is None:
+            raise HTTPException(status_code=503,
+                                detail="no connection store is configured")
+        approvals = getattr(request.app.state, "pending_approvals", None)
+        pending = list(approvals(tenant=tenant)) if approvals else []
+        return controlplane.centre(store=store, tenant=tenant,
+                                   pending_approvals=pending)
+
+    @router.get("/integrations", dependencies=[Depends(requires(Scope.READ))])
+    def integrations(request: Request,
+                     tenant: TenantId = Depends(current_tenant)) -> dict:
+        """What is connected, what is waiting on a credential, what is not built."""
+        store = getattr(request.app.state, "connections", None)
+        if store is None:
+            raise HTTPException(status_code=503,
+                                detail="no connection store is configured")
+        return integration_registry.catalogue(store, tenant=tenant)
 
     @router.get("/businesses/{business_id}/measurements",
                 dependencies=[Depends(requires(Scope.READ))])
