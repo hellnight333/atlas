@@ -56,18 +56,25 @@ No P9+ exists and none has been invented.
 
 ## Baselines
 
-Full suite 2339 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
+Full suite 2352 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
 ruff or mypy above these has regressed.
 
 
+## Reconciliation done
+
+`ROADMAP_RECONCILIATION.md` and `MASTER_EXECUTION_STATE.md` are now the
+execution map. The pending docs are a **second programme** (Phase 1–12,
+execution platform) and docs 11/11A a **third** (media business). P1–P8 remains
+authoritative. Do not renumber.
+
 ## Next unblocked work, in order
 
-1. **P8 agency / white label** — `organization/` already has Organization,
-   Membership, Team, Role and `tenant_id`. Verify 1:N org→tenant against the
-   schema before changing anything. No external dependency.
-2. **P2 multi-page website** — the bundle machinery and `SiteContent` already
-   support it; `offer-website` declares only "a page with a title" because that
-   is all every build carries today.
+1. **P2 multi-page website** — the bundle machinery supports it. The blocker is
+   `themes/clean.py::render` returning a single page with no navigation block;
+   adding optional inter-page links there is the smallest change. Each service
+   page is a `SiteContent` with one service, rendered by the same theme.
+2. **Customer write routes** — complete a task with proof, request an approval.
+   The services exist and are tested; only the routes are missing.
 3. **P2 media** — `media/providers/mock.py` exists; wire a local vertical slice.
 4. **P5/P6/P7 adapters** — follow the `aivisibility` pattern exactly: protocol,
    local fixture provider, `PendingCredentialProvider`, entry in
