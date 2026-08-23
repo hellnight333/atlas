@@ -46,12 +46,20 @@ Statuses: COMPLETE · IN_PROGRESS · READY · PENDING_CREDENTIAL · PENDING_EXTE
 | Credential centre | COMPLETE | `integrations/registry.py` | `46d618e` |
 | Blocker-first action centre | COMPLETE | `controlplane/actions.py` | `a945c4e` |
 | Measurement scheduling query | COMPLETE | `measurement/schedule.py` | `44f975b` |
-| Agent provider abstraction | NOT_STARTED | — | — |
-| Chat → plan → execute | PARTIAL — `Plan` is the boundary; no chat intake | `mission/models.py` | this commit |
-| Mission model + state machine | COMPLETE | `mission/` | this commit |
-| Persistent mission state | COMPLETE — event-sourced, survives restart | `mission/service.py` | this commit |
+| Coding-agent boundary (plan/implement/review/summarize) | COMPLETE | `mission/agents.py` | `b317f41` |
+| Fake agent — 7 failure modes | COMPLETE | `mission/agents.py` | `b317f41` |
+| LLM adapter (Claude/Codex/Qwen/DeepSeek) | COMPLETE — live calls PENDING_CREDENTIAL | `mission/agents.py` | `b317f41` |
+| Persistent worker, bounded repair, restart recovery | COMPLETE | `mission/worker.py` | `b317f41` |
+| Git worktree isolation + pre-commit secret scan | COMPLETE | `mission/gitspace.py` | `7d579c8` |
+| Chat → plan → execute | PARTIAL — `Plan` is the boundary; no conversation persistence, no intake | `mission/models.py` | `f56f46f` |
+| Mission model + state machine | COMPLETE | `mission/` | `f56f46f` |
+| Persistent mission state | COMPLETE — event-sourced, survives restart | `mission/service.py` | `f56f46f` |
 | Multi-worker atomic claim | PENDING_INFRASTRUCTURE — needs a DB row with SKIP LOCKED | `mission/service.py` | — |
-| Agent cost tracking | COMPLETE — labelled REPORTED/ESTIMATED/UNKNOWN | `mission/models.py` | this commit |
+| Agent cost tracking | COMPLETE — labelled REPORTED/ESTIMATED/UNKNOWN | `mission/models.py` | `f56f46f` |
+| Durable per-mission report (P-B1 §9) | NOT_STARTED | — | — |
+| Mission Control read API (P-B1 §12) | NOT_STARTED | — | — |
+| Qevik self-use mission (P-B1 §17) | NOT_STARTED | — | — |
+| Business re-evaluation mission (P-B1 §18) | NOT_STARTED | — | — |
 | app.qevik.ai UI | NOT_STARTED | — | — |
 
 ## Product B — execution platform (`QEVIK_PENDING_IMPLEMENTATION_DOCS/`)
