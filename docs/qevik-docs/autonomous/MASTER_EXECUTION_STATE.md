@@ -37,7 +37,7 @@ Statuses: COMPLETE · IN_PROGRESS · READY · PENDING_CREDENTIAL · PENDING_EXTE
 | Marketplaces (Amazon/Noon) | P5 | NOT_STARTED | — | — | — | Follow the `aivisibility` adapter pattern |
 | Leads / CRM / email | P6 | NOT_STARTED | — | — | — | Same pattern; suppression list already exists in `outreach/` |
 | Social / video / autopilot | P7 | NOT_STARTED | — | — | — | Same pattern |
-| Agency / white label | P8 | READY | `organization/` | — | — | Org, Membership, Team, Role and `tenant_id` all exist |
+| Agency / white label | P8 | COMPLETE | `organization/agency.py` | `test_agency` | this commit | Delegation = membership. No schema change |
 
 ## Cross-cutting (master directive)
 
