@@ -31,6 +31,11 @@ PUBLIC_PATHS = frozenset(
         "/openapi.json",
         "/docs",
         "/redoc",
+        # The acquisition entry point: a visitor audits a site before they have
+        # an account. It returns only what `customer.public.audit` assembles,
+        # which is an allow-list of fields rather than a redaction of a private
+        # payload — see customer/public.py.
+        "/api/public/audit",
     }
 )
 

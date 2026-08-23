@@ -502,3 +502,82 @@ def test_no_handler_reimplements_kernel_logic() -> None:
     for forbidden in ("def assess", "def generate(", "PublicationStatus.PUBLISHED",
                       "ApprovalState.APPROVED", "engine.begin", "text("):
         assert forbidden not in source, forbidden
+
+
+# =============================================== the public entry point
+
+@pytest.fixture
+def public_client(monkeypatch):
+    """A client with no credentials at all, as a visitor has none."""
+    app = _app()
+
+    def audit_reader(*, website: str):
+        if "alpha" not in website:
+            return None
+        return {"observations": RESEARCH["alpha-co"]["observations"],
+                "opportunities": opp.for_host(website, category="logistics",
+                                              absent=frozenset({"page_speed"}),
+                                              present=frozenset({"website"}))}
+
+    app.state.public_audit_reader = audit_reader
+    with TestClient(app) as client:
+        yield client
+
+
+def test_a_visitor_with_no_account_can_audit_a_site(public_client) -> None:
+    response = public_client.post("/api/public/audit",
+                                  json={"website": "https://alpha.test"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["website"] == "https://alpha.test"
+    assert isinstance(body["summary"]["to_fix"], int)
+    assert body["opportunities"]
+
+
+def test_the_public_audit_exposes_nothing_private(public_client) -> None:
+    body = public_client.post("/api/public/audit",
+                              json={"website": "https://alpha.test"}).json()
+    blob = repr(body)
+    for private in (A, B, "alpha-co", "tenant", "evidence", "recommendation_id",
+                    "business_id", "page_title"):
+        assert private not in blob, private
+
+
+def test_an_unaudited_site_is_told_so_rather_than_guessed_at(public_client) -> None:
+    body = public_client.post("/api/public/audit",
+                              json={"website": "https://never-seen.test"}).json()
+    assert body["checked"] == {"confirmed": 0, "not_verified": 0}
+    assert body["summary"] == {"working": 0, "to_fix": 0}
+    assert body["opportunities"] == []
+
+
+def test_the_public_route_does_not_fetch_anything_on_request() -> None:
+    """A route that crawled an arbitrary URL on request is a request-triggered
+    outbound fetch: an amplifier, and a way to put Qevik's address in a
+    stranger's logs."""
+    from pathlib import Path
+
+    from atlas_kernel.customer import api as customer_module
+
+    source = Path(customer_module.__file__).read_text(encoding="utf-8")
+    for forbidden in ("httpx.", "requests.", "urlopen", "discover(", "crawl("):
+        assert forbidden not in source, forbidden
+
+
+def test_a_public_audit_needs_a_website(public_client) -> None:
+    assert public_client.post("/api/public/audit", json={}).status_code == 400
+    assert public_client.post("/api/public/audit",
+                              json={"website": "   "}).status_code == 400
+
+
+@pytest.mark.real_auth
+def test_the_customer_routes_are_still_closed(public_client) -> None:
+    """Adding a public route must not open the authenticated ones.
+
+    `real_auth` because conftest authenticates every other test as an operator;
+    this one is *about* authentication, so it needs the genuine middleware with
+    no credentials at all — which is what a visitor has.
+    """
+    for path in READS:
+        assert public_client.get(path.format(b="alpha-co")).status_code == 401
+    assert public_client.get("/api/customer/me").status_code == 401

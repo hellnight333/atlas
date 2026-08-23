@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..auth.api import current_user, requires
 from ..auth.models import Scope, User
+from ..customer import public
 from ..customer import strategy as strategy_service
 from ..customer import tasks as task_service
 from ..measurement import service as measurement_service
@@ -90,6 +91,48 @@ def _plan(request: Request, business_id: str, tenant: TenantId) -> Any:
     if found is None:
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     return found
+
+
+def build_public_router() -> APIRouter:
+    """Unauthenticated. Separate router so the boundary is visible in the code.
+
+    One route, and everything it can return goes through `public.audit`, whose
+    guard refuses any field nobody put on the allow-list. Keeping it in its own
+    router rather than as an exception inside the customer one means a route
+    added to the wrong file is a route with the wrong authentication, which is
+    noticeable, rather than a decorator argument nobody reads.
+    """
+    router = APIRouter(prefix="/api/public", tags=["public"])
+
+    @router.post("/audit")
+    def audit(body: dict, request: Request) -> dict:
+        """Audit a website for somebody who has no account yet.
+
+        Research is not run here. A route that crawled an arbitrary URL on
+        request is a request-triggered outbound fetch, which is a denial-of-
+        service amplifier and a way to make Qevik's address appear in a
+        stranger's logs. Instead it reads what research already holds, and
+        says plainly when it holds nothing.
+        """
+        website = (body or {}).get("website", "")
+        if not isinstance(website, str) or not website.strip():
+            raise HTTPException(status_code=400, detail="a website is required")
+
+        reader = getattr(request.app.state, "public_audit_reader", None)
+        if reader is None:
+            raise HTTPException(status_code=503,
+                                detail="no audit source is configured")
+        found = reader(website=website.strip())
+        if found is None:
+            # Not 404-as-absence here: there is no tenant boundary to protect,
+            # and telling a visitor "we have not looked at this yet" is the
+            # honest answer and the one that converts.
+            return public.audit(website=website.strip(), observations=[])
+        return public.audit(website=website.strip(),
+                            observations=found.get("observations") or [],
+                            opportunities=found.get("opportunities") or ())
+
+    return router
 
 
 def build_router() -> APIRouter:
@@ -203,3 +246,4 @@ def build_router() -> APIRouter:
 
 def install(app: Any) -> None:
     app.include_router(build_router())
+    app.include_router(build_public_router())

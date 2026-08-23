@@ -165,8 +165,26 @@ class TestTheApiIsClosedByDefault:
         decorating."""
         from atlas_kernel.auth.api import PUBLIC_PATHS
 
-        assert PUBLIC_PATHS == {"/health", "/auth/login", "/openapi.json", "/docs", "/redoc"}
+        # Pinned exactly, so adding an unauthenticated route is a conscious
+        # decision rather than a side effect. `/api/public/audit` was added
+        # deliberately in the P4 acquisition entry point: a visitor audits a
+        # site before they have an account.
+        assert PUBLIC_PATHS == {"/health", "/auth/login", "/openapi.json",
+                                "/docs", "/redoc", "/api/public/audit"}
         assert not any(p.startswith("/control") for p in PUBLIC_PATHS)
+        # Nothing tenant-scoped may be public, whatever else is added later.
+        assert not any(p.startswith("/api/customer") for p in PUBLIC_PATHS)
+
+    def test_the_one_public_api_route_returns_only_allow_listed_fields(self) -> None:
+        """`/api/public/audit` is unauthenticated, so what it can return is
+        bounded by an allow-list rather than by remembering to redact."""
+        from atlas_kernel.customer.public import FORBIDDEN_HINTS, PUBLIC_FIELDS, Leak, guard
+
+        for private in ("tenant_id", "business_id", "evidence", "recommendation_id"):
+            assert private not in PUBLIC_FIELDS
+            with pytest.raises(Leak):
+                guard({private: "anything"})
+        assert "tenant" in FORBIDDEN_HINTS
 
     def test_the_session_cookie_is_not_reachable_from_javascript(self) -> None:
         """Set httponly, so an injected script on any page cannot read it."""
