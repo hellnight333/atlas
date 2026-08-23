@@ -1,5 +1,16 @@
 """Missions — human requests, planned, approved, executed and recorded."""
 
+from .agents import (
+    AgentError,
+    AgentOutcome,
+    AgentTimeout,
+    Behaviour,
+    CodingAgent,
+    FakeCodingAgent,
+    LLMCodingAgent,
+    MalformedResult,
+    Roles,
+)
 from .models import (
     CLAIMABLE,
     TERMINAL,
@@ -23,8 +34,12 @@ from .service import (
     stale,
     transition,
 )
+from .worker import Acceptance, Worker, recover
 
-__all__ = ["ALLOWED", "CLAIMABLE", "TERMINAL", "AgentInvocation", "Blocker",
+__all__ = ["ALLOWED", "CLAIMABLE", "TERMINAL", "Acceptance", "AgentError",
+           "AgentInvocation", "AgentOutcome", "AgentTimeout", "Behaviour",
+           "Blocker", "CodingAgent", "FakeCodingAgent", "LLMCodingAgent",
+           "MalformedResult", "Roles", "Worker", "recover",
            "Mission", "MissionStatus", "NotPermitted", "Plan", "PlanStep",
            "attach_plan", "claim", "create", "fold", "history",
            "record_invocation", "release", "stale", "transition"]
