@@ -222,3 +222,74 @@ def test_an_account_with_no_tenant_sees_no_actions(client) -> None:
     client.acting_as(_as(""))
     assert client.get("/api/customer/actions").status_code == 403
     assert client.get("/api/customer/integrations").status_code == 403
+
+
+# ============================================ the plan surface
+
+@pytest.fixture
+def paid_client(client):
+    """A client whose tenant is on a plan."""
+    from atlas_kernel.credits import CreditService, Plan
+
+    service = CreditService()
+    service.assign(A, Plan.ADVANCED)
+    client.app.state.credits = service
+    return client
+
+
+def test_a_customer_can_see_their_plan_and_what_is_left(paid_client) -> None:
+    body = paid_client.get("/api/customer/plan").json()
+    assert body["plan"] == "ADVANCED"
+    assert body["included_units"] == 600.0
+    # 600 included, 60 held back for essential work, so ordinary work sees 540.
+    # Both numbers are shown: quoting only the larger one would let a customer
+    # plan against units ordinary work cannot reach.
+    assert body["remaining"] == 540.0
+    assert body["reserved_for_essential"] == 60.0
+    assert body["remaining_including_reserve"] == 600.0
+    assert body["used"] == 0.0
+
+
+def test_the_plan_surface_shows_units_and_never_money(paid_client) -> None:
+    body = paid_client.get("/api/customer/plan").json()
+    # The field names and values, not the note — the note is prose *about* not
+    # pricing anything, and matching on it tests the wrong thing.
+    fields = {k: v for k, v in body.items() if k != "note"}
+    blob = repr(fields).lower()
+    for money in ("price", "usd", "aed", "currency", "$", "invoice", "charged"):
+        assert money not in blob, money
+    assert "units, not money" in body["note"].lower()
+
+
+def test_spending_shows_up_on_the_plan(paid_client) -> None:
+    service = paid_client.app.state.credits
+    reservation = service.reserve(tenant=A, action="offer-website")
+    held = paid_client.get("/api/customer/plan").json()
+    assert held["held"] == 30.0 and held["used"] == 0.0
+
+    service.settle(reservation.id, tenant=A)
+    settled = paid_client.get("/api/customer/plan").json()
+    assert settled["used"] == 30.0 and settled["held"] == 0.0
+    assert settled["remaining"] == 510.0, "540 ordinary, less the 30 just spent"
+
+
+def test_a_tenant_with_no_plan_is_told_it_is_a_provisioning_gap(paid_client) -> None:
+    paid_client.acting_as(_as(B))
+    response = paid_client.get("/api/customer/plan")
+    assert response.status_code == 409
+    assert "provisioning gap" in response.json()["detail"]
+
+
+def test_one_tenant_never_sees_anothers_usage(paid_client) -> None:
+    from atlas_kernel.credits import Plan
+
+    service = paid_client.app.state.credits
+    service.assign(B, Plan.LIST)
+    reservation = service.reserve(tenant=A, action="offer-website")
+    service.settle(reservation.id, tenant=A)
+
+    paid_client.acting_as(_as(B))
+    body = paid_client.get("/api/customer/plan").json()
+    assert body["plan"] == "LIST"
+    assert body["used"] == 0.0, "A's spending must not appear on B's plan"
+    assert body["history"] == []
