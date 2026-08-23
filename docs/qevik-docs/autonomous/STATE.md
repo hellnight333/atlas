@@ -21,7 +21,8 @@ No P9+ exists and none has been invented.
 | Credential centre (`integrations/`) | COMPLETE | `46d618e` |
 | Blocker-first action centre (`controlplane/`) | COMPLETE | this commit |
 | P4 Public audit route | COMPLETE | `41f47b4` |
-| P4 Plans surface | TODO | — |
+| P4 Plans surface | COMPLETE | `200190b` |
+| P4 Portal expansion | PARTIAL — reads only, no write routes | — |
 | P5 Marketplace | TODO | — |
 | P6 Leads/CRM/email | TODO | — |
 | P7 Social/video/autopilot | TODO | — |
@@ -55,5 +56,27 @@ No P9+ exists and none has been invented.
 
 ## Baselines
 
-Full suite 2334 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
+Full suite 2339 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
 ruff or mypy above these has regressed.
+
+
+## Next unblocked work, in order
+
+1. **P8 agency / white label** — `organization/` already has Organization,
+   Membership, Team, Role and `tenant_id`. Verify 1:N org→tenant against the
+   schema before changing anything. No external dependency.
+2. **P2 multi-page website** — the bundle machinery and `SiteContent` already
+   support it; `offer-website` declares only "a page with a title" because that
+   is all every build carries today.
+3. **P2 media** — `media/providers/mock.py` exists; wire a local vertical slice.
+4. **P5/P6/P7 adapters** — follow the `aivisibility` pattern exactly: protocol,
+   local fixture provider, `PendingCredentialProvider`, entry in
+   `integrations/registry.py`. Only the live call is blocked.
+5. **Write routes** on the customer surface (complete a task, request an
+   approval) — reads exist, writes do not.
+
+## Not yet read
+
+`QEVIK_PENDING_IMPLEMENTATION_DOCS/` — 13 specs, tracked in the repo, not read
+in full. Read these before assuming the list above is complete; they may define
+work counted as "remaining".
