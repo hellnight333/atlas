@@ -456,8 +456,18 @@ def test_a_high_score_does_not_manufacture_a_priority(ahs) -> None:
     readiness = assess(business_id="ahs",
                        observations=[{"feature": f, "status": s} for f, s in AHS["features"]],
                        business_model="CATERING")
-    scores = {d.dimension.value: d.score for d in readiness.dimensions}
-    ranked = [scores.get(t.dimension) for t in ordered if scores.get(t.dimension) is not None]
+    # Weighted severity, not the raw score. `WEIGHTS` is per business model on
+    # purpose — for a caterer, proof matters more than content depth — so
+    # "worst first" means worst *relative to how much it matters here*.
+    #
+    # Comparing raw scores passed only while one of the two dimensions had no
+    # executor and so produced no task. The moment editorial became executable,
+    # AHS had proof at 67 (weight 1.0) and content at 50 (weight 0.4), and the
+    # generator correctly put proof first: 67 is worse for a caterer than 50 is.
+    weighted = {d.dimension.value: (d.score, d.weight) for d in readiness.dimensions}
+    ranked = [weighted[t.dimension][0] / max(weighted[t.dimension][1], 0.01)
+              for t in ordered
+              if weighted.get(t.dimension, (None, 0))[0] is not None]
     assert ranked == sorted(ranked), f"work is not ordered worst-first: {ranked}"
 
 

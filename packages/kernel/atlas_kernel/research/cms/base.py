@@ -76,6 +76,15 @@ class CMSFacts:
                 {"slug": p.slug, "title": p.title, "url": p.url, "images": p.images}
                 for p in sorted(self.image_pages, key=lambda x: -x.images)[:80]
             ],
+            # Same reasoning as image_page_list, for the editorial capability:
+            # what they publish, not how much of it. An index built from a count
+            # would have to guess at the titles.
+            "post_list": [
+                {"slug": p.slug, "title": p.title, "url": p.url,
+                 "published": p.published, "words": p.words, "images": p.images,
+                 "categories": list(p.categories)}
+                for p in sorted(self.posts, key=lambda x: x.published, reverse=True)[:80]
+            ],
         }
 
 
