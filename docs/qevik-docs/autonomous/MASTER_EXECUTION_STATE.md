@@ -47,8 +47,11 @@ Statuses: COMPLETE · IN_PROGRESS · READY · PENDING_CREDENTIAL · PENDING_EXTE
 | Blocker-first action centre | COMPLETE | `controlplane/actions.py` | `a945c4e` |
 | Measurement scheduling query | COMPLETE | `measurement/schedule.py` | `44f975b` |
 | Agent provider abstraction | NOT_STARTED | — | — |
-| Chat → plan → execute | NOT_STARTED | — | — |
-| Persistent task queue / worker | NOT_STARTED | — | — |
+| Chat → plan → execute | PARTIAL — `Plan` is the boundary; no chat intake | `mission/models.py` | this commit |
+| Mission model + state machine | COMPLETE | `mission/` | this commit |
+| Persistent mission state | COMPLETE — event-sourced, survives restart | `mission/service.py` | this commit |
+| Multi-worker atomic claim | PENDING_INFRASTRUCTURE — needs a DB row with SKIP LOCKED | `mission/service.py` | — |
+| Agent cost tracking | COMPLETE — labelled REPORTED/ESTIMATED/UNKNOWN | `mission/models.py` | this commit |
 | app.qevik.ai UI | NOT_STARTED | — | — |
 
 ## Product B — execution platform (`QEVIK_PENDING_IMPLEMENTATION_DOCS/`)

@@ -1,0 +1,232 @@
+"""Missions on the event timeline, so a restart loses nothing.
+
+Every transition is an append-only `BusinessEvent` and the mission is folded
+from them. That is the whole persistence story: no table, no migration, and no
+way to quietly rewrite what happened — which matters more here than elsewhere,
+because a mission is the record of what an autonomous agent did on somebody's
+repository.
+
+**Resume is the point.** A worker that dies mid-mission leaves the mission in a
+non-terminal state with `claimed_by` still set. `stale()` finds exactly those,
+and `release()` returns them to the queue with the reason recorded. Nothing is
+lost and nothing is silently retried.
+
+**One honest limitation, stated rather than papered over.** `claim()` is atomic
+only against a single writer, because folding events cannot compare-and-set. A
+second worker on another process could claim the same mission. Making that safe
+needs a database row with `SELECT … FOR UPDATE SKIP LOCKED`, which is a genuine
+schema addition, and it is recorded as PENDING_INFRASTRUCTURE rather than
+pretended away. Single-worker operation is safe today; multi-worker is not.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from ..opportunity.models import BusinessEvent
+from ..opportunity.tenancy import TenantId, owns
+from ..opportunity.tenancy import require as _require_tenant
+from .models import (
+    CLAIMABLE,
+    AgentInvocation,
+    Mission,
+    MissionStatus,
+    Plan,
+)
+
+log = logging.getLogger(__name__)
+
+FACTORY = "mission"
+KIND = "mission_transition"
+
+#: How long a claim may be held before a worker is presumed dead. Long enough
+#: that a slow implementation is not stolen mid-write.
+CLAIM_TIMEOUT = timedelta(hours=2)
+
+
+class NotPermitted(Exception):
+    """The transition asked for is not one this mission may make."""
+
+
+#: Which transitions are legitimate. Written out rather than left implicit,
+#: because "queued straight to complete" is exactly the shortcut an agent under
+#: pressure would take, and it would skip the tests and the review.
+ALLOWED: dict[MissionStatus, frozenset[MissionStatus]] = {
+    MissionStatus.DRAFT: frozenset({MissionStatus.PLANNING, MissionStatus.CANCELLED}),
+    MissionStatus.PLANNING: frozenset({MissionStatus.AWAITING_APPROVAL,
+                                       MissionStatus.QUEUED, MissionStatus.BLOCKED,
+                                       MissionStatus.FAILED, MissionStatus.CANCELLED}),
+    MissionStatus.AWAITING_APPROVAL: frozenset({MissionStatus.QUEUED,
+                                                MissionStatus.CANCELLED,
+                                                MissionStatus.BLOCKED}),
+    MissionStatus.QUEUED: frozenset({MissionStatus.PROCESSING, MissionStatus.BLOCKED,
+                                     MissionStatus.CANCELLED}),
+    MissionStatus.PROCESSING: frozenset({MissionStatus.TESTING, MissionStatus.FAILED,
+                                         MissionStatus.BLOCKED,
+                                         MissionStatus.QUEUED}),
+    MissionStatus.TESTING: frozenset({MissionStatus.REVIEWING, MissionStatus.FAILED,
+                                      MissionStatus.PROCESSING}),
+    MissionStatus.REVIEWING: frozenset({MissionStatus.COMMITTING,
+                                        MissionStatus.PROCESSING,
+                                        MissionStatus.FAILED}),
+    MissionStatus.COMMITTING: frozenset({MissionStatus.COMPLETE, MissionStatus.FAILED}),
+    MissionStatus.BLOCKED: frozenset({MissionStatus.QUEUED, MissionStatus.PLANNING,
+                                      MissionStatus.CANCELLED}),
+    MissionStatus.COMPLETE: frozenset(),
+    MissionStatus.FAILED: frozenset({MissionStatus.QUEUED}),
+    MissionStatus.CANCELLED: frozenset(),
+}
+
+
+def _event(mission: Mission, *, actor: str, note: str = "",
+           extra: dict | None = None) -> BusinessEvent:
+    detail = {**mission.summary(), "note": note, **(extra or {})}
+    return BusinessEvent(business_id=mission.tenant_id, factory=FACTORY,
+                         kind=KIND, actor=actor, detail=detail)
+
+
+def create(*, tenant: TenantId | None, title: str, description: str = "",
+           requested_by: str = "", priority: int = 0
+           ) -> tuple[Mission, BusinessEvent]:
+    """A new request, in DRAFT. Nothing runs from this."""
+    tenant = _require_tenant(tenant, method="mission.create")
+    if not title.strip():
+        raise NotPermitted("a mission needs a title; a request nobody can read "
+                           "is one nobody can approve")
+    mission = Mission(id=f"mission-{uuid4().hex[:12]}", tenant_id=str(tenant),
+                      title=title.strip(), description=description,
+                      requested_by=requested_by, priority=priority)
+    return mission, _event(mission, actor=requested_by or "operator",
+                           note="created")
+
+
+def transition(mission: Mission, to: MissionStatus, *, tenant: TenantId | None,
+               actor: str = "system", note: str = "",
+               **changes: object) -> tuple[Mission, BusinessEvent]:
+    """Move a mission, or refuse.
+
+    Refuses a transition that is not in `ALLOWED`, which is what stops a mission
+    going from queued straight to complete and skipping its tests.
+    """
+    tenant = _require_tenant(tenant, method="mission.transition")
+    if not owns(mission.tenant_id, tenant):
+        raise NotPermitted("this mission belongs to a different tenant")
+    if to not in ALLOWED[mission.status]:
+        raise NotPermitted(
+            f"{mission.id}: {mission.status.value} cannot become {to.value}. "
+            f"Allowed: {', '.join(sorted(s.value for s in ALLOWED[mission.status])) or 'nothing'}")
+    moved = mission.model_copy(update={"status": to,
+                                       "updated_at": datetime.now(UTC), **changes})
+    return moved, _event(moved, actor=actor, note=note or to.value)
+
+
+def attach_plan(mission: Mission, plan: Plan, *, tenant: TenantId | None,
+                actor: str = "agent") -> tuple[Mission, BusinessEvent]:
+    """Record a proposed plan and route it by whether policy needs a human.
+
+    The plan is the safety boundary: arbitrary text never becomes execution, it
+    becomes something a person can read first. A plan whose own analysis found
+    blockers goes to BLOCKED rather than to a queue.
+    """
+    if plan.blockers:
+        return transition(mission, MissionStatus.BLOCKED, tenant=tenant,
+                          actor=actor, plan=plan, blockers=plan.blockers,
+                          note="planning found blockers")
+    destination = (MissionStatus.AWAITING_APPROVAL if plan.approval_required
+                   else MissionStatus.QUEUED)
+    return transition(mission, destination, tenant=tenant, actor=actor, plan=plan,
+                      note="plan attached")
+
+
+def claim(mission: Mission, *, worker: str, tenant: TenantId | None
+          ) -> tuple[Mission, BusinessEvent]:
+    """Take a queued mission for one worker.
+
+    See the module note: atomic against a single writer only.
+    """
+    tenant = _require_tenant(tenant, method="mission.claim")
+    if not worker.strip():
+        raise NotPermitted("a claim must name the worker holding it, or a "
+                           "crashed mission cannot be told from an idle one")
+    # Held first: both refusals are true of an already-claimed mission, and
+    # "already held by w1" tells the caller who has it, where "not claimable"
+    # only tells them it is busy.
+    if mission.claimed_by:
+        raise NotPermitted(f"{mission.id} is already held by {mission.claimed_by}")
+    if mission.status not in CLAIMABLE:
+        raise NotPermitted(f"{mission.id} is {mission.status.value}, not claimable")
+    return transition(mission, MissionStatus.PROCESSING, tenant=tenant,
+                      actor=worker, claimed_by=worker, note=f"claimed by {worker}")
+
+
+def release(mission: Mission, *, tenant: TenantId | None, reason: str,
+            actor: str = "supervisor") -> tuple[Mission, BusinessEvent]:
+    """Return a mission whose worker died. Nothing is retried silently."""
+    if mission.terminal:
+        raise NotPermitted(f"{mission.id} is {mission.status.value}; there is "
+                           "nothing to release")
+    return transition(mission, MissionStatus.QUEUED, tenant=tenant, actor=actor,
+                      claimed_by="", note=f"released: {reason}")
+
+
+def stale(missions: list[Mission], *, now: datetime | None = None,
+          timeout: timedelta = CLAIM_TIMEOUT) -> tuple[Mission, ...]:
+    """Missions held by a worker that has not reported for too long."""
+    at = now or datetime.now(UTC)
+    return tuple(m for m in missions
+                 if m.claimed_by and not m.terminal
+                 and at - m.updated_at > timeout)
+
+
+def record_invocation(mission: Mission, invocation: AgentInvocation, *,
+                      tenant: TenantId | None) -> tuple[Mission, BusinessEvent]:
+    """Append what an agent call cost. Never replaces an earlier one."""
+    tenant = _require_tenant(tenant, method="mission.record_invocation")
+    if not owns(mission.tenant_id, tenant):
+        raise NotPermitted("this mission belongs to a different tenant")
+    updated = mission.model_copy(update={
+        "invocations": (*mission.invocations, invocation),
+        "updated_at": datetime.now(UTC)})
+    return updated, _event(updated, actor=invocation.provider,
+                           note=f"{invocation.provider}/{invocation.model}")
+
+
+def fold(events: list, *, tenant: TenantId | None = None) -> list[dict]:
+    """TENANT_SCOPED. The current state of every mission, newest first.
+
+    Later events replace earlier ones for the same mission, which is what makes
+    an append-only log readable as current state without rewriting anything.
+    """
+    tenant = _require_tenant(tenant, method="mission.fold")
+    current: dict[str, dict] = {}
+    for event in events:
+        kind = getattr(event, "kind", None) or event.get("kind")
+        if kind != KIND:
+            continue
+        detail = getattr(event, "detail", None) or event.get("detail") or {}
+        if not owns(detail.get("tenant_id"), tenant):
+            continue
+        if mission_id := detail.get("mission_id"):
+            current[mission_id] = dict(detail)
+    return sorted(current.values(), key=lambda d: d.get("updated_at", ""),
+                  reverse=True)
+
+
+def history(events: list, mission_id: str, *, tenant: TenantId | None = None
+            ) -> list[dict]:
+    """Every transition of one mission, oldest first. Never collapsed."""
+    tenant = _require_tenant(tenant, method="mission.history")
+    found = []
+    for event in events:
+        kind = getattr(event, "kind", None) or event.get("kind")
+        if kind != KIND:
+            continue
+        detail = getattr(event, "detail", None) or event.get("detail") or {}
+        if detail.get("mission_id") != mission_id:
+            continue
+        if not owns(detail.get("tenant_id"), tenant):
+            continue
+        found.append(dict(detail))
+    return found
