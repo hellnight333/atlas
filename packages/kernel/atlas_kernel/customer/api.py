@@ -23,11 +23,14 @@ Qevik, not to read one customer's file.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from .. import controlplane
+from ..approval.models import ApprovalState
+from ..approval.service import ApprovalError
 from ..auth.api import current_user, requires
 from ..auth.models import Scope, User
 from ..credits.models import ESSENTIAL_FLOOR, INCLUDED, NoPlan
@@ -36,7 +39,7 @@ from ..customer import strategy as strategy_service
 from ..customer import tasks as task_service
 from ..integrations import registry as integration_registry
 from ..measurement import service as measurement_service
-from ..opportunity.tenancy import TenantId
+from ..opportunity.tenancy import TenantId, owns
 from ..publication import service as publication_service
 from ..publication import staging as staging_service
 from ..roadmap.lifecycle import facts_for
@@ -94,6 +97,105 @@ def _plan(request: Request, business_id: str, tenant: TenantId) -> Any:
     if found is None:
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     return found
+
+
+@runtime_checkable
+class Approvals(Protocol):
+    """The three things this surface needs of an approval service.
+
+    Declared as a protocol rather than importing `ApprovalService` directly,
+    because the real one needs a repository and an event bus and this surface
+    needs none of that. Naming the narrow dependency means a test can supply a
+    double without the double being a shortcut — and
+    `test_the_real_approval_service_satisfies_the_protocol` checks the real one
+    still fits, so the double cannot drift away from it silently.
+    """
+
+    def get(self, approval_id: str) -> Any: ...
+
+    def approve(self, approval_id: str, actor: str,
+                comment: str | None = None) -> Any: ...
+
+    def reject(self, approval_id: str, actor: str,
+               comment: str | None = None) -> Any: ...
+
+
+class TaskCompletion(BaseModel):
+    """The customer's claim that they did their part, and what backs it.
+
+    `kind` is what sort of evidence this is; `reference` is the thing itself — a
+    hostname, an approval id. There is deliberately no `verified_by_system`
+    field: that is derived from the kind, and a field for it would let a caller
+    assert that Qevik checked something Qevik never looked at.
+    """
+
+    kind: task_service.ProofKind
+    reference: str = Field(min_length=1, max_length=500)
+    detail: str = Field(default="", max_length=2000)
+    #: Required for an attestation, ignored otherwise — the attester is the
+    #: authenticated session, and this exists only to record a third party who
+    #: is not the person logged in.
+    attested_by: str = Field(default="", max_length=200)
+
+
+class Decision(BaseModel):
+    """A customer's answer about one artefact.
+
+    No `decided_by`: the decider is the authenticated session, and a field for
+    it would be a field to lie in.
+    """
+
+    approved: bool
+    comment: str = Field(default="", max_length=2000)
+
+
+def _append(request: Request, event: Any) -> None:
+    """Put one event on the business timeline, or refuse.
+
+    Never a silent no-op. A write route that returns 200 and persists nothing is
+    how a customer marks a task done, sees it accepted, and finds it outstanding
+    again tomorrow.
+    """
+    sink = getattr(request.app.state, "business_sink", None)
+    if sink is None:
+        raise HTTPException(
+            status_code=503,
+            detail="no timeline is configured to write to, so this would have "
+                   "been accepted and lost")
+    sink(event)
+
+
+def _establish(body: TaskCompletion, request: Request,
+               tenant: TenantId) -> task_service.Proof:
+    """Turn a claim into evidence, or refuse it.
+
+    The three kinds are not interchangeable. An `observed` proof is checked
+    here and now; an `approval` proof is read from the approval service rather
+    than taken from the request, because an approval id a customer typed is a
+    claim and the approval's own state is the fact; an `attestation` is
+    somebody's word and is recorded as such.
+    """
+    try:
+        if body.kind is task_service.ProofKind.OBSERVED:
+            # A DNS lookup, not a fetch: tri-state resolution, no ports, no
+            # response body. Authenticated and scoped to a task, so it is not
+            # the open amplifier the public audit route refuses to be.
+            return task_service.verify_domain(body.reference)
+        if body.kind is task_service.ProofKind.APPROVAL:
+            service = getattr(request.app.state, "approvals", None)
+            if service is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="no approval service is configured")
+            found = service.get(body.reference)
+            if found is None or not owns(found.metadata.get("tenant_id"), tenant):
+                raise HTTPException(status_code=404, detail=NOT_FOUND)
+            return task_service.verify_approval(found)
+        return task_service.Proof(kind=body.kind, reference=body.reference,
+                                  detail=body.detail,
+                                  attested_by=body.attested_by)
+    except task_service.ProofRejected as rejected:
+        raise HTTPException(status_code=422, detail=str(rejected)) from rejected
 
 
 def build_public_router() -> APIRouter:
@@ -309,6 +411,89 @@ def build_router() -> APIRouter:
                 "pending_sources": list(
                     measurement_service.awaiting_source(plan.roadmap)),
                 "measurements": list(plan.measurements)}
+
+    # ---------------------------------------------------------------- writes
+    #
+    # Two, and only two, things a customer may change: they can tell us they
+    # have done their part, and they can decide an approval. Everything else on
+    # this surface is a read, because everything else is work Qevik owes them
+    # and a customer marking our work done is the conversion the whole
+    # CUSTOMER_TASK boundary exists to prevent.
+
+    @router.post("/businesses/{business_id}/tasks/{task_id}/complete",
+                 dependencies=[Depends(requires(Scope.EXECUTE))])
+    def complete_task(business_id: str, task_id: str, body: TaskCompletion,
+                      request: Request,
+                      tenant: TenantId = Depends(current_tenant),
+                      user: User = Depends(current_user)) -> dict:
+        """Record that the customer did their part, with the evidence.
+
+        The proof is *established*, never accepted. An `observed` proof runs the
+        check; an `approval` proof reads the approval's real state; an
+        `attestation` records whose word it is. `verified_by_system` is derived
+        from the kind and can therefore not be claimed by the caller — a field a
+        customer could set would make "we checked this" mean "somebody said so".
+        """
+        plan = _plan(request, business_id, tenant)
+        task = next((t for t in plan.roadmap.tasks if t.id == task_id), None)
+        if task is None:
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+        proof = _establish(body, request, tenant)
+        try:
+            event = task_service.complete(task, proof, tenant=tenant,
+                                          actor=user.username)
+        except task_service.ProofRejected as rejected:
+            raise HTTPException(status_code=422, detail=str(rejected)) from rejected
+        except PermissionError as denied:      # pragma: no cover - plan scopes
+            raise HTTPException(status_code=404, detail=NOT_FOUND) from denied
+
+        _append(request, event)
+        return {"task_id": task_id, "completed": True,
+                "proof": proof.model_dump(mode="json"),
+                "verified_by_system": event.detail["verified_by_system"]}
+
+    @router.post("/approvals/{approval_id}/decide",
+                 dependencies=[Depends(requires(Scope.EXECUTE))])
+    def decide(approval_id: str, body: Decision, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               user: User = Depends(current_user)) -> dict:
+        """Approve or reject one specific thing.
+
+        This is the artefact boundary, not the execution one: it answers "may
+        this exact output go live", and holding EXECUTE is what lets a customer
+        answer it rather than what answers it for them.
+
+        Another tenant's approval is absent. An approval names an artefact and
+        usually a domain, so 403-versus-404 here would tell a caller which
+        customers exist and what is pending for them.
+        """
+        service = getattr(request.app.state, "approvals", None)
+        if service is None:
+            raise HTTPException(status_code=503,
+                                detail="no approval service is configured")
+        found = service.get(approval_id)
+        if found is None or not owns(found.metadata.get("tenant_id"), tenant):
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        if found.state is not ApprovalState.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail=f"this was already {found.state.value}. Deciding it "
+                       "again would overwrite a decision somebody made.")
+
+        try:
+            decided = (service.approve(approval_id, user.username, body.comment)
+                       if body.approved
+                       else service.reject(approval_id, user.username, body.comment))
+        except ApprovalError as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        return {"approval_id": approval_id, "state": decided.state.value,
+                "decided_by": user.username,
+                # Approving is permission to publish, not publication. Saying so
+                # here stops "approved" being read as "live" by whoever builds
+                # the screen that shows this.
+                "note": "recorded. Approval permits the publication; it does "
+                        "not perform it."}
 
     return router
 

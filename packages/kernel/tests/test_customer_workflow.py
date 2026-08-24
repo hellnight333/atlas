@@ -19,6 +19,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from atlas_kernel.approval.models import (
+    ApprovalDecision,
+    ApprovalDecisionType,
+    ApprovalRequest,
+    ApprovalState,
+)
 from atlas_kernel.auth import Scope, User
 from atlas_kernel.auth import api as auth_api
 from atlas_kernel.auth.models import hash_password
@@ -42,6 +48,7 @@ from atlas_kernel.outreach import opportunity as opp
 from atlas_kernel.recommendation import service as rec_service
 from atlas_kernel.roadmap import Executability, assess, generate
 from atlas_kernel.roadmap.lifecycle import facts_for
+from atlas_kernel.roadmap.models import TaskKind
 
 A = "tenant-alpha"
 B = "tenant-beta"
@@ -120,7 +127,54 @@ def _app() -> FastAPI:
     app.state.research_reader = research_reader
     app.state.plan_reader = plan_reader
     app.state.business_events = []
+    # A real sink, so a write route that persisted nothing would show up as a
+    # read that still reports the task outstanding.
+    app.state.business_sink = app.state.business_events.append
+    app.state.approvals = FakeApprovals()
     return app
+
+
+class FakeApprovals:
+    """The three methods the customer surface needs of an approval service.
+
+    Not a shortcut: the surface declares `customer.api.Approvals`, a protocol
+    with exactly these three methods, precisely so this can exist without the
+    real service's repository and event bus. A separate test asserts the real
+    `ApprovalService` still satisfies that protocol, which is what stops this
+    double drifting into something the production service is not.
+    """
+
+    def __init__(self) -> None:
+        self.requests: dict[str, ApprovalRequest] = {}
+
+    def add(self, request: ApprovalRequest) -> ApprovalRequest:
+        self.requests[request.id] = request
+        return request
+
+    def get(self, approval_id: str) -> ApprovalRequest | None:
+        return self.requests.get(approval_id)
+
+    def _decide(self, approval_id: str, state: ApprovalState, actor: str,
+                comment: str | None, verdict: ApprovalDecisionType) -> ApprovalRequest:
+        found = self.requests[approval_id]
+        decided = found.model_copy(update={
+            "state": state,
+            "decisions": [*found.decisions,
+                          ApprovalDecision(actor=actor, decision=verdict,
+                                           comment=comment or "")],
+            "decided_at": datetime.now(UTC)})
+        self.requests[approval_id] = decided
+        return decided
+
+    def approve(self, approval_id: str, actor: str,
+                comment: str | None = None) -> ApprovalRequest:
+        return self._decide(approval_id, ApprovalState.APPROVED, actor, comment,
+                            ApprovalDecisionType.APPROVE)
+
+    def reject(self, approval_id: str, actor: str,
+               comment: str | None = None) -> ApprovalRequest:
+        return self._decide(approval_id, ApprovalState.REJECTED, actor, comment,
+                            ApprovalDecisionType.REJECT)
 
 
 def _as(tenant: str, *, scopes=frozenset(Scope)) -> User:
@@ -581,3 +635,198 @@ def test_the_customer_routes_are_still_closed(public_client) -> None:
     for path in READS:
         assert public_client.get(path.format(b="alpha-co")).status_code == 401
     assert public_client.get("/api/customer/me").status_code == 401
+
+
+# ======================================================= writes
+
+def _customer_task(business_id: str = "alpha-co"):
+    """One task the customer genuinely owes us, and one Qevik owes them."""
+    roadmap = _plan_for(business_id).roadmap
+    mine = next(t for t in roadmap.tasks if t.kind is TaskKind.CUSTOMER_TASK)
+    ours = next(t for t in roadmap.tasks if t.kind is not TaskKind.CUSTOMER_TASK)
+    return mine, ours
+
+
+def _complete(client, task_id: str, **body):
+    return client.post(
+        f"/api/customer/businesses/alpha-co/tasks/{task_id}/complete", json=body)
+
+
+def test_a_customer_can_record_that_they_did_their_part(client) -> None:
+    mine, _ = _customer_task()
+    client.acting_as(_as(A))
+    response = _complete(client, mine.id, kind="attestation",
+                         reference="logo.png", attested_by="Ayoub")
+    assert response.status_code == 200, response.text
+    assert response.json()["completed"] is True
+
+    # And the read agrees: a write that persisted nothing would still show it.
+    tasks = client.get("/api/customer/businesses/alpha-co/tasks").json()
+    assert mine.id in tasks["completed"]
+
+
+def test_a_customer_cannot_mark_qeviks_own_work_done(client) -> None:
+    """The conversion the whole CUSTOMER_TASK boundary exists to prevent.
+
+    It arrives here as an ordinary-looking call with a valid task id.
+    """
+    _, ours = _customer_task()
+    client.acting_as(_as(A))
+    response = _complete(client, ours.id, kind="attestation",
+                         reference="done", attested_by="Ayoub")
+    assert response.status_code == 422
+    assert "work we owe them into work they did" in response.json()["detail"]
+
+
+def test_the_caller_cannot_claim_the_system_verified_something(client) -> None:
+    """`verified_by_system` is derived from the proof kind.
+
+    A field a customer could set would make "we checked this" mean "somebody
+    said so", which is the difference the three-state evidence model exists for.
+    """
+    mine, _ = _customer_task()
+    client.acting_as(_as(A))
+    body = _complete(client, mine.id, kind="attestation", reference="x",
+                     attested_by="Ayoub", verified_by_system=True).json()
+    assert body["verified_by_system"] is False
+
+
+def test_an_attestation_without_a_name_is_refused(client) -> None:
+    """Somebody's word has to record whose, or it is an unsourced claim."""
+    mine, _ = _customer_task()
+    client.acting_as(_as(A))
+    response = _complete(client, mine.id, kind="attestation", reference="x")
+    assert response.status_code == 422
+    assert "whose" in response.json()["detail"]
+
+
+def test_an_observed_proof_is_checked_rather_than_believed(client) -> None:
+    """A domain that does not resolve has not been connected, whoever says so."""
+    mine, _ = _customer_task()
+    client.acting_as(_as(A))
+    response = _complete(client, mine.id, kind="observed",
+                         reference="this-host-does-not-exist.invalid")
+    assert response.status_code == 422
+    assert "does not resolve" in response.json()["detail"]
+
+
+def test_an_approval_proof_reads_the_approvals_real_state(client) -> None:
+    """An approval id a customer typed is a claim; the approval is the fact."""
+    mine, _ = _customer_task()
+    approvals = client.app.state.approvals
+    pending = approvals.add(ApprovalRequest(title="Publish the site",
+                                            state=ApprovalState.PENDING,
+                                            metadata={"tenant_id": A}))
+    client.acting_as(_as(A))
+    response = _complete(client, mine.id, kind="approval", reference=pending.id)
+    assert response.status_code == 422
+    assert "nothing has been agreed" in response.json()["detail"]
+
+    approvals.approve(pending.id, "ayoub")
+    accepted = _complete(client, mine.id, kind="approval", reference=pending.id)
+    assert accepted.status_code == 200
+    assert accepted.json()["verified_by_system"] is True
+
+
+def test_another_tenants_approval_cannot_be_used_as_proof(client) -> None:
+    mine, _ = _customer_task()
+    approvals = client.app.state.approvals
+    theirs = approvals.add(ApprovalRequest(title="Theirs",
+                                           state=ApprovalState.APPROVED,
+                                           metadata={"tenant_id": B}))
+    client.acting_as(_as(A))
+    assert _complete(client, mine.id, kind="approval",
+                     reference=theirs.id).status_code == 404
+
+
+def test_a_task_on_another_tenants_business_is_absent(client) -> None:
+    mine, _ = _customer_task("beta-co")
+    client.acting_as(_as(A))
+    response = client.post(
+        f"/api/customer/businesses/beta-co/tasks/{mine.id}/complete",
+        json={"kind": "attestation", "reference": "x", "attested_by": "Ayoub"})
+    assert response.status_code == 404
+
+
+def test_a_write_with_nowhere_to_persist_refuses(client) -> None:
+    """A 200 that persisted nothing is a task that is outstanding again
+    tomorrow."""
+    mine, _ = _customer_task()
+    client.app.state.business_sink = None
+    client.acting_as(_as(A))
+    response = _complete(client, mine.id, kind="attestation", reference="x",
+                         attested_by="Ayoub")
+    assert response.status_code == 503
+    assert "lost" in response.json()["detail"]
+
+
+def test_completing_a_task_needs_execute_not_read(client) -> None:
+    mine, _ = _customer_task()
+    client.acting_as(_as(A, scopes=frozenset({Scope.READ})))
+    assert _complete(client, mine.id, kind="attestation", reference="x",
+                     attested_by="Ayoub").status_code == 403
+
+
+# ======================================================= deciding an approval
+
+def test_a_customer_can_approve_their_own_artefact(client) -> None:
+    approvals = client.app.state.approvals
+    pending = approvals.add(ApprovalRequest(title="Publish", metadata={"tenant_id": A}))
+    client.acting_as(_as(A))
+
+    body = client.post(f"/api/customer/approvals/{pending.id}/decide",
+                       json={"approved": True}).json()
+    assert body["state"] == ApprovalState.APPROVED.value
+    assert body["decided_by"] == "user-tenant-alpha"
+
+
+def test_approving_is_not_publishing(client) -> None:
+    """READY_TO_PUBLISH is not PUBLISHED, and the response says so where
+    whoever builds the screen will read it."""
+    approvals = client.app.state.approvals
+    pending = approvals.add(ApprovalRequest(title="Publish", metadata={"tenant_id": A}))
+    client.acting_as(_as(A))
+    body = client.post(f"/api/customer/approvals/{pending.id}/decide",
+                       json={"approved": True}).json()
+    assert "does not perform it" in body["note"]
+
+
+def test_a_decision_cannot_be_overwritten(client) -> None:
+    approvals = client.app.state.approvals
+    pending = approvals.add(ApprovalRequest(title="Publish", metadata={"tenant_id": A}))
+    client.acting_as(_as(A))
+    client.post(f"/api/customer/approvals/{pending.id}/decide", json={"approved": False})
+
+    again = client.post(f"/api/customer/approvals/{pending.id}/decide",
+                        json={"approved": True})
+    assert again.status_code == 409
+    assert "already rejected" in again.json()["detail"]
+
+
+def test_another_tenants_approval_is_absent_not_forbidden(client) -> None:
+    approvals = client.app.state.approvals
+    theirs = approvals.add(ApprovalRequest(title="Theirs", metadata={"tenant_id": B}))
+    client.acting_as(_as(A))
+    missing = client.post("/api/customer/approvals/approval-000000000000/decide",
+                          json={"approved": True})
+    other = client.post(f"/api/customer/approvals/{theirs.id}/decide",
+                        json={"approved": True})
+    assert other.status_code == missing.status_code == 404
+    assert other.json() == missing.json()
+
+
+def test_the_double_cannot_drift_from_the_real_approval_service() -> None:
+    """The surface names a narrow protocol; the real service must still fit it.
+
+    Without this, the double is a description of a service that used to exist.
+    """
+    import inspect
+
+    from atlas_kernel.approval.service import ApprovalService
+    from atlas_kernel.customer.api import Approvals
+
+    assert isinstance(FakeApprovals(), Approvals)
+    for method in ("get", "approve", "reject"):
+        real = inspect.signature(getattr(ApprovalService, method))
+        fake = inspect.signature(getattr(FakeApprovals, method))
+        assert list(real.parameters) == list(fake.parameters), method

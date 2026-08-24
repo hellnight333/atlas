@@ -29,7 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..integrations.registry import BY_ID, INTEGRATIONS
 from ..opportunity.models import BusinessEvent
-from ..opportunity.tenancy import TenantId, owns, require as _require_tenant
+from ..opportunity.tenancy import TenantId, owns
+from ..opportunity.tenancy import require as _require_tenant
 from ..publication.models import Connection, ConnectionKind
 from .vault import Vault, VaultError, fingerprint, hint
 
