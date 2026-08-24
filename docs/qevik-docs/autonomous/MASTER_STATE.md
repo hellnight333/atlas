@@ -7,6 +7,12 @@ three document sets and is not restated.
 
 Last reconciled: **25 August 2026**, at `c943d31`.
 
+Architecture review (design only, nothing implemented):
+`MUNDER_DIFFLIN_REVIEW.md` · `QEVIK_AGENT_FABRIC_ARCHITECTURE.md` ·
+`CURRENT_VS_TARGET_ARCHITECTURE.md`. Its governing finding: **orchestration is
+not intelligence** — policy stays deterministic code, a model proposes and never
+authorises. P1–P8 is unchanged by it.
+
 Companion documents: `SECURITY_REVIEW_2026_08_24.md` (every §18 item, with the check that established it) and `COMMERCIAL_REVIEW_2026_08_24.md` (what can be sold, NOW/NEXT/LATER/REJECT).
 
 ## The three programmes, kept apart
