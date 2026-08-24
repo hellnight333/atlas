@@ -1,6 +1,6 @@
 """Executors, keyed by the offer they fulfil.
 
-Five entries. The lookup is what makes "no executor for that capability" a
+Six entries. The lookup is what makes "no executor for that capability" a
 refusal rather than a crash, and it is the authority the roadmap consults before
 telling a customer that Qevik can do something — an offer existing is not the
 same as something being able to perform it.
@@ -12,6 +12,7 @@ from typing import Any
 from .arabic import NothingToTranslate, build_arabic_experience
 from .editorial import build_editorial_hub
 from .enquiry import NowhereToSend, build_enquiry_capability
+from .imagery import NothingToIllustrate, build_imagery
 from .portfolio import build_portfolio_index
 from .website import NothingToBuild, WebsiteMode, build_website
 
@@ -52,6 +53,14 @@ REQUIRES_CUSTOMER_INPUT: dict[str, str] = {
         "An email address or a WhatsApp number for enquiries to reach. A form "
         "with nowhere to deliver discards what a visitor writes while they "
         "believe they made contact, which is worse than having no form.",
+    # Decorative imagery needs nothing from the customer, but the documentary
+    # slots — premises, team, product, work — take only photographs they
+    # supply. Listed because the *valuable* half of this offer is theirs to
+    # unblock, and promising it without saying so is promising their photos.
+    "offer-imagery":
+        "Photographs of the premises, team, product or work. Qevik will not "
+        "generate these: an invented photograph on a business's own site is a "
+        "false statement about them, published in their name.",
 }
 
 #: offer id -> executor. An offer with no entry cannot be executed.
@@ -66,10 +75,12 @@ EXECUTORS: dict[str, Executor] = {
     # `offer-one-tap-contact`, which answers `reachability` and `whatsapp` and
     # is the simpler thing the theme's `tel:` link already does.
     "offer-enquiry-builder": build_enquiry_capability,
+    "offer-imagery": build_imagery,
 }
 
 __all__ = ["CALLING_CONVENTION", "EXECUTORS", "REQUIRES_CUSTOMER_INPUT",
            "Executor", "NothingToBuild", "NothingToTranslate",
-           "NowhereToSend", "WebsiteMode", "build_arabic_experience",
-           "build_editorial_hub", "build_enquiry_capability",
+           "NothingToIllustrate", "NowhereToSend", "WebsiteMode",
+           "build_arabic_experience", "build_editorial_hub",
+           "build_enquiry_capability", "build_imagery",
            "build_portfolio_index", "build_website"]
