@@ -1,6 +1,6 @@
 """Missions — human requests, planned, approved, executed and recorded."""
 
-from . import reports
+from . import reevaluation, reports
 from .agents import (
     AgentError,
     AgentOutcome,
@@ -40,7 +40,8 @@ from .worker import Acceptance, Worker, recover
 __all__ = ["ALLOWED", "CLAIMABLE", "TERMINAL", "Acceptance", "AgentError",
            "AgentInvocation", "AgentOutcome", "AgentTimeout", "Behaviour",
            "Blocker", "CodingAgent", "FakeCodingAgent", "LLMCodingAgent",
-           "MalformedResult", "Roles", "Worker", "recover", "reports",
+           "MalformedResult", "Roles", "Worker", "recover", "reevaluation",
+           "reports",
            "Mission", "MissionStatus", "NotPermitted", "Plan", "PlanStep",
            "attach_plan", "claim", "create", "fold", "history",
            "record_invocation", "release", "stale", "transition"]
