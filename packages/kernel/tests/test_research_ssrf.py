@@ -34,6 +34,31 @@ import pytest
 from atlas_kernel.research import addresses
 from atlas_kernel.research.net import Fetcher
 
+PUBLIC = "93.184.216.34"
+
+
+def _resolving(monkeypatch, answer: str | None) -> None:
+    """Control what names resolve to, instead of asking the real resolver.
+
+    Necessary, not merely tidy. This machine's resolver answers *every* name —
+    including `example.com` and names under `.invalid` — from `198.18.0.0/15`,
+    which is RFC 2544 benchmark space and correctly classified as private. So
+    against ambient DNS the guard refuses everything, "does not resolve" is not
+    observable at all, and three tests here passed or failed depending on which
+    resolver happened to answer.
+
+    A test of an address policy must control the addresses. `None` means the
+    name does not resolve.
+    """
+    import socket
+
+    def answering(host, *args, **kwargs):
+        if answer is None:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (answer, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", answering)
+
 # ============================================ what must never be fetched
 
 @pytest.mark.parametrize("url,expected", [
@@ -72,9 +97,10 @@ def test_only_http_and_https_are_fetched(url) -> None:
     assert "not a scheme Qevik fetches" in why
 
 
-def test_a_public_address_is_allowed() -> None:
+def test_a_public_address_is_allowed(monkeypatch) -> None:
     """The guard must not refuse everything, or it is not a guard — it is an
     outage that happens to be secure."""
+    _resolving(monkeypatch, PUBLIC)
     assert addresses.safe("https://example.com") is True
 
 
@@ -82,11 +108,11 @@ def test_a_url_with_no_host_is_refused() -> None:
     assert "names no host" in addresses.reason("https:///path-only")
 
 
-def test_a_name_that_does_not_resolve_is_refused_rather_than_attempted() -> None:
-    """An unresolvable host is not one we can vouch for, and attempting it
-    leaks the lookup to whoever runs the parent domain's resolver."""
-    why = addresses.reason("https://this-name-does-not-exist.invalid/")
-    assert "does not resolve" in why
+def test_a_name_that_does_not_resolve_is_refused_rather_than_attempted(
+        monkeypatch) -> None:
+    """An unresolvable host is not one we can vouch for."""
+    _resolving(monkeypatch, None)
+    assert "does not resolve" in addresses.reason("https://nowhere.invalid/")
 
 
 # ============================================ every address, not the first
@@ -98,7 +124,7 @@ def test_every_resolved_address_is_checked(monkeypatch) -> None:
 
     def both(host, *args, **kwargs):
         return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, 0)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0)),
         ]
 
@@ -114,14 +140,20 @@ def test_the_check_can_actually_pass(monkeypatch) -> None:
     import socket
 
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [
-        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, 0))])
     assert addresses.safe("https://looks-fine.example/") is True
 
 
 # ============================================ every redirect hop
 
-def test_a_redirect_to_an_internal_address_is_refused() -> None:
-    """The case that defeats an entry-point-only check completely."""
+def test_a_redirect_to_an_internal_address_is_refused(monkeypatch) -> None:
+    """The case that defeats an entry-point-only check completely.
+
+    The entry point resolves publicly; only the hop is internal, which is the
+    whole shape of the attack.
+    """
+    _resolving(monkeypatch, PUBLIC)
+
     def handler(request: httpx.Request) -> httpx.Response:
         if "start" in str(request.url):
             return httpx.Response(302, headers={
@@ -131,6 +163,7 @@ def test_a_redirect_to_an_internal_address_is_refused() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler),
                           follow_redirects=False)
     fetcher = Fetcher("https://example.com", client=client)
+    monkeypatch.setattr(fetcher, "_wait", lambda: None)
     page = fetcher.get("https://example.com/start", enforce_robots=False)
 
     assert "redirect refused" in page.error
