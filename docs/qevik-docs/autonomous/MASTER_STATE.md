@@ -5,7 +5,9 @@ It supersedes the status tables in `STATE.md` and `MASTER_EXECUTION_STATE.md`,
 which now point here. `ROADMAP_RECONCILIATION.md` remains the map between the
 three document sets and is not restated.
 
-Last reconciled: **24 August 2026**, at `5116889`.
+Last reconciled: **24 August 2026**, at `cf2148f`.
+
+Companion documents: `SECURITY_REVIEW_2026_08_24.md` (every §18 item, with the check that established it) and `COMMERCIAL_REVIEW_2026_08_24.md` (what can be sold, NOW/NEXT/LATER/REJECT).
 
 ## The three programmes, kept apart
 
@@ -72,7 +74,9 @@ store with a list on exactly the first run that needed it.
 | P2 website generation | COMPLETE | `website/`, `themes/clean.py` | — | Met |
 | P2 multi-page + navigation | COMPLETE | `themes/clean.py::pages` — split derived from `THIN_CONTENT_CHARS` | — | Met: no generated page is thinner than the threshold Atlas sells against |
 | P2 editorial content | COMPLETE | `website/content.py` | — | Met |
-| P2 media | NOT_STARTED | `media/providers/mock.py` exists, unwired | Local vertical slice through the media abstraction | An image reaches a published page with provenance |
+| P2 media | NOT_STARTED | `media/providers/mock.py` exists, unwired. `offer-imagery` has no executor | Adapter + fake provider, then a credential | An image reaches a published page with provenance |
+| P2 Arabic / RTL | COMPLETE | `website/arabic.py` + executor. Qevik does not translate; Arabic is customer-supplied and attributed | — | Met: an Arabic page renders RTL, drops anything untranslated, and no module reaches for a model |
+| P2 enquiry | COMPLETE | `website/enquiry.py` + executor. mailto/WhatsApp, no server | — | Met: works with scripting off; a business with no channel gets no form |
 | P2.1 publication foundation | COMPLETE | `publication/`, `execution/artefacts.bundle_hash` | — | Met |
 | P3 technical SEO | COMPLETE | `website/seo.py` — sitemap, robots, canonicals, link audit, merged before hashing | — | Met |
 | P3 AI visibility | PENDING_CREDENTIAL | `aivisibility/` — adapter, fake provider, `PendingCredentialProvider`, measurement, `mention ≠ rank` all built | Enter a provider key in the Credential Centre | A live observation with `position_available` honoured |
@@ -124,6 +128,32 @@ the abstraction, the credential entry, the validation, the fake provider, the
 tests, the cost model and the documentation are built; only the live call waits.
 Exactly that capability is marked `PENDING_CREDENTIAL` and appears as a
 `HumanAction` in the Credential Centre.
+
+## Capability delivery, as distinct from capability existence
+
+`EXECUTORS` says what can run. `REQUIRES_CUSTOMER_INPUT` says what still needs
+something only the customer has. **Both are consulted before a roadmap presents
+a task as executable**, because two separate corrections were needed to get
+here: an offer existing did not imply an executor, and an executor existing did
+not imply it could ever receive its input.
+
+| Offer | Executor | Runnable today |
+|---|---|---|
+| `offer-website` | yes | yes |
+| `offer-portfolio-system` | yes | yes |
+| `offer-editorial` | yes | yes |
+| `offer-arabic-experience` | yes | **no — needs Arabic copy from the customer** |
+| `offer-enquiry-builder` | yes | **no — needs an email address or WhatsApp number** |
+| `offer-one-tap-contact` | no | the theme already renders `tel:`; the fix is inside `offer-website` |
+| `offer-imagery` | no | NOT_STARTED |
+
+## The five businesses Qevik contacted
+
+Re-evaluated on 24 August 2026 —
+`reports/2026-08-24_business_reevaluation.md`. Nothing was re-crawled, so every
+difference is a change in Qevik. **Three of the five were contacted about a
+missing Arabic version at a time when nothing could build one.** All five now
+correctly read "nothing yet" with the Arabic offer shown as needing them first.
 
 ## Qevik as its own customer
 
