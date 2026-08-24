@@ -60,8 +60,13 @@ No P9+ exists and none has been invented.
 
 ## Baselines
 
-Full suite 2579 passed / 25 skipped · ruff 22 · mypy 135. Any run that raises
+Full suite 2599 passed / 25 skipped · **ruff 0** · mypy 135. Any run that raises
 ruff or mypy above these has regressed.
+
+The ruff baseline was 22 for most of this project's life, and two of those 22
+were live defects — one of them a 500 on `?sort=confidence`. It is zero now and
+should stay zero: the entire argument for the number 22 was that those were the
+errors not worth fixing.
 
 **A green suite does not mean the repository is complete.** Two commits reported
 adding the credential vault and added only its tests: `.gitignore` carried a

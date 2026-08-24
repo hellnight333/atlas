@@ -143,7 +143,9 @@ def test_verification_is_what_earns_the_confidence_points() -> None:
     unchecked = score()
     checked = score(audit=scoring.apply_verification(audit(), {"arabic": "CONFIRMED"}))
     assert checked.verified is True and unchecked.verified is False
-    parts = lambda s: {c.name: c.points for c in s.components}
+    def parts(s):
+        return {c.name: c.points for c in s.components}
+
     assert parts(checked)["confidence"] > parts(unchecked)["confidence"]
 
 
@@ -176,7 +178,10 @@ def test_reachability_reflects_who_actually_answers(phone, expected_kind, at_lea
 
 def test_a_switchboard_scores_below_a_landline_which_scores_below_a_mobile() -> None:
     """A toll-free line reaches somebody who cannot buy a website."""
-    points = lambda phone: {c.name: c.points for c in score(phone=phone).components}["reachability"]
+    def points(phone):
+        return {c.name: c.points
+                for c in score(phone=phone).components}["reachability"]
+
     assert points("800 37569") < points("04 347 4339") < points("052 151 4300")
 
 

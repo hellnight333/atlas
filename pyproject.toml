@@ -80,6 +80,11 @@ ignore = ["E501"]
 # kept in step with something it does not derive from.
 "packages/kernel/atlas_kernel/api.py" = ["B008"]
 "packages/kernel/atlas_kernel/**/api.py" = ["B008"]
+# A router that predates the api.py convention, so the glob above misses it.
+# Named explicitly rather than widened: the exception is visible here, which is
+# the point — an ignore broad enough to catch it by accident would also catch
+# the next genuine mutable-default bug written anywhere in the kernel.
+"packages/kernel/atlas_kernel/control/sales.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -85,14 +85,6 @@ def api():
     return {route.path: route.endpoint for route in router.routes}
 
 
-def findings_of(state_map: dict) -> list[dict]:
-    """Findings for a business, through the real shaping path."""
-    router = sales.build_router()
-    # `_findings` is a closure inside build_router; reach it through a rendered
-    # detail rather than reimplementing the shaping in the test.
-    return state_map
-
-
 def test_the_three_states_stay_three(api) -> None:
     """CONFIRMED_ABSENT, CONFIRMED_PRESENT and NOT_VERIFIED never merge."""
     f = folded()
@@ -128,7 +120,8 @@ def _do_not_say(f: dict) -> list[str]:
     for route in router.routes:
         if route.path == "/control/sales/prospects/{business_id}":
             closure = dict(zip(route.endpoint.__code__.co_freevars,
-                               (c.cell_contents for c in route.endpoint.__closure__)))
+                               (c.cell_contents for c in route.endpoint.__closure__),
+                               strict=True))
             fn = closure["_do_not_say"]
             assert isinstance(fn, types.FunctionType)
             return fn(f)

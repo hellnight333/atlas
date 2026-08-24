@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from atlas_kernel.auth import Scope, User
 from atlas_kernel.auth.api import build_router, current_user
-from atlas_kernel.auth.models import AuthError
+from atlas_kernel.auth.models import AuthError, NotAuthenticated
 from atlas_kernel.auth.store import AuthStore, init_auth
 
 
@@ -73,9 +73,12 @@ def test_a_deleted_user_can_no_longer_authenticate(store, temp_user) -> None:
     token, _ = store.login(user.username, "correct-horse-battery-staple")
     assert store.authenticate(token).username == user.username
     store.delete_user(user.username)
-    with pytest.raises(Exception):
+    # The specific error, not any error. `pytest.raises(Exception)` here would
+    # pass on a KeyError or a TypeError from a broken store — the two outcomes
+    # this test most needs to tell apart from "the session was refused".
+    with pytest.raises(NotAuthenticated):
         store.authenticate(token)
-    with pytest.raises(Exception):
+    with pytest.raises(NotAuthenticated):
         store.login(user.username, "correct-horse-battery-staple")
 
 

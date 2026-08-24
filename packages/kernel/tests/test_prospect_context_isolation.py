@@ -250,7 +250,7 @@ def test_no_module_keeps_its_own_category_to_sample_map() -> None:
 def test_the_angle_a_page_headlines_is_the_one_its_message_uses() -> None:
     """A page that headlines one gap while its message opens with another leaves
     the operator deciding which to trust."""
-    for key, p in PROSPECTS.items():
+    for key in PROSPECTS:
         score = score_for(key)
         chosen = selection_for(key)
         leads = demos.leadable(chosen, score.speakable)

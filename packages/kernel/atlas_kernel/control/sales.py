@@ -965,25 +965,36 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
                       "mobile": {"captured": False, "reason": "not captured"}},
                 "screenshots_at": folded["shots_at"].isoformat() if folded["shots_at"] else "",
                 "demo": _demo_view(folded),
+                # Each lambda binds `folded`, `findings` and `business` as
+                # defaults rather than closing over the loop variables. They are
+                # correct either way *today*, because `_safe` calls them
+                # immediately — but `_safe` exists to degrade one panel instead
+                # of a whole page, so a queue, a cache or a thread in it is a
+                # plausible future change, and on that day every prospect would
+                # render the last iteration's data and it would read as a data
+                # bug rather than a scoping one.
                 "research": _safe(
-                    "research", lambda: _research_view(folded), {"state": "NONE"},
+                    "research", lambda f=folded: _research_view(f),
+                    {"state": "NONE"},
                     business_id=business_id, warnings=warnings),
                 "digital_opportunities": _safe(
                     "digital_opportunities",
-                    lambda: _digital(findings, category=folded["category"],
-                                     website=business["website"]),
+                    lambda f=folded, d=findings, b=business: _digital(
+                        d, category=f["category"], website=b["website"]),
                     [], business_id=business_id, warnings=warnings),
                 "media": _safe(
                     "media",
-                    lambda: {**folded["media"], "options": list(MEDIA_PERMISSION)},
+                    lambda f=folded: {**f["media"],
+                                      "options": list(MEDIA_PERMISSION)},
                     {"permission": "none", "source": "", "at": "", "note": "",
                      "options": list(MEDIA_PERMISSION)},
                     business_id=business_id, warnings=warnings),
                 "builds": _safe(
                     "builds",
-                    lambda: {"jobs": sorted(folded["builds"].values(),
-                                            key=lambda j: j["created"], reverse=True),
-                             "products": list(PRODUCTS), "states": list(JOB_STATES)},
+                    lambda f=folded: {
+                        "jobs": sorted(f["builds"].values(),
+                                       key=lambda j: j["created"], reverse=True),
+                        "products": list(PRODUCTS), "states": list(JOB_STATES)},
                     {"jobs": [], "products": list(PRODUCTS), "states": list(JOB_STATES)},
                     business_id=business_id, warnings=warnings),
                 "warnings": warnings,
