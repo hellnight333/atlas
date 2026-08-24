@@ -141,7 +141,8 @@ Mission Control, Chat, Human Actions, Credentials, Models, Businesses,
 Publications, Measurements, Reports, History, Settings. Responsive; the
 navigation becomes a scrolling strip under 820px.
 
-**Status: built and acceptance-tested locally. NOT deployed.**
+**Status: LIVE at https://app.qevik.ai**, verified from outside. See
+`DEPLOY_APP_QEVIK_AI.md`.
 
 `infra/run_console_acceptance.py` runs it against a real uvicorn over real HTTP:
 33 checks, all passing, including killing the server mid-flight, running the
@@ -150,10 +151,10 @@ to confirm the mission, its full lifecycle history and its report survived.
 
 | | |
 |---|---|
-| app.qevik.ai reachable | **Yes** — real Cloudflare IPs, serving the older *sales* interface |
-| control plane reachable there | **No** — `/api/*` fell through to the static handler and returned `index.html` with a 200 |
+| app.qevik.ai | **Serving the Qevik Control panel** |
+| control plane | **Reachable** — `/api/*` on `qevik-control` (:8081), 401 JSON unauthenticated |
 | Caddyfile | Fixed: `/api/*` now proxies to the control plane |
-| Deploying it | **NOT BLOCKED ON ACCESS** — the `naml_hetzner` key opens the host. Blocked on one routing conflict; see `DEPLOY_APP_QEVIK_AI.md` |
+| Remaining | One operator needs a tenant — an auth change on a live system, so it is the user's to make |
 
 `infra/deploy_console.sh` copies the console, installs the Caddyfile, validates
 it, reloads Caddy and verifies over HTTPS.

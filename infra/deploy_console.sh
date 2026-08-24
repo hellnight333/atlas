@@ -20,7 +20,7 @@ CADDYFILE="$(cd "$(dirname "$0")" && pwd)/qevik-production.Caddyfile"
 [ -f "$LOCAL/index.html" ] || { echo "no console at $LOCAL"; exit 1; }
 
 echo "==> checking access to $TARGET"
-if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" true 2>/dev/null; then
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" true 2>/dev/null; then
   cat <<'MSG'
 REFUSED: no SSH access to the host.
 
@@ -39,35 +39,35 @@ MSG
 fi
 
 echo "==> syncing the kernel"
-rsync -az --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
+rsync -az -e "ssh -i $HOME/.ssh/naml_hetzner -o IdentitiesOnly=yes" --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
 
 echo "==> installing the control-plane service"
-scp -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
-ssh "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable --now qevik-control"
+scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable --now qevik-control"
 # Give it a moment, then insist it is actually up. A unit that failed to start
 # and a unit that started are indistinguishable from `systemctl enable`.
 sleep 3
-ssh "$TARGET" "systemctl is-active --quiet qevik-control" || {
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl is-active --quiet qevik-control" || {
   echo "the control plane did not start:"
   ssh "$TARGET" "journalctl -u qevik-control -n 30 --no-pager"
   exit 6
 }
-ssh "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /health -> %{http_code}\n' http://127.0.0.1:8081/health"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /health -> %{http_code}\n' http://127.0.0.1:8081/health"
 
 echo "==> copying the console to $REMOTE"
-ssh "$TARGET" "mkdir -p $REMOTE.incoming"
-scp -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "mkdir -p $REMOTE.incoming"
+scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
 # Swap, rather than overwrite in place: a half-copied console is a broken
 # console that is live, which is worse than the previous one still being live.
-ssh "$TARGET" "rm -rf $REMOTE.previous && \
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "rm -rf $REMOTE.previous && \
   { [ -d $REMOTE ] && mv $REMOTE $REMOTE.previous || true; } && \
   mv $REMOTE.incoming $REMOTE"
 
 echo "==> installing the Caddyfile"
-scp -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
-ssh "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
+scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
   || { echo "the Caddyfile did not validate; nothing was reloaded"; exit 3; }
-ssh "$TARGET" "systemctl reload caddy"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl reload caddy"
 
 echo "==> verifying"
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/ || echo 000)
