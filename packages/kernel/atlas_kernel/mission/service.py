@@ -196,8 +196,16 @@ def record_invocation(mission: Mission, invocation: AgentInvocation, *,
 def fold(events: list, *, tenant: TenantId | None = None) -> list[dict]:
     """TENANT_SCOPED. The current state of every mission, newest first.
 
-    Later events replace earlier ones for the same mission, which is what makes
-    an append-only log readable as current state without rewriting anything.
+    The **latest** event wins, by its own `updated_at` — not the last one in the
+    list. Position and time are the same thing only when nothing ever writes out
+    of order, and the first real run of the worker did exactly that: the sink
+    persisted the worker's events as they happened while the caller appended the
+    earlier create/plan/approve events afterwards, so a completed mission folded
+    back to `awaiting_approval`.
+
+    A log that must be replayed in the order it was written is not really an
+    append-only log; it is a log with a hidden ordering requirement. This has no
+    such requirement.
     """
     tenant = _require_tenant(tenant, method="mission.fold")
     current: dict[str, dict] = {}
@@ -208,7 +216,11 @@ def fold(events: list, *, tenant: TenantId | None = None) -> list[dict]:
         detail = getattr(event, "detail", None) or event.get("detail") or {}
         if not owns(detail.get("tenant_id"), tenant):
             continue
-        if mission_id := detail.get("mission_id"):
+        mission_id = detail.get("mission_id")
+        if not mission_id:
+            continue
+        seen = current.get(mission_id)
+        if seen is None or detail.get("updated_at", "") >= seen.get("updated_at", ""):
             current[mission_id] = dict(detail)
     return sorted(current.values(), key=lambda d: d.get("updated_at", ""),
                   reverse=True)
@@ -229,4 +241,6 @@ def history(events: list, mission_id: str, *, tenant: TenantId | None = None
         if not owns(detail.get("tenant_id"), tenant):
             continue
         found.append(dict(detail))
-    return found
+    # By time, not by position, for the same reason as `fold`. A history shown
+    # in arrival order would read as though the mission went backwards.
+    return sorted(found, key=lambda d: d.get("updated_at", ""))

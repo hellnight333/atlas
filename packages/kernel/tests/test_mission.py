@@ -255,3 +255,38 @@ def test_missions_do_not_duplicate_job_status() -> None:
     # And a mission references jobs rather than replacing them.
     mission, _ = _queued()
     assert hasattr(mission, "job_ids")
+
+
+# ============================================ out-of-order replay
+
+def test_the_latest_event_wins_regardless_of_arrival_order() -> None:
+    """A log that must be replayed in write order is not an append-only log,
+    it is a log with a hidden ordering requirement.
+
+    The first real worker run wrote the worker's events through a sink as they
+    happened while its caller appended the earlier create/plan/approve events
+    afterwards. Folding by position reported a completed mission as still
+    awaiting approval.
+    """
+    mission, events = _queued()
+    mission, claimed = claim(mission, worker="w1", tenant=A)
+    mission, done = transition(mission, MissionStatus.TESTING, tenant=A)
+
+    forwards = fold([*events, claimed, done], tenant=A)
+    backwards = fold([claimed, done, *events], tenant=A)
+    shuffled = fold([done, *events, claimed], tenant=A)
+
+    assert forwards[0]["status"] == "testing"
+    assert backwards[0]["status"] == "testing"
+    assert shuffled[0]["status"] == "testing"
+
+
+def test_history_reads_forwards_whatever_order_it_arrived_in() -> None:
+    """Shown in arrival order it would read as though the mission went
+    backwards."""
+    mission, events = _queued()
+    mission, claimed = claim(mission, worker="w1", tenant=A)
+
+    entries = history([claimed, *events], mission.id, tenant=A)
+    assert [e["status"] for e in entries] == ["draft", "planning", "queued",
+                                              "processing"]

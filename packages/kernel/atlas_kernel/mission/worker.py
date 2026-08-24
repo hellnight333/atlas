@@ -31,6 +31,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId
@@ -80,8 +81,9 @@ class Worker:
     """One worker. Independent of any UI, resumable after a restart."""
 
     def __init__(self, *, name: str, roles: Roles, acceptance: Acceptance,
-                 workspace_factory: Callable[[Mission], object] | None = None,
+                 workspace_factory: Callable[[Mission], Path | str] | None = None,
                  committer: Callable[[Mission, AgentOutcome], str] | None = None,
+                 sink: Callable[[BusinessEvent], None] | None = None,
                  max_attempts: int = MAX_ATTEMPTS) -> None:
         self.name = name
         self._roles = roles
@@ -91,7 +93,28 @@ class Worker:
         self._workspace_factory = workspace_factory
         #: Returns a commit SHA, or "" when committing is not permitted here.
         self._committer = committer
+        #: Called with every event as it happens, so state is durable *during*
+        #: the mission rather than at the end of it. The first real run of this
+        #: worker crashed after the work was done but before its caller wrote
+        #: the timeline, and two missions vanished — "persisted" and "persisted
+        #: if nothing goes wrong" are not the same property.
+        self._sink = sink
         self._max_attempts = max(1, max_attempts)
+
+    def _emit(self, result: Outcome, event: BusinessEvent) -> None:
+        """Record an event, and persist it immediately where a sink exists.
+
+        A sink that raises must not take the mission down with it: losing the
+        log is bad, losing the work as well is worse.
+        """
+        result.events.append(event)
+        if self._sink is None:
+            return
+        try:
+            self._sink(event)
+        except Exception:                         # noqa: BLE001 - logged, not fatal
+            log.exception("worker %s could not persist an event for %s",
+                          self.name, result.mission.id)
 
     # -- the loop ---------------------------------------------------------
 
@@ -100,7 +123,8 @@ class Worker:
         result = Outcome(mission=mission)
         try:
             mission, event = service.claim(mission, worker=self.name, tenant=tenant)
-            result.mission, result.events = mission, [event]
+            result.mission = mission
+            self._emit(result, event)
         except service.NotPermitted as refusal:
             # Not ours to run. Nothing has changed, so nothing to release.
             result.detail = str(refusal)
@@ -113,7 +137,7 @@ class Worker:
             result.detail = f"{type(failure).__name__}: {failure}"[:300]
             result.mission, event = self._fail(result.mission, tenant=tenant,
                                                note=result.detail)
-            result.events.append(event)
+            self._emit(result, event)
             return result
 
     def _execute(self, result: Outcome, *, tenant: TenantId | None) -> Outcome:
@@ -123,11 +147,25 @@ class Worker:
             result.detail = "no plan; a mission is not executable until planned"
             result.mission, event = self._fail(mission, tenant=tenant,
                                                note=result.detail)
-            result.events.append(event)
+            self._emit(result, event)
             return result
 
-        workspace_root = (self._workspace_factory(mission)
-                          if self._workspace_factory else "")
+        # A path, and checked to be one. The first real mission run against this
+        # returned a workspace *object* here, whose str() is a dataclass repr —
+        # the agent then wrote its files under a directory named
+        # "GitWorkspace(repository=...", the acceptance check found nothing, and
+        # the mission failed three times with a message about a missing module.
+        # The contract was loose enough to make that a plausible call, so it is
+        # now checked at the boundary where the mistake is legible.
+        workspace_root = ""
+        if self._workspace_factory is not None:
+            supplied = self._workspace_factory(mission)
+            if not isinstance(supplied, (str, Path)):
+                raise TypeError(
+                    "workspace_factory must return a path to the workspace, not "
+                    f"{type(supplied).__name__}. The agent writes files relative "
+                    "to this value.")
+            workspace_root = str(supplied)
 
         outcome: AgentOutcome | None = None
         passed, detail = False, ""
@@ -148,7 +186,7 @@ class Worker:
                 mission, event = service.record_invocation(
                     mission, outcome.invocation, tenant=tenant)
                 result.mission = mission
-                result.events.append(event)
+                self._emit(result, event)
 
             if outcome.blockers:
                 result.blockers = list(outcome.blockers)
@@ -156,7 +194,7 @@ class Worker:
                     mission, MissionStatus.BLOCKED, tenant=tenant, actor=self.name,
                     blockers=tuple(outcome.blockers),
                     note="the agent found a blocker")
-                result.events.append(event)
+                self._emit(result, event)
                 return result
 
             # An agent that reports success having touched nothing is the most
@@ -171,7 +209,7 @@ class Worker:
             mission, event = service.transition(
                 mission, MissionStatus.TESTING, tenant=tenant, actor=self.name)
             result.mission = mission
-            result.events.append(event)
+            self._emit(result, event)
 
             passed, detail = self._acceptance.check(mission, outcome)
             if not passed:
@@ -182,7 +220,7 @@ class Worker:
                     mission, MissionStatus.PROCESSING, tenant=tenant,
                     actor=self.name, note=f"{self._acceptance.name} failed")
                 result.mission = mission
-                result.events.append(event)
+                self._emit(result, event)
 
         if not passed or outcome is None:
             note = (f"{self._acceptance.name} did not pass after "
@@ -190,14 +228,14 @@ class Worker:
             result.detail = note
             result.mission, event = self._fail(result.mission, tenant=tenant,
                                                note=note)
-            result.events.append(event)
+            self._emit(result, event)
             return result
 
         # -- review -------------------------------------------------------
         mission, event = service.transition(result.mission, MissionStatus.REVIEWING,
                                             tenant=tenant, actor=self.name)
         result.mission = mission
-        result.events.append(event)
+        self._emit(result, event)
 
         reviewer = self._roles.reviewer or self._roles.implementer
         reviewed = reviewer.review(plan, outcome)
@@ -206,14 +244,14 @@ class Worker:
             result.detail = note
             result.mission, event = self._fail(result.mission, tenant=tenant,
                                                note=note)
-            result.events.append(event)
+            self._emit(result, event)
             return result
 
         # -- commit, only from here ---------------------------------------
         mission, event = service.transition(result.mission, MissionStatus.COMMITTING,
                                             tenant=tenant, actor=self.name)
         result.mission = mission
-        result.events.append(event)
+        self._emit(result, event)
 
         if self._committer is not None:
             result.committed = self._committer(mission, outcome) or ""
@@ -224,7 +262,7 @@ class Worker:
             claimed_by="", commits=tuple(filter(None, (result.committed,))),
             note="complete")
         result.mission = mission
-        result.events.append(event)
+        self._emit(result, event)
         return result
 
     def _fail(self, mission: Mission, *, tenant: TenantId | None,
