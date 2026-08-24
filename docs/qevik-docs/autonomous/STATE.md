@@ -1,6 +1,10 @@
 # Autonomous run — durable state
 
-**This file is the resume point.** If a session ends, work continues from here
+**Superseded by `MASTER_STATE.md`**, which is now the single durable
+answer to what is built. Read that first; this file's status table is
+kept only for history.
+
+**This file was the resume point.** If a session ends, work continues from here
 rather than from anything remembered.
 
 Authoritative roadmap: `01_QEVIK_PHASE_ROADMAP.md` (P1.2–P1.7, then P2–P8).
