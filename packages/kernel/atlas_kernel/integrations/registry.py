@@ -166,7 +166,23 @@ INTEGRATIONS: tuple[Integration, ...] = (
         purpose="Publish a site to a real host rather than a local directory.",
         kind=ConnectionKind.API_TOKEN, credential="QEVIK_CLOUDFLARE_API_TOKEN",
         setup_url="https://dash.cloudflare.com/profile/api-tokens",
-        blocks=("publication:cloudflare",)),
+        # The adapter exists as far as it can: domain verification, the upload
+        # manifest, and refusals naming exactly what is needed. Only the HTTP
+        # call is missing, and it is deliberately unwritten rather than written
+        # blind against an API nobody here can run — see publication/targets.py.
+        blocks=("publication:cloudflare",),
+        adapter_ready=False),
+    Integration(
+        id="cloudflare-account", name="Cloudflare account id",
+        purpose="Names which Cloudflare account a site is published under.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_CLOUDFLARE_ACCOUNT_ID",
+        setup_url="https://dash.cloudflare.com",
+        # Not a secret, and registered here anyway: it is a value only the
+        # account holder has, and a person entering a token needs to be asked
+        # for it in the same place at the same time rather than discovering it
+        # is missing at the first publish.
+        blocks=("publication:cloudflare",),
+        adapter_ready=False),
     # --- marketplaces ------------------------------------------------------
     #
     # Registered with `adapter_ready=False`, which is the honest state and not a
