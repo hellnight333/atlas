@@ -43,7 +43,11 @@ rsync -az -e "ssh -i $HOME/.ssh/naml_hetzner -o IdentitiesOnly=yes" --delete   -
 
 echo "==> installing the control-plane service"
 scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable --now qevik-control"
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable qevik-control && \
+  systemctl restart qevik-control"
+# `restart`, not `enable --now`. On an already-running unit `--now` is a no-op,
+# so the freshly synced code stayed unloaded and the schema migration inside
+# start-up never ran — the deployment reported success and changed nothing.
 # Give it a moment, then insist it is actually up. A unit that failed to start
 # and a unit that started are indistinguishable from `systemctl enable`.
 sleep 3
@@ -67,7 +71,10 @@ echo "==> installing the Caddyfile"
 scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
 ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
   || { echo "the Caddyfile did not validate; nothing was reloaded"; exit 3; }
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl reload caddy"
+# `restart`, not `reload`. Caddy's admin API on :2019 is disabled on this host,
+# so `reload` validates the config and then fails to apply it with
+# `connection refused` — reporting the file valid while changing nothing.
+ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl restart caddy"
 
 echo "==> verifying"
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/ || echo 000)
