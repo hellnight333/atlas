@@ -93,6 +93,53 @@ class Integration(BaseModel):
 #: The catalogue. Every entry names a capability that genuinely wants it — an
 #: integration nothing consumes is a credential request nobody can justify.
 INTEGRATIONS: tuple[Integration, ...] = (
+    # --- the coding agents -------------------------------------------------
+    # Listed here so a model provider is configured the same way as any other
+    # external system, through the Credential Center, rather than through an
+    # environment variable that dies with the shell that set it.
+    Integration(
+        id="qwen", name="Qwen (DashScope)",
+        purpose="Run planning, implementation and review agents.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_DASHSCOPE_API_KEY",
+        setup_url="https://dashscope.console.aliyun.com/",
+        blocks=("agent:planning", "agent:implementation", "agent:review")),
+    Integration(
+        id="anthropic", name="Claude (Anthropic)",
+        purpose="Run agents on the strongest available reasoning model.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_ANTHROPIC_API_KEY",
+        setup_url="https://console.anthropic.com/settings/keys",
+        blocks=("agent:planning", "agent:implementation", "agent:review")),
+    Integration(
+        id="openai", name="OpenAI / Codex",
+        purpose="Run agents on an OpenAI-compatible model.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_OPENAI_API_KEY",
+        setup_url="https://platform.openai.com/api-keys",
+        blocks=("agent:implementation",)),
+    Integration(
+        id="deepseek", name="DeepSeek",
+        purpose="Run cheaper background and summarisation work.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_DEEPSEEK_API_KEY",
+        setup_url="https://platform.deepseek.com/api_keys",
+        blocks=("agent:cheap", "agent:summarisation"),
+        # No adapter is wired for it yet, so it reports NOT_IMPLEMENTED rather
+        # than asking somebody for a key nothing could use.
+        adapter_ready=False),
+    Integration(
+        id="stripe", name="Stripe",
+        purpose="Take payment for plans, once billing exists.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_STRIPE_SECRET_KEY",
+        setup_url="https://dashboard.stripe.com/apikeys",
+        blocks=("billing",),
+        # Billing is deliberately unbuilt; asking for a live payment key before
+        # anything can use it is how a key sits unused in a store for a year.
+        adapter_ready=False),
+    Integration(
+        id="smtp", name="Email (SMTP)",
+        purpose="Send approved outreach and customer notifications.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_SMTP_PASSWORD",
+        blocks=("outreach:send", "notifications"),
+        adapter_ready=False),
+    # --- everything else ---------------------------------------------------
     Integration(
         id="local", name="Local filesystem",
         purpose="Publish a site to a directory a web server serves.",

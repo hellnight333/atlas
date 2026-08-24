@@ -99,3 +99,10 @@ dist-release/
 
 # Built output of the public site — regenerate with apps/public/build.py
 apps/public/dist/
+
+# Credential vault ciphertext. Useless without QEVIK_VAULT_MASTER_KEY, which
+# lives outside it — but a store of encrypted customer credentials is still not
+# something to keep in a repository.
+.qevik-vault.json
+*.vault.json
+vault/

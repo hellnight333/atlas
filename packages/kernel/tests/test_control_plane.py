@@ -41,9 +41,21 @@ def store() -> ConnectionStore:
 
 # ============================================ derived, not stored
 
-def test_every_unconnected_integration_becomes_an_action(store) -> None:
+def test_every_buildable_unconnected_integration_becomes_an_action(store) -> None:
+    """Every integration with an adapter — and only those.
+
+    A provider whose adapter is not built produces no action: "we have not
+    built this" is our move, not the customer's, and asking them for a key
+    nothing could use is how a credential sits unused in a store for a year.
+    """
     actions = credential_actions(store, tenant=A)
-    assert {a.service for a in actions} == {i.id for i in INTEGRATIONS}
+    buildable = {i.id for i in INTEGRATIONS if i.adapter_ready}
+    unbuilt = {i.id for i in INTEGRATIONS if not i.adapter_ready}
+
+    assert {a.service for a in actions} == buildable
+    assert unbuilt, "the fixture must include an unbuilt provider to test this"
+    assert not ({a.service for a in actions} & unbuilt)
+
     for action in actions:
         assert action.kind is ActionKind.CREDENTIAL
         assert action.instructions and action.verification
