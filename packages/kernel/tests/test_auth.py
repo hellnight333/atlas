@@ -211,3 +211,53 @@ class TestTheApiIsClosedByDefault:
         source = inspect.getsource(api)
         assert "httponly=True" in source
         assert 'samesite="strict"' in source
+
+
+class TestTheSchemaComesUpToDateOnItsOwn:
+    """Production reached a state where the code read a column that did not
+    exist. This is the class of bug that caused it."""
+
+    def test_an_existing_database_gains_a_column_the_code_needs(self, tmp_path
+                                                                ) -> None:
+        """The failure was not a missing table — it was a table that predated a
+        column. A fresh database got it from CREATE TABLE, so every test passed
+        while the deployed one failed at the first read.
+        """
+        from sqlalchemy import create_engine, text
+
+        from atlas_kernel.auth import store
+
+        engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'a.db'}")
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE qevik_users (id TEXT PRIMARY KEY, "
+                "username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, "
+                "scopes TEXT NOT NULL, created_at TIMESTAMP NOT NULL, "
+                "disabled BOOLEAN NOT NULL DEFAULT 0)"))
+            conn.execute(text("INSERT INTO qevik_users VALUES "
+                              "('u1','keep','h','read','2026-01-01 00:00:00',0)"))
+
+        import unittest.mock as mock
+
+        with mock.patch.object(store, "engine", engine):
+            with engine.begin() as conn:
+                assert "tenant_id" not in store._columns(conn, "qevik_users")
+                store._migrate(conn)
+                assert "tenant_id" in store._columns(conn, "qevik_users")
+                # Twice, because every application calls this at start-up.
+                store._migrate(conn)
+
+        with engine.connect() as conn:
+            rows = list(conn.execute(
+                text("SELECT username, tenant_id FROM qevik_users")))
+        assert rows == [("keep", "")], "existing users must survive untouched"
+
+    def test_a_new_column_defaults_to_no_tenant(self) -> None:
+        """Empty means "no tenant established", and the customer routes refuse
+        on that rather than guessing — so an existing operator keeps working on
+        the internal surfaces and reaches none of the customer ones."""
+        from atlas_kernel.auth.store import _ADDED_COLUMNS
+
+        table, column, definition = _ADDED_COLUMNS[0]
+        assert (table, column) == ("qevik_users", "tenant_id")
+        assert "NOT NULL DEFAULT ''" in definition

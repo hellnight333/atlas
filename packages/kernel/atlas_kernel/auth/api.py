@@ -140,6 +140,22 @@ class LoginResponse(BaseModel):
     approval_required_for: list[str] = Field(default_factory=list)
 
 
+class TenantChange(BaseModel):
+    """Which customer a user acts for.
+
+    Mirrors `ScopeChange` deliberately: attaching a tenant is the same kind of
+    act as granting a scope — an administrator deciding what an account may
+    reach — and it belongs on the same surface under the same guard rather than
+    in a script that opens the database directly.
+
+    Empty clears it. An account with no tenant reaches the internal surfaces and
+    none of the customer ones, which is the correct default for an operator.
+    """
+
+    username: str
+    tenant_id: str = ""
+
+
 class ScopeChange(BaseModel):
     """Which scopes an administrator is granting to whom.
 
@@ -224,6 +240,20 @@ def build_router(store: AuthStore | None = None, audit=None) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"unknown scope: {error}") from error
         return store.set_scopes(body.username, scopes).redacted()
+
+    @router.post("/users/tenant", dependencies=[Depends(requires(Scope.ADMIN))])
+    def set_tenant(body: TenantChange) -> dict:
+        """Attach a user to a customer, or detach them.
+
+        ADMIN only, like scopes: a tenant decides which customer's data an
+        account can reach, so granting one is exactly as consequential as
+        granting a permission.
+        """
+        try:
+            return store.set_tenant(body.username,
+                                    body.tenant_id.strip()).redacted()
+        except AuthError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
     @router.delete("/users/{username}", dependencies=[Depends(requires(Scope.ADMIN))])
     def delete_user(username: str, user: User = Depends(current_user)) -> dict:

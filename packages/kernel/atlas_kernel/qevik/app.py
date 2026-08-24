@@ -25,6 +25,7 @@ nothing has failed yet.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ from fastapi import FastAPI, HTTPException
 
 from ..approval.models import ApprovalRequest
 from ..auth import api as auth_api
-from ..auth.store import AuthStore
+from ..auth.store import AuthStore, init_auth
 from ..chat import api as chat_api
 from ..control import sales as sales_api
 from ..credentials import api as credentials_api
@@ -50,6 +51,8 @@ from ..mission.timeline import Timeline
 from ..modelchoice import api as models_api
 from ..modelchoice.store import SelectionStore
 from ..publication import ConnectionStore
+
+log = logging.getLogger(__name__)
 
 #: Every surface this application serves. The list is the composition, and
 #: `test_app_composition.py` reads it against the modules on disk — a router
@@ -125,6 +128,26 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     """The application. Everything mounted, everything wired."""
     wiring = wiring or Wiring()
     app = FastAPI(title=title)
+
+    # The schema this application depends on, ensured before anything uses it.
+    #
+    # `init_auth()` carries the auth tables *and their migrations* — including
+    # the `tenant_id` column every customer route reads. It was called only by
+    # `atlas_kernel/api.py`, so this application assumed a schema it never
+    # created: a fresh deployment failed at the first login rather than at
+    # start-up, and an existing one silently ran without a migration the code
+    # required. Production reached exactly that state — the column was absent
+    # while the code that reads it was deployed.
+    #
+    # Wrapped for the same reason `api.py` wraps it: this module is imported by
+    # tests and tooling with no database, and an import-time connection failure
+    # there must not break things unrelated to the control plane. A control
+    # plane that cannot reach its schema refuses requests; it does not fail to
+    # start and it does not run open.
+    try:
+        init_auth()
+    except Exception:                            # noqa: BLE001 - logged, not fatal
+        log.exception("the auth schema could not be ensured")
 
     # Auth first: `auth_api.install` registers the middleware, and middleware
     # only sees routes added after it. Mounting a surface before this would

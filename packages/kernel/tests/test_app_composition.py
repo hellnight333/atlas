@@ -404,3 +404,66 @@ def test_every_control_plane_route_is_still_mounted(client) -> None:
                      "/api/customer/actions", "/auth/login",
                      "/control/sales/summary"):
         assert required in served, required
+
+
+# ============================================ the schema this app depends on
+
+def test_the_composed_app_ensures_its_own_auth_schema() -> None:
+    """It did not, and production reached the state that follows from that.
+
+    `init_auth()` carries the auth tables *and their migrations* — including the
+    `tenant_id` column every customer route reads. It was called only by
+    `atlas_kernel/api.py`, so this application assumed a schema it never
+    created: `qevik_users` on the server had six columns and no `tenant_id`
+    while the code reading it was deployed, and the failure surfaced at the
+    first login rather than at start-up.
+
+    A deployment must not depend on some *other* application having been started
+    first to create its tables.
+    """
+    import ast
+    from pathlib import Path
+
+    from atlas_kernel.qevik import app as module
+
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "init_auth" in called, (
+        "create_app must ensure the auth schema before anything uses it")
+
+
+def test_a_schema_failure_refuses_rather_than_running_open(tmp_path,
+                                                           monkeypatch) -> None:
+    """The wrapping matters as much as the call.
+
+    A control plane that cannot reach its schema must refuse requests. It must
+    not fail to start — that breaks tooling with no database — and it must
+    certainly not start without authentication.
+    """
+    from atlas_kernel.qevik import app as module
+
+    def unreachable() -> None:
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(module, "init_auth", unreachable)
+    app = create_app(Wiring(repository_root=tmp_path,
+                            vault_path=tmp_path / "vault.json"))
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200, "liveness still answers"
+
+
+@pytest.mark.real_auth
+def test_attaching_a_tenant_is_an_admin_route_not_a_database_edit(client
+                                                                  ) -> None:
+    """Granting a tenant decides which customer's data an account reaches, so it
+    belongs on the same guarded surface as granting a scope — not in a script
+    that opens the database directly."""
+    served = client.app.openapi()["paths"]
+    assert "/auth/users/tenant" in served
+    assert "post" in served["/auth/users/tenant"]
+    # And it is closed by default, like everything else.
+    assert client.post("/auth/users/tenant",
+                       json={"username": "x", "tenant_id": "y"}
+                       ).status_code == 401

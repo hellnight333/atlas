@@ -17,6 +17,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from ..db import engine
 from .models import (
@@ -66,25 +67,65 @@ SCHEMA = (
 )
 
 
-#: Statements only PostgreSQL understands. `ADD COLUMN IF NOT EXISTS` is a
-#: Postgres extension, and it is the single thing that stopped the whole auth
-#: stack from running on sqlite — which is what a local acceptance run, a
-#: developer machine and a throwaway environment all want to use.
+#: Statements PostgreSQL understands and sqlite does not. `ADD COLUMN IF NOT
+#: EXISTS` is a Postgres extension.
 #:
-#: Skipped rather than rewritten for every dialect: on a fresh sqlite database
-#: `CREATE TABLE` above already includes the column, so the migration has
-#: nothing to do. It matters only for a Postgres database created before the
-#: column existed.
+#: Skipping them on sqlite was wrong, and quietly: a *fresh* sqlite database
+#: gets the column from `CREATE TABLE`, so tests passed, while an *existing*
+#: one never gained it and failed at the first read. `_migrate` runs the same
+#: change in a form each dialect supports instead.
 _POSTGRES_ONLY = ("ADD COLUMN IF NOT EXISTS",)
+
+#: Columns added after the table first shipped: (table, column, definition).
+#:
+#: One list, applied by `_migrate` on every dialect. The production database
+#: reached a state where the code read `tenant_id` and the column did not exist,
+#: because the only thing that ran this migration was a *different* application
+#: that had not been restarted.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("qevik_users", "tenant_id", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _columns(conn: Connection, table: str) -> set[str]:
+    """The columns a table actually has, whichever database this is."""
+    if engine.dialect.name.startswith("postgres"):
+        rows = conn.execute(
+            text("SELECT column_name FROM information_schema.columns "
+                 "WHERE table_name = :t"), {"t": table})
+    else:
+        rows = conn.execute(text(f'SELECT name FROM pragma_table_info("{table}")'))
+    return {row[0] for row in rows}
+
+
+def _migrate(conn: Connection) -> None:
+    """Add any column the code needs and the database lacks.
+
+    Checked rather than attempted-and-caught: a failed `ALTER` inside a
+    transaction poisons it on Postgres, so the next statement fails for a reason
+    that has nothing to do with itself.
+    """
+    for table, column, definition in _ADDED_COLUMNS:
+        if column in _columns(conn, table):
+            continue
+        log.info("adding %s.%s", table, column)
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
 
 
 def init_auth() -> None:
+    """Create the auth tables and bring them up to date.
+
+    Idempotent, and it must stay that way: every application that serves auth
+    calls it at start-up, which is what stops a deployment depending on some
+    *other* application having been started first.
+    """
     postgres = engine.dialect.name.startswith("postgres")
     with engine.begin() as conn:
         for statement in SCHEMA:
             if not postgres and any(m in statement for m in _POSTGRES_ONLY):
                 continue
             conn.execute(text(statement))
+        _migrate(conn)
 
 
 def _moment(value: object) -> datetime:
