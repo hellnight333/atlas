@@ -56,9 +56,9 @@ Statuses: COMPLETE · IN_PROGRESS · READY · PENDING_CREDENTIAL · PENDING_EXTE
 | Persistent mission state | COMPLETE — event-sourced, survives restart | `mission/service.py` | `f56f46f` |
 | Multi-worker atomic claim | PENDING_INFRASTRUCTURE — needs a DB row with SKIP LOCKED | `mission/service.py` | — |
 | Agent cost tracking | COMPLETE — labelled REPORTED/ESTIMATED/UNKNOWN | `mission/models.py` | `f56f46f` |
-| Durable per-mission report (P-B1 §9) | NOT_STARTED | — | — |
-| Mission Control read API (P-B1 §12) | NOT_STARTED | — | — |
-| Qevik self-use mission (P-B1 §17) | NOT_STARTED | — | — |
+| Durable per-mission report (P-B1 §9) | COMPLETE | `mission/reports.py` | `253c938` |
+| Mission Control read model (P-B1 §12) | COMPLETE — read model; no HTTP route yet | `controlplane/missions.py` | `88395c5` |
+| Qevik self-use mission (P-B1 §17) | COMPLETE — ran end to end, commit 6476074. Agent was scripted, not Qwen | `infra/run_self_use_mission.py` | `253c938` |
 | Business re-evaluation mission (P-B1 §18) | NOT_STARTED | — | — |
 | app.qevik.ai UI | NOT_STARTED | — | — |
 
