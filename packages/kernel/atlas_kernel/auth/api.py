@@ -122,6 +122,21 @@ class LoginResponse(BaseModel):
     approval_required_for: list[str] = Field(default_factory=list)
 
 
+class ScopeChange(BaseModel):
+    """Which scopes an administrator is granting to whom.
+
+    Module level, not nested inside the route factory — the same trap
+    `control/api.py` records. A model declared inside a function is invisible to
+    the schema generator, and here it did more than break one route's
+    validation: generating the OpenAPI document for the *whole application*
+    raised `PydanticUserError`, so `/docs` and `/openapi.json` returned 500 on
+    every deployment that mounted this router.
+    """
+
+    username: str
+    scopes: list[str]
+
+
 def build_router(store: AuthStore | None = None, audit=None) -> APIRouter:
     store = store or AuthStore()
     router = APIRouter(prefix="/auth", tags=["auth"])
@@ -181,10 +196,6 @@ def build_router(store: AuthStore | None = None, audit=None) -> APIRouter:
     @router.get("/users", dependencies=[Depends(requires(Scope.ADMIN))])
     def list_users() -> list[dict]:
         return [u.redacted() for u in store.list_users()]
-
-    class ScopeChange(BaseModel):
-        username: str
-        scopes: list[str]
 
     @router.post("/users/scopes", dependencies=[Depends(requires(Scope.ADMIN))])
     def set_scopes(body: ScopeChange) -> dict:

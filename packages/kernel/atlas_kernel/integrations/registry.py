@@ -167,6 +167,50 @@ INTEGRATIONS: tuple[Integration, ...] = (
         kind=ConnectionKind.API_TOKEN, credential="QEVIK_CLOUDFLARE_API_TOKEN",
         setup_url="https://dash.cloudflare.com/profile/api-tokens",
         blocks=("publication:cloudflare",)),
+    # --- marketplaces ------------------------------------------------------
+    #
+    # Registered with `adapter_ready=False`, which is the honest state and not a
+    # placeholder: the abstractions exist and the live calls do not, so these
+    # appear in the Credential Centre as NOT_IMPLEMENTED rather than as a
+    # request for a key. Asking a seller for Selling Partner credentials before
+    # anything could use them is how a live marketplace token sits in a store
+    # for a year — and a marketplace token can create orders.
+    Integration(
+        id="amazon", name="Amazon Selling Partner",
+        purpose="List products and read orders and inventory from Amazon.",
+        kind=ConnectionKind.OAUTH, credential="QEVIK_AMAZON_REFRESH_TOKEN",
+        setup_url="https://sellercentral.amazon.com",
+        blocks=("marketplace:amazon:listing", "marketplace:amazon:inventory",
+                "marketplace:amazon:orders"),
+        adapter_ready=False),
+    Integration(
+        id="noon", name="Noon Seller Lab",
+        purpose="List products and read orders and inventory from Noon.",
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_NOON_API_KEY",
+        setup_url="https://sellerlab.noon.com",
+        blocks=("marketplace:noon:listing", "marketplace:noon:inventory",
+                "marketplace:noon:orders"),
+        adapter_ready=False),
+    # --- social ------------------------------------------------------------
+    #
+    # Every one of these can publish to an audience under the customer's name.
+    # They stay `adapter_ready=False` until there is an approval gate in front
+    # of them, because the failure mode is not a broken feature — it is a post
+    # nobody agreed to, on somebody else's account, which cannot be recalled.
+    Integration(
+        id="youtube", name="YouTube",
+        purpose="Publish approved video to the customer's channel.",
+        kind=ConnectionKind.OAUTH, credential="QEVIK_YOUTUBE_REFRESH_TOKEN",
+        setup_url="https://console.cloud.google.com/apis/credentials",
+        blocks=("social:youtube:publish", "measurement:youtube_views"),
+        adapter_ready=False),
+    Integration(
+        id="instagram", name="Instagram",
+        purpose="Publish approved posts to the customer's account.",
+        kind=ConnectionKind.OAUTH, credential="QEVIK_INSTAGRAM_ACCESS_TOKEN",
+        setup_url="https://developers.facebook.com/apps",
+        blocks=("social:instagram:publish", "measurement:instagram_reach"),
+        adapter_ready=False),
 )
 
 BY_ID: dict[str, Integration] = {i.id: i for i in INTEGRATIONS}
