@@ -5,7 +5,7 @@ It supersedes the status tables in `STATE.md` and `MASTER_EXECUTION_STATE.md`,
 which now point here. `ROADMAP_RECONCILIATION.md` remains the map between the
 three document sets and is not restated.
 
-Last reconciled: **24 August 2026**, at `cf2148f`.
+Last reconciled: **25 August 2026**, at `ed64f67`.
 
 Companion documents: `SECURITY_REVIEW_2026_08_24.md` (every §18 item, with the check that established it) and `COMMERCIAL_REVIEW_2026_08_24.md` (what can be sold, NOW/NEXT/LATER/REJECT).
 
@@ -79,6 +79,8 @@ store with a list on exactly the first run that needed it.
 | P2 enquiry | COMPLETE | `website/enquiry.py` + executor. mailto/WhatsApp, no server | — | Met: works with scripting off; a business with no channel gets no form |
 | P2.1 publication foundation | COMPLETE | `publication/`, `execution/artefacts.bundle_hash` | — | Met |
 | P3 technical SEO | COMPLETE | `website/seo.py` — sitemap, robots, canonicals, link audit, merged before hashing | — | Met |
+| P3 Search Console | PENDING_CREDENTIAL | `measurement/providers.py` — protocol, fixture provider, `SearchConsoleProvider`, comparison rules. Live call deliberately unwritten | Enter `QEVIK_SEARCH_CONSOLE_REFRESH_TOKEN` | A reading with a real window and sample |
+| P3 Analytics | PENDING_CREDENTIAL | Same module and shape | Enter `QEVIK_ANALYTICS_REFRESH_TOKEN` | As above |
 | P3 AI visibility | PENDING_CREDENTIAL | `aivisibility/` — adapter, fake provider, `PendingCredentialProvider`, measurement, `mention ≠ rank` all built | Enter a provider key in the Credential Centre | A live observation with `position_available` honoured |
 | P4 public audit | COMPLETE | `customer/public.py`, allow-listed | — | Met |
 | P4 plans surface | COMPLETE | `/api/customer/plan` | — | Met |
@@ -110,7 +112,9 @@ store with a list on exactly the first run that needed it.
 | Coding-agent sandbox | PENDING_INFRASTRUCTURE | Needs a host | — | — |
 | Browser worker | PENDING_INFRASTRUCTURE | `browser/` is an interface | — | — |
 | Iran-origin worker | PENDING_INFRASTRUCTURE | Needs an Iran-resident host; cannot be faked, and the doc says so | — | — |
-| Public deploy target | PENDING_INFRASTRUCTURE | Only a local filesystem target is connected | Host + DNS | A published site answers on a public URL over HTTPS |
+| Publication boundary | COMPLETE | `publication/targets.py` — target protocol, real `LocalTarget` with atomic replace and rollback, domain verification, `NOT_AUTHORISED` distinct from `FAILED` | — | Met: Qevik's own site publishes for real to the local target |
+| Cloudflare target | PENDING_CREDENTIAL | Adapter, manifest and refusals built; only the HTTP call is unwritten, deliberately | Enter `QEVIK_CLOUDFLARE_API_TOKEN` + `QEVIK_CLOUDFLARE_ACCOUNT_ID` | A bundle reaches a public URL |
+| Public deploy target | PENDING_INFRASTRUCTURE | A verified domain. The TXT record only its owner can create is generated per tenant | Point a domain at Qevik and create the record | A published site answers on a public URL over HTTPS |
 | Billing | DEFERRED | Plans, credits and quota exist and are enforced; money does not, deliberately | — | A price is agreed by a person first |
 
 ## Product C

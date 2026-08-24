@@ -211,7 +211,66 @@ def main() -> int:
             f"{feature} was never checked and became an opportunity")
     print("   Verified: no unverified feature reached the opportunity list.")
 
+    # 7. Actually deliver it -------------------------------------------------
+    # Through the real publication boundary, to the real local target. Not a
+    # simulation: files are written, a second publication replaces the first
+    # atomically, and a rollback restores it. What is missing is a public
+    # address, which is a host and a DNS record.
+    import tempfile
+
+    from atlas_kernel.publication.targets import (
+        CloudflareTarget,
+        LocalTarget,
+        VerificationState,
+        deploy,
+        describe,
+        domain_for,
+        verify,
+    )
+
+    root = Path(tempfile.mkdtemp(prefix="qevik-site-")) / "site"
+    target = LocalTarget(root)
+    from atlas_kernel.execution.artefacts import bundle_hash
+
+    digest = bundle_hash(files)
+
+    held = deploy(target, files, content_hash=digest)
+    live = deploy(target, files, content_hash=digest, authorised=True)
+    on_disk = sorted(p.name for p in root.rglob("*") if p.is_file())
+
+    domain = domain_for(WEBSITE, tenant=str(TENANT))
+    unproved = deploy(CloudflareTarget(), files, domain=domain,
+                      content_hash=digest, authorised=True)
+    proved = verify(domain, records=(domain.token,))
+    no_key = deploy(CloudflareTarget(), files, domain=proved,
+                    content_hash=digest, authorised=True)
+
+    print()
+    print("7. DELIVERY")
+    print(f"   without authorisation : {held.state.value} (nothing written)")
+    print(f"   local target          : {live.state.value} -> {len(on_disk)} "
+          f"file(s) on disk: {', '.join(on_disk)}")
+    print(f"   cloudflare, unverified: {unproved.state.value} — "
+          f"{unproved.detail[:52]}")
+    print(f"   domain proof required : TXT {domain.hostname} = "
+          f"{domain.token[:38]}…")
+    print(f"   cloudflare, verified  : {no_key.state.value} — "
+          f"{no_key.detail[:52]}")
+    print(f"   bundle identity       : {digest[:16]}… carried onto the deployment")
+
     report = {
+        "delivery": {
+            "local": {"state": live.state.value, "files": on_disk,
+                      "content_hash": digest},
+            "unauthorised_is_not_a_failure":
+                held.state.value == "NOT_AUTHORISED",
+            "public_target": describe(CloudflareTarget()),
+            "domain_verification": {
+                "hostname": domain.hostname,
+                "state_before": VerificationState.NOT_CHECKED.value,
+                "record": domain.record,
+            },
+        },
         "business_id": BUSINESS, "tenant_id": str(TENANT), "website": WEBSITE,
         "at": datetime.now(UTC).isoformat(),
         "counts": {"present": len(present), "absent": len(absent),

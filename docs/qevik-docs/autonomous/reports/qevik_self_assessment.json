@@ -1,8 +1,38 @@
 {
+  "delivery": {
+    "local": {
+      "state": "PUBLISHED",
+      "files": [
+        "index.html",
+        "robots.txt",
+        "sitemap.xml"
+      ],
+      "content_hash": "5421f3917b2eaf901d6cc0159284c474f93cc574c9c7a168d55ec71773902db0"
+    },
+    "unauthorised_is_not_a_failure": true,
+    "public_target": {
+      "target": "cloudflare",
+      "status": "PENDING_CREDENTIAL",
+      "credential": "QEVIK_CLOUDFLARE_API_TOKEN",
+      "action": "Add QEVIK_CLOUDFLARE_API_TOKEN in the Credential Centre",
+      "publishes": false
+    },
+    "domain_verification": {
+      "hostname": "qevik.ai",
+      "state_before": "NOT_CHECKED",
+      "record": {
+        "type": "TXT",
+        "name": "qevik.ai",
+        "value": "qevik-site-verification=1dbfe61f1407a9b16f2e0343f7ae258b",
+        "ttl": 300,
+        "note": "Only somebody who controls this domain can create this record, which is what makes it proof."
+      }
+    }
+  },
   "business_id": "qevik",
   "tenant_id": "tenant-qevik",
   "website": "https://qevik.ai",
-  "at": "2026-08-24T18:12:56.751750+00:00",
+  "at": "2026-08-24T20:31:49.151890+00:00",
   "counts": {
     "present": 0,
     "absent": 6,
