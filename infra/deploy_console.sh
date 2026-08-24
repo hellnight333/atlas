@@ -38,6 +38,22 @@ MSG
   exit 2
 fi
 
+echo "==> syncing the kernel"
+rsync -az --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
+
+echo "==> installing the control-plane service"
+scp -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
+ssh "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable --now qevik-control"
+# Give it a moment, then insist it is actually up. A unit that failed to start
+# and a unit that started are indistinguishable from `systemctl enable`.
+sleep 3
+ssh "$TARGET" "systemctl is-active --quiet qevik-control" || {
+  echo "the control plane did not start:"
+  ssh "$TARGET" "journalctl -u qevik-control -n 30 --no-pager"
+  exit 6
+}
+ssh "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /health -> %{http_code}\n' http://127.0.0.1:8081/health"
+
 echo "==> copying the console to $REMOTE"
 ssh "$TARGET" "mkdir -p $REMOTE.incoming"
 scp -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
@@ -56,8 +72,14 @@ ssh "$TARGET" "systemctl reload caddy"
 echo "==> verifying"
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/ || echo 000)
 type=$(curl -sS --max-time 20 -o /dev/null -w '%{content_type}' https://app.qevik.ai/api/health || echo none)
-echo "    GET /            -> $code"
-echo "    GET /api/health  -> $type"
+api=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/api/missions || echo 000)
+sales=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/control/sales/summary || echo 000)
+echo "    GET /                     -> $code"
+echo "    GET /api/health           -> $type"
+echo "    GET /api/missions         -> $api   (401 expected: JSON, never HTML)"
+echo "    GET /control/sales/summary-> $sales (401 expected: sales still served)"
+[ "$api" = "401" ] || { echo "FAILED: /api/missions answered $api, not 401"; exit 6; }
+[ "$sales" = "401" ] || { echo "FAILED: the sales console lost its API ($sales)"; exit 7; }
 if [ "$code" != "200" ]; then echo "FAILED: the console did not answer"; exit 4; fi
 case "$type" in
   application/json*) echo "OK: the console is live and the control plane is reachable." ;;

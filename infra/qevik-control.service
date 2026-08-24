@@ -1,0 +1,41 @@
+[Unit]
+# The Qevik control plane: missions, chat, credentials, models, and the console.
+#
+# A *second* service rather than a replacement. `qevik-api.service` runs
+# `atlas_kernel.api:app`, which carries 181 Atlas routes and a middleware that
+# rewrites `/api/X` to `/X` for the desktop client — so mounting the control
+# plane there turned `/api/missions` into `/missions` and answered HTML with a
+# 200 where an authenticated JSON API belongs.
+#
+# Two products, two processes, one database. Caddy routes `/api/*` here and
+# leaves `/control/*` on the monolith, so the sales console keeps working.
+Description=Qevik Control Plane
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+# The vault's master key. Without it the vault seals and the Credentials page
+# stores nothing — deliberately, rather than falling back to plaintext.
+EnvironmentFile=-/opt/qevik/control.env
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+Environment=QEVIK_STATE=/var/lib/qevik/control
+ExecStart=/opt/qevik/atlas/.venv/bin/python -m uvicorn \
+  --factory atlas_kernel.qevik.app:from_environment \
+  --host 127.0.0.1 --port 8081 --workers 1
+Restart=on-failure
+RestartSec=5
+# Loopback only. Caddy is the single door, and it authenticates on the far side.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/qevik /srv/sites
+StateDirectory=qevik
+
+[Install]
+WantedBy=multi-user.target

@@ -170,6 +170,17 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     def _health() -> dict:
         return health(app)
 
+    @app.get("/health", include_in_schema=False)
+    def _liveness() -> dict:
+        """Liveness, and nothing else.
+
+        Public — systemd and Caddy check it before anybody has a session — so it
+        must say only that the process is answering. `/api/health` reports
+        whether the vault is sealed and which components are absent, which is
+        deployment posture and sits behind authentication.
+        """
+        return {"status": "ok"}
+
     _serve_console(app, wiring.console)
     return app
 
@@ -304,11 +315,30 @@ def from_environment() -> FastAPI:
 
     `QEVIK_VAULT_MASTER_KEY` is consulted by the vault itself and never passes
     through here, so it cannot reach a log line or a traceback in this module.
+
+    `QEVIK_STATE` is one directory holding everything that must outlive a
+    restart: the mission timeline, the conversation store and the vault. A
+    deployment that set none of them individually used to get an in-memory
+    timeline, which is a real configuration and the wrong one for a server.
     """
     root = Path(os.environ.get("QEVIK_REPOSITORY", Path.cwd()))
+    state = os.environ.get("QEVIK_STATE", "")
+
     timeline = os.environ.get("QEVIK_MISSION_TIMELINE", "")
+    if not timeline and state:
+        timeline = str(Path(state) / "missions.jsonl")
+
+    vault = os.environ.get("QEVIK_VAULT", "")
+    if not vault:
+        vault = str(Path(state) / "vault.json") if state else str(DEFAULT_VAULT)
+
+    turns: list = []
+    if state:
+        Path(state).mkdir(parents=True, exist_ok=True)
+
     return create_app(Wiring(
         repository_root=root,
         mission_timeline=Path(timeline) if timeline else None,
-        vault_path=Path(os.environ.get("QEVIK_VAULT", DEFAULT_VAULT)),
+        vault_path=Path(vault),
+        chat_events=turns,
     ))

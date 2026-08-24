@@ -297,3 +297,110 @@ def test_the_console_asset_route_refuses_to_escape_its_directory(client) -> None
     for attempt in ("/../../etc/passwd", "/etc/passwd", "/....//etc/passwd"):
         body = client.get(attempt).text
         assert "root:" not in body, attempt
+
+
+# ============================================ the two applications are separate
+
+def test_the_api_prefix_is_not_an_alias_in_the_composed_app() -> None:
+    """The monolith and the control plane cannot share one application.
+
+    `atlas_kernel/api.py` carries `accept_api_prefix`, a middleware that
+    rewrites `/api/X` to `/X` so the Atlas desktop client can address the kernel
+    either way. Mounting the control plane there made `/api/missions` become
+    `/missions` — a console path — and answer **200 with HTML** instead of 401
+    with JSON. An unauthenticated 200 where an authenticated API belongs, and
+    HTML that anything not checking content type reads as success.
+
+    The composed app must never grow that middleware: here `/api/` is a real
+    namespace, not an alias.
+    """
+    import ast
+    from pathlib import Path
+
+    from atlas_kernel.qevik import app as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    rewrites = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Subscript)
+                and isinstance(n.value, ast.Attribute)
+                and n.value.attr == "scope"]
+    assert rewrites == [], "nothing here may rewrite request.scope['path']"
+    assert "accept_api_prefix" not in source
+
+
+@pytest.mark.real_auth
+def test_unauthenticated_api_returns_401_json_and_never_html(client) -> None:
+    """The exact regression. Both halves matter: the status *and* the type."""
+    for path in ("/api/missions", "/api/chat", "/api/credentials",
+                 "/api/models", "/api/customer/actions", "/api/health"):
+        response = client.get(path)
+        assert response.status_code == 401, path
+        assert response.headers["content-type"].startswith("application/json"), (
+            f"{path} answered {response.headers['content-type']} — HTML here is "
+            "worse than a 404, because only the 404 is obviously broken")
+
+
+def test_the_spa_fallback_never_captures_an_api_path(client) -> None:
+    """Not by registration order — by the handler refusing.
+
+    Order is invisible at the call site, and one `install()` moving would
+    silently reopen the shadowing.
+    """
+    for path in ("/api/missions", "/api/nothing-here", "/api/"):
+        assert "Qevik Control" not in client.get(path).text, path
+
+
+def test_an_unknown_path_is_not_the_console(client) -> None:
+    body = client.get("/definitely-not-a-console-route").text
+    assert "Qevik Control" not in body
+
+
+def test_health_is_liveness_only_and_says_nothing_about_posture(client) -> None:
+    """Public, because systemd and Caddy check it before anybody has a session.
+    So it must not leak whether the vault is sealed."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {"status": "ok"}
+    blob = response.text.lower()
+    for posture in ("vault", "sealed", "degraded", "credential", "claiming"):
+        assert posture not in blob, posture
+
+
+def test_authenticated_api_routes_reach_the_control_plane(client, monkeypatch
+                                                          ) -> None:
+    """The other half: refusing everything is not correctness either.
+
+    A tenanted operator, because the session fixture's default has no tenant and
+    the customer boundary refuses that with 403 — correctly, and it would hide
+    whether the route was reached at all.
+    """
+    from atlas_kernel.auth import Scope, User
+    from atlas_kernel.auth.models import hash_password
+    from atlas_kernel.auth.store import AuthStore
+
+    monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: User(
+        username="tenanted", password_hash=hash_password("test-only-password"),
+        tenant_id="tenant-alpha", scopes=frozenset(Scope)))
+
+    for path in ("/api/missions", "/api/chat", "/api/credentials",
+                 "/api/models", "/api/models/selection",
+                 "/api/missions/blockers", "/api/missions/costs"):
+        response = client.get(path)
+        assert response.status_code == 200, (path, response.text[:120])
+        assert response.headers["content-type"].startswith("application/json")
+
+
+def test_every_control_plane_route_is_still_mounted(client) -> None:
+    """A guard against a fix for the above quietly removing a surface."""
+    served = set(client.app.openapi()["paths"])
+    for required in ("/api/missions", "/api/missions/{mission_id}",
+                     "/api/missions/{mission_id}/report", "/api/chat",
+                     "/api/chat/{conversation_id}/plan",
+                     "/api/chat/{conversation_id}/decide",
+                     "/api/credentials", "/api/credentials/{provider}",
+                     "/api/models", "/api/models/selection",
+                     "/api/customer/actions", "/auth/login",
+                     "/control/sales/summary"):
+        assert required in served, required

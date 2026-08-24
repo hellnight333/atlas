@@ -81,21 +81,30 @@ app.qevik.ai {
 	# The API stays bound to 127.0.0.1:8080 and is never published directly.
 	# Caddy is the only thing that talks to it, so there is exactly one door and
 	# it is authenticated on the other side.
+	# Two services behind one domain, and the split is not arbitrary.
+	#
+	# :8080 is `atlas_kernel.api:app` — 181 Atlas routes plus the sales console's
+	# API — and it carries a middleware that rewrites `/api/X` to `/X` for the
+	# desktop client. Mounting the Qevik control plane there turned
+	# `/api/missions` into `/missions` and answered HTML with a 200 where an
+	# authenticated JSON API belongs.
+	#
+	# :8081 is `atlas_kernel.qevik.app:from_environment` — the composed control
+	# plane the acceptance suite actually exercises, where `/api/` is a real
+	# namespace rather than an alias.
+	#
+	# `/control/*` deliberately stays on :8080 so the sales console keeps working.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8081
+	}
 	handle /auth/* {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8081
 	}
 	handle /control/* {
 		reverse_proxy 127.0.0.1:8080
 	}
-	# The Qevik control plane: missions, chat, credentials, models, customer.
-	# Absent until now, which is why the console's own API calls fell through to
-	# the static handler and came back as `index.html` with a 200 — a response
-	# that looks like success to anything not checking the content type.
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8080
-	}
 	handle /health {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8081
 	}
 	handle {
 		root * /srv/qevik-control
@@ -156,21 +165,30 @@ sites.qevik.ai {
 https://2.28.62.83:8443 {
 	tls internal
 
+	# Two services behind one domain, and the split is not arbitrary.
+	#
+	# :8080 is `atlas_kernel.api:app` — 181 Atlas routes plus the sales console's
+	# API — and it carries a middleware that rewrites `/api/X` to `/X` for the
+	# desktop client. Mounting the Qevik control plane there turned
+	# `/api/missions` into `/missions` and answered HTML with a 200 where an
+	# authenticated JSON API belongs.
+	#
+	# :8081 is `atlas_kernel.qevik.app:from_environment` — the composed control
+	# plane the acceptance suite actually exercises, where `/api/` is a real
+	# namespace rather than an alias.
+	#
+	# `/control/*` deliberately stays on :8080 so the sales console keeps working.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8081
+	}
 	handle /auth/* {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8081
 	}
 	handle /control/* {
 		reverse_proxy 127.0.0.1:8080
 	}
-	# The Qevik control plane: missions, chat, credentials, models, customer.
-	# Absent until now, which is why the console's own API calls fell through to
-	# the static handler and came back as `index.html` with a 200 — a response
-	# that looks like success to anything not checking the content type.
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8080
-	}
 	handle /health {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8081
 	}
 	handle {
 		root * /srv/qevik-control
