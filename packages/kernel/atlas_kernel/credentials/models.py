@@ -33,7 +33,16 @@ log = logging.getLogger(__name__)
 
 
 class Role(StrEnum):
-    """What a model is being chosen for. §8's list."""
+    """What a model is being chosen for.
+
+    §8's list, extended for media. Extended here rather than given a registry of
+    its own: an image provider is a model chosen for a role, and a second
+    registry of "media models" beside this one is how an invocation ends up
+    recorded against something that never saw the request.
+
+    The media roles have no provider yet. They exist so the fabric can express
+    an image agent without inventing a parallel vocabulary for it.
+    """
 
     PLANNING = "planning"
     IMPLEMENTATION = "implementation"
@@ -41,6 +50,8 @@ class Role(StrEnum):
     SUMMARISATION = "summarisation"
     RESEARCH = "research"
     CHEAP = "cheap"
+    IMAGE = "image"
+    VIDEO = "video"
 
 
 #: Which credential each provider family draws on. The provider id is the same

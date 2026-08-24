@@ -85,6 +85,9 @@ ignore = ["E501"]
 # the point — an ignore broad enough to catch it by accident would also catch
 # the next genuine mutable-default bug written anywhere in the kernel.
 "packages/kernel/atlas_kernel/control/sales.py" = ["B008"]
+# `qevik/app.py` composes the application and also serves a few routes of its
+# own (health, status). Same FastAPI idiom, same reason.
+"packages/kernel/atlas_kernel/qevik/app.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"

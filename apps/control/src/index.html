@@ -165,6 +165,17 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .msg .from { font-size: 11px; color: var(--muted); margin-bottom: .3rem; }
 .msg pre { margin: 0; background: transparent; border: 0; padding: 0; }
 
+/* The live indicator. Fixed, small, and it never covers content: a banner
+   that obscures what it is reporting on is worse than no banner. */
+#live {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 20;
+  background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 20px; padding: .4rem .9rem; font-size: 12.5px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.25); cursor: pointer;
+}
+#live.stale { border-color: var(--warn); color: var(--warn); }
+@media (max-width: 820px) { #live { left: 1rem; right: 1rem; text-align: center; } }
+
 #login { max-width: 22rem; margin: 12vh auto; }
 .hidden { display: none !important; }
 </style>
@@ -190,6 +201,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 <div id="shell" class="hidden">
   <nav id="nav"></nav>
   <main id="main"></main>
+  <div id="live" class="hidden" role="status" aria-live="polite"></div>
 </div>
 
 <script>
@@ -811,12 +823,15 @@ views.settings = async () => {
 /* --------------------------------------------------------------- render */
 async function render() {
   if (!API.token) {
+    live.stop();
     $('login').classList.remove('hidden');
     $('shell').classList.add('hidden');
     return;
   }
   $('login').classList.add('hidden');
   $('shell').classList.remove('hidden');
+  $('live').classList.remove('hidden');
+  if (!live.timer) live.start();
   drawNav();
   const main = $('main');
   main.setAttribute('aria-busy', 'true');
@@ -830,6 +845,73 @@ async function render() {
   main.removeAttribute('aria-busy');
   drawNav();
 }
+
+/* ---------------------------------------------------------- live status
+ *
+ * Polling with a version token rather than server-sent events, and that is a
+ * decision. This page is served through Cloudflare, which buffers streaming
+ * responses by default — an SSE channel would work locally, pass review, and
+ * deliver nothing in production. Polling also holds no connection open, so a
+ * hundred idle tabs cost a single-worker deployment nothing.
+ *
+ * The page is never load-bearing for the work: this only decides when to
+ * re-read. Closing the tab stops the polling and stops nothing else.
+ */
+const live = {
+  version: '', timer: null, failures: 0,
+
+  start() {
+    this.stop();
+    this.tick();
+    this.timer = setInterval(() => this.tick(), 4000);
+  },
+  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } },
+
+  async tick() {
+    if (!API.token || document.hidden) return;
+    try {
+      const status = await API.get('/api/status?since=' + encodeURIComponent(this.version));
+      this.failures = 0;
+      if (!status.changed) { this.show(status, false); return; }
+      const first = !this.version;
+      this.version = status.version;
+      this.show(status, true);
+      /* Re-render only the pages a change could affect. Redrawing Credentials
+       * because a mission moved would discard whatever somebody was typing. */
+      if (!first && ['dashboard', 'missions', 'chat', 'reports', 'history'].includes(state.page)) {
+        render();
+      }
+    } catch (e) {
+      /* A failed poll is not a failed mission. The badge says the view may be
+       * behind; it does not claim anything about the work. */
+      this.failures += 1;
+      if (this.failures >= 2) {
+        const box = $('live');
+        box.className = 'stale';
+        box.textContent = 'Not refreshing — the view may be behind';
+      }
+    }
+  },
+
+  show(status, changed) {
+    const box = $('live');
+    const c = status.counts;
+    if (!c) return;
+    box.className = '';
+    const bits = [];
+    if (c.running) bits.push(c.running + ' running');
+    if (c.needs_me) bits.push(c.needs_me + ' needs you');
+    if (c.blocked) bits.push(c.blocked + ' blocked');
+    box.textContent = bits.length ? bits.join(' · ') : 'Nothing running';
+    box.onclick = () => { location.hash = c.needs_me ? '#/actions' : '#/missions'; };
+  },
+};
+
+/* Stop polling while the tab is hidden and catch up on return. A phone in a
+ * pocket should not be asking every four seconds. */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && API.token) live.tick();
+});
 
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();

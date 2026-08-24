@@ -467,3 +467,135 @@ def test_attaching_a_tenant_is_an_admin_route_not_a_database_edit(client
     assert client.post("/auth/users/tenant",
                        json={"username": "x", "tenant_id": "y"}
                        ).status_code == 401
+
+
+# ============================================ live status
+
+def test_status_is_tenant_scoped_and_refuses_without_one(client) -> None:
+    """A change in another tenant's work must not even signal."""
+    assert client.get("/api/status").status_code == 403
+
+
+def _tenanted(monkeypatch, tenant: str = "tenant-alpha"):
+    from atlas_kernel.auth import Scope, User
+    from atlas_kernel.auth.models import hash_password
+    from atlas_kernel.auth.store import AuthStore
+
+    monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: User(
+        username="operator", password_hash=hash_password("test-only-password"),
+        tenant_id=tenant, scopes=frozenset(Scope)))
+
+
+def test_an_unchanged_version_answers_without_a_payload(client, monkeypatch
+                                                        ) -> None:
+    """What makes asking every few seconds cheap. A summary on every poll
+    would make a live view cost more than the page it lives on."""
+    _tenanted(monkeypatch)
+    first = client.get("/api/status").json()
+    again = client.get("/api/status", params={"since": first["version"]}).json()
+
+    assert again["changed"] is False
+    assert "counts" not in again, "an unchanged poll must not ship the summary"
+    assert again["version"] == first["version"]
+
+
+def test_a_new_mission_changes_the_version(client, monkeypatch) -> None:
+    from atlas_kernel.mission import service as mission_service
+
+    _tenanted(monkeypatch)
+    before = client.get("/api/status").json()["version"]
+
+    _mission, event = mission_service.create(
+        tenant="tenant-alpha", title="Ship it", requested_by="operator")
+    client.app.state.mission_events.append(event)
+
+    after = client.get("/api/status", params={"since": before}).json()
+    assert after["changed"] is True
+    assert after["counts"]["missions"] == 1
+
+
+def test_another_tenants_work_never_changes_this_tenants_version(
+        client, monkeypatch) -> None:
+    from atlas_kernel.mission import service as mission_service
+
+    _tenanted(monkeypatch, "tenant-alpha")
+    before = client.get("/api/status").json()["version"]
+
+    _mission, event = mission_service.create(
+        tenant="tenant-beta", title="Theirs", requested_by="them")
+    client.app.state.mission_events.append(event)
+
+    assert client.get("/api/status",
+                      params={"since": before}).json()["changed"] is False
+
+
+def test_the_digest_ignores_the_order_events_arrive_in(client, monkeypatch
+                                                       ) -> None:
+    """Two workers appending concurrently produce the same set in a different
+    order, and that is not a change a viewer should see."""
+    from atlas_kernel.qevik.live import snapshot
+
+    _tenanted(monkeypatch)
+    from atlas_kernel.mission import service as mission_service
+
+    events = []
+    for title in ("One", "Two", "Three"):
+        _m, event = mission_service.create(tenant="tenant-alpha", title=title,
+                                           requested_by="operator")
+        events.append(event)
+
+    forwards = snapshot(events, [], tenant="tenant-alpha")["version"]
+    backwards = snapshot(list(reversed(events)), [], tenant="tenant-alpha")["version"]
+    assert forwards == backwards
+
+
+def test_needs_me_counts_both_kinds_of_waiting(client, monkeypatch) -> None:
+    """A mission awaiting approval and a plan awaiting a decision are the same
+    question to a person, and the home screen exists to answer it once."""
+    from atlas_kernel.chat import service as chat_service
+    from atlas_kernel.mission import service as mission_service
+    from atlas_kernel.mission.models import MissionStatus, Plan, PlanStep
+
+    _tenanted(monkeypatch)
+    mission, event = mission_service.create(tenant="tenant-alpha", title="M",
+                                            requested_by="operator")
+    client.app.state.mission_events.append(event)
+    client.app.state.mission_events.append(mission_service._event(
+        mission.model_copy(update={"status": MissionStatus.AWAITING_APPROVAL}),
+        actor="test", note="seeded"))
+
+    conversation, opened = chat_service.start(tenant="tenant-alpha", text="hello")
+    client.app.state.chat_events.append(opened)
+    _updated, proposed = chat_service.plan_for(
+        conversation, Plan(goal="g", steps=(PlanStep(order=1, title="s"),)),
+        tenant="tenant-alpha")
+    client.app.state.chat_events.append(proposed)
+
+    counts = client.get("/api/status").json()["counts"]
+    assert counts["awaiting_approval"] == 1
+    assert counts["plans_proposed"] == 1
+    assert counts["needs_me"] == 2
+
+
+def test_the_console_polls_rather_than_streaming() -> None:
+    """A decision, not a shortcut: this page is served through Cloudflare, which
+    buffers streaming responses by default. An SSE channel would work locally,
+    pass review, and deliver nothing in production."""
+    from atlas_kernel.qevik.app import CONSOLE
+
+    source = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    assert "EventSource" not in source
+    assert "/api/status?since=" in source
+    # And it stops when the tab is hidden — a phone in a pocket should not ask
+    # every four seconds.
+    assert "visibilitychange" in source
+
+
+def test_the_live_view_never_makes_the_page_load_bearing() -> None:
+    """Polling decides when to re-read. It must not drive a mission."""
+    from atlas_kernel.qevik.app import CONSOLE
+
+    source = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    live = source[source.index("const live = {"):source.index("document.addEventListener('visibilitychange'")]
+    for forbidden in ("/approve", "/decide", "/plan", "method: 'POST'"):
+        assert forbidden not in live, forbidden

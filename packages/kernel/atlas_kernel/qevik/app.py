@@ -32,10 +32,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from ..approval.models import ApprovalRequest
 from ..auth import api as auth_api
+from ..auth.api import current_user
+from ..auth.models import User
 from ..auth.store import AuthStore, init_auth
 from ..chat import api as chat_api
 from ..control import sales as sales_api
@@ -51,6 +53,7 @@ from ..mission.timeline import Timeline
 from ..modelchoice import api as models_api
 from ..modelchoice.store import SelectionStore
 from ..publication import ConnectionStore
+from . import live
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +195,30 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     @app.get("/api/health")
     def _health() -> dict:
         return health(app)
+
+    @app.get("/api/status")
+    def _status(request: Request, since: str = "",
+                user: User = Depends(current_user)) -> dict:
+        """What changed, for a console that refreshes itself.
+
+        `since` is the version the caller last saw. Unchanged means a few bytes
+        and no re-render, which is what makes asking every few seconds cheap.
+
+        Tenant-scoped: the digest is computed over one tenant's events, so a
+        change in another tenant's work cannot even signal.
+        """
+        tenant = (user.tenant_id or "").strip()
+        if not tenant:
+            raise HTTPException(
+                status_code=403,
+                detail="this account is not attached to a tenant, so it has no "
+                       "status of its own.")
+        current = live.snapshot(getattr(request.app.state, "mission_events", []),
+                                getattr(request.app.state, "chat_events", []),
+                                tenant=tenant)
+        if since and since == current["version"]:
+            return {"version": current["version"], "changed": False}
+        return {**current, "changed": True}
 
     @app.get("/health", include_in_schema=False)
     def _liveness() -> dict:
