@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from ..approval.models import ApprovalRequest
 from ..auth import api as auth_api
@@ -201,17 +201,33 @@ def _serve_console(app: FastAPI, root: Path | None) -> None:
     def _console() -> HTMLResponse:
         return HTMLResponse(index.read_text(encoding="utf-8"))
 
+    from ..auth.api import CONSOLE_PATHS
+
     @app.get("/{path:path}", include_in_schema=False)
     def _console_asset(path: str) -> FileResponse | HTMLResponse:
+        """A console asset, or the shell for a client-side route.
+
+        **Never a catch-all.** An earlier version returned the shell for any
+        unmatched path, and mounted onto an application with its own routes it
+        shadowed them — `/api/missions` came back as HTML with a 200, which is
+        worse than a 404 because only the second is obviously broken and
+        anything not checking content type reads it as success.
+
+        So an unknown path 404s. Route ordering is not a thing to rest this on:
+        registration order is invisible at the call site and one `install()`
+        moving would silently reopen it.
+        """
         # Resolved under the console directory and refused if it escapes: the
         # path comes from the URL, and serving whatever it names is an
         # arbitrary-file-read with extra steps.
         candidate = (directory / path).resolve()
         if candidate.is_file() and candidate.is_relative_to(directory.resolve()):
             return FileResponse(candidate)
-        # Anything else is a client-side route. Returning the shell rather than
-        # a 404 is what makes a deep link work on reload.
-        return HTMLResponse(index.read_text(encoding="utf-8"))
+        if f"/{path}" in CONSOLE_PATHS:
+            # A client-side route. The shell rather than a 404 is what makes a
+            # deep link survive a reload.
+            return HTMLResponse(index.read_text(encoding="utf-8"))
+        raise HTTPException(status_code=404, detail="no such path")
 
 
 def health(app: FastAPI) -> dict:

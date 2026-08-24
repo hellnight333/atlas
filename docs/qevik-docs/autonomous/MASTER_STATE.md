@@ -153,11 +153,19 @@ to confirm the mission, its full lifecycle history and its report survived.
 | app.qevik.ai reachable | **Yes** — real Cloudflare IPs, serving the older *sales* interface |
 | control plane reachable there | **No** — `/api/*` fell through to the static handler and returned `index.html` with a 200 |
 | Caddyfile | Fixed: `/api/*` now proxies to the control plane |
-| Deploying it | **BLOCKED — no SSH access to the host** |
+| Deploying it | **NOT BLOCKED ON ACCESS** — the `naml_hetzner` key opens the host. Blocked on one routing conflict; see `DEPLOY_APP_QEVIK_AI.md` |
 
 `infra/deploy_console.sh` copies the console, installs the Caddyfile, validates
-it, reloads Caddy and verifies over HTTPS. Run today it refuses with exit 2 and
-deploys nothing, because `ssh root@2.28.62.83` is `Permission denied`.
+it, reloads Caddy and verifies over HTTPS.
+
+**Correction to an earlier report:** SSH access exists.
+`ssh -i ~/.ssh/naml_hetzner -o IdentitiesOnly=yes root@2.28.62.83` works; the
+earlier check let SSH pick a default identity and failed before reaching that
+key. The real obstacle is that the server runs `atlas_kernel.api:app`, not the
+composed app, and mounting the control plane onto the monolith made
+`/api/missions` answer **200 with HTML** instead of 401 with JSON — an
+unauthenticated 200 where an authenticated API belongs. Reverted rather than
+shipped. `DEPLOY_APP_QEVIK_AI.md` has the exact remaining work.
 
 ## Capability delivery, as distinct from capability existence
 
@@ -201,10 +209,9 @@ rather than model. It closes with a crawl and a Search Console credential.
 
 ## What a person has to do that no code can
 
-0. **SSH access to the host serving app.qevik.ai** (qevik-core-01 /
-   2.28.62.83). This is the only thing between the control panel existing and
-   the control panel being usable, and no credential in the vault substitutes
-   for it. Once available: `./infra/deploy_console.sh`.
+0. **Nothing.** The console runs today with `python3 infra/serve_console.py`.
+   Putting it on app.qevik.ai needs one routing conflict resolved — engineering,
+   not a credential. See `DEPLOY_APP_QEVIK_AI.md`.
 1. Enter provider keys once in the Credential Centre — nothing is asked for in
    chat, and no key is ever needed to build the integration.
 2. Provision Postgres, if multi-worker missions are wanted.

@@ -4237,3 +4237,4 @@ def install_demo(demo_id: str) -> dict[str, object]:
     result = demo_installer.install(demo)
     onboarding.record_demo(demo_id)
     return result.to_dict()
+
