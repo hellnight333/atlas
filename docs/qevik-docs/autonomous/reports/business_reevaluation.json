@@ -1,0 +1,376 @@
+{
+  "at": "2026-08-24T18:22:08.633173+00:00",
+  "source": "docs/qevik-docs/73_FIRST_COMMERCIAL_TEST.md",
+  "recrawled": false,
+  "tenant_id": "tenant-qevik",
+  "prospects": [
+    {
+      "business_id": "malabar-dental",
+      "name": "Malabar Dental Clinic",
+      "score_then": 78,
+      "claim_used": "no Arabic version",
+      "evidence_unchanged": true,
+      "comparison": {
+        "business_id": "malabar-dental",
+        "tenant_id": "tenant-qevik",
+        "changes": [
+          {
+            "feature": "arabic",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "blog",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "click_to_call",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "https",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "page_title",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "social_proof",
+            "was": "unverified",
+            "now": "unverified",
+            "change": "unchanged"
+          }
+        ],
+        "first_seen": [],
+        "no_longer_checked": [],
+        "counts": {
+          "total": 6,
+          "unchanged": 6,
+          "about_the_business": 0,
+          "about_our_checking": 0
+        },
+        "statement": "Nothing changed since the previous check."
+      },
+      "opportunities": [
+        "arabic"
+      ],
+      "recommendations": [
+        "offer-arabic-experience"
+      ],
+      "executable_now": [],
+      "requires_customer_input": [
+        "offer-arabic-experience"
+      ],
+      "no_executor": [],
+      "claim_offer": "offer-arabic-experience",
+      "claim_deliverable_now": true
+    },
+    {
+      "business_id": "topdent",
+      "name": "The TopDent",
+      "score_then": 69,
+      "claim_used": "no Arabic version",
+      "evidence_unchanged": true,
+      "comparison": {
+        "business_id": "topdent",
+        "tenant_id": "tenant-qevik",
+        "changes": [
+          {
+            "feature": "arabic",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "blog",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "click_to_call",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "https",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "page_speed",
+            "was": "unverified",
+            "now": "unverified",
+            "change": "unchanged"
+          }
+        ],
+        "first_seen": [],
+        "no_longer_checked": [],
+        "counts": {
+          "total": 5,
+          "unchanged": 5,
+          "about_the_business": 0,
+          "about_our_checking": 0
+        },
+        "statement": "Nothing changed since the previous check."
+      },
+      "opportunities": [
+        "arabic"
+      ],
+      "recommendations": [
+        "offer-arabic-experience"
+      ],
+      "executable_now": [],
+      "requires_customer_input": [
+        "offer-arabic-experience"
+      ],
+      "no_executor": [],
+      "claim_offer": "offer-arabic-experience",
+      "claim_deliverable_now": true
+    },
+    {
+      "business_id": "pearl-dental",
+      "name": "Pearl Dental Implants & Aligners",
+      "score_then": 67,
+      "claim_used": "no Arabic version",
+      "evidence_unchanged": true,
+      "comparison": {
+        "business_id": "pearl-dental",
+        "tenant_id": "tenant-qevik",
+        "changes": [
+          {
+            "feature": "arabic",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "blog",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "click_to_call",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "contact_form",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "https",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          }
+        ],
+        "first_seen": [],
+        "no_longer_checked": [],
+        "counts": {
+          "total": 5,
+          "unchanged": 5,
+          "about_the_business": 0,
+          "about_our_checking": 0
+        },
+        "statement": "Nothing changed since the previous check."
+      },
+      "opportunities": [
+        "arabic",
+        "reachability",
+        "enquiry"
+      ],
+      "recommendations": [
+        "offer-arabic-experience",
+        "offer-one-tap-contact"
+      ],
+      "executable_now": [],
+      "requires_customer_input": [
+        "offer-arabic-experience"
+      ],
+      "no_executor": [
+        "offer-one-tap-contact"
+      ],
+      "claim_offer": "offer-arabic-experience",
+      "claim_deliverable_now": true
+    },
+    {
+      "business_id": "360-agency",
+      "name": "360 Agency / StaffFinder.io",
+      "score_then": 86,
+      "claim_used": "number not tappable on mobile",
+      "evidence_unchanged": true,
+      "comparison": {
+        "business_id": "360-agency",
+        "tenant_id": "tenant-qevik",
+        "changes": [
+          {
+            "feature": "arabic",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "click_to_call",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "contact_form",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "https",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "page_speed",
+            "was": "unverified",
+            "now": "unverified",
+            "change": "unchanged"
+          }
+        ],
+        "first_seen": [],
+        "no_longer_checked": [],
+        "counts": {
+          "total": 5,
+          "unchanged": 5,
+          "about_the_business": 0,
+          "about_our_checking": 0
+        },
+        "statement": "Nothing changed since the previous check."
+      },
+      "opportunities": [
+        "arabic",
+        "reachability"
+      ],
+      "recommendations": [
+        "offer-arabic-experience",
+        "offer-one-tap-contact"
+      ],
+      "executable_now": [],
+      "requires_customer_input": [
+        "offer-arabic-experience"
+      ],
+      "no_executor": [
+        "offer-one-tap-contact"
+      ],
+      "claim_offer": "offer-one-tap-contact",
+      "claim_deliverable_now": false
+    },
+    {
+      "business_id": "ahs",
+      "name": "AHS Catering & Events",
+      "score_then": 83,
+      "claim_used": "number not tappable on mobile",
+      "evidence_unchanged": true,
+      "comparison": {
+        "business_id": "ahs",
+        "tenant_id": "tenant-qevik",
+        "changes": [
+          {
+            "feature": "arabic",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "blog",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "blog_cadence",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "click_to_call",
+            "was": "not_found",
+            "now": "not_found",
+            "change": "unchanged"
+          },
+          {
+            "feature": "https",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "portfolio_depth",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          },
+          {
+            "feature": "social_proof",
+            "was": "present",
+            "now": "present",
+            "change": "unchanged"
+          }
+        ],
+        "first_seen": [],
+        "no_longer_checked": [],
+        "counts": {
+          "total": 7,
+          "unchanged": 7,
+          "about_the_business": 0,
+          "about_our_checking": 0
+        },
+        "statement": "Nothing changed since the previous check."
+      },
+      "opportunities": [
+        "arabic",
+        "reachability",
+        "proof",
+        "blog_revival"
+      ],
+      "recommendations": [
+        "offer-arabic-experience",
+        "offer-editorial",
+        "offer-one-tap-contact"
+      ],
+      "executable_now": [
+        "offer-editorial"
+      ],
+      "requires_customer_input": [
+        "offer-arabic-experience"
+      ],
+      "no_executor": [
+        "offer-one-tap-contact"
+      ],
+      "claim_offer": "offer-one-tap-contact",
+      "claim_deliverable_now": false
+    }
+  ],
+  "finding": {
+    "pitched_arabic": 3,
+    "pitched_contact": 2,
+    "arabic_deliverable_now": true,
+    "arabic_requires_customer_input": true,
+    "statement": "Nothing about these businesses changed and no evidence moved. What changed is that the work Qevik pitched to three of them now has an executor, and that it is correctly presented as requiring something from the customer first."
+  }
+}
