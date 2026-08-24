@@ -346,7 +346,12 @@ def test_research_to_published_website(wiring) -> None:
     asset = runtime.repository.get_asset(outcome.asset_ids[0])
     assert asset.metadata["built_from"]["mode"] == WebsiteMode.MODIFY.value
     assert asset.metadata["built_from"]["addresses"]
-    assert asset.metadata["files"] == [DEFAULT_PATH]
+    # The page and the SEO artefacts. `sitemap.xml` and `robots.txt` are part
+    # of the bundle rather than added after it, because the publication gate
+    # compares the hash of what is published against the hash of what was
+    # approved — a file merged in later is a file nobody agreed to.
+    assert set(asset.metadata["files"]) == {DEFAULT_PATH, "sitemap.xml",
+                                            "robots.txt"}
 
     files, _ = build_website(business_name=BUSINESS.name, research=FAILING,
                              business=BUSINESS)

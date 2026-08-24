@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..opportunity.models import Business
+from . import seo
 from .content import ContactDetails, Fact, FactSource, SiteContent
 from .themes import clean
 
@@ -100,17 +101,41 @@ def seed_content(business: Business) -> SiteContent:
     )
 
 
-def generate(content: SiteContent, *, theme: str = clean.NAME) -> tuple[dict[str, str], dict]:
+def generate(content: SiteContent, *, theme: str = clean.NAME,
+             website: str = "", published: bool = False
+             ) -> tuple[dict[str, str], dict]:
     """Render content with a theme. Returns the files and their provenance.
 
     Provenance records what produced the artifact -- theme, version, and how
     many facts came from where -- so a rebuild can be compared like with like
     and a claim on a live site can be traced to its source without re-deriving
     anything.
+
+    The SEO artefacts are merged in **here**, before anything hashes the bundle.
+    A sitemap added after `bundle_hash` is a file nobody approved, and the
+    publication gate compares the hash of what is about to be published against
+    the hash of what was agreed.
+
+    `published` defaults to False, so the generated `robots.txt` disallows
+    everything until a domain is actually agreed. The common case is a preview,
+    and a preview that reaches a search index is the customer's unfinished site
+    in somebody else's results — which nobody can withdraw on their behalf.
     """
     renderer = get_theme(theme)
     files = renderer.render(content)
+    files.update(seo.artefacts(files, website=website, published=published))
+    inspection = seo.audit(files, website=website)
     provenance = {
+        "seo": {
+            "canonical_host": inspection["website"],
+            "indexable": published and bool(inspection["website"]),
+            "findings": inspection["findings"],
+            # Recorded rather than raised. A generated bundle with a defect is
+            # something the publication gate should refuse, and that decision
+            # belongs to the gate — but a defect nobody wrote down is one the
+            # gate cannot see.
+            "clean": inspection["clean"],
+        },
         "theme": renderer.name,
         "facts": len(content.facts),
         "fact_sources": {
