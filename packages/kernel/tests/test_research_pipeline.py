@@ -97,6 +97,13 @@ def client() -> httpx.Client:
         yield made
 
 
+#: Every `Fetcher` here runs against a `MockTransport`, which opens no socket.
+#: The address guard resolves the hostname before fetching, so it refuses
+#: `fake.test` as unresolvable — checking something that will never be connected
+#: to. Turned off explicitly, at the one place that supplies the transport.
+NO_SOCKET = {"check_addresses": False}
+
+
 # --- discovery -------------------------------------------------------------
 
 def test_discovery_reads_robots_and_the_sitemap(client) -> None:
@@ -168,6 +175,7 @@ def test_a_site_with_no_wordpress_is_not_misread() -> None:
 def result(client):
     """Run every stage against the fake site, through the real code."""
     return pipeline.research("b1", "https://fake.test/", client=client,
+                             **NO_SOCKET,
                              budget=Budget(max_pages=12, delay_seconds=0))
 
 
@@ -213,6 +221,7 @@ def test_one_broken_stage_costs_that_stage_only(client, monkeypatch) -> None:
 
     monkeypatch.setattr(pipeline.seo, "analyse", explode)
     result = pipeline.research("b1", "https://fake.test/", client=client,
+                             **NO_SOCKET,
                                budget=Budget(max_pages=8, delay_seconds=0))
     assert result.state is JobState.PARTIAL
     assert result.failed_stages == ("seo",)

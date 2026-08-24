@@ -13,6 +13,7 @@ second fetcher.
 
 from __future__ import annotations
 
+import logging
 import socket
 import ssl
 import time
@@ -22,6 +23,10 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 import httpx
+
+from . import addresses
+
+log = logging.getLogger(__name__)
 
 #: Identifies us and says where to complain. A crawler that will not say who it
 #: is has no business on somebody's server.
@@ -224,13 +229,29 @@ class Fetcher:
     """The only thing in the engine that touches the network."""
 
     def __init__(self, root: str, *, budget: Budget | None = None,
-                 robots: Robots | None = None, client: httpx.Client | None = None) -> None:
+                 robots: Robots | None = None, client: httpx.Client | None = None,
+                 check_addresses: bool = True) -> None:
         self.root = root
+        #: Whether to refuse addresses that are not on the public internet.
+        #:
+        #: On by default and only ever turned off by the caller that supplies
+        #: the transport — a `MockTransport` opens no socket, so resolving the
+        #: hostname checks something that will never be connected to and
+        #: refuses every test host as unresolvable.
+        #:
+        #: An explicit flag rather than sniffing the transport: "off here, and
+        #: here is why" is reviewable at the call site, and a guard that decides
+        #: for itself when to apply is a guard whose exceptions nobody can find.
+        self.check_addresses = check_addresses
         self.budget = budget or Budget()
         self.robots = robots or Robots(root)
         self._owns_client = client is None
+        # `follow_redirects=False`, deliberately. httpx would walk the chain
+        # itself and only the first URL would ever be address-checked — a public
+        # page that 302s to 169.254.169.254 defeats an entry-point-only check
+        # completely. `_follow` walks it instead and checks every hop.
         self.client = client or httpx.Client(
-            timeout=REQUEST_TIMEOUT_S, follow_redirects=True,
+            timeout=REQUEST_TIMEOUT_S, follow_redirects=False,
             headers={"User-Agent": USER_AGENT, "Accept": "text/html,*/*"},
             limits=httpx.Limits(max_connections=1, max_keepalive_connections=1))
         self._last_request = 0.0
@@ -244,12 +265,59 @@ class Fetcher:
             time.sleep(delay - gap)
         self._last_request = time.monotonic()
 
+    #: How many hops a redirect chain may take before it is a loop.
+    MAX_REDIRECTS = 5
+
+    def _follow(self, url: str) -> tuple[httpx.Response | None, list[str], str]:
+        """Walk a redirect chain, checking the address at every hop.
+
+        Returns `(response, chain, refusal)`. A non-empty refusal means the
+        chain led somewhere Qevik must not fetch, and the caller records it as
+        an error on the page rather than raising — the crawl continues.
+
+        Written out rather than delegated to `follow_redirects=True` because
+        httpx would resolve and connect to each hop before anything here saw it,
+        and the hop is exactly what needs checking.
+        """
+        chain: list[str] = []
+        current = url
+        for _ in range(self.MAX_REDIRECTS + 1):
+            response = self.client.get(current)
+            if not response.is_redirect:
+                return response, chain, ""
+            location = response.headers.get("location", "")
+            if not location:
+                return response, chain, ""
+            chain.append(current)
+            current = urljoin(current, location)
+            try:
+                if self.check_addresses:
+                    addresses.check(current)
+            except addresses.Blocked as blocked:
+                log.warning("refused a redirect from %s to %s: %s",
+                            url, current, blocked)
+                return None, chain, f"redirect refused: {blocked}"
+            self._wait()
+        return None, chain, f"more than {self.MAX_REDIRECTS} redirects"
+
     def get(self, url: str, *, depth: int = 0, discovered_from: str = "",
             enforce_robots: bool = True) -> Page:
         """Fetch one document, or explain why not. Never raises for a bad site."""
         key = normalise(url)
         if key in self._cache:
             return self._cache[key]
+        try:
+            if self.check_addresses:
+                addresses.check(url)
+        except addresses.Blocked as blocked:
+            # Recorded as data, not raised. A site we may not reach is a site we
+            # could not check — which research must report as NOT_VERIFIED
+            # rather than as a fact about the business, and rather than as a
+            # crash that stops the crawl.
+            log.warning("refused to fetch %s: %s", url, blocked)
+            return Page(url=url, status=0, depth=depth,
+                        discovered_from=discovered_from,
+                        error=f"address refused: {blocked}")
         if enforce_robots and not self.robots.allows(url):
             return Page(url=url, status=0, depth=depth, discovered_from=discovered_from,
                         error="disallowed by robots.txt")
@@ -261,7 +329,17 @@ class Fetcher:
         self._wait()
         started = time.monotonic()
         try:
-            response = self.client.get(url)
+            response, chain, refusal = self._follow(url)
+            # `response is None`, not `if refusal` — the two carry the same
+            # information and only this form tells a reader (or a type checker)
+            # that a missing response and a refusal are the same event rather
+            # than two conditions that happen to coincide.
+            if response is None:
+                page = Page(url=url, status=0, depth=depth,
+                            discovered_from=discovered_from,
+                            redirect_chain=tuple(chain), error=refusal)
+                self._cache[key] = page
+                return page
             body = response.text if len(response.content) <= MAX_BYTES else ""
             page = Page(
                 url=str(response.url), status=response.status_code, html=body,
@@ -269,7 +347,7 @@ class Fetcher:
                 bytes=len(response.content),
                 elapsed_ms=int((time.monotonic() - started) * 1000), depth=depth,
                 discovered_from=discovered_from,
-                redirect_chain=tuple(str(r.url) for r in response.history),
+                redirect_chain=tuple(chain),
                 error="" if len(response.content) <= MAX_BYTES else "response too large")
         except Exception as error:              # noqa: BLE001 - a bad site is data
             page = Page(url=url, status=0, depth=depth, discovered_from=discovered_from,

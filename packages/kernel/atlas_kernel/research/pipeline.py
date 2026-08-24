@@ -79,7 +79,8 @@ def _skip(name: str, reason: str) -> StageResult:
 
 
 def research(business_id: str, website: str, *, budget: Budget | None = None,
-             client: httpx.Client | None = None) -> ResearchResult:
+             client: httpx.Client | None = None,
+             check_addresses: bool = True) -> ResearchResult:
     """Everything the engine can establish about one business's digital presence.
 
     `client` is an injection point rather than a convenience. Without it the only
@@ -114,8 +115,13 @@ def research(business_id: str, website: str, *, budget: Budget | None = None,
             return fold(business_id, website, stages, started=started)
 
         found = context.discovery
+        # `check_addresses` is threaded through rather than derived from
+        # whether a client was injected. Deriving it would silently drop the
+        # SSRF guard for any deployment that supplied a client for connection
+        # pooling — a guard lost by inference is the worst kind.
         context.fetcher = Fetcher(found.canonical, budget=context.budget,
-                                  robots=found.robots, client=context.client)
+                                  robots=found.robots, client=context.client,
+                                  check_addresses=check_addresses)
 
         # -- crawl: sitemap routes first, then whatever they link ------------
         def _crawl() -> tuple[dict, list[Finding]]:
