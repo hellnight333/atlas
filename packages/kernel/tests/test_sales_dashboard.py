@@ -441,3 +441,55 @@ def test_the_industry_filter_offers_every_label_the_api_can_return() -> None:
     html = CONTROL_HTML.read_text(encoding="utf-8")
     for label in set(sales.INDUSTRY.values()):
         assert f'"{label}"' in html, f"the filter cannot select {label!r}"
+
+
+# ------------------------------------------------------ one key, two meanings
+
+def test_no_dict_literal_in_the_kernel_assigns_one_key_twice() -> None:
+    """Python keeps the last, silently, and the first is dead computation.
+
+    `_card` had `confidence` twice: the scoring component's points, then the
+    level string. The points were computed and discarded, and `?sort=confidence`
+    negated a string — a 500 on the sort an operator reaches for first.
+
+    A structural check rather than one test for that key, because the shape
+    recurs: any long dict literal assembled by hand can grow a second copy of a
+    key, and nothing at runtime complains.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(sales.__file__).resolve().parents[1]
+    duplicates = []
+    for path in source.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Dict):
+                continue
+            seen: dict[str, int] = {}
+            for key in node.keys:
+                if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                    continue
+                if key.value in seen:
+                    duplicates.append(
+                        f"{path.name}:{key.lineno} {key.value!r} "
+                        f"(first at line {seen[key.value]})")
+                seen[key.value] = key.lineno
+
+    assert duplicates == [], duplicates
+
+
+def test_the_scan_can_actually_find_a_duplicate() -> None:
+    """A structural check that passes by parsing nothing is no check at all."""
+    import ast
+
+    tree = ast.parse('{"a": 1, "b": 2, "a": 3}')
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.Dict))
+    keys = [k.value for k in node.keys]
+    assert len(keys) != len(set(keys))
+
+
+def test_prospects_can_be_sorted_by_confidence() -> None:
+    """The ordering expression, applied to the key it actually reads."""
+    order = {"confidence": lambda c: -c["confidence_points"]}["confidence"]
+    assert order({"confidence_points": 12}) == -12
+    assert order({"confidence_points": 0}) == 0

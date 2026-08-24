@@ -657,7 +657,11 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
             "score": score.total,
             "band": ("HIGH OPPORTUNITY" if score.total >= 75
                      else "WORTH A LOOK" if score.total >= 55 else "LOW"),
-            "confidence": next(c.points for c in score.components if c.name == "confidence"),
+            # Points, not the level. Both used to live under `confidence`, in one
+            # dict literal, and Python kept the later one — so the points were
+            # computed and thrown away, and `?sort=confidence` negated a string.
+            "confidence_points": next(c.points for c in score.components
+                                      if c.name == "confidence"),
             "audit_complete": score.audit_complete,
             "verified": score.verified,
             "stale": folded["stale"],
@@ -746,7 +750,7 @@ def build_router() -> APIRouter:  # noqa: C901 - one cohesive read model
 
         cards.sort(key={
             "score": lambda c: -c["score"],
-            "confidence": lambda c: -c["confidence"],
+            "confidence": lambda c: -c["confidence_points"],
             "industry": lambda c: (c["industry"], -c["score"]),
             "verified": lambda c: (c["stale"], -c["score"]),
             "contactability": lambda c: (c["contactability"]["whatsapp"] != "REACHABLE", -c["score"]),
