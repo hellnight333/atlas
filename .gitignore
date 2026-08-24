@@ -32,6 +32,13 @@ dist/
 *.pfx
 secrets/
 credentials/
+# …except the kernel's credential *code*, which is a source package that
+# happens to share the name of the directory secrets get stored in. Git does
+# not descend into an excluded directory, so the directory itself has to be
+# re-included before anything inside it can be. Without this line the whole
+# vault module — five files, forty-one security tests' worth of subject —
+# was silently absent from the repository while every test passed locally.
+!packages/kernel/atlas_kernel/credentials/
 .qevik/
 
 # Google OAuth — the file Google Cloud issues, under every name it is given.
