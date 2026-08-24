@@ -1,0 +1,105 @@
+{
+  "business_id": "qevik",
+  "tenant_id": "tenant-qevik",
+  "website": "https://qevik.ai",
+  "at": "2026-08-24T14:59:42.208898+00:00",
+  "counts": {
+    "present": 0,
+    "absent": 6,
+    "unverified": 10
+  },
+  "readiness": [
+    {
+      "dimension": "reachability",
+      "score": 0,
+      "confidence": "MEDIUM",
+      "confirmed": 2,
+      "unverified": 0
+    },
+    {
+      "dimension": "conversion",
+      "score": 0,
+      "confidence": "MEDIUM",
+      "confirmed": 1,
+      "unverified": 0
+    },
+    {
+      "dimension": "discoverability",
+      "score": null,
+      "confidence": "UNKNOWN",
+      "confirmed": 0,
+      "unverified": 5
+    },
+    {
+      "dimension": "ai_visibility",
+      "score": null,
+      "confidence": "UNKNOWN",
+      "confirmed": 0,
+      "unverified": 0
+    },
+    {
+      "dimension": "content",
+      "score": 0,
+      "confidence": "MEDIUM",
+      "confirmed": 2,
+      "unverified": 0
+    },
+    {
+      "dimension": "proof",
+      "score": 0,
+      "confidence": "MEDIUM",
+      "confirmed": 1,
+      "unverified": 0
+    },
+    {
+      "dimension": "technical_health",
+      "score": null,
+      "confidence": "UNKNOWN",
+      "confirmed": 0,
+      "unverified": 2
+    },
+    {
+      "dimension": "multilingual",
+      "score": 0,
+      "confidence": "MEDIUM",
+      "confirmed": 1,
+      "unverified": 0
+    }
+  ],
+  "opportunities": [
+    {
+      "key": "arabic",
+      "name": "Arabic experience",
+      "priority": "HIGH"
+    },
+    {
+      "key": "reachability",
+      "name": "One-tap contact",
+      "priority": "HIGH"
+    },
+    {
+      "key": "enquiry",
+      "name": "Structured enquiry",
+      "priority": "HIGH"
+    }
+  ],
+  "recommendations": [
+    "offer-arabic-experience",
+    "offer-one-tap-contact"
+  ],
+  "roadmap": {
+    "total": 7,
+    "qevik": 6,
+    "customer": 1,
+    "blocked": 0
+  },
+  "own_artefact": {
+    "files": [
+      "index.html",
+      "robots.txt",
+      "sitemap.xml"
+    ],
+    "audit_clean": true,
+    "indexable": false
+  }
+}

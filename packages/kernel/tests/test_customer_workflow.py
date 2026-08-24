@@ -354,9 +354,31 @@ def test_a_customer_task_is_not_complete_because_somebody_said_so() -> None:
     assert event.actor == "ayoub@alpha.test"
 
 
-def test_an_observed_proof_is_actually_observed() -> None:
+def _resolving(monkeypatch, answer: str | None) -> None:
+    """Control what names resolve to instead of asking the real resolver.
+
+    Necessary rather than tidy. This machine's resolver answers *every* name,
+    including ones under `.invalid`, from 198.18.0.0/15 — so "does not resolve"
+    is not observable against ambient DNS and these tests passed or failed
+    depending on which resolver happened to answer. A test of a DNS-dependent
+    check has to supply the DNS.
+    """
+    import socket
+
+    def answering(host, *args, **kwargs):
+        if answer is None:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (answer, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", answering)
+
+
+def test_an_observed_proof_is_actually_observed(monkeypatch) -> None:
+    _resolving(monkeypatch, None)
     with pytest.raises(ProofRejected, match="does not resolve"):
         verify_domain("definitely-not-a-real-qevik-domain.invalid")
+
+    _resolving(monkeypatch, "93.184.216.34")
     proof = verify_domain("https://example.com/whatever")
     assert proof.kind is ProofKind.OBSERVED
     assert proof.reference == "example.com"
@@ -700,8 +722,10 @@ def test_an_attestation_without_a_name_is_refused(client) -> None:
     assert "whose" in response.json()["detail"]
 
 
-def test_an_observed_proof_is_checked_rather_than_believed(client) -> None:
+def test_an_observed_proof_is_checked_rather_than_believed(client, monkeypatch
+                                                           ) -> None:
     """A domain that does not resolve has not been connected, whoever says so."""
+    _resolving(monkeypatch, None)
     mine, _ = _customer_task()
     client.acting_as(_as(A))
     response = _complete(client, mine.id, kind="observed",
