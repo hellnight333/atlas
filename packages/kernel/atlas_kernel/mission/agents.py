@@ -22,6 +22,7 @@ the handling is wrong.
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -116,10 +117,20 @@ class FakeCodingAgent:
     def __init__(self, *, name: str = "fake", behaviour: Behaviour = Behaviour.SUCCESS,
                  files: tuple[str, ...] = ("README.md",),
                  blockers: tuple[Blocker, ...] = (),
-                 succeed_after: int | None = None) -> None:
+                 succeed_after: int | None = None,
+                 writes: bool = False) -> None:
         self._name = name
         self._behaviour = behaviour
         self._files = files
+        #: Whether `implement` actually creates the files it names.
+        #:
+        #: Off by default, and that default is the useful one: a unit test of
+        #: the worker wants an agent that *claims* completion without writing
+        #: anything, because catching exactly that claim is the acceptance
+        #: check's whole job. Turned on only when something needs to exercise
+        #: the acceptance-and-commit path end to end, where a claim with no
+        #: file behind it stops the run before it reaches either.
+        self._writes = writes
         self._blockers = blockers or (self.DEFAULT_BLOCKER,)
         #: Lets a test drive "fails twice, then works", which is the only way to
         #: check that bounded retry actually retries rather than merely stopping.
@@ -169,6 +180,11 @@ class FakeCodingAgent:
             # Confident, and changed nothing. The worker must catch this.
             return AgentOutcome(summary="done", claims_done=True, files=(),
                                 invocation=self._invocation("implement"))
+        if self._writes:
+            for name in self._files:
+                path = Path(workspace_root) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{plan.goal}\n", encoding="utf-8")
         return AgentOutcome(summary=f"implemented {plan.goal}", files=self._files,
                             claims_done=True,
                             invocation=self._invocation("implement"))

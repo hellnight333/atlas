@@ -244,3 +244,23 @@ def history(events: list, mission_id: str, *, tenant: TenantId | None = None
     # By time, not by position, for the same reason as `fold`. A history shown
     # in arrival order would read as though the mission went backwards.
     return sorted(found, key=lambda d: d.get("updated_at", ""))
+
+
+def rehydrate(summary: dict, *, tenant: TenantId | None = None) -> Mission:
+    """A folded mission back into a `Mission`, so a surface can act on it.
+
+    `fold()` returns dicts because a read model should not force a caller to
+    import the model layer. But approving a mission means calling `transition()`,
+    which needs the object — so the round trip has to be lossless, or an approval
+    made from the mission control would silently drop the plan it approved.
+
+    Refuses a summary belonging to another tenant rather than reconstructing it:
+    the caller has already been scoped, and a mismatch here means the summary
+    came from somewhere it should not have.
+    """
+    tenant = _require_tenant(tenant, method="mission.rehydrate")
+    if not owns(summary.get("tenant_id"), tenant):
+        raise NotPermitted("that mission belongs to another tenant")
+    fields = {k: v for k, v in summary.items()
+              if k in Mission.model_fields and k != "id"}
+    return Mission.model_validate({**fields, "id": summary.get("mission_id", "")})

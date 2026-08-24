@@ -73,11 +73,13 @@ ignore = ["E501"]
 "packages/kernel/tests/*.py" = ["B011"]
 # FastAPI's dependency-injection defaults (File, Form, Depends) are the
 # framework's documented idiom, not a mutable-default bug.
+#
+# A glob rather than one line per router. The enumerated version was four
+# hand-synced lines, and adding a fifth router meant twenty lint errors that
+# said nothing about the router — the failure mode of every list that has to be
+# kept in step with something it does not derive from.
 "packages/kernel/atlas_kernel/api.py" = ["B008"]
-"packages/kernel/atlas_kernel/auth/api.py" = ["B008"]
-"packages/kernel/atlas_kernel/control/api.py" = ["B008"]
-# FastAPI's Depends() belongs in the signature; same reason as the routers above.
-"packages/kernel/atlas_kernel/customer/api.py" = ["B008"]
+"packages/kernel/atlas_kernel/**/api.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -203,3 +203,33 @@ class GitWorkspace:
                 "branch": self.branch, "base": self.base,
                 "changed": list(self.changed()),
                 "note": "kept deliberately: this is the evidence for the failure"}
+
+    def discard(self) -> dict:
+        """Remove a *committed* worktree directory. The branch survives it.
+
+        Only safe once the work is committed: the commit lives on the branch and
+        the directory is a checkout of it, so removing the directory loses
+        nothing. Refuses while changes are uncommitted, because then the
+        directory *is* the work — that is `keep()`'s job, not this one.
+
+        Without this, every successful mission leaves a worktree behind and the
+        disk fills with directories nobody will ever open.
+        """
+        outstanding = self.changed()
+        if outstanding:
+            raise GitError(
+                f"{self.root} has {len(outstanding)} uncommitted change(s). "
+                "Removing it now would destroy work that exists nowhere else; "
+                "commit it or keep() it as failure evidence.")
+        removed = subprocess.run(
+            ["git", "worktree", "remove", str(self.root)],
+            cwd=str(self.repository), capture_output=True, text=True, check=False)
+        if removed.returncode != 0:
+            raise GitError(
+                f"could not remove worktree: {removed.stderr.strip()[:300]}")
+        self.commands.append(f"git worktree remove {self.root}")
+        log.info("removed mission worktree %s (branch %s kept)",
+                 self.root, self.branch)
+        return {"removed": True, "worktree": str(self.root),
+                "branch": self.branch,
+                "note": "the branch and its commits are untouched"}

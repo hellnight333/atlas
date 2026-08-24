@@ -31,6 +31,7 @@ from .service import (
     fold,
     history,
     record_invocation,
+    rehydrate,
     release,
     stale,
     transition,
@@ -44,4 +45,4 @@ __all__ = ["ALLOWED", "CLAIMABLE", "TERMINAL", "Acceptance", "AgentError",
            "reports",
            "Mission", "MissionStatus", "NotPermitted", "Plan", "PlanStep",
            "attach_plan", "claim", "create", "fold", "history",
-           "record_invocation", "release", "stale", "transition"]
+           "record_invocation", "rehydrate", "release", "stale", "transition"]

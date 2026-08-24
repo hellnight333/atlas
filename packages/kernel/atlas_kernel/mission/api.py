@@ -1,0 +1,392 @@
+"""Mission control over HTTP. A window onto the work, never the thing doing it.
+
+§12. The temptation in a control plane is to let the route that starts a mission
+also run it — it is one function call, the response can carry the result, and the
+UI gets a progress bar for free. That design makes the browser tab load-bearing:
+close it, lose the network, restart the API to deploy, and a mission dies
+half-committed with a worktree left behind.
+
+So **no handler in this module runs anything.** Every write appends an event and
+returns. A worker somewhere else folds the timeline, sees a queued mission, and
+picks it up on its own schedule. That is what makes "closing the UI does not stop
+a running mission" a property of the architecture rather than a hope, and
+`test_the_http_surface_cannot_run_a_mission` reads this file to keep it true.
+
+Two smaller rules, both borrowed from the customer surface because they were
+right there:
+
+**The tenant comes from the authenticated user, never from the request.** There
+is no argument in which to ask for somebody else's missions.
+
+**Another tenant's mission is absent, not forbidden.** 404 and the same body for
+both, since 403-versus-404 tells a caller which mission ids exist.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from ..auth.api import current_user, requires
+from ..auth.models import Scope, User
+from ..opportunity.tenancy import TenantId
+from . import service
+from .models import Mission, MissionStatus
+
+#: The single message for every miss, whether the mission does not exist or
+#: belongs to somebody else.
+NOT_FOUND = "no such mission"
+
+#: What `create()` produces. Collection routes are declared before the
+#: parameterised one, but order-of-declaration is a fragile thing to rest a
+#: routing decision on — this makes `/api/missions/costs` impossible to read as
+#: a mission id rather than merely unlikely to be.
+MISSION_ID = re.compile(r"^mission-[0-9a-f]{12}$")
+
+#: Where reports are written, relative to the deployment root. A path that
+#: escapes this is refused: `report_path` arrives from an event, and an event is
+#: data, so treating it as a filesystem instruction is how a read model becomes
+#: an arbitrary-file-read.
+REPORTS = Path("docs/qevik-docs/autonomous/reports")
+
+
+def current_tenant(user: User = Depends(current_user)) -> TenantId:
+    """The tenant this request acts for, or a refusal."""
+    tenant = (user.tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(
+            status_code=403,
+            detail="this account is not attached to a tenant, so it has no "
+                   "missions. Attach it to one rather than defaulting.")
+    return tenant
+
+
+def _events(request: Request) -> list:
+    """The timeline this deployment folds missions from.
+
+    Injected rather than imported, so the same routes serve a file-backed
+    timeline in development and a database-backed one in production without
+    this module knowing which.
+    """
+    source = getattr(request.app.state, "mission_events", None)
+    return list(source or [])
+
+
+def _append(request: Request, event: Any) -> None:
+    """Put one event on the timeline, or refuse.
+
+    No silent no-op when a sink is missing. A write route that appears to
+    succeed and persists nothing is the failure mode where an operator approves
+    a mission, sees a 200, and nothing ever runs.
+    """
+    sink = getattr(request.app.state, "mission_sink", None)
+    if sink is None:
+        raise HTTPException(
+            status_code=503,
+            detail="no mission timeline is configured to write to, so this "
+                   "would have been accepted and lost")
+    sink(event)
+
+
+def _folded(request: Request, tenant: TenantId) -> list[dict]:
+    return service.fold(_events(request), tenant=tenant)
+
+
+def _one(request: Request, mission_id: str, tenant: TenantId) -> dict:
+    if not MISSION_ID.match(mission_id):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    for summary in _folded(request, tenant):
+        if summary.get("mission_id") == mission_id:
+            return summary
+    raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+
+def _rehydrate(summary: dict, tenant: TenantId) -> Mission:
+    try:
+        return service.rehydrate(summary, tenant=tenant)
+    except service.NotPermitted as error:  # pragma: no cover - fold scopes first
+        raise HTTPException(status_code=404, detail=NOT_FOUND) from error
+
+
+# ============================================ what a cost summary may claim
+
+def costs(missions: list[dict]) -> dict:
+    """What the work cost, and how much of that is actually known.
+
+    Summing the invocations that reported a cost gives a number that reads as
+    the total and is really a floor. So the floor is labelled a floor, and the
+    calls that reported nothing are counted beside it rather than folded in as
+    zero — a missing cost is not a free call, and the one number in this system
+    nobody can check is a fabricated exact one.
+    """
+    reported = estimated = 0.0
+    unknown = priced = 0
+    currencies: set[str] = set()
+    for mission in missions:
+        for call in mission.get("invocations") or []:
+            status = call.get("cost_status", "UNKNOWN")
+            cost = call.get("cost")
+            if cost is None:
+                unknown += 1
+                continue
+            priced += 1
+            currencies.add(call.get("currency", "") or "")
+            if status == "REPORTED":
+                reported += float(cost)
+            else:
+                estimated += float(cost)
+
+    known = reported + estimated
+    return {
+        "reported": round(reported, 6),
+        "estimated": round(estimated, 6),
+        "known_total": round(known, 6),
+        "priced_calls": priced,
+        "unpriced_calls": unknown,
+        # Mixed currencies would make the sum meaningless, so say so rather than
+        # adding dirhams to dollars behind a single figure.
+        "currency": next(iter(currencies)) if len(currencies) == 1 else "",
+        "mixed_currencies": len(currencies) > 1,
+        "complete": unknown == 0 and priced > 0,
+        "note": ("every call reported a cost" if unknown == 0 and priced
+                 else f"{unknown} call(s) reported no cost. The total is a "
+                      "floor, not the amount spent."),
+    }
+
+
+def blockers(missions: list[dict]) -> dict:
+    """What is stopping work, grouped by class rather than listed as sentences.
+
+    A credential blocker and an architecture blocker are both "blocked" and
+    almost nothing else in common: one is a person's five minutes, the other is
+    a design decision. Grouping by kind is what turns a stuck list into a list
+    somebody can act on.
+    """
+    by_kind: dict[str, list[dict]] = {}
+    for mission in missions:
+        for blocker in mission.get("blockers") or []:
+            entry = {**blocker, "mission_id": mission.get("mission_id"),
+                     "title": mission.get("title", "")}
+            by_kind.setdefault(blocker.get("kind", "UNKNOWN"), []).append(entry)
+
+    stopped = [m for m in missions
+               if m.get("status") == MissionStatus.BLOCKED.value]
+    return {
+        "by_kind": {kind: found for kind, found in sorted(by_kind.items())},
+        "counts": {kind: len(found) for kind, found in sorted(by_kind.items())},
+        "blocked_missions": [
+            {"mission_id": m.get("mission_id"), "title": m.get("title", ""),
+             "blockers": m.get("blockers") or []} for m in stopped],
+        "total": sum(len(f) for f in by_kind.values()),
+    }
+
+
+class Submission(BaseModel):
+    """A request for work. Qevik decides the steps; this is not a plan."""
+
+    title: str = Field(min_length=3, max_length=300)
+    description: str = Field(default="", max_length=8000)
+    priority: int = 0
+
+
+class Decision(BaseModel):
+    """An operator's answer about one mission.
+
+    No `decided_by`. The decider is the authenticated session, and a field for
+    it would be a field to lie in.
+    """
+
+    note: str = Field(default="", max_length=2000)
+
+
+def build_router() -> APIRouter:
+    router = APIRouter(prefix="/api/missions", tags=["missions"])
+
+    # -------------------------------------------------- collection views
+    # Declared before `/{mission_id}`, and made unambiguous by MISSION_ID.
+
+    @router.get("")
+    def listing(request: Request, status: str = "",
+                tenant: TenantId = Depends(current_tenant),
+                _: User = Depends(requires(Scope.READ))) -> dict:
+        """Every mission this tenant has, newest first."""
+        found = _folded(request, tenant)
+        if status:
+            wanted = {s.strip() for s in status.split(",") if s.strip()}
+            unknown = wanted - {s.value for s in MissionStatus}
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown status: {', '.join(sorted(unknown))}")
+            found = [m for m in found if m.get("status") in wanted]
+        return {
+            "missions": found,
+            "counts": {
+                "total": len(found),
+                "running": sum(1 for m in found if m.get("claimed_by")),
+                "awaiting_approval": sum(
+                    1 for m in found
+                    if m.get("status") == MissionStatus.AWAITING_APPROVAL.value),
+                "blocked": sum(1 for m in found
+                               if m.get("status") == MissionStatus.BLOCKED.value),
+            },
+        }
+
+    @router.get("/costs")
+    def cost_summary(request: Request, tenant: TenantId = Depends(current_tenant),
+                     _: User = Depends(requires(Scope.READ))) -> dict:
+        return costs(_folded(request, tenant))
+
+    @router.get("/blockers")
+    def blocker_summary(request: Request,
+                        tenant: TenantId = Depends(current_tenant),
+                        _: User = Depends(requires(Scope.READ))) -> dict:
+        return blockers(_folded(request, tenant))
+
+    @router.get("/actions")
+    def actions(request: Request, tenant: TenantId = Depends(current_tenant),
+                _: User = Depends(requires(Scope.READ))) -> dict:
+        """What is waiting on a person.
+
+        Delegated to the control plane rather than derived again here. Two
+        places computing "what does the human still owe us" is two places to
+        disagree, and the one that disagrees quietly is the one in the UI.
+        """
+        from .. import controlplane
+        from ..publication import ConnectionStore
+
+        store = getattr(request.app.state, "connections", None) or ConnectionStore()
+        return controlplane.centre(store=store, tenant=tenant)
+
+    # -------------------------------------------------- one mission
+
+    @router.get("/{mission_id}")
+    def detail(mission_id: str, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               _: User = Depends(requires(Scope.READ))) -> dict:
+        return _one(request, mission_id, tenant)
+
+    @router.get("/{mission_id}/history")
+    def transitions(mission_id: str, request: Request,
+                    tenant: TenantId = Depends(current_tenant),
+                    _: User = Depends(requires(Scope.READ))) -> dict:
+        """Every transition, oldest first, never collapsed.
+
+        Establishes the mission first. Reading history for an id that folds to
+        nothing would return an empty list either way — and an empty list for
+        "not yours" versus "no such mission" is the same leak in a quieter form.
+        """
+        _one(request, mission_id, tenant)
+        return {"mission_id": mission_id,
+                "history": service.history(_events(request), mission_id,
+                                           tenant=tenant)}
+
+    @router.get("/{mission_id}/report")
+    def report(mission_id: str, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               _: User = Depends(requires(Scope.READ))) -> dict:
+        """The written report, if the mission produced one.
+
+        `report_path` comes off an event, which is data. It is resolved under
+        the reports directory and refused if it escapes — a read model that
+        opens whatever path an event names is an arbitrary-file-read with extra
+        steps.
+        """
+        summary = _one(request, mission_id, tenant)
+        raw = (summary.get("report_path") or "").strip()
+        if not raw:
+            raise HTTPException(
+                status_code=404,
+                detail="this mission has not produced a report")
+
+        root = Path(getattr(request.app.state, "repository_root", ".")).resolve()
+        reports = (root / REPORTS).resolve()
+        candidate = (root / raw).resolve()
+        if not candidate.is_relative_to(reports) or not candidate.is_file():
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        return {"mission_id": mission_id, "path": raw,
+                "report": candidate.read_text(encoding="utf-8")}
+
+    # -------------------------------------------------- writes append, only
+
+    @router.post("", status_code=201)
+    def submit(body: Submission, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Record a request. Nothing runs from this.
+
+        The mission lands in DRAFT and stays there until something plans it and
+        a person approves the plan. A submission that went straight to QUEUED
+        would let anyone holding EXECUTE start unreviewed work by choosing a
+        title carefully.
+        """
+        try:
+            mission, event = service.create(
+                tenant=tenant, title=body.title, description=body.description,
+                requested_by=user.username, priority=body.priority)
+        except service.NotPermitted as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        _append(request, event)
+        return mission.summary()
+
+    @router.post("/{mission_id}/approve")
+    def approve(mission_id: str, body: Decision, request: Request,
+                tenant: TenantId = Depends(current_tenant),
+                user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Let an approved plan be picked up. Still does not run it.
+
+        The transition goes through the same `ALLOWED` table the worker obeys,
+        so a mission that is not actually awaiting approval is refused here for
+        the same reason it would be refused anywhere else, rather than by a
+        second rule written into this handler.
+        """
+        mission = _rehydrate(_one(request, mission_id, tenant), tenant)
+        try:
+            approved, event = service.transition(
+                mission, MissionStatus.QUEUED, tenant=tenant,
+                actor=user.username, note=body.note or "approved by operator")
+        except service.NotPermitted as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        _append(request, event)
+        return approved.summary()
+
+    @router.post("/{mission_id}/cancel")
+    def cancel(mission_id: str, body: Decision, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Stop a mission from being picked up. Only before something picks it.
+
+        A claimed mission cannot be cancelled here, and the refusal says why
+        rather than being a generic state error. Marking it cancelled while a
+        worker is still writing to a worktree and about to commit would show
+        the operator a cancelled mission that goes on producing commits — the
+        button that appears to kill a process and does not. The worker's own
+        claim expiry is what handles a worker that has actually died.
+        """
+        mission = _rehydrate(_one(request, mission_id, tenant), tenant)
+        if mission.claimed_by:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{mission.id} is being worked on by "
+                       f"{mission.claimed_by}. Cancelling it here would record "
+                       "it as cancelled while the worker is still writing, so "
+                       "it is refused: wait for the mission to finish, fail, or "
+                       "for the claim to expire.")
+        try:
+            cancelled, event = service.transition(
+                mission, MissionStatus.CANCELLED, tenant=tenant,
+                actor=user.username, note=body.note or "cancelled by operator")
+        except service.NotPermitted as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        _append(request, event)
+        return cancelled.summary()
+
+    return router
+
+
+def install(app: Any) -> None:
+    app.include_router(build_router())
