@@ -5,7 +5,7 @@ It supersedes the status tables in `STATE.md` and `MASTER_EXECUTION_STATE.md`,
 which now point here. `ROADMAP_RECONCILIATION.md` remains the map between the
 three document sets and is not restated.
 
-Last reconciled: **25 August 2026**, at `ed64f67`.
+Last reconciled: **25 August 2026**, at `424faa0`.
 
 Companion documents: `SECURITY_REVIEW_2026_08_24.md` (every §18 item, with the check that established it) and `COMMERCIAL_REVIEW_2026_08_24.md` (what can be sold, NOW/NEXT/LATER/REJECT).
 
@@ -133,6 +133,32 @@ tests, the cost model and the documentation are built; only the live call waits.
 Exactly that capability is marked `PENDING_CREDENTIAL` and appears as a
 `HumanAction` in the Credential Centre.
 
+## The control panel
+
+`apps/control/src/index.html` — one file, no build step, served either by Caddy
+from `/srv/qevik-control` or by the composed app itself. Dashboard, Roadmap,
+Mission Control, Chat, Human Actions, Credentials, Models, Businesses,
+Publications, Measurements, Reports, History, Settings. Responsive; the
+navigation becomes a scrolling strip under 820px.
+
+**Status: built and acceptance-tested locally. NOT deployed.**
+
+`infra/run_console_acceptance.py` runs it against a real uvicorn over real HTTP:
+33 checks, all passing, including killing the server mid-flight, running the
+worker as a separate process with nothing serving, and starting a *new* server
+to confirm the mission, its full lifecycle history and its report survived.
+
+| | |
+|---|---|
+| app.qevik.ai reachable | **Yes** — real Cloudflare IPs, serving the older *sales* interface |
+| control plane reachable there | **No** — `/api/*` fell through to the static handler and returned `index.html` with a 200 |
+| Caddyfile | Fixed: `/api/*` now proxies to the control plane |
+| Deploying it | **BLOCKED — no SSH access to the host** |
+
+`infra/deploy_console.sh` copies the console, installs the Caddyfile, validates
+it, reloads Caddy and verifies over HTTPS. Run today it refuses with exit 2 and
+deploys nothing, because `ssh root@2.28.62.83` is `Permission denied`.
+
 ## Capability delivery, as distinct from capability existence
 
 `EXECUTORS` says what can run. `REQUIRES_CUSTOMER_INPUT` says what still needs
@@ -174,6 +200,10 @@ rather than model. It closes with a crawl and a Search Console credential.
 
 ## What a person has to do that no code can
 
+0. **SSH access to the host serving app.qevik.ai** (qevik-core-01 /
+   2.28.62.83). This is the only thing between the control panel existing and
+   the control panel being usable, and no credential in the vault substitutes
+   for it. Once available: `./infra/deploy_console.sh`.
 1. Enter provider keys once in the Credential Centre — nothing is asked for in
    chat, and no key is ever needed to build the integration.
 2. Provision Postgres, if multi-worker missions are wanted.

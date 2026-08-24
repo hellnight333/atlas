@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Put the control panel on the host that serves app.qevik.ai.
+#
+# Static files only. The console has no build step — that is the deployment
+# decision it was written for: this script copies a directory and reloads a web
+# server, and there is no toolchain between the repository and the browser that
+# can be broken on the day the operator needs the console.
+#
+#   ./infra/deploy_console.sh [user@host]
+#
+# It refuses rather than half-deploying, and it verifies afterwards rather than
+# reporting success because `scp` exited zero.
+set -euo pipefail
+
+TARGET="${1:-root@2.28.62.83}"
+LOCAL="$(cd "$(dirname "$0")/.." && pwd)/apps/control/src"
+REMOTE="/srv/qevik-control"
+CADDYFILE="$(cd "$(dirname "$0")" && pwd)/qevik-production.Caddyfile"
+
+[ -f "$LOCAL/index.html" ] || { echo "no console at $LOCAL"; exit 1; }
+
+echo "==> checking access to $TARGET"
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" true 2>/dev/null; then
+  cat <<'MSG'
+REFUSED: no SSH access to the host.
+
+This is the exact human dependency, and nothing here can work around it:
+
+  1. An SSH key or password for the host serving app.qevik.ai
+     (qevik-core-01 / 2.28.62.83).
+
+Everything else is ready. The console is built, the Caddyfile carries the
+/api/* route the control plane needs, and this script deploys and verifies in
+one step once it can reach the host.
+
+Nothing was deployed. No success is being reported.
+MSG
+  exit 2
+fi
+
+echo "==> copying the console to $REMOTE"
+ssh "$TARGET" "mkdir -p $REMOTE.incoming"
+scp -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
+# Swap, rather than overwrite in place: a half-copied console is a broken
+# console that is live, which is worse than the previous one still being live.
+ssh "$TARGET" "rm -rf $REMOTE.previous && \
+  { [ -d $REMOTE ] && mv $REMOTE $REMOTE.previous || true; } && \
+  mv $REMOTE.incoming $REMOTE"
+
+echo "==> installing the Caddyfile"
+scp -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
+ssh "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
+  || { echo "the Caddyfile did not validate; nothing was reloaded"; exit 3; }
+ssh "$TARGET" "systemctl reload caddy"
+
+echo "==> verifying"
+code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/ || echo 000)
+type=$(curl -sS --max-time 20 -o /dev/null -w '%{content_type}' https://app.qevik.ai/api/health || echo none)
+echo "    GET /            -> $code"
+echo "    GET /api/health  -> $type"
+if [ "$code" != "200" ]; then echo "FAILED: the console did not answer"; exit 4; fi
+case "$type" in
+  application/json*) echo "OK: the console is live and the control plane is reachable." ;;
+  *) echo "FAILED: /api/* is still falling through to the static handler."; exit 5 ;;
+esac

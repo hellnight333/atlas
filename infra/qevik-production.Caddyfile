@@ -87,6 +87,13 @@ app.qevik.ai {
 	handle /control/* {
 		reverse_proxy 127.0.0.1:8080
 	}
+	# The Qevik control plane: missions, chat, credentials, models, customer.
+	# Absent until now, which is why the console's own API calls fell through to
+	# the static handler and came back as `index.html` with a 200 — a response
+	# that looks like success to anything not checking the content type.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
 	handle /health {
 		reverse_proxy 127.0.0.1:8080
 	}
@@ -153,6 +160,13 @@ https://2.28.62.83:8443 {
 		reverse_proxy 127.0.0.1:8080
 	}
 	handle /control/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# The Qevik control plane: missions, chat, credentials, models, customer.
+	# Absent until now, which is why the console's own API calls fell through to
+	# the static handler and came back as `index.html` with a 200 — a response
+	# that looks like success to anything not checking the content type.
+	handle /api/* {
 		reverse_proxy 127.0.0.1:8080
 	}
 	handle /health {

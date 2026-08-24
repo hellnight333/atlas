@@ -175,6 +175,22 @@ class TestTheApiIsClosedByDefault:
         # Nothing tenant-scoped may be public, whatever else is added later.
         assert not any(p.startswith("/api/customer") for p in PUBLIC_PATHS)
 
+    def test_the_console_paths_serve_a_page_and_never_an_api(self) -> None:
+        """The console's routes are a second, separate allow-list.
+
+        Kept apart from `PUBLIC_PATHS` so the pin above still means what it
+        says. `/api/health` was briefly in this set and is deliberately not:
+        it reports whether the vault is sealed and which components are absent,
+        which is deployment posture and belongs behind a session. `/health`
+        stays public and returns nothing but a status word.
+        """
+        from atlas_kernel.auth.api import CONSOLE_PATHS
+
+        assert not any(p.startswith("/api") for p in CONSOLE_PATHS)
+        assert not any(p.startswith("/control") for p in CONSOLE_PATHS)
+        assert not any(p.startswith("/auth") for p in CONSOLE_PATHS)
+        assert "/" in CONSOLE_PATHS, "the login form must be reachable"
+
     def test_the_one_public_api_route_returns_only_allow_listed_fields(self) -> None:
         """`/api/public/audit` is unauthenticated, so what it can return is
         bounded by an allow-list rather than by remembering to redact."""

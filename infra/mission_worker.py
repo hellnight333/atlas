@@ -40,7 +40,7 @@ from atlas_kernel.credentials.models import (  # noqa: E402
 )
 from atlas_kernel.credentials.service import CredentialService  # noqa: E402
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
-from atlas_kernel.mission import service  # noqa: E402
+from atlas_kernel.mission import reports, service  # noqa: E402
 from atlas_kernel.mission.agents import (  # noqa: E402
     Behaviour,
     CodingAgent,
@@ -173,7 +173,8 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
 
 
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
-              repository: Path, roles: Roles) -> int:
+              repository: Path, roles: Roles, report_root: Path | None = None
+              ) -> int:
     """Recover, then take at most one mission. Returns how many ran."""
     freed = release_stale(timeline, tenant=tenant)
     if freed:
@@ -191,6 +192,28 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     log.info("%s finished as %s (attempts %d, commit %s)", mission.id,
              result.mission.status.value, result.attempts,
              result.committed or "none")
+
+    # A report per mission, written by the worker rather than by whichever
+    # script happened to start it. Without this a mission run in production
+    # completes, commits, and leaves nothing a person can read — which the
+    # console then correctly reports as "no report", because there is none.
+    try:
+        written = reports.write(
+            result.mission, root=report_root or repository,
+            attempts=result.attempts, committed=result.committed,
+            detail=result.detail,
+            tests=result.detail or "acceptance check",
+            branch=f"mission/{mission.id}",
+            files=tuple(held[mission.id].changed()) if mission.id in held else ())
+        log.info("report written to %s", written)
+        # Recorded on the mission itself, so `/api/missions/{id}/report` can
+        # find it. A report nothing points at is a file in a directory.
+        result.mission = result.mission.model_copy(update={
+            "report_path": str(written.relative_to(report_root or repository))})
+        timeline.append(service._event(result.mission, actor=name,
+                                       note="report written"))
+    except Exception:                            # noqa: BLE001 - logged, not fatal
+        log.exception("could not write a report for %s", mission.id)
 
     space = held.get(mission.id)
     if space is not None and result.succeeded:
@@ -216,6 +239,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="'fake' runs a deterministic stub that calls no "
                              "model. Never the default: everything it produces "
                              "would claim work nothing did.")
+    parser.add_argument("--reports", default="",
+                        help="where mission reports are written "
+                             "(default: alongside the repository)")
     parser.add_argument("--vault", default="",
                         help="credential vault root (default: the user vault)")
     args = parser.parse_args(argv)
@@ -235,14 +261,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         pass_once(timeline, tenant=args.tenant, name=args.name,
-                  worktrees=worktrees, repository=repository, roles=roles)
+                  worktrees=worktrees, repository=repository, roles=roles,
+                  report_root=Path(args.reports) if args.reports else None)
         return 0
 
     log.info("watching %s for %s", timeline.path, args.tenant)
     while True:
         try:
             pass_once(timeline, tenant=args.tenant, name=args.name,
-                      worktrees=worktrees, repository=repository, roles=roles)
+                      worktrees=worktrees, repository=repository, roles=roles,
+                      report_root=Path(args.reports) if args.reports else None)
         except KeyboardInterrupt:
             log.info("stopping")
             return 0

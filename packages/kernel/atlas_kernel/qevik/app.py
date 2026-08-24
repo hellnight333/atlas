@@ -105,6 +105,8 @@ class Wiring:
     claims: Any = None
     repository_root: Path = field(default_factory=Path.cwd)
     vault_path: Path = DEFAULT_VAULT
+    #: Where the control panel's files live. None uses the repository copy.
+    console: Path | None = None
 
     def build_credentials(self) -> CredentialService:
         """The vault, sealed unless a master key is in the environment.
@@ -168,7 +170,48 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     def _health() -> dict:
         return health(app)
 
+    _serve_console(app, wiring.console)
     return app
+
+
+#: The control panel, as built. One directory of static files with no build step
+#: — a deployment decision rather than a stylistic one: the console has to be
+#: serveable by copying a directory onto a host, and every build chain is another
+#: thing that can be broken on the day the operator needs it most.
+# qevik -> atlas_kernel -> kernel -> packages -> repository root.
+CONSOLE = Path(__file__).resolve().parents[4] / "apps" / "control" / "src"
+
+
+def _serve_console(app: FastAPI, root: Path | None) -> None:
+    """Serve the console from the same process that serves the API.
+
+    Optional, and absent rather than faked when the directory is missing: a
+    deployment serving the API alone is a real configuration (Caddy serves the
+    files in production), and inventing a placeholder page would make a missing
+    console look like a working one.
+    """
+    directory = root or CONSOLE
+    index = directory / "index.html"
+    if not index.is_file():
+        return
+
+    from fastapi.responses import FileResponse, HTMLResponse
+
+    @app.get("/", include_in_schema=False)
+    def _console() -> HTMLResponse:
+        return HTMLResponse(index.read_text(encoding="utf-8"))
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def _console_asset(path: str) -> FileResponse | HTMLResponse:
+        # Resolved under the console directory and refused if it escapes: the
+        # path comes from the URL, and serving whatever it names is an
+        # arbitrary-file-read with extra steps.
+        candidate = (directory / path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(directory.resolve()):
+            return FileResponse(candidate)
+        # Anything else is a client-side route. Returning the shell rather than
+        # a 404 is what makes a deep link work on reload.
+        return HTMLResponse(index.read_text(encoding="utf-8"))
 
 
 def health(app: FastAPI) -> dict:

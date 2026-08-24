@@ -40,7 +40,8 @@ SCHEMA = (
         password_hash TEXT NOT NULL,
         scopes TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-        disabled BOOLEAN NOT NULL DEFAULT FALSE
+        disabled BOOLEAN NOT NULL DEFAULT FALSE,
+        tenant_id TEXT NOT NULL DEFAULT ''
     )
     """,
     # Added for the customer surface. Defaults to empty, which means "no tenant
@@ -65,10 +66,38 @@ SCHEMA = (
 )
 
 
+#: Statements only PostgreSQL understands. `ADD COLUMN IF NOT EXISTS` is a
+#: Postgres extension, and it is the single thing that stopped the whole auth
+#: stack from running on sqlite — which is what a local acceptance run, a
+#: developer machine and a throwaway environment all want to use.
+#:
+#: Skipped rather than rewritten for every dialect: on a fresh sqlite database
+#: `CREATE TABLE` above already includes the column, so the migration has
+#: nothing to do. It matters only for a Postgres database created before the
+#: column existed.
+_POSTGRES_ONLY = ("ADD COLUMN IF NOT EXISTS",)
+
+
 def init_auth() -> None:
+    postgres = engine.dialect.name.startswith("postgres")
     with engine.begin() as conn:
         for statement in SCHEMA:
+            if not postgres and any(m in statement for m in _POSTGRES_ONLY):
+                continue
             conn.execute(text(statement))
+
+
+def _moment(value: object) -> datetime:
+    """A timestamp from any driver, as an aware datetime.
+
+    Postgres returns a `datetime`; sqlite has no timestamp type and returns the
+    string it stored. Handling both is what lets the whole auth stack run on a
+    throwaway sqlite file for a local run or an acceptance test, rather than
+    requiring a Postgres wherever anybody wants to sign in.
+    """
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    assert isinstance(moment, datetime)
+    return moment.replace(tzinfo=moment.tzinfo or UTC)
 
 
 def _to_user(row) -> User:
@@ -78,7 +107,7 @@ def _to_user(row) -> User:
         password_hash=row.password_hash,
         tenant_id=getattr(row, "tenant_id", "") or "",
         scopes=frozenset(Scope(s) for s in row.scopes.split(",") if s),
-        created_at=row.created_at.replace(tzinfo=row.created_at.tzinfo or UTC),
+        created_at=_moment(row.created_at),
         disabled=row.disabled,
     )
 
@@ -249,9 +278,10 @@ class AuthStore:
             ).first()
         if row is None or row.revoked:
             raise NotAuthenticated("session not found or revoked")
-        expires = row.expires_at
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=UTC)
+        # `_moment` rather than `.tzinfo` directly: sqlite has no timestamp
+        # type and hands back the string it stored, and this is the hot path of
+        # every authenticated request.
+        expires = _moment(row.expires_at)
         if datetime.now(UTC) >= expires:
             raise NotAuthenticated("session expired")
         user = self.get_user_by_id(row.user_id)

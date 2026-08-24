@@ -39,6 +39,24 @@ PUBLIC_PATHS = frozenset(
     }
 )
 
+#: The console's own routes: the shell, and the client-side paths it owns.
+#:
+#: Deliberately a *separate* set from `PUBLIC_PATHS`, which is pinned exactly by
+#: a test so that an unauthenticated API route is a conscious decision. These
+#: serve one static HTML file that carries no data — every number on screen is
+#: fetched from an API that authenticates separately — and the login form has to
+#: be reachable before anybody has a session.
+#:
+#: `/api/health` is **not** here, and was briefly. It reports whether the vault
+#: is sealed, which components are absent and what claiming guarantees — that is
+#: deployment posture, and it belongs behind a session. `/health` stays public
+#: for liveness and returns nothing but `{"status": "ok"}`.
+CONSOLE_PATHS = frozenset({
+    "/", "/dashboard", "/roadmap", "/missions", "/chat", "/actions",
+    "/credentials", "/models", "/businesses", "/publications", "/measurements",
+    "/reports", "/history", "/settings",
+})
+
 #: Cookie rather than a header for the browser UI, so the token is not reachable
 #: from JavaScript and therefore not stealable by injected script.
 SESSION_COOKIE = "qevik_session"
@@ -246,7 +264,8 @@ def install(app, store: AuthStore | None = None) -> None:
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
         path = request.url.path
-        if path in PUBLIC_PATHS or request.method == "OPTIONS":
+        if (path in PUBLIC_PATHS or path in CONSOLE_PATHS
+                or request.method == "OPTIONS"):
             return await call_next(request)
         try:
             request.state.user = store.authenticate(token_from(request))

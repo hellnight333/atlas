@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Qevik Control</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+/* Qevik Control.
+ *
+ * One file, no build step, no dependency. That is a deployment decision, not a
+ * stylistic one: the control plane has to be serveable by copying a directory
+ * onto a host that runs Caddy and nothing else, and every build chain is another
+ * thing that can be broken on the day the operator needs the console most.
+ *
+ * The CSP in qevik-production.Caddyfile allows 'self' and inline style/script
+ * and nothing else — no CDN, no font host, no analytics. This file is written to
+ * that policy rather than asking for it to be relaxed.
+ */
+:root {
+  --bg: #0e1116; --panel: #161b22; --line: #262d38; --raised: #1c2330;
+  --text: #e6edf3; --muted: #8b98a8; --dim: #5c6875;
+  --accent: #4c8dff; --accent-dim: #1f3a63;
+  --ok: #3fb950; --warn: #d29922; --bad: #f85149; --wait: #a371f7;
+  --radius: 8px; --gap: 16px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f8fa; --panel: #ffffff; --line: #d8dee4; --raised: #f0f3f6;
+    --text: #1f2328; --muted: #59636e; --dim: #818b98;
+    --accent: #0969da; --accent-dim: #ddf4ff;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button {
+  font: inherit; cursor: pointer; border-radius: 6px; padding: .5rem .9rem;
+  border: 1px solid var(--line); background: var(--raised); color: var(--text);
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--bad); }
+input, textarea, select {
+  font: inherit; width: 100%; padding: .55rem .7rem; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+}
+input:focus, textarea:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+pre {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: .8rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+}
+
+/* ---------------------------------------------------------------- layout */
+#shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+nav {
+  background: var(--panel); border-right: 1px solid var(--line);
+  padding: 1rem .75rem; display: flex; flex-direction: column; gap: 2px;
+}
+nav h1 {
+  font-size: 13px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--muted); margin: .25rem .5rem 1rem;
+}
+nav a {
+  padding: .5rem .6rem; border-radius: 6px; color: var(--text);
+  display: flex; justify-content: space-between; align-items: center; gap: .5rem;
+}
+nav a:hover { background: var(--raised); text-decoration: none; }
+nav a[aria-current="page"] { background: var(--accent-dim); color: var(--accent); }
+nav .count {
+  font-size: 11px; background: var(--raised); border: 1px solid var(--line);
+  border-radius: 20px; padding: 0 .45rem; color: var(--muted);
+}
+nav .count.alert { background: var(--bad); border-color: var(--bad); color: #fff; }
+nav .spacer { flex: 1; }
+nav .who { font-size: 12px; color: var(--dim); padding: .5rem .6rem; }
+main { padding: 1.5rem; max-width: 1180px; }
+header.page { margin-bottom: 1.25rem; }
+header.page h2 { margin: 0 0 .25rem; font-size: 21px; }
+header.page p { margin: 0; color: var(--muted); }
+
+@media (max-width: 820px) {
+  #shell { grid-template-columns: 1fr; }
+  nav {
+    flex-direction: row; overflow-x: auto; border-right: 0;
+    border-bottom: 1px solid var(--line); padding: .5rem; gap: 4px;
+  }
+  nav h1, nav .spacer, nav .who { display: none; }
+  nav a { white-space: nowrap; }
+  main { padding: 1rem; }
+}
+
+/* ---------------------------------------------------------------- pieces */
+.grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1rem;
+}
+.card h3 { margin: 0 0 .6rem; font-size: 13px; color: var(--muted); font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase; }
+.stat { font-size: 27px; font-weight: 600; line-height: 1.1; }
+.stat small { font-size: 13px; color: var(--muted); font-weight: 400; }
+.rows { display: flex; flex-direction: column; gap: 10px; }
+.row {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .85rem 1rem; display: flex; gap: 1rem; align-items: flex-start;
+  justify-content: space-between; flex-wrap: wrap;
+}
+.row .body { flex: 1; min-width: 220px; }
+.row .title { font-weight: 600; }
+.row .meta { color: var(--muted); font-size: 12.5px; margin-top: .2rem; }
+.actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+.pill {
+  display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .03em;
+  padding: .15rem .5rem; border-radius: 20px; border: 1px solid var(--line);
+  color: var(--muted); white-space: nowrap;
+}
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+.pill.run { color: var(--accent); border-color: var(--accent); }
+.pill.wait { color: var(--wait); border-color: var(--wait); }
+
+/* The mission lifecycle, drawn as the sequence it actually is. */
+.track { display: flex; flex-wrap: wrap; gap: 4px; margin-top: .6rem; }
+.track span {
+  font-size: 10.5px; padding: .12rem .45rem; border-radius: 4px;
+  border: 1px solid var(--line); color: var(--dim);
+}
+.track span.done { color: var(--ok); border-color: var(--ok); }
+.track span.now { background: var(--accent); border-color: var(--accent); color: #fff; }
+.track span.bad { color: var(--bad); border-color: var(--bad); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.wrap-scroll { overflow-x: auto; }
+
+.note { color: var(--muted); font-size: 13px; }
+.empty { color: var(--dim); padding: 2rem; text-align: center; border: 1px dashed var(--line);
+  border-radius: var(--radius); }
+.error {
+  border: 1px solid var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-radius: var(--radius); padding: .8rem 1rem; margin-bottom: 1rem;
+}
+.field { margin-bottom: .9rem; }
+.field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: .3rem; }
+
+/* Chat */
+.msgs { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1rem; }
+.msg { padding: .7rem .9rem; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--panel); max-width: 46rem; }
+.msg.user { margin-left: auto; background: var(--accent-dim); border-color: var(--accent); }
+.msg.system { border-style: dashed; }
+.msg .from { font-size: 11px; color: var(--muted); margin-bottom: .3rem; }
+.msg pre { margin: 0; background: transparent; border: 0; padding: 0; }
+
+#login { max-width: 22rem; margin: 12vh auto; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login" class="hidden">
+  <div class="card">
+    <h3>Qevik Control</h3>
+    <div id="login-error"></div>
+    <form id="login-form">
+      <div class="field"><label for="u">Username</label><input id="u" autocomplete="username" required></div>
+      <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>
+      <button class="primary" type="submit" style="width:100%">Sign in</button>
+    </form>
+    <p class="note" style="margin-top:1rem">
+      Credentials are never stored in this page. The session token is held in
+      memory and in <code>sessionStorage</code>, and is gone when the tab closes.
+    </p>
+  </div>
+</div>
+
+<div id="shell" class="hidden">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+
+<script>
+/* Qevik Control — the browser half of the control plane.
+ *
+ * Two rules the whole file is written to.
+ *
+ * **No business logic lives here.** Every number, status and decision comes from
+ * the kernel over HTTP. This file arranges what the API returns and sends back
+ * what a person clicked. The moment it starts deciding, for example, whether a
+ * mission is really complete, there are two answers to that question and the one
+ * on screen is the one nobody tested.
+ *
+ * **Nothing executes from the browser.** Approving a plan POSTs an approval and
+ * returns; a worker in another process picks the mission up. Closing this tab
+ * cannot stop it, which is the property `test_chat_to_commit.py` proves and this
+ * page must not quietly undo by, say, driving a mission from a polling loop.
+ */
+'use strict';
+
+const API = {
+  /* Session token in sessionStorage, never localStorage: localStorage outlives
+   * the tab and survives on a shared machine long after the person walked away. */
+  get token() { return sessionStorage.getItem('qevik.token') || ''; },
+  set token(v) { v ? sessionStorage.setItem('qevik.token', v) : sessionStorage.removeItem('qevik.token'); },
+
+  async call(path, options = {}) {
+    const headers = { 'Accept': 'application/json' };
+    if (this.token) headers['Authorization'] = 'Bearer ' + this.token;
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    const response = await fetch(path, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+    if (response.status === 401) { this.token = ''; render(); throw new Error('Session expired'); }
+    const text = await response.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+    if (!response.ok) {
+      const error = new Error((data && data.detail) || ('HTTP ' + response.status));
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  },
+  get(p) { return this.call(p); },
+  post(p, body) { return this.call(p, { method: 'POST', body: body || {} }); },
+  put(p, body) { return this.call(p, { method: 'PUT', body: body || {} }); },
+  del(p) { return this.call(p, { method: 'DELETE' }); },
+};
+
+/* --------------------------------------------------------------- helpers */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function when(iso) {
+  if (!iso) return '—';
+  const then = new Date(iso);
+  if (isNaN(then)) return esc(iso);
+  const seconds = Math.round((Date.now() - then) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+  return then.toISOString().slice(0, 10);
+}
+
+/* The kernel's vocabulary, mapped to colour. Kept as one table so a status the
+ * UI does not recognise renders neutrally rather than as a success. */
+const TONE = {
+  complete: 'ok', PUBLISHED: 'ok', CONNECTED: 'ok', COMPLETE: 'ok', MEASURED: 'ok',
+  failed: 'bad', FAILED: 'bad', INVALID_CREDENTIAL: 'bad', blocked: 'bad', BLOCKED: 'bad',
+  processing: 'run', testing: 'run', reviewing: 'run', committing: 'run',
+  queued: 'run', planning: 'run', IN_PROGRESS: 'run', PROCESSING: 'run',
+  awaiting_approval: 'wait', plan_proposed: 'wait', PENDING_CREDENTIAL: 'warn',
+  PENDING_INFRASTRUCTURE: 'warn', PARTIAL: 'warn', NOT_AUTHORISED: 'warn',
+  pending_credential: 'warn', NOT_VERIFIED: 'warn', DISABLED: 'warn',
+  cancelled: '', draft: '', NOT_STARTED: '', NOT_CONFIGURED: '', DEFERRED: '',
+};
+const pill = (v) => `<span class="pill ${TONE[v] || ''}">${esc(v)}</span>`;
+
+/* The mission lifecycle, in the order `mission/service.py::ALLOWED` permits.
+ * Drawn as a sequence because that is what it is, and because a status word on
+ * its own does not tell an operator how much is left. */
+const LIFECYCLE = ['draft', 'planning', 'awaiting_approval', 'queued',
+                   'processing', 'testing', 'reviewing', 'committing', 'complete'];
+
+function track(status) {
+  const at = LIFECYCLE.indexOf(status);
+  const dead = ['failed', 'blocked', 'cancelled'].includes(status);
+  return '<div class="track">' + LIFECYCLE.map((step, i) => {
+    let cls = '';
+    if (at >= 0 && i < at) cls = 'done';
+    else if (i === at) cls = 'now';
+    return `<span class="${cls}">${step}</span>`;
+  }).join('') + (dead ? `<span class="bad">${esc(status)}</span>` : '') + '</div>';
+}
+
+function fail(message) {
+  return `<div class="error"><strong>${esc(message)}</strong></div>`;
+}
+const empty = (m) => `<div class="empty">${esc(m)}</div>`;
+
+/* --------------------------------------------------------------- state */
+const state = { page: 'dashboard', arg: null, me: null, counts: {} };
+
+const PAGES = [
+  ['dashboard', 'Dashboard'], ['roadmap', 'Roadmap'], ['missions', 'Mission Control'],
+  ['chat', 'Chat'], ['actions', 'Human Actions'], ['credentials', 'Credentials'],
+  ['models', 'Models'], ['businesses', 'Businesses'], ['publications', 'Publications'],
+  ['measurements', 'Measurements'], ['reports', 'Reports'], ['history', 'History'],
+  ['settings', 'Settings'],
+];
+
+function navigate() {
+  const [page, arg] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/');
+  state.page = PAGES.some(([id]) => id === page) ? page : 'dashboard';
+  state.arg = arg ? decodeURIComponent(arg) : null;
+  render();
+}
+window.addEventListener('hashchange', navigate);
+
+function drawNav() {
+  $('nav').innerHTML = '<h1>Qevik Control</h1>' + PAGES.map(([id, label]) => {
+    const n = state.counts[id];
+    const badge = n ? `<span class="count ${id === 'actions' ? 'alert' : ''}">${n}</span>` : '';
+    const current = state.page === id ? ' aria-current="page"' : '';
+    return `<a href="#/${id}"${current}>${esc(label)}${badge}</a>`;
+  }).join('') + '<div class="spacer"></div>' +
+    `<div class="who">${esc(state.me ? state.me.username : '')}</div>` +
+    '<a href="#/" id="signout">Sign out</a>';
+  const out = $('signout');
+  if (out) out.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try { await API.post('/auth/logout'); } catch { /* the token is going either way */ }
+    API.token = ''; state.me = null; render();
+  });
+}
+
+/* --------------------------------------------------------------- pages */
+const views = {};
+
+views.dashboard = async () => {
+  const [health, missions, actions, costs, blockers] = await Promise.all([
+    API.get('/api/health').catch(() => null),
+    API.get('/api/missions').catch(() => ({ missions: [], counts: {} })),
+    API.get('/api/missions/actions').catch(() => ({ counts: {} })),
+    API.get('/api/missions/costs').catch(() => null),
+    API.get('/api/missions/blockers').catch(() => ({ total: 0 })),
+  ]);
+  state.counts.actions = (actions.counts && actions.counts.blocking) || 0;
+  state.counts.missions = (missions.counts && missions.counts.awaiting_approval) || 0;
+
+  const c = missions.counts || {};
+  const degraded = health && health.degraded && health.degraded.length
+    ? `<div class="card"><h3>Degraded</h3><p class="note">${health.degraded.map(esc).join(', ')}
+       — a component is absent, not failed. ${esc(health.note || '')}</p></div>` : '';
+
+  return `
+    <header class="page"><h2>Dashboard</h2>
+      <p>Everything below is read from the kernel. Nothing on this page decides anything.</p></header>
+    <div class="grid">
+      <div class="card"><h3>Missions</h3><div class="stat">${c.total || 0}</div>
+        <p class="note">${c.running || 0} running · ${c.blocked || 0} blocked</p></div>
+      <div class="card"><h3>Awaiting approval</h3><div class="stat">${c.awaiting_approval || 0}</div>
+        <p class="note">nothing runs until a person approves</p></div>
+      <div class="card"><h3>Waiting on you</h3><div class="stat">${(actions.counts && actions.counts.blocking) || 0}
+        <small>of ${(actions.counts && actions.counts.total) || 0}</small></div>
+        <p class="note"><a href="#/actions">Human actions</a></p></div>
+      <div class="card"><h3>Blockers</h3><div class="stat">${blockers.total || 0}</div>
+        <p class="note"><a href="#/missions">by class</a></p></div>
+      ${costs ? `<div class="card"><h3>Cost</h3>
+        <div class="stat">${costs.known_total} <small>${esc(costs.currency || '')}</small></div>
+        <p class="note">${esc(costs.note || '')}</p></div>` : ''}
+      ${health ? `<div class="card"><h3>Claiming</h3>
+        <div class="stat" style="font-size:16px">${pill((health.components.claiming || {}).status || '—')}</div>
+        <p class="note">${esc((health.components.claiming || {}).detail || '')}</p></div>` : ''}
+    </div>
+    ${degraded}`;
+};
+
+views.roadmap = async () => {
+  /* The roadmap is served from a static document the kernel also writes, so the
+   * UI and MASTER_STATE.md cannot disagree. Fetched rather than embedded. */
+  let data = null;
+  try { data = await API.get('/control/roadmap'); } catch { data = null; }
+  if (!data) {
+    return `<header class="page"><h2>Roadmap</h2>
+      <p>Product A phases, the Product B programme, and Product C as a separate business.</p></header>
+      ${fail('The roadmap endpoint is not available on this deployment.')}
+      <p class="note">The roadmap is derived from <code>MASTER_STATE.md</code> by the
+      kernel. Until <code>/control/roadmap</code> is served, this page has nothing
+      to show — and showing a hardcoded copy here would create a second answer to
+      "what is built" that drifts from the first.</p>`;
+  }
+  const section = (title, note, items) => `
+    <h3 style="margin:1.5rem 0 .5rem">${esc(title)}</h3>
+    <p class="note" style="margin-bottom:.75rem">${esc(note)}</p>
+    <div class="rows">${items.map((i) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(i.item)} ${pill(i.status)}</div>
+        <div class="meta">${esc(i.why || '')}</div>
+        ${i.next_action ? `<div class="meta"><strong>Next:</strong> ${esc(i.next_action)}</div>` : ''}
+        ${i.acceptance ? `<div class="meta"><strong>Done when:</strong> ${esc(i.acceptance)}</div>` : ''}
+      </div></div>`).join('')}</div>`;
+  return `<header class="page"><h2>Roadmap</h2>
+      <p>Reconciled ${esc(data.reconciled_at || '')} at <code>${esc(data.commit || '')}</code>.</p></header>
+    ${section('Product A — evidence engine', data.product_a_note || '', data.product_a || [])}
+    ${section('Product B — execution platform', data.product_b_note || '', data.product_b || [])}
+    ${section('Product C — separate business', data.product_c_note || '', data.product_c || [])}`;
+};
+
+views.missions = async () => {
+  if (state.arg) return missionDetail(state.arg);
+  const [listing, blockers] = await Promise.all([
+    API.get('/api/missions'), API.get('/api/missions/blockers').catch(() => ({ by_kind: {} })),
+  ]);
+  const kinds = Object.entries(blockers.by_kind || {});
+  return `
+    <header class="page"><h2>Mission Control</h2>
+      <p>Missions run in a worker process. Closing this page does not stop one.</p></header>
+    ${kinds.length ? `<div class="card" style="margin-bottom:1rem"><h3>Blocked by</h3>
+      ${kinds.map(([kind, rows]) => `<div class="meta">${pill(kind)} ${rows.length} — ${
+        esc(rows.map((r) => r.detail).join('; ').slice(0, 160))}</div>`).join('')}</div>` : ''}
+    <div class="rows">${(listing.missions || []).map((m) => `
+      <div class="row">
+        <div class="body">
+          <div class="title"><a href="#/missions/${encodeURIComponent(m.mission_id)}">${esc(m.title)}</a></div>
+          <div class="meta"><code>${esc(m.mission_id)}</code> · ${when(m.updated_at)}
+            ${m.claimed_by ? '· held by <code>' + esc(m.claimed_by) + '</code>' : ''}</div>
+          ${track(m.status)}
+        </div>
+        <div class="actions">${pill(m.status)}</div>
+      </div>`).join('') || empty('No missions yet. Start one from Chat.')}</div>`;
+};
+
+async function missionDetail(id) {
+  const [mission, history] = await Promise.all([
+    API.get('/api/missions/' + encodeURIComponent(id)),
+    API.get('/api/missions/' + encodeURIComponent(id) + '/history').catch(() => ({ history: [] })),
+  ]);
+  let report = null;
+  try { report = await API.get('/api/missions/' + encodeURIComponent(id) + '/report'); } catch { /* often absent */ }
+
+  const approve = mission.status === 'awaiting_approval'
+    ? '<button class="primary" data-approve>Approve — queue this mission</button>' : '';
+  const cancel = ['draft', 'planning', 'awaiting_approval', 'queued', 'blocked'].includes(mission.status)
+    ? '<button class="danger" data-cancel>Cancel</button>' : '';
+
+  const html = `
+    <header class="page"><h2>${esc(mission.title)}</h2>
+      <p><code>${esc(mission.mission_id)}</code> · requested by ${esc(mission.requested_by || '—')}
+      · ${when(mission.created_at)}</p></header>
+    <div class="card" style="margin-bottom:1rem">
+      ${pill(mission.status)} ${track(mission.status)}
+      <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
+    </div>
+    ${(mission.blockers || []).length ? `<div class="card" style="margin-bottom:1rem">
+      <h3>Blocked</h3>${mission.blockers.map((b) =>
+        `<div class="meta">${pill(b.kind)} ${esc(b.detail)}${b.action ? ' → <strong>' + esc(b.action) + '</strong>' : ''}</div>`
+      ).join('')}</div>` : ''}
+    ${mission.plan ? `<div class="card" style="margin-bottom:1rem"><h3>Plan</h3>
+      <div class="meta">${esc(mission.plan.goal || '')}</div>
+      <ol>${(mission.plan.steps || []).map((s) =>
+        `<li>${esc(s.title)}${s.files && s.files.length ? ' <code>' + esc(s.files.join(', ')) + '</code>' : ''}</li>`
+      ).join('')}</ol></div>` : ''}
+    <div class="grid" style="margin-bottom:1rem">
+      <div class="card"><h3>Commits</h3>${(mission.commits || []).length
+        ? mission.commits.map((c) => `<div><code>${esc(c.slice(0, 12))}</code></div>`).join('')
+        : '<p class="note">none</p>'}</div>
+      <div class="card"><h3>Model calls</h3>
+        ${(mission.invocations || []).length ? mission.invocations.map((i) =>
+          `<div class="meta"><code>${esc(i.provider)}/${esc(i.model)}</code> ${esc(i.task || '')} —
+           ${i.cost == null ? 'cost ' + pill('UNKNOWN') : esc(i.cost) + ' ' + esc(i.currency || '')}
+           <span class="pill">${esc(i.cost_status)}</span></div>`).join('')
+          : '<p class="note">none</p>'}</div>
+      <div class="card"><h3>Total cost</h3>
+        <div class="stat" style="font-size:18px">${mission.total_cost == null
+          ? pill('UNKNOWN') : esc(mission.total_cost)}</div>
+        <p class="note">A missing cost is not zero.</p></div>
+    </div>
+    <div class="card" style="margin-bottom:1rem"><h3>History</h3><div class="wrap-scroll">
+      <table><thead><tr><th>When</th><th>Status</th><th>Held by</th><th>Note</th></tr></thead><tbody>
+      ${(history.history || []).map((h) => `<tr><td>${when(h.updated_at)}</td><td>${pill(h.status)}</td>
+        <td><code>${esc(h.claimed_by || '—')}</code></td><td>${esc(h.note || '')}</td></tr>`).join('')}
+      </tbody></table></div></div>
+    ${report ? `<div class="card"><h3>Report</h3><pre>${esc(report.report)}</pre></div>`
+      : '<div class="card"><h3>Report</h3><p class="note">No report yet. One is written when the mission finishes.</p></div>'}`;
+
+  queueMicrotask(() => {
+    const a = document.querySelector('[data-approve]');
+    if (a) a.addEventListener('click', async () => {
+      a.disabled = true; a.textContent = 'Queueing…';
+      try { await API.post('/api/missions/' + encodeURIComponent(id) + '/approve'); render(); }
+      catch (e) { a.disabled = false; a.textContent = 'Approve'; alert(e.message); }
+    });
+    const c = document.querySelector('[data-cancel]');
+    if (c) c.addEventListener('click', async () => {
+      c.disabled = true;
+      try { await API.post('/api/missions/' + encodeURIComponent(id) + '/cancel'); render(); }
+      catch (e) { c.disabled = false; alert(e.message); }
+    });
+  });
+  return html;
+}
+
+views.chat = async () => {
+  if (state.arg) return conversation(state.arg);
+  const listing = await API.get('/api/chat');
+  const html = `
+    <header class="page"><h2>Chat</h2>
+      <p>Say what you want. Qevik proposes a plan; nothing runs until you approve it.</p></header>
+    <div class="card" style="margin-bottom:1rem">
+      <form id="start">
+        <div class="field"><label for="say">What would you like Qevik to do?</label>
+          <textarea id="say" rows="3" required placeholder="Improve the Qevik website."></textarea></div>
+        <button class="primary" type="submit">Start</button>
+      </form>
+    </div>
+    <div class="rows">${(listing.conversations || []).map((c) => `
+      <div class="row"><div class="body">
+        <div class="title"><a href="#/chat/${encodeURIComponent(c.conversation_id)}">${esc(c.title)}</a></div>
+        <div class="meta">${when(c.at)}${c.mission_id ? ' · mission <code>' + esc(c.mission_id) + '</code>' : ''}</div>
+      </div><div class="actions">${pill(c.status)}</div></div>`).join('')
+      || empty('No conversations yet.')}</div>`;
+
+  queueMicrotask(() => {
+    const form = $('start');
+    if (form) form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true; button.textContent = 'Starting…';
+      try {
+        const made = await API.post('/api/chat', { text: $('say').value });
+        location.hash = '#/chat/' + encodeURIComponent(made.conversation_id);
+      } catch (err) { alert(err.message); button.disabled = false; button.textContent = 'Start'; }
+    });
+  });
+  return html;
+};
+
+async function conversation(id) {
+  const c = await API.get('/api/chat/' + encodeURIComponent(id));
+  const awaiting = c.status === 'plan_proposed';
+  const html = `
+    <header class="page"><h2>${esc(c.title)}</h2>
+      <p>${pill(c.status)} ${c.mission_id
+        ? '· <a href="#/missions/' + encodeURIComponent(c.mission_id) + '">mission ' + esc(c.mission_id) + '</a>'
+        : ''}</p></header>
+    <div class="msgs">${(c.messages || []).map((m) => `
+      <div class="msg ${esc(m.role)}">
+        <div class="from">${esc(m.role)}${m.model ? ' · <code>' + esc(m.provider) + '/' + esc(m.model) + '</code>' : ''}
+          · ${when(m.at)}</div>
+        <pre>${esc(m.text)}</pre>
+      </div>`).join('')}</div>
+    ${awaiting ? `<div class="card">
+        <h3>This plan is waiting for you</h3>
+        <p class="note">Approving queues a mission. A worker in another process runs
+        it, so you can close this page.</p>
+        <div class="actions"><button class="primary" data-yes>Approve</button>
+          <button class="danger" data-no>Decline</button></div></div>`
+      : c.status === 'mission_created' ? '' : `<div class="card">
+        <form id="more"><div class="field"><label for="say2">Add to this conversation</label>
+          <textarea id="say2" rows="2"></textarea></div>
+          <div class="actions"><button type="submit">Send</button>
+          <button type="button" class="primary" data-plan>Propose a plan</button></div></form></div>`}`;
+
+  queueMicrotask(() => {
+    const plan = document.querySelector('[data-plan]');
+    if (plan) plan.addEventListener('click', async () => {
+      plan.disabled = true; plan.textContent = 'Planning…';
+      try { await API.post('/api/chat/' + encodeURIComponent(id) + '/plan'); render(); }
+      catch (e) { plan.disabled = false; plan.textContent = 'Propose a plan'; alert(e.message); }
+    });
+    const more = $('more');
+    if (more) more.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await API.post('/api/chat/' + encodeURIComponent(id) + '/messages', { text: $('say2').value }); render(); }
+      catch (err) { alert(err.message); }
+    });
+    const yes = document.querySelector('[data-yes]');
+    if (yes) yes.addEventListener('click', async () => {
+      yes.disabled = true; yes.textContent = 'Queueing…';
+      try { await API.post('/api/chat/' + encodeURIComponent(id) + '/decide', { approved: true }); render(); }
+      catch (e) { yes.disabled = false; yes.textContent = 'Approve'; alert(e.message); }
+    });
+    const no = document.querySelector('[data-no]');
+    if (no) no.addEventListener('click', async () => {
+      try { await API.post('/api/chat/' + encodeURIComponent(id) + '/decide', { approved: false }); render(); }
+      catch (e) { alert(e.message); }
+    });
+  });
+  return html;
+}
+
+views.actions = async () => {
+  const centre = await API.get('/api/missions/actions');
+  state.counts.actions = (centre.counts && centre.counts.blocking) || 0;
+  return `<header class="page"><h2>Human Actions</h2>
+      <p>Things only a person can do. Blocking work first.</p></header>
+    <div class="rows">${(centre.open || []).map((a) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(a.title)} ${a.blocking ? pill('BLOCKING') : ''}</div>
+        <div class="meta">${esc(a.instructions || '')}</div>
+        ${a.requires ? `<div class="meta">Needs: <code>${esc(a.requires)}</code></div>` : ''}
+        ${a.verification ? `<div class="meta">Verified by: ${esc(a.verification)}</div>` : ''}
+      </div><div class="actions">${a.service ? `<a href="#/credentials">${esc(a.service)}</a>` : ''}</div></div>`
+    ).join('') || empty('Nothing is waiting on you.')}</div>`;
+};
+
+views.credentials = async () => {
+  const centre = await API.get('/api/credentials');
+  const rows = centre.credentials || [];
+  const html = `
+    <header class="page"><h2>Credentials</h2>
+      <p>The one place a key is entered. No value is ever shown again after saving.</p></header>
+    ${centre.vault && centre.vault.sealed ? fail(
+      'The vault is sealed: QEVIK_VAULT_MASTER_KEY is not set on the server, so nothing can be stored. It refuses rather than falling back to plaintext.') : ''}
+    <div class="rows">${rows.map((r) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(r.name)} ${pill(r.status)}</div>
+        <div class="meta">${esc(r.purpose || '')}</div>
+        <div class="meta">Credential: <code>${esc(r.credential)}</code>
+          ${r.hint ? '· ends <code>' + esc(r.hint) + '</code>' : ''}
+          ${r.fingerprint ? '· fingerprint <code>' + esc(r.fingerprint) + '</code>' : ''}</div>
+        ${r.blocks && r.blocks.length ? `<div class="meta">Blocks: ${esc(r.blocks.join(', '))}</div>` : ''}
+        ${r.detail ? `<div class="meta">${esc(r.detail)}</div>` : ''}
+        <form data-provider="${esc(r.provider)}" style="margin-top:.6rem;max-width:26rem">
+          <div class="field"><input type="password" name="secret" autocomplete="off"
+            placeholder="${r.configured ? 'Replace this credential' : 'Paste the credential'}"></div>
+          <div class="actions">
+            <button class="primary" type="submit">${r.configured ? 'Rotate' : 'Save'}</button>
+            <button type="button" data-test>Test</button>
+            ${r.configured ? '<button type="button" class="danger" data-forget>Forget</button>' : ''}
+            ${r.setup_url ? `<a href="${esc(r.setup_url)}" target="_blank" rel="noopener">Where to get one</a>` : ''}
+          </div>
+        </form>
+      </div></div>`).join('')}</div>
+    <p class="note" style="margin-top:1rem">
+      Stored is not connected. A saved credential stays <code>PENDING_CREDENTIAL</code>
+      until something tests it — reporting it as working because somebody pasted
+      one is how an integration sits broken behind a green tick.</p>`;
+
+  queueMicrotask(() => {
+    document.querySelectorAll('form[data-provider]').forEach((form) => {
+      const provider = form.dataset.provider;
+      const configured = form.querySelector('button.primary').textContent === 'Rotate';
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const secret = form.secret.value;
+        if (!secret) return;
+        try {
+          await API.call('/api/credentials/' + encodeURIComponent(provider) +
+            (configured ? '/rotate' : ''), { method: configured ? 'POST' : 'PUT', body: { secret } });
+          /* Cleared immediately: the value must not survive in the DOM, and it is
+           * never read back from the server. */
+          form.secret.value = '';
+          render();
+        } catch (err) { alert(err.message); }
+      });
+      const test = form.querySelector('[data-test]');
+      if (test) test.addEventListener('click', async () => {
+        test.disabled = true; test.textContent = 'Testing…';
+        try {
+          const r = await API.post('/api/credentials/' + encodeURIComponent(provider) + '/test');
+          alert(r.works ? 'Connected.' : (r.status + ' — ' + (r.detail || '')));
+        } catch (err) { alert(err.message); }
+        finally { test.disabled = false; test.textContent = 'Test'; render(); }
+      });
+      const forget = form.querySelector('[data-forget]');
+      if (forget) forget.addEventListener('click', async () => {
+        if (!confirm('Destroy the stored credential for ' + provider + '? This cannot be undone.')) return;
+        try { await API.del('/api/credentials/' + encodeURIComponent(provider)); render(); }
+        catch (err) { alert(err.message); }
+      });
+    });
+  });
+  return html;
+};
+
+views.models = async () => {
+  const [catalogue, selection] = await Promise.all([
+    API.get('/api/models'), API.get('/api/models/selection'),
+  ]);
+  const html = `
+    <header class="page"><h2>Models</h2>
+      <p>Which model does which job. A choice that cannot run is reported, never
+      silently replaced.</p></header>
+    <div class="rows" style="margin-bottom:1.25rem">${(selection.roles || []).map((r) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(r.role)} ${r.available ? pill(r.model || '—') : pill('unavailable')}</div>
+        <div class="meta">${esc(r.reason || '')}</div>
+      </div><div class="actions">
+        <select data-role="${esc(r.role)}">
+          <option value="">registry default</option>
+          ${(catalogue.models || []).map((m) => `<option value="${esc(m.model)}"
+            ${selection.selection[r.role] === m.model ? 'selected' : ''}>${esc(m.model)}${
+              m.usable ? '' : ' (needs ' + esc(m.credential) + ')'}</option>`).join('')}
+        </select></div></div>`).join('')}</div>
+    <div class="card"><h3>Available models</h3><div class="wrap-scroll">
+      <table><thead><tr><th>Model</th><th>Provider</th><th>Status</th><th>Blocked by</th></tr></thead><tbody>
+      ${(catalogue.models || []).map((m) => `<tr><td><code>${esc(m.model)}</code></td>
+        <td>${esc(m.provider)}</td><td>${pill(m.status)}</td>
+        <td class="note">${esc(m.blocked_by || '')}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="note" style="margin-top:.75rem">Cost per call is reported by the
+      provider on each invocation and shown on the mission. Where a provider does
+      not report one it is ${pill('UNKNOWN')}, never zero.</p></div>`;
+
+  queueMicrotask(() => {
+    document.querySelectorAll('select[data-role]').forEach((select) => {
+      select.addEventListener('change', async () => {
+        try { await API.put('/api/models/selection/' + encodeURIComponent(select.dataset.role),
+          { model: select.value }); render(); }
+        catch (e) { alert(e.message); render(); }
+      });
+    });
+  });
+  return html;
+};
+
+views.businesses = async () => {
+  const me = await API.get('/api/customer/me').catch(() => null);
+  return `<header class="page"><h2>Businesses</h2>
+      <p>Every factory references one <code>Business</code> id.</p></header>
+    <div class="card"><h3>Open a business</h3>
+      <form id="open"><div class="field"><label for="bid">Business id</label>
+        <input id="bid" placeholder="ahs" required></div>
+      <button class="primary" type="submit">Open</button></form>
+      <p class="note" style="margin-top:.75rem">A business belonging to another
+      tenant is absent, not forbidden — the same 404 either way.</p></div>
+    ${state.arg ? await businessDetail(state.arg) : ''}
+    ${me ? `<p class="note" style="margin-top:1rem">Tenant <code>${esc(me.tenant_id || '')}</code></p>` : ''}`;
+};
+
+async function businessDetail(id) {
+  const [research, roadmap, tasks] = await Promise.all([
+    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/research`).catch((e) => ({ error: e.message })),
+    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/roadmap`).catch(() => null),
+    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/tasks`).catch(() => null),
+  ]);
+  if (research.error) return fail(research.error);
+  return `<div class="card" style="margin-top:1rem"><h3>${esc(id)}</h3>
+    ${tasks ? `<p class="note">${(tasks.outstanding || []).length} outstanding customer task(s),
+      ${(tasks.completed || []).length} done</p>` : ''}
+    <pre>${esc(JSON.stringify(roadmap || research, null, 2).slice(0, 4000))}</pre></div>`;
+}
+
+views.publications = async () => `
+  <header class="page"><h2>Publications</h2>
+    <p>What has actually gone live, and what is ready but not authorised.</p></header>
+  <div class="card"><p class="note">Publications are recorded per business. Open a
+    business to see its previews and publications.</p>
+    <p class="note"><strong>READY_TO_PUBLISH is not PUBLISHED.</strong> Approval
+    permits a publication; it does not perform one.</p>
+    <p><a href="#/businesses">Businesses</a></p></div>`;
+
+views.measurements = async () => `
+  <header class="page"><h2>Measurements</h2>
+    <p>What changed, and whether we can honestly say so.</p></header>
+  <div class="card"><p class="note">Measurements are recorded per business.</p>
+  <p class="note">A metric with no data reads <span class="pill warn">NOT_VERIFIED</span>,
+  never zero. Search Console genuinely returns zero clicks for a page nobody
+  clicked; a refused request returns nothing, and recording that as zero
+  manufactures a decline out of an authentication error.</p>
+  <p><a href="#/businesses">Businesses</a></p></div>`;
+
+views.reports = async () => {
+  const listing = await API.get('/api/missions');
+  const withReports = (listing.missions || []).filter((m) => m.report_path);
+  return `<header class="page"><h2>Reports</h2>
+      <p>Every finished mission leaves a durable report.</p></header>
+    <div class="rows">${withReports.map((m) => `
+      <div class="row"><div class="body">
+        <div class="title"><a href="#/missions/${encodeURIComponent(m.mission_id)}">${esc(m.title)}</a></div>
+        <div class="meta"><code>${esc(m.report_path)}</code> · ${when(m.updated_at)}</div>
+      </div><div class="actions">${pill(m.status)}</div></div>`).join('')
+      || empty('No reports yet. One is written when a mission finishes.')}</div>`;
+};
+
+views.history = async () => {
+  const listing = await API.get('/api/chat');
+  return `<header class="page"><h2>History</h2>
+      <p>Every conversation, and the mission it became.</p></header>
+    <div class="wrap-scroll"><table>
+      <thead><tr><th>Conversation</th><th>Status</th><th>Mission</th><th>When</th></tr></thead>
+      <tbody>${(listing.conversations || []).map((c) => `<tr>
+        <td><a href="#/chat/${encodeURIComponent(c.conversation_id)}">${esc(c.title)}</a></td>
+        <td>${pill(c.status)}</td>
+        <td>${c.mission_id ? `<a href="#/missions/${encodeURIComponent(c.mission_id)}">
+          <code>${esc(c.mission_id)}</code></a>` : '—'}</td>
+        <td>${when(c.at)}</td></tr>`).join('')}</tbody></table></div>`;
+};
+
+views.settings = async () => {
+  const [me, health, plan] = await Promise.all([
+    API.get('/auth/me').catch(() => null),
+    API.get('/api/health').catch(() => null),
+    API.get('/api/customer/plan').catch(() => null),
+  ]);
+  return `<header class="page"><h2>Settings</h2></header>
+    <div class="grid">
+      <div class="card"><h3>Session</h3>
+        <p><code>${esc(me ? me.username : '—')}</code></p>
+        <p class="note">Tenant <code>${esc((me && me.tenant_id) || '—')}</code></p>
+        <p class="note">Scopes: ${esc(((me && me.scopes) || []).join(', '))}</p></div>
+      ${plan ? `<div class="card"><h3>Plan</h3><div class="stat">${esc(plan.plan)}</div>
+        <p class="note">${esc(plan.remaining)} of ${esc(plan.included_units)} units left.
+        ${esc(plan.note || '')}</p></div>` : ''}
+      ${health ? `<div class="card"><h3>Deployment</h3>
+        <p>${pill(health.status)}</p>
+        ${Object.entries(health.components || {}).map(([name, c]) =>
+          `<div class="meta">${esc(name)}: ${c.configured ? 'configured' : 'absent'}
+           ${c.detail ? '— ' + esc(c.detail) : ''}</div>`).join('')}</div>` : ''}
+    </div>`;
+};
+
+/* --------------------------------------------------------------- render */
+async function render() {
+  if (!API.token) {
+    $('login').classList.remove('hidden');
+    $('shell').classList.add('hidden');
+    return;
+  }
+  $('login').classList.add('hidden');
+  $('shell').classList.remove('hidden');
+  drawNav();
+  const main = $('main');
+  main.setAttribute('aria-busy', 'true');
+  try {
+    main.innerHTML = await (views[state.page] || views.dashboard)();
+  } catch (e) {
+    main.innerHTML = fail(e.message) +
+      '<p class="note">This is what the kernel said. The page shows it rather than ' +
+      'an empty list, because an empty list reads as "you have none".</p>';
+  }
+  main.removeAttribute('aria-busy');
+  drawNav();
+}
+
+$('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const box = $('login-error');
+  box.innerHTML = '';
+  try {
+    const r = await API.call('/auth/login', {
+      method: 'POST', body: { username: $('u').value, password: $('p').value },
+    });
+    API.token = r.token || r.access_token || '';
+    $('p').value = '';
+    if (!API.token) throw new Error('No session token was returned.');
+    state.me = await API.get('/auth/me').catch(() => null);
+    navigate();
+  } catch (err) { box.innerHTML = fail(err.message); }
+});
+
+(async function start() {
+  if (API.token) state.me = await API.get('/auth/me').catch(() => null);
+  navigate();
+})();
+</script>
+</body>
+</html>

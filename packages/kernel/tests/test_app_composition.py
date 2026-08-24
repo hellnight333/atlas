@@ -232,3 +232,68 @@ def test_the_mission_sink_is_absent_rather_than_a_no_op(tmp_path) -> None:
     app = create_app(Wiring(repository_root=tmp_path,
                             vault_path=tmp_path / "vault.json"))
     assert app.state.mission_sink is None
+
+
+# ============================================ the console
+
+def test_the_console_shell_loads_without_a_session(client) -> None:
+    """The login form has to be reachable before anybody has a session, and the
+    shell carries nothing private — every number on screen is fetched from an
+    API that authenticates separately."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Qevik Control" in response.text
+
+
+def test_a_deep_link_serves_the_shell_so_reload_works(client) -> None:
+    """`/missions` is a client-side route. A 404 here means every reload of a
+    deep link loses the page."""
+    assert client.get("/missions").status_code == 200
+
+
+@pytest.mark.real_auth
+def test_the_console_being_public_does_not_open_the_api(client) -> None:
+    """The one thing that could go wrong with making the shell public.
+
+    `real_auth`: the session fixture patches `authenticate` to a fixed
+    operator, so without it every request here is already authenticated and the
+    test would pass against an application with no middleware at all.
+    """
+    for path in ("/api/missions", "/api/chat", "/api/credentials",
+                 "/api/models", "/api/customer/actions"):
+        assert client.get(path).status_code == 401, path
+
+
+def test_the_console_carries_no_secret_and_no_business_logic() -> None:
+    """It arranges what the API returns. The moment it decides anything there
+    are two answers to that question, and the one on screen is untested."""
+    from pathlib import Path
+
+    from atlas_kernel.qevik.app import CONSOLE
+
+    source = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    # The calls, not the word. The file explains in a comment *why* it does not
+    # use localStorage, and matching on raw text fails on the explanation —
+    # the same trap the chat execution scan hit.
+    assert "localStorage.getItem" not in source and "localStorage.setItem" not in source, (
+        "a session in localStorage outlives the tab on a shared machine")
+    assert "sessionStorage.getItem" in source
+    # A hardcoded *value*, not the word. The login form legitimately sends
+    # `password: $('p').value`, and forbidding the field name would forbid the
+    # form.
+    import re
+
+    literals = re.findall(
+        r"""(?:password|secret|token|api[_-]?key)\s*[:=]\s*['"][^'"]{8,}['"]""",
+        source, re.I)
+    assert literals == [], literals
+    assert "sk-" not in source
+    assert Path(CONSOLE / "index.html").stat().st_size < 80_000
+
+
+def test_the_console_asset_route_refuses_to_escape_its_directory(client) -> None:
+    """The path comes from the URL, and serving whatever it names is an
+    arbitrary-file-read with extra steps."""
+    for attempt in ("/../../etc/passwd", "/etc/passwd", "/....//etc/passwd"):
+        body = client.get(attempt).text
+        assert "root:" not in body, attempt
