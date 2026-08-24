@@ -25,7 +25,7 @@ import logging
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from ..execution.capabilities import EXECUTORS
+from ..execution.capabilities import EXECUTORS, REQUIRES_CUSTOMER_INPUT
 from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId, owns
 from ..opportunity.tenancy import require as _require_tenant
@@ -218,10 +218,19 @@ def generate(*, business_id: str, tenant_id: str | None, observations: list[dict
         alone presented five capabilities as executable that nothing could
         perform — a promise the execution gate would then refuse, after the
         customer had read it as a plan.
+
+        An executor existing is not sufficient either. The execution service
+        passes exactly four arguments, so a capability needing anything else —
+        Arabic copy, a logo, a price list — can never succeed through this path
+        however correct its code is. `REQUIRES_CUSTOMER_INPUT` names those, and
+        they are presented as needing the customer rather than as work Qevik
+        will do. The refusal at execution time was already correct; what was
+        wrong was promising it beforehand.
         """
         return (bool(recommendation.capability_id)
                 and offer_for(recommendation.offer_id) is not None
-                and recommendation.offer_id in EXECUTORS)
+                and recommendation.offer_id in EXECUTORS
+                and recommendation.offer_id not in REQUIRES_CUSTOMER_INPUT)
 
     surviving = sorted(
         (r for r in recommendations

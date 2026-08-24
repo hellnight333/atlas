@@ -45,11 +45,11 @@ def multipage() -> SiteContent:
     return SiteContent(
         business_name=_f("Al Hamra Facilities"),
         tagline=_f("Air-conditioning and plumbing across Dubai"),
-        about=Prose(text="A" * 500, source=FactSource.OPERATOR),
+        about=Prose(text="A" * 500, written_by="operator"),
         services=[Service(name=_f(f"Service {i}"),
                           description=Prose(text="What it covers and what is "
                                                  "charged separately.",
-                                            source=FactSource.OPERATOR))
+                                            written_by="operator"))
                   for i in range(6)],
         hours=OpeningHours(days={day: _f("8am to 6pm") for day in WEEK}),
         contact=ContactDetails(phone=_f("+971 4 555 0100"),

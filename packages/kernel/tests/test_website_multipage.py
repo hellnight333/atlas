@@ -39,7 +39,7 @@ def _f(value: str) -> Fact:
 
 
 def _prose(text: str) -> Prose:
-    return Prose(text=text, source=FactSource.OPERATOR)
+    return Prose(text=text, written_by="operator")
 
 
 @pytest.fixture

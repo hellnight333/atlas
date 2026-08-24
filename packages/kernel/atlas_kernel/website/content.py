@@ -90,7 +90,12 @@ class Prose(BaseModel):
     being written confidently.
     """
 
-    model_config = ConfigDict(frozen=True)
+    # `extra="forbid"`, and this module more than any other. Pydantic drops an
+    # unknown keyword silently, so `Prose(text=…, source=…)` — the field name
+    # `Fact` uses — validated cleanly and discarded the attribution. That is
+    # provenance vanishing without a single test failing, in the module whose
+    # entire purpose is provenance.
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: str
     #: What wrote it. ``"operator"`` when a person did, a model name otherwise.

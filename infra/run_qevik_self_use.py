@@ -173,20 +173,20 @@ def main() -> int:
             "Qevik researches a business's digital presence, establishes what "
             "is actually there, and proposes only work that the evidence "
             "supports. Every finding is confirmed present, confirmed absent, or "
-            "recorded as unverified — never assumed."), source=FactSource.OPERATOR),
+            "recorded as unverified — never assumed."), written_by="operator"),
         services=[
             Service(name=fact("Website audit"),
                     description=Prose(text="What is on your site now, checked "
                                            "rather than guessed.",
-                                      source=FactSource.OPERATOR)),
+                                      written_by="operator")),
             Service(name=fact("Website build"),
                     description=Prose(text="A fast, indexable site generated "
                                            "from facts you supplied.",
-                                      source=FactSource.OPERATOR)),
+                                      written_by="operator")),
             Service(name=fact("Search visibility"),
                     description=Prose(text="Technical SEO and measurement of "
                                            "what actually changed.",
-                                      source=FactSource.OPERATOR)),
+                                      written_by="operator")),
         ],
         contact=ContactDetails(email=fact("hello@qevik.ai")),
         location=fact("Dubai"))
