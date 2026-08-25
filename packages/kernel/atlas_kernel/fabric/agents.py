@@ -54,6 +54,9 @@ class Capability(StrEnum):
     RESEARCH = "research"
     SUMMARISE = "summarise"
     ANALYSE = "analyse"
+    #: Check that something is actually sound, by running a check rather than by
+    #: forming an opinion. Distinct from REVIEW, which reads a proposal.
+    VERIFY = "verify"
     WRITE = "write"
     TRANSLATE_CHECK = "translate_check"
     # Everything below is designed and has no backend yet. Recorded so the gap
@@ -270,6 +273,13 @@ AGENTS: tuple[Agent, ...] = (
           offer_id="offer-imagery", tools=("website-generator",),
           notes="Plans imagery. Documentary slots take only supplied "
                 "photographs."),
+    Agent(id="self-check", name="Self-check",
+          capability=Capability.VERIFY, backend=Backend.EXECUTOR,
+          tools=("shell", "filesystem"),
+          notes="Runs declared commands in a workspace and reports what they "
+                "did. No model, no provider, no network, and every effect is "
+                "inside a discardable checkout — which is what makes it safe to "
+                "run as an end-to-end proof of the whole path."),
     Agent(id="researcher", name="Researcher", capability=Capability.RESEARCH,
           backend=Backend.EXECUTOR, tools=("http-fetch", "dns"),
           notes="Crawls with the SSRF guard: every resolved address, every "

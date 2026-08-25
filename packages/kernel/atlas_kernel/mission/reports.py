@@ -35,6 +35,7 @@ def filename(mission: Mission, *, at: datetime | None = None) -> str:
 
 def render(mission: Mission, *, attempts: int = 0, committed: str = "",
            detail: str = "", tests: str = "", branch: str = "",
+           evidence: str = "",
            files: tuple[str, ...] = ()) -> str:
     """The report body. States what did not happen as plainly as what did."""
     cost = mission.total_cost
@@ -55,6 +56,14 @@ def render(mission: Mission, *, attempts: int = 0, committed: str = "",
         for step in mission.plan.steps:
             lines.append(f"{step.order}. {step.title}")
         lines.append("")
+
+    if evidence:
+        # What the agent actually observed, step by step. The worker computed
+        # this and dropped it: `result.report` was set and never passed here,
+        # so a report said a mission succeeded without saying what was checked.
+        lines += ["## Evidence", "",
+                  "What ran, and what each step establishes.", "",
+                  "```", evidence.strip(), "```", ""]
 
     lines += ["## Agent", ""]
     if mission.invocations:
@@ -96,7 +105,8 @@ def render(mission: Mission, *, attempts: int = 0, committed: str = "",
 
 def write(mission: Mission, *, root: Path | str = ".", attempts: int = 0,
           committed: str = "", detail: str = "", tests: str = "",
-          branch: str = "", files: tuple[str, ...] = ()) -> Path:
+          branch: str = "", files: tuple[str, ...] = (),
+          evidence: str = "") -> Path:
     """Persist the report and return its path. Never overwrites another.
 
     The fields are named rather than forwarded as `**kwargs`: a passthrough
@@ -108,6 +118,6 @@ def write(mission: Mission, *, root: Path | str = ".", attempts: int = 0,
     path = directory / filename(mission)
     path.write_text(
         render(mission, attempts=attempts, committed=committed, detail=detail,
-               tests=tests, branch=branch, files=files),
+               tests=tests, branch=branch, files=files, evidence=evidence),
         encoding="utf-8")
     return path

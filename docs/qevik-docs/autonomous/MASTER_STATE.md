@@ -123,6 +123,18 @@ store with a list on exactly the first run that needed it.
 | Public deploy target | PENDING_INFRASTRUCTURE | A verified domain. The TXT record only its owner can create is generated per tenant | Point a domain at Qevik and create the record | A published site answers on a public URL over HTTPS |
 | Billing | DEFERRED | Plans, credits and quota exist and are enforced; money does not, deliberately | — | A price is agreed by a person first |
 
+## The fabric, connected to the running system
+
+The operating fabric below was built and connected to nothing. Two gates closed
+that, both verified against the live host rather than a TestClient.
+
+| Item | Status | Why / files | Acceptance |
+|---|---|---|---|
+| **Credential Centre** | COMPLETE | `CREDENTIAL_CENTRE_FIX.md`. Two defects: records lived in an in-memory dict while the vault persisted the secret, so a saved key read back as NOT_CONFIGURED after any restart with its value orphaned in the vault; and **no probes were registered at all**, so `/test` answered 501 for every provider and nothing could leave PENDING_CREDENTIAL. Records now fold from `credentials.jsonl` like every sibling module; real probes ship for anthropic, qwen, openai, deepseek, stripe, cloudflare | Met, **live on tenant-qevik**: 20/20 through save → restart → test → restart → forget → restart. Anthropic and DashScope both reached for real and both rejected a deliberately fake key. `grep -cE 'sk-…'` over the live timeline returns 0 |
+| **End-to-end execution** | COMPLETE | `FABRIC_WIRED.md`. The scheduler now decides dispatch order, `PostgresClaims` decides who, `mission/adapter.py` joins the registry to the tool contract and the sandbox, and `POST /api/missions/{id}/plan` gives the control plane the planning step it never had | Met, **on qevik-core-01**: 27/27 with a real server process, a real worker process, real PostgreSQL, real bubblewrap, and the control plane killed mid-flight. Mission still complete after two restarts |
+| **Multi-worker safety, in the worker** | COMPLETE (worker) / NOT_DEPLOYED (service) | `--claims-dsn` plus `--require-atomic-claims`, which **refuses to start** rather than falling back — a silent fallback means two workers run one mission and two commits appear with no error | Met: 7/7 with two workers racing one mission — exactly one claim, one `processing` transition, one commit. The *service* still runs `LocalClaims`; `/api/health` says `SINGLE_WORKER_ONLY` until `QEVIK_CLAIMS_DSN` is set |
+| Budgets charged at execution | NOT_STARTED | The scheduler consults the tenant balance before dispatch; `reserve()` is still not called from the worker | Per-mission and per-agent allowances drawn down by a real run |
+
 ## The autonomous operating fabric
 
 Built after the Munder-Difflin review named orchestration, not intelligence, as

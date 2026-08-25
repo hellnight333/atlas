@@ -22,6 +22,7 @@ only record of what the agent actually did.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -52,6 +53,12 @@ SECRET_SHAPED = re.compile(
 )
 
 DEFAULT_TIMEOUT = 120.0
+
+
+#: Who the worker commits as. A `.local` address that cannot resolve, on
+#: purpose: a commit from an automated worker must not look like it came from a
+#: person, and must not reach a real mailbox if a host ever pushes.
+COMMITTER_EMAIL = "agent@qevik.local"
 
 
 class GitError(RuntimeError):
@@ -91,8 +98,14 @@ class GitWorkspace:
     # -- running git ------------------------------------------------------
 
     def _git(self, *args: str, cwd: Path | None = None,
-             timeout: float = DEFAULT_TIMEOUT) -> str:
-        """Run one allow-listed git subcommand. No shell, ever."""
+             timeout: float = DEFAULT_TIMEOUT, identity: str = "") -> str:
+        """Run one allow-listed git subcommand. No shell, ever.
+
+        `identity` supplies the committer through the environment rather than
+        through `-c user.email=…`, which would put a flag where the allow-list
+        expects a subcommand — and that guard is worth more than the
+        convenience.
+        """
         if not args or args[0] not in ALLOWED:
             raise GitError(
                 f"git {args[0] if args else '<nothing>'!r} is not permitted here. "
@@ -101,9 +114,17 @@ class GitWorkspace:
             if forbidden in args:
                 raise GitError(f"{forbidden} is never permitted: this module does "
                                "not rewrite or discard history")
+        environment = dict(os.environ)
+        if identity:
+            environment.update({
+                "GIT_AUTHOR_NAME": identity,
+                "GIT_AUTHOR_EMAIL": COMMITTER_EMAIL,
+                "GIT_COMMITTER_NAME": identity,
+                "GIT_COMMITTER_EMAIL": COMMITTER_EMAIL,
+            })
         completed = subprocess.run(
             ["git", *args], cwd=str(cwd or self.root), capture_output=True,
-            text=True, timeout=timeout, check=False)
+            text=True, timeout=timeout, check=False, env=environment)
         self.commands.append("git " + " ".join(args))
         if completed.returncode != 0:
             raise GitError(f"git {args[0]} failed: {completed.stderr.strip()[:300]}")
@@ -187,8 +208,21 @@ class GitWorkspace:
                 "how a key reaches a public repository.")
 
         self._git("add", "-A")
+        # The *committer* identity too, not only the author.
+        #
+        # `--author` sets who wrote the change; git still refuses without a
+        # committer, which it takes from `user.email` in whoever's global config
+        # happens to be present. On a developer machine that is set and this
+        # worked; on the server it is not, and the first real mission run there
+        # reached `committing` and died with "Committer identity unknown" after
+        # doing all of the work.
+        #
+        # A worker's identity belongs to the worker, not to the shell it was
+        # started from. Passed per-invocation rather than written to a config
+        # file, so nothing about the host is modified.
         self._git("commit", "-m", message,
-                  "--author", f"{author} <agent@qevik.local>")
+                  "--author", f"{author} <{COMMITTER_EMAIL}>",
+                  identity=author)
         sha = self._git("rev-parse", "HEAD")
         return Commit(sha=sha, branch=self.branch, base=self.base, files=changed)
 

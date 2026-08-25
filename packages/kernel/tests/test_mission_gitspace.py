@@ -9,6 +9,7 @@ never a push, never an unscanned commit.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -181,3 +182,55 @@ def test_every_git_command_is_recorded(workspace) -> None:
     workspace.commit("work")
     assert any(c.startswith("git commit") for c in workspace.commands)
     assert any(c.startswith("git add") for c in workspace.commands)
+
+
+def test_a_commit_does_not_depend_on_the_hosts_git_config(tmp_path,
+                                                          monkeypatch) -> None:
+    """The first real mission on the server reached `committing` and died with
+    "Committer identity unknown" — git takes the committer from `user.email` in
+    whoever's global config happens to exist, and on the server there was none.
+
+    A worker's identity belongs to the worker, not to the shell it was started
+    from. Driven with HOME pointed at an empty directory, so no global config
+    is reachable at all.
+    """
+    import subprocess
+
+    from atlas_kernel.mission.gitspace import COMMITTER_EMAIL, GitWorkspace
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    empty_home = tmp_path / "no-config"
+    empty_home.mkdir()
+
+    def git(*args: str, cwd=origin) -> None:
+        subprocess.run(["git", *args], cwd=str(cwd), check=True,
+                       capture_output=True,
+                       env={"HOME": str(empty_home), "PATH": os.environ["PATH"],
+                            "GIT_AUTHOR_NAME": "seed",
+                            "GIT_AUTHOR_EMAIL": "seed@example.invalid",
+                            "GIT_COMMITTER_NAME": "seed",
+                            "GIT_COMMITTER_EMAIL": "seed@example.invalid"})
+
+    git("init", "-b", "main")
+    (origin / "seed.txt").write_text("seed\n")
+    git("add", "-A")
+    git("commit", "-m", "seed")
+
+    monkeypatch.setenv("HOME", str(empty_home))
+    monkeypatch.delenv("GIT_AUTHOR_NAME", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_NAME", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_EMAIL", raising=False)
+
+    space = GitWorkspace.create(origin, branch="mission/identity",
+                                worktrees=tmp_path / "worktrees")
+    (space.root / "written.txt").write_text("by the worker\n")
+    commit = space.commit("a mission that had to name itself")
+    assert commit.sha
+
+    shown = subprocess.run(
+        ["git", "show", "-s", "--format=%cn <%ce>", commit.sha],
+        cwd=str(space.root), capture_output=True, text=True, check=True,
+        env={"HOME": str(empty_home), "PATH": os.environ["PATH"]})
+    assert COMMITTER_EMAIL in shown.stdout
+    assert "qevik" in shown.stdout

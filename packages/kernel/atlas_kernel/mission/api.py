@@ -258,6 +258,16 @@ class Decision(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class Proposal(BaseModel):
+    """Which registered agent should propose the plan.
+
+    Named rather than defaulted: "whichever agent the system picked" is not
+    something a person can approve, because they cannot tell what it was.
+    """
+
+    agent: str = Field(min_length=1, max_length=64)
+
+
 class Deferral(BaseModel):
     """When a mission may start, and why it was held.
 
@@ -391,7 +401,17 @@ def build_router() -> APIRouter:
                 status_code=404,
                 detail="this mission has not produced a report")
 
-        root = Path(getattr(request.app.state, "repository_root", ".")).resolve()
+        # The root the *worker* wrote under, not the repository root.
+        #
+        # These were the same expression and are not the same thing: a worker
+        # started with `--reports <dir>` records a path relative to that
+        # directory, while this resolved it against the repository. The report
+        # existed, the mission pointed at it, and the console said "no report" —
+        # found by running the whole path end to end rather than by reading it.
+        configured = (getattr(request.app.state, "reports_root", None)
+                      or getattr(request.app.state, "repository_root", None)
+                      or ".")
+        root = Path(str(configured)).resolve()
         reports = (root / REPORTS).resolve()
         candidate = (root / raw).resolve()
         if not candidate.is_relative_to(reports) or not candidate.is_file():
@@ -420,6 +440,66 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(error)) from error
         _append(request, event)
         return mission.summary()
+
+    @router.post("/{mission_id}/plan")
+    def propose(mission_id: str, body: Proposal, request: Request,
+                tenant: TenantId = Depends(current_tenant),
+                user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Ask a registered agent to propose a plan. It does not queue anything.
+
+        The missing link in the control plane: a mission could be submitted and
+        approved here, but only *planned* through chat — so anything not driven
+        by a conversation had no way to become executable.
+
+        The agent **proposes**. This route attaches the proposal and moves the
+        mission to AWAITING_APPROVAL, which is exactly where a person decides.
+        Nothing here can queue work, and a mission that arrived already planned
+        is refused rather than re-planned over.
+        """
+        from ..fabric import Registry, UnknownAgent
+        from ..fabric.agents import Backend
+        from .adapter import SELF_CHECK_STEPS, NotRunnable, build
+
+        mission = _rehydrate(_one(request, mission_id, tenant), tenant)
+        registry = getattr(request.app.state, "agents", None) or Registry()
+        try:
+            agent = registry.get(body.agent)
+        except UnknownAgent as unknown:
+            raise HTTPException(status_code=404, detail=str(unknown)) from unknown
+
+        if agent.backend is not Backend.EXECUTOR:
+            # Honest about the boundary rather than half-implementing it: a
+            # model-backed proposal needs the vault and a provider call, which
+            # is the worker's and chat's job, not this route's.
+            raise HTTPException(
+                status_code=501,
+                detail=f"{agent.id} is {agent.backend.value}-backed. A model "
+                       "proposal is made in chat, where the conversation that "
+                       "justifies it is recorded alongside it.")
+        if agent.id != "self-check":
+            raise HTTPException(
+                status_code=501,
+                detail=f"{agent.id} declares no steps to propose. Only agents "
+                       "with a declared procedure can be planned from here.")
+        try:
+            proposed = build(agent.id, SELF_CHECK_STEPS).plan(
+                mission.title or "verify this deployment")
+        except NotRunnable as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+        try:
+            planning, first = service.transition(
+                mission, MissionStatus.PLANNING, tenant=tenant,
+                actor=user.username, note=f"planning with {agent.id}")
+            planned, second = service.attach_plan(planning, proposed,
+                                                  tenant=tenant)
+        except service.NotPermitted as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        _append(request, first)
+        _append(request, second)
+        return {**planned.summary(),
+                "proposed_by": agent.id,
+                "note": "proposed, not authorised. Approve it to queue it."}
 
     @router.post("/{mission_id}/approve")
     def approve(mission_id: str, body: Decision, request: Request,

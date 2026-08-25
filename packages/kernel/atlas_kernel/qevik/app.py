@@ -122,6 +122,11 @@ class Wiring:
     #: not be there and failing at the first claim.
     claims_dsn: str = ""
     repository_root: Path = field(default_factory=Path.cwd)
+    #: Where the worker writes mission reports. Separate from the repository
+    #: root because a deployment keeps reports on durable storage rather than
+    #: inside a checkout that a deploy replaces — and because the worker is
+    #: started with its own `--reports`, which this must agree with.
+    reports_root: Path | None = None
     vault_path: Path = DEFAULT_VAULT
     #: Where the control panel's files live. None uses the repository copy.
     console: Path | None = None
@@ -225,6 +230,7 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
         if getattr(app.state.sandbox, "confinement", None) is Confinement.FULL
         else AgentRegistry())
     app.state.repository_root = str(wiring.repository_root)
+    app.state.reports_root = str(wiring.reports_root or wiring.repository_root)
     app.state.wiring = wiring
 
     @app.get("/api/health")
@@ -458,6 +464,12 @@ def from_environment() -> FastAPI:
     # the mission timeline: both are append-only JSONL and mixing them would
     # make "what happened to this mission" and "what happened to this key" one
     # log that neither reader wants whole.
+    # Reports live beside the rest of the durable state by default, so the
+    # worker and this surface agree without either being configured.
+    report_root = os.environ.get("QEVIK_REPORTS", "")
+    if not report_root and state:
+        report_root = str(Path(state) / "reports")
+
     credentials = os.environ.get("QEVIK_CREDENTIAL_TIMELINE", "")
     if not credentials and state:
         credentials = str(Path(state) / "credentials.jsonl")
@@ -471,6 +483,7 @@ def from_environment() -> FastAPI:
         mission_timeline=Path(timeline) if timeline else None,
         vault_path=Path(vault),
         credential_timeline=Path(credentials) if credentials else None,
+        reports_root=Path(report_root) if report_root else None,
         chat_events=turns,
         claims_dsn=os.environ.get("QEVIK_CLAIMS_DSN", ""),
     ))
