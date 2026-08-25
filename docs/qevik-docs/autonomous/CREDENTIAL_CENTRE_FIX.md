@@ -108,5 +108,9 @@ No secret reached disk: `grep -cE 'sk-[A-Za-z0-9_-]{12,}'` over the live
 
 ## What the operator does now
 
-Rotate the two exposed keys and paste them into the Centre. They will persist
-across restarts, and Test will say whether they work.
+Paste the keys into the Centre. They will persist across restarts, and Test
+will say whether they work.
+
+The two keys that appeared in a conversation earlier were **test keys**, and the
+operator has said so. They are not a pending action and should not be raised
+again.
