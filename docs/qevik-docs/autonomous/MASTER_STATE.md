@@ -7,7 +7,7 @@ three document sets and is not restated.
 
 Last reconciled: **25 August 2026**, at `c943d31`.
 
-Architecture review (design only, nothing implemented):
+Architecture review (design; the operating fabric below is now implemented):
 `MUNDER_DIFFLIN_REVIEW.md` · `QEVIK_AGENT_FABRIC_ARCHITECTURE.md` ·
 `CURRENT_VS_TARGET_ARCHITECTURE.md`. Its governing finding: **orchestration is
 not intelligence** — policy stays deterministic code, a model proposes and never
@@ -122,6 +122,23 @@ store with a list on exactly the first run that needed it.
 | Cloudflare target | PENDING_CREDENTIAL | Adapter, manifest and refusals built; only the HTTP call is unwritten, deliberately | Enter `QEVIK_CLOUDFLARE_API_TOKEN` + `QEVIK_CLOUDFLARE_ACCOUNT_ID` | A bundle reaches a public URL |
 | Public deploy target | PENDING_INFRASTRUCTURE | A verified domain. The TXT record only its owner can create is generated per tenant | Point a domain at Qevik and create the record | A published site answers on a public URL over HTTPS |
 | Billing | DEFERRED | Plans, credits and quota exist and are enforced; money does not, deliberately | — | A price is agreed by a person first |
+
+## The autonomous operating fabric
+
+Built after the Munder-Difflin review named orchestration, not intelligence, as
+the governing gap. The ordering is the operator's: live status, then the
+registry, then the scheduler, then the protocol, then budgets.
+
+| Item | Status | Why / files | Acceptance |
+|---|---|---|---|
+| **Live status** | COMPLETE | `qevik/live.py`, `GET /api/status` — one fold of both timelines, a `blake2b` version digest over `(mission, updated_at, status)` sorted so arrival order is not a change. Console polls every 4s and pauses on `visibilitychange`. Polling, not SSE: Cloudflare buffers streaming responses | Met. `{"changed": false}` when nothing moved; the poll loop contains no approve/decide/plan/POST |
+| **Agent registry** | COMPLETE | `fabric/agents.py` — 17 declarative records, 11 ready. `Blast` → `APPROVAL_FOR` decides which approval applies. An agent is a record: no `run`, no `spawn`, no `delegates_to` | Met. AST tests assert the registry never imports `EXECUTORS`, `REQUIRES_CUSTOMER_INPUT`, `owns(`, `QuotaLedger` or `ALLOWED` |
+| **Scheduler** | COMPLETE | `fabric/scheduler.py`, `SCHEDULER.md` — five queues; `WAITING` and `BLOCKED` never merge, and a missing credential is BLOCKED (nothing resolves it but a person). Priced and unpriced work judged separately, so UNKNOWN cost is neither free nor a wall. Deferral is durable (`Mission.not_before`) and **enforced in `claim()`**, not advisory | Met. A deferral written in one interpreter is read by a `subprocess` that never saw it, with a negative control proving the same process would otherwise have run it |
+| **Message protocol** | COMPLETE | `fabric/protocol.py` — an agent addresses a *capability*, never an agent, so every edge in the graph is one the registry declared. Hop, message and budget caps **escalate to a person with the chain attached**; they never truncate | Met. A cycle is caught by "who is still waiting", so a second question to the same specialist after an answer is still ordinary work |
+| **Budgets** | COMPLETE | `fabric/budgets.py` — tenant ⊃ mission ⊃ agent ⊃ conversation on the existing `QuotaLedger`. Check-all-then-commit-all; a refusal charges nothing. An unmetered *tenant* refuses (`Unmetered`), an unmetered mission is ordinary | Met. Two tenants with the same `mission-1` never share an allowance |
+| Multi-worker safety | PENDING_INFRASTRUCTURE | Unchanged: `PostgresClaims` still refuses to construct unverified. The scheduler's `dispatchable` is advice; the atomic claim remains the single place two workers race | Two workers, one mission, exactly one claim |
+| CLI/coding-agent backend | PENDING_INFRASTRUCTURE | `fabric/agents.py` marks every `CLI_AGENT` **not ready**, because Qevik has no sandbox and marking it ready would dispatch a filesystem-writing process into a worktree and call that isolation | A host |
+| Provider rate limits as a scheduling input | NOT_STARTED | Named in `SCHEDULER.md` as a stated gap | — |
 
 ## Product C
 

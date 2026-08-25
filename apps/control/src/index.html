@@ -282,7 +282,9 @@ const TONE = {
   pending_credential: 'warn', NOT_VERIFIED: 'warn', DISABLED: 'warn',
   cancelled: '', draft: '', NOT_STARTED: '', NOT_CONFIGURED: '', DEFERRED: '',
 };
-const pill = (v) => `<span class="pill ${TONE[v] || ''}">${esc(v)}</span>`;
+/* An explicit tone for values that have no intrinsic one — a count is not
+   good or bad, but the queue it counts is. */
+const pill = (v, tone) => `<span class="pill ${tone !== undefined ? tone : (TONE[v] || '')}">${esc(v)}</span>`;
 
 /* The mission lifecycle, in the order `mission/service.py::ALLOWED` permits.
  * Drawn as a sequence because that is what it is, and because a status word on
@@ -311,6 +313,7 @@ const state = { page: 'dashboard', arg: null, me: null, counts: {} };
 
 const PAGES = [
   ['dashboard', 'Dashboard'], ['roadmap', 'Roadmap'], ['missions', 'Mission Control'],
+  ['schedule', 'Schedule'],
   ['chat', 'Chat'], ['actions', 'Human Actions'], ['credentials', 'Credentials'],
   ['models', 'Models'], ['businesses', 'Businesses'], ['publications', 'Publications'],
   ['measurements', 'Measurements'], ['reports', 'Reports'], ['history', 'History'],
@@ -508,6 +511,42 @@ async function missionDetail(id) {
   });
   return html;
 }
+
+/* The five queues. WAITING and BLOCKED are drawn apart on purpose: one
+   resolves by itself and the other never will, and an operator who cannot tell
+   them apart chases the wrong half. */
+const QUEUES = [
+  ['NOW', 'Running now', 'run', 'Dispatched, or about to be.'],
+  ['NEXT', 'Next', '', 'Ready. Waiting only for a free worker.'],
+  ['SCHEDULED', 'Scheduled', 'wait', 'Held until a window somebody chose.'],
+  ['WAITING', 'Waiting', 'warn', 'On a person, or on other work. Resolves by itself.'],
+  ['BLOCKED', 'Blocked', 'bad', 'Cannot proceed. Nothing here resolves on its own.'],
+];
+
+views.schedule = async () => {
+  const plan = await API.get('/api/missions/schedule?concurrency=2');
+  const queues = plan.queues || {};
+  const section = ([id, label, tone, blurb]) => {
+    const rows = queues[id] || [];
+    return `<div class="card" style="margin-bottom:1rem">
+      <h3>${esc(label)} ${pill(String(rows.length), tone)}</h3>
+      <div class="note" style="margin:-.3rem 0 .7rem">${esc(blurb)}</div>
+      ${rows.length ? `<div class="rows">${rows.map((r) => `
+        <div class="row"><div class="body">
+          <div class="title"><a href="#/missions/${encodeURIComponent(r.mission_id)}">${esc(r.mission_id)}</a></div>
+          <div class="meta">${esc(r.why)}</div>
+          ${r.runs_after ? `<div class="meta">runs after ${when(r.runs_after)}</div>` : ''}
+        </div><div class="actions">${pill(r.priority)}</div></div>`).join('')}</div>`
+        : empty('Nothing.')}
+    </div>`;
+  };
+  return `
+    <header class="page"><h2>Schedule</h2>
+      <p>What runs next, and why everything else does not. This page decides
+      nothing — a worker still has to win the claim.</p></header>
+    ${QUEUES.map(section).join('')}
+    <div class="note">${esc(plan.note || '')}</div>`;
+};
 
 views.chat = async () => {
   if (state.arg) return conversation(state.arg);

@@ -157,8 +157,47 @@ def claim(mission: Mission, *, worker: str, tenant: TenantId | None
         raise NotPermitted(f"{mission.id} is already held by {mission.claimed_by}")
     if mission.status not in CLAIMABLE:
         raise NotPermitted(f"{mission.id} is {mission.status.value}, not claimable")
+    # A deferral is enforced here rather than trusted to the scheduler. A worker
+    # that takes the oldest queued mission — which is exactly what the worker
+    # does — would otherwise run work somebody deliberately moved to tonight,
+    # and the deferral would be a suggestion.
+    if mission.not_before and datetime.now(UTC) < mission.not_before:
+        raise NotPermitted(
+            f"{mission.id} is held until "
+            f"{mission.not_before.isoformat(timespec='minutes')}")
     return transition(mission, MissionStatus.PROCESSING, tenant=tenant,
                       actor=worker, claimed_by=worker, note=f"claimed by {worker}")
+
+
+def defer(mission: Mission, *, until: datetime, tenant: TenantId | None,
+          reason: str, actor: str = "scheduler"
+          ) -> tuple[Mission, BusinessEvent]:
+    """Hold a mission until a chosen moment, with the reason recorded.
+
+    Not a status change: the mission stays queued, because it is still work
+    somebody wants done. What changes is when it may start, and that is durable
+    — folded from the timeline like everything else — so a restart does not
+    forget the window and start a night job at eleven in the morning.
+
+    Refuses a moment in the past. "Deferred until yesterday" reads as a decision
+    while behaving as no decision at all.
+    """
+    tenant = _require_tenant(tenant, method="mission.defer")
+    if not owns(mission.tenant_id, tenant):
+        raise NotPermitted("this mission belongs to a different tenant")
+    if mission.terminal:
+        raise NotPermitted(f"{mission.id} is {mission.status.value}; there is "
+                           "nothing left to defer")
+    if not reason.strip():
+        raise NotPermitted("a deferral must say why, or nobody can tell it from "
+                           "a queue that is simply long")
+    if until <= datetime.now(UTC):
+        raise NotPermitted("a deferral must point at a future moment")
+    updated = mission.model_copy(update={"not_before": until,
+                                         "updated_at": datetime.now(UTC)})
+    return updated, _event(updated, actor=actor,
+                           note=f"deferred until "
+                                f"{until.isoformat(timespec='minutes')}: {reason}")
 
 
 def release(mission: Mission, *, tenant: TenantId | None, reason: str,

@@ -33,6 +33,35 @@ from .agents import (
     capable_of,
     describe,
 )
+from .budgets import (
+    Assessment,
+    Envelope,
+    Scope,
+    Unmetered,
+    assess,
+    reserve,
+)
+from .protocol import (
+    Conversation,
+    Exchange,
+    Kind,
+    Limits,
+    Message,
+    Refused,
+)
+from .scheduler import (
+    Decision,
+    Demand,
+    Priority,
+    Queue,
+    decide,
+    demands_from,
+    plan,
+)
 
-__all__ = ["AGENTS", "Agent", "Backend", "Blast", "Capability", "Placement",
-           "Registry", "UnknownAgent", "capable_of", "describe"]
+__all__ = ["AGENTS", "Agent", "Assessment", "Backend", "Blast", "Capability",
+           "Conversation", "Decision", "Demand", "Envelope", "Exchange", "Kind",
+           "Limits", "Message", "Placement", "Priority", "Queue", "Refused",
+           "Registry", "Scope", "Unmetered", "UnknownAgent", "assess",
+           "capable_of", "decide", "demands_from", "describe", "plan",
+           "reserve"]

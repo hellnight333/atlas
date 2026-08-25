@@ -240,6 +240,26 @@ def main() -> int:
         check("the mission is queued, not running",
               isinstance(approved, dict) and approved.get("mission_status") == "queued")
 
+        # ------------------------------------- 5b. the scheduler sees the work
+        status, plan = call("/api/missions/schedule", token=token)
+        queues = plan.get("queues", {}) if isinstance(plan, dict) else {}
+        check("the scheduler puts the queued mission somewhere runnable",
+              status == 200 and (plan or {}).get("dispatchable") == [mission],
+              f"status {status}, dispatchable {(plan or {}).get('dispatchable')}")
+        check("nothing is stuck without a reason",
+              all(row.get("why", "").strip()
+                  for rows in queues.values() for row in rows),
+              "a queue entry with no reason is a status, not an action")
+
+        timeline = workspace / "missions.jsonl"
+        before = len(timeline.read_text(encoding="utf-8").splitlines())
+        call("/api/missions/schedule", token=token)
+        call("/api/missions/schedule", token=token)
+        after = len(timeline.read_text(encoding="utf-8").splitlines())
+        check("reading the schedule starts nothing", before == after and before > 0,
+              f"{before} timeline events before, {after} after — the schedule "
+              "is a view, and a refreshed stale tab must not dispatch")
+
         # ------------------------------------------------ 6. the browser leaves
         print("\n6. The server is killed — the browser going away")
         stop(server)

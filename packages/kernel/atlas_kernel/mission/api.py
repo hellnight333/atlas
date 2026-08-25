@@ -25,6 +25,7 @@ both, since 403-versus-404 tells a caller which mission ids exist.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ from pydantic import BaseModel, Field
 
 from ..auth.api import current_user, requires
 from ..auth.models import Scope, User
+from ..fabric import scheduler
+from ..fabric.scheduler import demands_from
 from ..opportunity.tenancy import TenantId
 from . import service
 from .models import Mission, MissionStatus
@@ -52,6 +55,58 @@ MISSION_ID = re.compile(r"^mission-[0-9a-f]{12}$")
 #: data, so treating it as a filesystem instruction is how a read model becomes
 #: an arbitrary-file-read.
 REPORTS = Path("docs/qevik-docs/autonomous/reports")
+
+
+def usable_credentials(request: Request, tenant: TenantId) -> frozenset[str]:
+    """Which providers `resolve()` would actually hand over a secret for.
+
+    Deliberately the same rule `resolve()` applies — `UNUSABLE` — rather than
+    "has a row". A credential somebody typed and nothing ever verified is
+    exactly the case where the scheduler would dispatch work that fails at the
+    provider, after telling the operator it was running.
+
+    An unreachable or sealed vault yields the empty set: not knowing which keys
+    work is not the same as knowing they all do, and scheduling on the
+    optimistic reading is how a queue full of doomed missions gets built.
+    """
+    service_ = getattr(request.app.state, "credentials", None)
+    if service_ is None:
+        return frozenset()
+    from ..credentials.service import UNUSABLE
+    from ..integrations import INTEGRATIONS
+
+    usable: set[str] = set()
+    for integration in INTEGRATIONS:
+        try:
+            if service_.status(provider=integration.id, tenant=tenant) not in UNUSABLE:
+                usable.add(integration.id)
+        except Exception:  # noqa: BLE001 - a sealed vault is not a scheduling error
+            continue
+    return frozenset(usable)
+
+
+def tenant_balance(request: Request, tenant: TenantId) -> float | None:
+    """What this tenant may still spend, or `None` when nothing meters it.
+
+    `CreditService.balance()` rather than the ledger directly, because it also
+    subtracts units already reserved and not yet settled — scheduling against
+    the raw remaining would dispatch work whose money is already promised to a
+    mission still running.
+
+    A tenant with no plan yields `None`, which the scheduler reads as "no
+    allowance configured" and does not block on. That is deliberately *not* what
+    `budgets.reserve()` does, and the asymmetry is the point: refusing to start
+    every mission because billing was never set up would break a single-tenant
+    self-hosted deployment, where refusing to *spend* against an allowance
+    nobody set is still correct.
+    """
+    credits = getattr(request.app.state, "credits", None)
+    if credits is None:
+        return None
+    try:
+        return credits.balance(tenant)
+    except Exception:  # noqa: BLE001 - no plan, or no policy. Both are "unmetered".
+        return None
 
 
 def current_tenant(user: User = Depends(current_user)) -> TenantId:
@@ -203,6 +258,18 @@ class Decision(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class Deferral(BaseModel):
+    """When a mission may start, and why it was held.
+
+    `reason` is required rather than optional. A deferral without one is
+    indistinguishable from a queue that is simply long, which is the exact
+    confusion the SCHEDULED queue exists to remove.
+    """
+
+    until: datetime
+    reason: str = Field(min_length=3, max_length=500)
+
+
 def build_router() -> APIRouter:
     router = APIRouter(prefix="/api/missions", tags=["missions"])
 
@@ -261,6 +328,27 @@ def build_router() -> APIRouter:
 
         store = getattr(request.app.state, "connections", None) or ConnectionStore()
         return controlplane.centre(store=store, tenant=tenant)
+
+    @router.get("/schedule")
+    def schedule(request: Request, concurrency: int = 1, local_worker: bool = False,
+                 tenant: TenantId = Depends(current_tenant),
+                 _: User = Depends(requires(Scope.READ))) -> dict:
+        """What would run next, and why everything else would not.
+
+        A view, not a command: nothing here claims, dispatches or transitions
+        anything. `dispatchable` is the scheduler's advice, and the atomic claim
+        remains the single place two workers can race — so a stale page cannot
+        start work twice by being refreshed.
+        """
+        found = _folded(request, tenant)
+        done = frozenset(m["mission_id"] for m in found
+                         if m.get("status") == MissionStatus.COMPLETE.value)
+        demands = demands_from(found,
+                               connected=usable_credentials(request, tenant),
+                               remaining_units=tenant_balance(request, tenant))
+        return scheduler.plan(demands, tenant=tenant, done=done,
+                              local_worker=local_worker,
+                              concurrency=max(1, min(concurrency, 32)))
 
     # -------------------------------------------------- one mission
 
@@ -384,6 +472,26 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(error)) from error
         _append(request, event)
         return cancelled.summary()
+
+    @router.post("/{mission_id}/defer")
+    def defer(mission_id: str, body: Deferral, request: Request,
+              tenant: TenantId = Depends(current_tenant),
+              user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Hold a mission until a chosen moment, with the reason recorded.
+
+        Not a cancellation and not a block: the mission stays queued, because it
+        is still work somebody wants done. What changes is when it may start —
+        and `claim()` enforces that, so the window is a decision rather than a
+        note the worker is free to ignore.
+        """
+        mission = _rehydrate(_one(request, mission_id, tenant), tenant)
+        try:
+            held, event = service.defer(mission, until=body.until, tenant=tenant,
+                                        reason=body.reason, actor=user.username)
+        except service.NotPermitted as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        _append(request, event)
+        return held.summary()
 
     return router
 

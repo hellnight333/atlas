@@ -39,6 +39,12 @@ from atlas_kernel.mission.models import (
 A, B = "tenant-alpha", "tenant-beta"
 
 
+def Plan_with_cost(units: float) -> Plan:  # noqa: N802 - reads as a constructor
+    """A plan whose only interesting property is what it says it will cost."""
+    return Plan(goal="do the thing", estimated_cost=units,
+                cost_status="ESTIMATED")
+
+
 def _user(tenant: str, *scopes: Scope) -> User:
     return User(username=f"u-{tenant}",
                 password_hash=hash_password("test-only-password"),
@@ -377,3 +383,224 @@ def test_rehydrating_another_tenants_summary_is_refused() -> None:
     mission, _ = service.create(tenant=B, title="x", requested_by="ayoub")
     with pytest.raises(service.NotPermitted):
         service.rehydrate(mission.summary(), tenant=A)
+
+
+# ============================================ the schedule view
+
+def test_the_schedule_view_never_starts_anything(client, app) -> None:
+    """A view, not a command. If refreshing the page could dispatch, a stale
+    tab would start work twice and the atomic claim would stop being the single
+    place two workers race."""
+    _seed(app, status=MissionStatus.QUEUED)
+    before = list(app.state.mission_events)
+    body = client.get("/api/missions/schedule").json()
+    assert body["counts"]["NOW"] == 1
+    assert app.state.mission_events == before, (
+        "reading the schedule appended an event; it is no longer a view")
+
+
+def test_the_schedule_separates_what_is_stuck_from_what_is_progressing(
+        client, app) -> None:
+    _seed(app, status=MissionStatus.AWAITING_APPROVAL, title="needs a person")
+    _seed(app, status=MissionStatus.BLOCKED, title="dead",
+          blockers=(Blocker(kind="PENDING_INFRASTRUCTURE", detail="no GPU"),))
+    body = client.get("/api/missions/schedule").json()
+    assert body["counts"]["WAITING"] == 1
+    assert body["counts"]["BLOCKED"] == 1
+    assert "no GPU" in body["queues"]["BLOCKED"][0]["why"]
+
+
+def test_the_schedule_shows_only_this_tenants_work(client, app) -> None:
+    _seed(app, tenant=A, status=MissionStatus.QUEUED)
+    theirs = _seed(app, tenant=B, status=MissionStatus.QUEUED)
+    body = client.get("/api/missions/schedule").json()
+    assert theirs.id not in client.get("/api/missions/schedule").text
+    assert body["counts"]["NOW"] == 1
+
+
+def test_concurrency_decides_how_much_is_dispatchable(client, app) -> None:
+    for _ in range(3):
+        _seed(app, status=MissionStatus.QUEUED)
+    one = client.get("/api/missions/schedule").json()
+    three = client.get("/api/missions/schedule?concurrency=3").json()
+    assert len(one["dispatchable"]) == 1
+    assert len(three["dispatchable"]) == 3
+
+
+def test_an_absurd_concurrency_is_clamped_rather_than_obeyed(client, app) -> None:
+    """A query string is a request, not an instruction. `concurrency=100000`
+    would name every mission dispatchable at once."""
+    for _ in range(3):
+        _seed(app, status=MissionStatus.QUEUED)
+    body = client.get("/api/missions/schedule?concurrency=100000").json()
+    assert len(body["dispatchable"]) == 3
+    assert client.get("/api/missions/schedule?concurrency=0").json()["counts"]["NOW"] == 1
+
+
+def test_a_vault_that_cannot_be_read_yields_no_usable_credentials(app) -> None:
+    """Not knowing which keys work is not the same as knowing they all do.
+
+    The optimistic reading dispatches work that fails at the provider, after
+    the operator was told it was running.
+    """
+    from atlas_kernel.mission.api import usable_credentials
+
+    class Sealed:
+        def status(self, **_: object) -> str:
+            raise RuntimeError("vault is sealed")
+
+    app.state.credentials = Sealed()
+
+    class Req:
+        pass
+    request = Req()
+    request.app = app  # type: ignore[attr-defined]
+    assert usable_credentials(request, A) == frozenset()
+
+
+def test_a_credential_stored_but_never_verified_is_not_treated_as_working(
+        app) -> None:
+    """`resolve()` refuses it, so scheduling as though it works would queue a
+    mission that fails at the provider."""
+    from atlas_kernel.credentials.service import CredentialService
+    from atlas_kernel.credentials.vault import MemorySecretStore, Vault
+    from atlas_kernel.mission.api import usable_credentials
+
+    vault = Vault(MemorySecretStore(), master_key="test-only-master-key")
+    credentials = CredentialService(vault)
+    credentials.store(provider="smtp", tenant=A, secret="test-only-value")
+    app.state.credentials = credentials
+
+    class Req:
+        pass
+    request = Req()
+    request.app = app  # type: ignore[attr-defined]
+    assert "smtp" not in usable_credentials(request, A)
+
+
+# ============================================ deferral
+
+def test_deferring_holds_a_mission_without_cancelling_it(client, app) -> None:
+    """It is still work somebody wants done. Moving it to BLOCKED would put it
+    in the queue for things that are never going to happen."""
+    mission = _seed(app, status=MissionStatus.QUEUED)
+    body = client.post(f"/api/missions/{mission.id}/defer",
+                       json={"until": "2099-01-01T01:00:00Z",
+                             "reason": "expensive and not urgent"}).json()
+    assert body["status"] == MissionStatus.QUEUED.value
+    assert body["not_before"].startswith("2099-01-01T01:00")
+
+    schedule = client.get("/api/missions/schedule").json()
+    assert schedule["counts"]["SCHEDULED"] == 1
+    assert schedule["counts"]["NOW"] == 0
+
+
+def test_a_deferral_needs_a_reason(client, app) -> None:
+    mission = _seed(app, status=MissionStatus.QUEUED)
+    response = client.post(f"/api/missions/{mission.id}/defer",
+                           json={"until": "2099-01-01T01:00:00Z", "reason": ""})
+    assert response.status_code == 422
+
+
+def test_a_deferral_into_the_past_is_refused(client, app) -> None:
+    """"Deferred until yesterday" reads as a decision while behaving as none."""
+    mission = _seed(app, status=MissionStatus.QUEUED)
+    response = client.post(f"/api/missions/{mission.id}/defer",
+                           json={"until": "2001-01-01T01:00:00Z",
+                                 "reason": "night window"})
+    assert response.status_code == 409
+    assert "future" in response.json()["detail"]
+
+
+def test_another_tenants_mission_cannot_be_deferred_and_is_absent(client, app
+                                                                  ) -> None:
+    """404, not 403 — a refusal would confirm the mission exists."""
+    theirs = _seed(app, tenant=B, status=MissionStatus.QUEUED)
+    response = client.post(f"/api/missions/{theirs.id}/defer",
+                           json={"until": "2099-01-01T01:00:00Z",
+                                 "reason": "night window"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == mission_api.NOT_FOUND
+
+
+def test_deferring_requires_execute_rather_than_read(client, app) -> None:
+    """Holding work back changes when it runs, which is an execution decision."""
+    mission = _seed(app, status=MissionStatus.QUEUED)
+    client.acting_as(_user(A, Scope.READ))
+    response = client.post(f"/api/missions/{mission.id}/defer",
+                           json={"until": "2099-01-01T01:00:00Z",
+                                 "reason": "night window"})
+    assert response.status_code == 403
+
+
+# ============================================ the budget reaches the schedule
+
+def test_a_tenant_out_of_credit_has_its_work_blocked_before_it_starts(app,
+                                                                      client
+                                                                      ) -> None:
+    """A mission stopped halfway has spent the money and produced nothing."""
+    from atlas_kernel.credits.models import Plan
+    from atlas_kernel.credits.service import CreditService
+
+    credits = CreditService()
+    credits.assign(A, Plan.LIST)
+    app.state.credits = credits
+    _seed(app, status=MissionStatus.QUEUED,
+          plan=Plan_with_cost(credits.balance(A) * 10))
+
+    body = client.get("/api/missions/schedule").json()
+    assert body["counts"]["BLOCKED"] == 1
+    assert "stopping halfway" in body["queues"]["BLOCKED"][0]["why"]
+
+
+def test_the_same_mission_runs_when_the_tenant_can_afford_it(app, client
+                                                             ) -> None:
+    """The negative control. Without it the test above passes against a
+    scheduler that blocks everything."""
+    from atlas_kernel.credits.models import Plan
+    from atlas_kernel.credits.service import CreditService
+
+    credits = CreditService()
+    credits.assign(A, Plan.LIST)
+    app.state.credits = credits
+    _seed(app, status=MissionStatus.QUEUED, plan=Plan_with_cost(1.0))
+
+    assert client.get("/api/missions/schedule").json()["counts"]["NOW"] == 1
+
+
+def test_units_already_reserved_are_not_offered_to_the_scheduler(app) -> None:
+    """Scheduling against the raw remaining would dispatch work whose money is
+    already promised to a mission still running."""
+    from atlas_kernel.credits.models import Plan
+    from atlas_kernel.credits.service import CreditService
+    from atlas_kernel.mission.api import tenant_balance
+
+    credits = CreditService()
+    credits.assign(A, Plan.LIST)
+    app.state.credits = credits
+
+    class Req:
+        pass
+    request = Req()
+    request.app = app  # type: ignore[attr-defined]
+    before = tenant_balance(request, A)
+    credits.reserve(tenant=A, action="offer-website")
+    after = tenant_balance(request, A)
+    assert after is not None and before is not None
+    assert after < before
+
+
+def test_a_tenant_with_no_plan_is_unmetered_rather_than_broke(app) -> None:
+    """A self-hosted deployment where billing was never set up must still run
+    missions. Refusing to *spend* against an allowance nobody set is a separate
+    decision, made in `budgets.reserve()`."""
+    from atlas_kernel.credits.service import CreditService
+    from atlas_kernel.mission.api import tenant_balance
+
+    app.state.credits = CreditService()
+
+    class Req:
+        pass
+    request = Req()
+    request.app = app  # type: ignore[attr-defined]
+    assert tenant_balance(request, A) is None

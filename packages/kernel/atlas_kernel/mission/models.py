@@ -167,6 +167,10 @@ class Mission(BaseModel):
     #: Set while a worker holds it, so a restart can tell a crashed mission from
     #: one nobody has started.
     claimed_by: str = ""
+    #: Deliberately held until this moment — a window somebody chose, not a
+    #: delay. Durable, because "why has this not run" must survive a restart
+    #: with an answer that is not "the queue is long".
+    not_before: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -199,6 +203,7 @@ class Mission(BaseModel):
             "invocations": [i.model_dump(mode="json") for i in self.invocations],
             "blockers": [b.model_dump(mode="json") for b in self.blockers],
             "report_path": self.report_path, "claimed_by": self.claimed_by,
+            "not_before": self.not_before.isoformat() if self.not_before else None,
             "total_cost": self.total_cost,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
