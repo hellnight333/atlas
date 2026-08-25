@@ -423,3 +423,113 @@ def test_a_provider_with_no_adapter_is_not_asked_for_a_key() -> None:
     store = ConnectionStore()
     for provider in ("deepseek", "stripe", "smtp"):
         assert BY_ID[provider].status(store, tenant=A) is IntegrationStatus.NOT_IMPLEMENTED
+
+
+# ============================================ records outlive the process
+
+def _service(events: list) -> CredentialService:
+    from atlas_kernel.credentials.service import CredentialService
+    from atlas_kernel.credentials.vault import MemorySecretStore, Vault
+
+    return CredentialService(Vault(MemorySecretStore(), master_key="test-only"),
+                             events=events, sink=events.append)
+
+
+def test_a_saved_credential_is_still_saved_after_a_restart() -> None:
+    """The bug this replaced: the vault persisted the secret and the *record*
+    did not, so the Centre read back NOT_CONFIGURED with the key still in the
+    vault — unreachable, and impossible to forget through the UI."""
+    from atlas_kernel.credentials.service import Status
+
+    events: list = []
+    _service(events).store(provider="anthropic", tenant="t1", secret="k-not-real")
+    after = _service(events)
+    assert after.status(provider="anthropic",
+                        tenant="t1") is Status.PENDING_CREDENTIAL
+
+
+def test_a_verified_credential_stays_verified_across_a_restart() -> None:
+    """Otherwise every restart silently demotes a working key to untested, and
+    the operator re-tests the whole Centre after each deploy."""
+    from atlas_kernel.credentials.service import Status
+
+    events: list = []
+    first = _service(events)
+    first.store(provider="anthropic", tenant="t1", secret="k-not-real")
+    first.verify(provider="anthropic", tenant="t1",
+                 probe=lambda _: (Status.CONNECTED, "accepted"))
+    after = _service(events)
+    assert after.status(provider="anthropic", tenant="t1") is Status.CONNECTED
+    record = after.record(provider="anthropic", tenant="t1")
+    assert record is not None and record.last_verification is not None
+    assert record.last_verification.detail == "accepted"
+
+
+def test_a_forgotten_credential_is_not_resurrected_by_the_fold() -> None:
+    """A timeline that only ever said "stored" would bring back exactly the
+    thing an operator deliberately destroyed."""
+    from atlas_kernel.credentials.service import Status
+
+    events: list = []
+    first = _service(events)
+    first.store(provider="anthropic", tenant="t1", secret="k-not-real")
+    first.forget(provider="anthropic", tenant="t1")
+    assert _service(events).status(provider="anthropic",
+                                   tenant="t1") is Status.NOT_CONFIGURED
+
+
+def test_a_disabled_credential_stays_disabled_across_a_restart() -> None:
+    from atlas_kernel.credentials.service import Status
+
+    events: list = []
+    first = _service(events)
+    first.store(provider="anthropic", tenant="t1", secret="k-not-real")
+    first.set_enabled(provider="anthropic", tenant="t1", enabled=False)
+    assert _service(events).status(provider="anthropic",
+                                   tenant="t1") is Status.DISABLED
+
+
+def test_the_latest_event_wins_by_time_not_by_position() -> None:
+    """A log that must be replayed in the order it was written is a log with a
+    hidden ordering requirement — the same reason `mission.fold` sorts."""
+    from atlas_kernel.credentials.service import restore
+
+    events: list = []
+    service = _service(events)
+    service.store(provider="anthropic", tenant="t1", secret="k-not-real")
+    service.set_enabled(provider="anthropic", tenant="t1", enabled=False)
+    shuffled = list(reversed(events))
+    records = restore(shuffled)
+    assert list(records.values())[0].enabled is False
+
+
+def test_the_timeline_never_carries_the_secret() -> None:
+    """`CredentialRecord` has no field holding one, and the event is built from
+    the record. This asserts the property rather than trusting the argument."""
+    import json
+
+    secret = "sk-a-very-distinctive-value-not-real"
+    events: list = []
+    service = _service(events)
+    service.store(provider="anthropic", tenant="t1", secret=secret)
+    service.verify(provider="anthropic", tenant="t1",
+                   probe=lambda s: (__import__(
+                       "atlas_kernel.credentials.service", fromlist=["Status"]
+                   ).Status.CONNECTED, f"provider echoed {s}"))
+    written = json.dumps([e.model_dump(mode="json") for e in events])
+    assert secret not in written
+    for fragment in (secret[:20], secret[-20:]):
+        assert fragment not in written
+
+
+def test_records_stay_in_memory_when_no_timeline_is_given() -> None:
+    """The negative control. A service with no timeline must still work — that
+    is every test in this file — and must not pretend to be durable."""
+    from atlas_kernel.credentials.service import CredentialService, Status
+    from atlas_kernel.credentials.vault import MemorySecretStore, Vault
+
+    vault = Vault(MemorySecretStore(), master_key="test-only")
+    first = CredentialService(vault)
+    first.store(provider="anthropic", tenant="t1", secret="k-not-real")
+    assert CredentialService(vault).status(
+        provider="anthropic", tenant="t1") is Status.NOT_CONFIGURED

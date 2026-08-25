@@ -22,6 +22,7 @@ key material and must find none.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -41,6 +42,9 @@ STORED = "credential_stored"
 VERIFIED = "credential_verified"
 ROTATED = "credential_rotated"
 DISABLED = "credential_disabled"
+#: A destroyed credential. Recorded rather than deleted, so a fold does not
+#: resurrect what an operator deliberately removed.
+FORGOTTEN = "credential_forgotten"
 
 
 class Status(StrEnum):
@@ -150,9 +154,35 @@ def reference_for(provider: str, tenant: str) -> str:
 class CredentialService:
     """Store, test, rotate and disable credentials. Never reveal them."""
 
-    def __init__(self, vault: Vault) -> None:
+    def __init__(self, vault: Vault, *, events: list | None = None,
+                 sink: Callable[[BusinessEvent], None] | None = None) -> None:
+        """The vault, and the timeline the records live on.
+
+        Without `events` the records are in memory only — which is correct for a
+        test and was quietly wrong for the deployment: the vault persisted the
+        secret while the record vanished on restart, so a saved credential read
+        back as NOT_CONFIGURED with its key still in the vault, unreachable and
+        impossible to forget through the UI.
+        """
         self._vault = vault
-        self._records: dict[str, CredentialRecord] = {}
+        self._sink = sink
+        self._records: dict[str, CredentialRecord] = (
+            restore(events) if events is not None else {})
+        if self._records:
+            log.info("credentials: restored %d record(s) from the timeline",
+                     len(self._records))
+
+    def _remember(self, record: CredentialRecord, kind: str, *,
+                  actor: str = "operator") -> None:
+        """Hold the record and append the event that will rebuild it.
+
+        Both, always, in one place. Updating the dict without appending is how
+        the state and its log disagree, and it is the shape of the bug this
+        replaced.
+        """
+        self._records[record.reference] = record
+        if self._sink is not None:
+            self._sink(to_event(record, kind, actor=actor))
 
     # -- writing ----------------------------------------------------------
 
@@ -171,7 +201,7 @@ class CredentialService:
             provider=provider, tenant_id=str(tenant), reference=reference,
             kind=kind, fingerprint=fingerprint(secret), hint=hint(secret),
             stored_at=datetime.now(UTC))
-        self._records[reference] = record
+        self._remember(record, STORED)
         log.info("credential stored for %s/%s (%s)", tenant, provider,
                  record.fingerprint)
         return record
@@ -194,7 +224,7 @@ class CredentialService:
             # credential as CONNECTED.
             last_verification=None,
             rotated_at=datetime.now(UTC))
-        self._records[reference] = record
+        self._remember(record, ROTATED)
         return record
 
     def set_enabled(self, *, provider: str, tenant: TenantId | None,
@@ -202,14 +232,19 @@ class CredentialService:
         """Disable without deleting, so it can be turned back on."""
         record = self._require(provider, tenant)
         updated = record.model_copy(update={"enabled": enabled})
-        self._records[updated.reference] = updated
+        self._remember(updated, DISABLED)
         return updated
 
     def forget(self, *, provider: str, tenant: TenantId | None) -> None:
         tenant = _require_tenant(tenant, method="credentials.forget")
         reference = reference_for(provider, str(tenant))
+        gone = self._records.get(reference)
         self._vault.drop(reference)
         self._records.pop(reference, None)
+        # Recorded, not merely deleted. A fold over a timeline that only ever
+        # said "stored" would resurrect a credential the operator destroyed.
+        if gone is not None and self._sink is not None:
+            self._sink(to_event(gone, FORGOTTEN))
 
     # -- reading ----------------------------------------------------------
 
@@ -294,7 +329,7 @@ class CredentialService:
                                       detail=type(failure).__name__)
 
         updated = record.model_copy(update={"last_verification": result})
-        self._records[updated.reference] = updated
+        self._remember(updated, VERIFIED)
         return result
 
     # -- the centre -------------------------------------------------------
@@ -352,10 +387,115 @@ def to_event(record: CredentialRecord, kind: str, *,
 
     There is no field on `CredentialRecord` holding a secret, so this cannot
     leak one — the same argument the publication record makes.
+
+    **Lossless.** `restore()` folds these back into records, so anything the
+    record needs has to be here. It was not, and the effect was that a saved
+    credential reverted to NOT_CONFIGURED on the next restart while its secret
+    sat in the vault, unreachable and unforgettable.
     """
+    verified = record.last_verification
     return BusinessEvent(
         business_id="", factory=FACTORY, kind=kind, actor=actor,
         detail={"provider": record.provider, "tenant_id": record.tenant_id,
+                "reference": record.reference, "kind": record.kind.value,
                 "fingerprint": record.fingerprint, "hint": record.hint,
                 "status": record.status.value, "enabled": record.enabled,
+                "verified_status": verified.status.value if verified else "",
+                "verified_detail": verified.detail if verified else "",
+                "verified_at": verified.at.isoformat() if verified else "",
+                "stored_at": (record.stored_at.isoformat()
+                              if record.stored_at else ""),
+                "rotated_at": (record.rotated_at.isoformat()
+                               if record.rotated_at else ""),
                 "at": datetime.now(UTC).isoformat()})
+
+
+#: Kinds this module writes. A fold that matched on `factory` alone would also
+#: swallow anything a later module namespaced the same way.
+KINDS: frozenset[str] = frozenset({STORED, VERIFIED, ROTATED, DISABLED,
+                                   FORGOTTEN})
+
+
+def _moment(value: object) -> datetime | None:
+    """An ISO string from a folded event back into a moment.
+
+    The timeline is JSON, so every datetime arrives as text. Parsed in one place
+    so a naive value cannot reach a comparison against an aware one.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def restore(events: list) -> dict[str, CredentialRecord]:
+    """Every current credential record, folded from the timeline.
+
+    Not tenant-scoped: this rebuilds one service's whole state at start-up, and
+    the tenant check happens on every read afterwards in `_require`. Scoping
+    here would silently give a restarted process one tenant's credentials.
+
+    The **latest** event wins by its own timestamp rather than by position, for
+    the same reason `mission.fold` does: a log that must be replayed in the
+    order it was written is a log with a hidden ordering requirement.
+    """
+    latest: dict[str, dict] = {}
+    for event in events:
+        kind = getattr(event, "kind", None) or event.get("kind")
+        if kind not in KINDS:
+            continue
+        detail = getattr(event, "detail", None) or event.get("detail") or {}
+        reference = detail.get("reference") or ""
+        if not reference:
+            continue
+        seen = latest.get(reference)
+        if seen is None or detail.get("at", "") >= seen.get("at", ""):
+            latest[reference] = {**dict(detail), "_kind": kind}
+
+    records: dict[str, CredentialRecord] = {}
+    for reference, detail in latest.items():
+        if detail["_kind"] == FORGOTTEN:
+            continue                      # destroyed; the timeline keeps why
+        verified = None
+        if detail.get("verified_status"):
+            verified = Verification(
+                status=Status(detail["verified_status"]),
+                detail=detail.get("verified_detail", ""),
+                at=_moment(detail.get("verified_at")) or datetime.now(UTC))
+        records[reference] = CredentialRecord(
+            provider=detail.get("provider", ""),
+            tenant_id=detail.get("tenant_id", ""),
+            reference=reference,
+            kind=ConnectionKind(detail.get("kind")
+                                or ConnectionKind.API_TOKEN.value),
+            enabled=bool(detail.get("enabled", True)),
+            fingerprint=detail.get("fingerprint", ""),
+            hint=detail.get("hint", ""),
+            last_verification=verified,
+            stored_at=_moment(detail.get("stored_at")),
+            rotated_at=_moment(detail.get("rotated_at")))
+    return records
+
+
+def read(events: list, *, tenant: TenantId | None = None) -> list[dict]:
+    """TENANT_SCOPED. Credential history for one tenant, newest first.
+
+    History, not state — `restore()` answers "what is configured now". This
+    answers "what happened", which is the question an audit asks.
+    """
+    tenant = _require_tenant(tenant, method="credentials.read")
+    found = []
+    for event in events:
+        kind = getattr(event, "kind", None) or event.get("kind")
+        if kind not in KINDS:
+            continue
+        detail = getattr(event, "detail", None) or event.get("detail") or {}
+        if not owns(detail.get("tenant_id"), tenant):
+            continue
+        found.append({**dict(detail), "kind": kind})
+    return sorted(found, key=lambda d: d.get("at", ""), reverse=True)

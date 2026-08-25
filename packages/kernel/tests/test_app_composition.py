@@ -200,12 +200,29 @@ def test_a_sealed_vault_is_reported_as_sealed(tmp_path, monkeypatch) -> None:
 
 def test_probes_are_reported_separately_from_the_vault(tmp_path) -> None:
     """They fail differently: a working vault with no probes stores keys it
-    cannot test, and one number would hide which half is missing."""
+    cannot test, and one number would hide which half is missing.
+
+    This asserted `configured is False`, which pinned a real defect: the
+    deployment registered no probes at all, so `/test` answered 501 for every
+    provider and a stored credential could never leave PENDING_CREDENTIAL. The
+    separation is still the point; the default is now real probes.
+    """
     app = create_app(Wiring(repository_root=tmp_path,
                             vault_path=tmp_path / "vault.json"))
     components = health(app)["components"]
     assert "probes" in components and "credentials" in components
-    assert components["probes"]["configured"] is False
+    assert components["probes"]["configured"] is True
+    assert {"anthropic", "qwen"} <= set(app.state.credential_probes), (
+        "the two providers reported broken must be testable")
+
+
+def test_a_deployment_may_still_supply_its_own_probes(tmp_path) -> None:
+    """The negative control on the default: an explicit set wins, so a test or
+    an air-gapped deployment is not forced to make real calls."""
+    app = create_app(Wiring(repository_root=tmp_path,
+                            vault_path=tmp_path / "vault.json",
+                            credential_probes={"anthropic": lambda _: None}))
+    assert set(app.state.credential_probes) == {"anthropic"}
 
 
 def test_health_never_claims_ready_because_nothing_has_failed(tmp_path) -> None:

@@ -42,6 +42,7 @@ from ..auth.store import AuthStore, init_auth
 from ..chat import api as chat_api
 from ..control import sales as sales_api
 from ..credentials import api as credentials_api
+from ..credentials.probes import PROBES
 from ..credentials.service import CredentialService
 from ..credentials.vault import FileSecretStore, Vault
 from ..credits import CreditService
@@ -125,6 +126,12 @@ class Wiring:
     #: Where the control panel's files live. None uses the repository copy.
     console: Path | None = None
 
+    #: Where credential *records* live. The vault holds the secret; this holds
+    #: the fingerprint, hint and verification result that the Centre reads.
+    #: Without it a saved credential reverts to NOT_CONFIGURED on restart while
+    #: its key sits in the vault, unreachable and impossible to forget.
+    credential_timeline: Path | None = None
+
     def build_credentials(self) -> CredentialService:
         """The vault, sealed unless a master key is in the environment.
 
@@ -135,7 +142,12 @@ class Wiring:
         """
         if self.credentials is not None:
             return self.credentials
-        return CredentialService(Vault(FileSecretStore(self.vault_path)))
+        vault = Vault(FileSecretStore(self.vault_path))
+        if self.credential_timeline is None:
+            return CredentialService(vault)
+        timeline = Timeline(self.credential_timeline)
+        return CredentialService(vault, events=timeline.read(),
+                                 sink=timeline.append)
 
 
 def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI:
@@ -193,7 +205,11 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.research_reader = wiring.research_reader
     app.state.plan_reader = wiring.plan_reader
     app.state.public_audit_reader = wiring.public_audit_reader
-    app.state.credential_probes = wiring.credential_probes
+    # Real probes unless the deployment supplied its own. Empty was the
+    # default, and it made /test answer 501 for every provider — so a stored
+    # credential could never leave PENDING_CREDENTIAL and the Centre could not
+    # tell a good key from a typo.
+    app.state.credential_probes = wiring.credential_probes or dict(PROBES)
     app.state.pending_approvals = wiring.pending_approvals
     app.state.approvals = wiring.approvals
     app.state.credentials = wiring.build_credentials()
@@ -438,6 +454,14 @@ def from_environment() -> FastAPI:
     if not vault:
         vault = str(Path(state) / "vault.json") if state else str(DEFAULT_VAULT)
 
+    # Beside the vault, in the same durable directory. Its own file rather than
+    # the mission timeline: both are append-only JSONL and mixing them would
+    # make "what happened to this mission" and "what happened to this key" one
+    # log that neither reader wants whole.
+    credentials = os.environ.get("QEVIK_CREDENTIAL_TIMELINE", "")
+    if not credentials and state:
+        credentials = str(Path(state) / "credentials.jsonl")
+
     turns: list = []
     if state:
         Path(state).mkdir(parents=True, exist_ok=True)
@@ -446,6 +470,7 @@ def from_environment() -> FastAPI:
         repository_root=root,
         mission_timeline=Path(timeline) if timeline else None,
         vault_path=Path(vault),
+        credential_timeline=Path(credentials) if credentials else None,
         chat_events=turns,
         claims_dsn=os.environ.get("QEVIK_CLAIMS_DSN", ""),
     ))
