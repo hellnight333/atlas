@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +43,11 @@ from atlas_kernel.credentials.models import (  # noqa: E402
 from atlas_kernel.credentials.service import CredentialService  # noqa: E402
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
 from atlas_kernel.fabric import scheduler  # noqa: E402
+from atlas_kernel.fabric.budgets import (  # noqa: E402
+    Envelope,
+    Unmetered,
+    reserve,
+)
 from atlas_kernel.fabric.scheduler import demands_from  # noqa: E402
 from atlas_kernel.mission import reports, service  # noqa: E402
 from atlas_kernel.mission.agents import (  # noqa: E402
@@ -60,6 +67,8 @@ from atlas_kernel.mission.gitspace import GitWorkspace  # noqa: E402
 from atlas_kernel.mission.models import TERMINAL, Mission, MissionStatus  # noqa: E402
 from atlas_kernel.mission.timeline import Timeline  # noqa: E402
 from atlas_kernel.mission.worker import Acceptance, Worker, recover  # noqa: E402
+from atlas_kernel.quota.ledger import QuotaLedger  # noqa: E402
+from atlas_kernel.quota.models import QuotaExhausted  # noqa: E402
 
 log = logging.getLogger("mission-worker")
 
@@ -68,7 +77,26 @@ class NoAgent(RuntimeError):
     """No model is available, and the worker will not invent one."""
 
 
-def roles_for(kind: str, *, tenant: str, vault_root: Path | None = None) -> Roles:
+def _vault_file(given: Path) -> Path:
+    """The secret store file, whether a file or its directory was named.
+
+    `from_environment` writes `<QEVIK_STATE>/vault.json`. Accepting either shape
+    means a worker pointed at the state directory and a worker pointed at the
+    file both read what the Credential Centre wrote, rather than one of them
+    silently reading an empty store.
+    """
+    if given.suffix == ".json":
+        return given
+    beside = given / "vault.json"
+    if beside.exists():
+        return beside
+    legacy = given / "credentials.json"
+    return legacy if legacy.exists() else beside
+
+
+def roles_for(kind: str, *, tenant: str, vault_root: Path | None = None,
+              events: list | None = None,
+              sink: Callable[[object], None] | None = None) -> Roles:
     """The agents this worker runs missions with.
 
     `--agent fake` is a real choice a person has to make, never a fallback. A
@@ -96,8 +124,17 @@ def roles_for(kind: str, *, tenant: str, vault_root: Path | None = None) -> Role
                     "be called and nothing it produces reflects real work")
         return Roles.all(FakeCodingAgent(behaviour=Behaviour.SUCCESS, writes=True))
 
-    store = FileSecretStore(vault_root / "credentials.json") if vault_root else None
-    credentials = CredentialService(Vault(store))
+    # The same file the control plane writes, not a second convention.
+    #
+    # This was `vault_root / "credentials.json"` while `from_environment` writes
+    # `<QEVIK_STATE>/vault.json`. Two different files: a key entered in the
+    # Credential Centre was invisible to the worker, and the worker's refusal
+    # would have read as "no credential configured" to an operator looking at a
+    # Centre that showed one connected.
+    store = FileSecretStore(_vault_file(vault_root)) if vault_root else None
+    credentials = CredentialService(Vault(store), events=events,
+                                    sink=sink) if events is not None else \
+        CredentialService(Vault(store))
     registry = registry_for(credentials, tenant=tenant)
     selection = Selection()
 
@@ -167,6 +204,74 @@ def _log_why_nothing_runs(plan: dict) -> None:
     for queue in ("BLOCKED", "WAITING", "SCHEDULED"):
         for row in plan["queues"].get(queue, [])[:3]:
             log.info("%s: %s — %s", queue, row["mission_id"], row["why"])
+
+
+def _charge(result, *, tenant: str, ledger, timeline: Timeline,
+            name: str) -> None:
+    """Draw the mission's real cost from every scope that bounds it.
+
+    Uses the existing `fabric.budgets` over the existing `QuotaLedger`. Nothing
+    here is a second budget: `reserve()` checks tenant, mission and agent and
+    commits to all of them or none, and the ledger persists to the same timeline
+    the control plane reads.
+
+    **An unknown cost is recorded, not invented.** `Mission.total_cost` is
+    `None` when no invocation reported one — a deterministic agent, or a
+    provider that does not say. Charging a guessed number would put a fiction in
+    the ledger; charging zero would say the work was free. So the fact is
+    written to the timeline instead, where an uncharged mission is visible.
+    """
+    mission = result.mission
+    spent = mission.total_cost
+    envelope = Envelope(tenant_id=str(tenant), mission_id=mission.id,
+                        agent_id=_agent_of(mission))
+    if spent is None:
+        log.info("%s: no provider reported a cost; nothing charged", mission.id)
+        timeline.append(service._event(
+            mission, actor=name,
+            note="cost UNKNOWN: no invocation reported one, so nothing was "
+                 "charged. This is not a zero."))
+        return
+    try:
+        verdict = reserve(ledger, envelope, spent,
+                          note=f"mission {mission.id}")
+    except Unmetered:
+        # The tenant is not on a plan. Ordinary for a self-hosted deployment,
+        # and the mission has already run — refusing now would change nothing
+        # except hiding what it cost.
+        log.info("%s: no allowance configured; %s units recorded, not charged",
+                 mission.id, spent)
+        timeline.append(service._event(
+            mission, actor=name,
+            note=f"cost {spent:g} units, not charged: this tenant is not on a "
+                 "plan"))
+        return
+    except QuotaExhausted as over:
+        log.warning("%s: cost %s exceeded an allowance: %s", mission.id, spent,
+                    over)
+        timeline.append(service._event(
+            mission, actor=name,
+            note=f"cost {spent:g} units and overran an allowance: {over}"))
+        return
+    log.info("%s: charged %s units (%s)", mission.id, spent,
+             ", ".join(f"{k} {v:g} left" for k, v in verdict.remaining.items()))
+    timeline.append(service._event(
+        mission, actor=name,
+        note=f"charged {spent:g} units against "
+             f"{', '.join(sorted(verdict.remaining))}"))
+
+
+def _agent_of(mission) -> str:
+    """Which agent did the work, for the per-agent allowance.
+
+    Read from the recorded invocations rather than from the worker's own
+    configuration: the record is what happened, and the configuration is what
+    was intended.
+    """
+    for call in reversed(mission.invocations):
+        if call.provider:
+            return call.provider
+    return ""
 
 
 def claims_for(dsn: str, *, insist: bool) -> object:
@@ -262,7 +367,7 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
 
 
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
-              repository: Path, roles: Roles, claims: object,
+              repository: Path, roles: Roles, claims: object, ledger: object,
               report_root: Path | None = None) -> int:
     """Recover, then take at most one mission. Returns how many ran."""
     freed = release_stale(timeline, tenant=tenant)
@@ -297,6 +402,14 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     log.info("%s finished as %s (attempts %d, commit %s)", mission.id,
              result.mission.status.value, result.attempts,
              result.committed or "none")
+
+    # What it cost, charged against every enclosing allowance.
+    #
+    # After the work, not before: the estimate gates *dispatch* (the scheduler
+    # already refused missions the tenant cannot afford), and this records what
+    # was actually consumed. Charging an estimate up front and never reconciling
+    # is how a month's usage drifts away from the month's bill.
+    _charge(result, tenant=tenant, ledger=ledger, timeline=timeline, name=name)
 
     # A report per mission, written by the worker rather than by whichever
     # script happened to start it. Without this a mission run in production
@@ -341,9 +454,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true",
                         help="make one pass and exit, for tests and cron")
-    parser.add_argument("--claims-dsn", default="",
-                        help="PostgreSQL DSN for cross-process atomic claims")
+    # Defaulted from the environment, not required on the command line: a DSN
+    # carries a password, and a password on an argv line is visible in `ps` to
+    # every user on the host. An EnvironmentFile at 0600 is not.
+    parser.add_argument("--quota-timeline", default="",
+                        help="where allowances and spends live. Defaults to "
+                             "quota.jsonl beside the mission timeline, which "
+                             "is where the control plane keeps it — a separate "
+                             "file would give the worker its own balance")
+    parser.add_argument("--claims-dsn",
+                        default=os.environ.get("QEVIK_CLAIMS_DSN", ""),
+                        help="PostgreSQL DSN for cross-process atomic claims. "
+                             "Defaults to QEVIK_CLAIMS_DSN, which is where it "
+                             "belongs — argv is world-readable")
     parser.add_argument("--require-atomic-claims", action="store_true",
+                        default=os.environ.get(
+                            "QEVIK_REQUIRE_ATOMIC_CLAIMS", ""
+                        ).strip().lower() in ("1", "true", "yes"),
                         help="refuse to start unless the claim database is "
                              "reachable. Use this in production: the default "
                              "logs the loss of safety, this one prevents it")
@@ -355,19 +482,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reports", default="",
                         help="where mission reports are written "
                              "(default: alongside the repository)")
-    parser.add_argument("--vault", default="",
-                        help="credential vault root (default: the user vault)")
+    parser.add_argument("--vault", default=os.environ.get("QEVIK_VAULT", ""),
+                        help="the credential vault: either the file the "
+                             "Credential Centre writes, or the state directory "
+                             "containing it. Defaults to QEVIK_VAULT")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(name)s %(message)s")
     timeline = Timeline(args.timeline)
+    # The same file the control plane reads. Two ledgers would be two answers
+    # to "what is left", and nobody could say which one the bill came from.
+    quota_path = Path(args.quota_timeline or
+                      Path(args.timeline).parent / "quota.jsonl")
+    quota_events = Timeline(quota_path)
+    ledger = QuotaLedger(events=quota_events.read(), sink=quota_events.append)
     worktrees = Path(args.worktrees or tempfile.mkdtemp(prefix="qevik-missions-"))
     repository = Path(args.repository)
 
     try:
+        credential_events = Timeline(
+            Path(args.vault).parent / "credentials.jsonl"
+            if args.vault and Path(args.vault).suffix == ".json"
+            else Path(args.timeline).parent / "credentials.jsonl")
         roles = roles_for(args.agent, tenant=args.tenant,
-                          vault_root=Path(args.vault) if args.vault else None)
+                          vault_root=Path(args.vault) if args.vault else None,
+                          events=credential_events.read(),
+                          sink=credential_events.append)
         claims = claims_for(args.claims_dsn,
                             insist=args.require_atomic_claims)
     except NoAgent as refusal:
@@ -378,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         pass_once(timeline, tenant=args.tenant, name=args.name,
                   worktrees=worktrees, repository=repository, roles=roles,
-                  claims=claims,
+                  claims=claims, ledger=ledger,
                   report_root=Path(args.reports) if args.reports else None)
         return 0
 
@@ -387,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             pass_once(timeline, tenant=args.tenant, name=args.name,
                       worktrees=worktrees, repository=repository, roles=roles,
-                      claims=claims,
+                      claims=claims, ledger=ledger,
                       report_root=Path(args.reports) if args.reports else None)
         except KeyboardInterrupt:
             log.info("stopping")

@@ -44,9 +44,17 @@ PASSED: list[str] = []
 FAILED: list[str] = []
 
 
-def check(name: str, ok: bool, detail: str = "") -> bool:
+def check(name: str, ok: bool, detail: str = "", *, why_not: str = "") -> bool:
+    """`detail` is shown either way; `why_not` only on failure.
+
+    Two parameters because one kept producing lines like
+    "PASS  … — the sentence that started the work is gone", where the
+    explanation of the failure was printed next to a pass. A reader skimming for
+    problems stops trusting the output after seeing that once.
+    """
     (PASSED if ok else FAILED).append(name)
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ""))
+    shown = detail if ok else (why_not or detail)
+    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {shown}" if shown else ""))
     return ok
 
 
@@ -280,7 +288,51 @@ def main() -> int:
         check("the report is a real file on disk",
               any(reports.rglob("*.md")), str(list(reports.rglob("*.md"))[:1]))
 
-        print("\n9. Restart again — durability is not a one-off")
+        print("\n9. The cost is accounted for, or its absence is")
+        code, history = call(base, f"/api/missions/{mission_id}/history",
+                             token=token)
+        notes = " ".join(h.get("note", "") for h in history.get("history", []))
+        accounted = "charged" in notes or "cost UNKNOWN" in notes
+        check("the mission's cost reached the ledger, or said why it could not",
+              accounted,
+              "" if accounted else "a mission finished with nothing said about "
+              "what it cost")
+        check("an unknown cost is never recorded as zero",
+              "This is not a zero" in notes or "charged" in notes,
+              "" if accounted else "silence reads as free")
+        check("the quota timeline is beside the mission timeline",
+              (state / "quota.jsonl").exists() or "cost UNKNOWN" in notes,
+              why_not="the worker and the control plane must share one balance")
+
+        print("\n10. The conversation that started it survives too")
+        code, listing = call(base, "/api/chat", token=token)
+        check("the control plane can list conversations", code == 200,
+              f"HTTP {code}")
+        code, opened = call(base, "/api/chat", "POST",
+                            {"text": "Check that this deployment is sound."},
+                            token)
+        conversation_id = opened.get("conversation_id", "")
+        check("a person's message starts a conversation",
+              code in (200, 201) and bool(conversation_id), f"HTTP {code}")
+
+        stop(server)
+        server = serve(state, args.port)
+        code, body = call(base, "/auth/login", "POST",
+                          {"username": USER, "password": password})
+        token = body.get("token", "")
+        code, after = call(base, f"/api/chat/{conversation_id}", token=token)
+        check("THE CONVERSATION SURVIVED A RESTART", code == 200,
+              f"HTTP {code}")
+        said = json.dumps(after)
+        check("and still carries what the person typed",
+              "Check that this deployment is sound." in said,
+              why_not="the sentence that started the work is gone")
+        check("the chat timeline is beside the mission timeline",
+              (state / "chat.jsonl").exists(),
+              why_not="conversations must be as durable as the missions they "
+                      "produce")
+
+        print("\n11. Restart again — durability is not a one-off")
         stop(server)
         server = serve(state, args.port)
         code, body = call(base, "/auth/login", "POST",

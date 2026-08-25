@@ -123,6 +123,17 @@ store with a list on exactly the first run that needed it.
 | Public deploy target | PENDING_INFRASTRUCTURE | A verified domain. The TXT record only its owner can create is generated per tenant | Point a domain at Qevik and create the record | A published site answers on a public URL over HTTPS |
 | Billing | DEFERRED | Plans, credits and quota exist and are enforced; money does not, deliberately | — | A price is agreed by a person first |
 
+## Operational state
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Atomic claims in production** | OPERATIONAL | `qevik-worker.service` active with `QEVIK_REQUIRE_ATOMIC_CLAIMS=1`; `/api/health` reports `PostgresClaims · COMPLETE`. 10/10 claim-safety (both processes refuse with no database and with an unreachable one, each with its negative control), 7/7 two workers racing one mission |
+| **Budgets charged at execution** | OPERATIONAL | Persistence went into `QuotaLedger` itself, so `credits` and `fabric.budgets` became durable at once and the worker and control plane share `quota.jsonl`. The worker calls `reserve()` after the work; an unknown cost is recorded as UNKNOWN, never as zero |
+| **Conversation persistence** | OPERATIONAL | `chat.jsonl`. A conversation survives a real server restart with the person's words intact; the console acceptance proves it still references its mission |
+| **Model-backed mission** | WIRED / BLOCKED_ON_PROVIDER | The worker reads the Centre's credential, the registry refuses to turn a rejected key into a model, and the worker refuses rather than faking. The configured DashScope key is rejected by DashScope at all three endpoints — not a region mismatch. Needs a key the provider accepts; nothing else |
+
+Detail: `OPERATIONAL.md`.
+
 ## The fabric, connected to the running system
 
 The operating fabric below was built and connected to nothing. Two gates closed

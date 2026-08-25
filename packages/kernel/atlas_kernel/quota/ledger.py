@@ -16,10 +16,14 @@ gone" and "the code is wrong" is a day of debugging nobody needed.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from ..opportunity.models import BusinessEvent
 from .models import (
     LimitKind,
     QuotaExhausted,
@@ -30,6 +34,27 @@ from .models import (
     window_end,
     window_start,
 )
+
+log = logging.getLogger(__name__)
+
+FACTORY = "quota"
+#: An allowance was set or changed.
+POLICY_SET = "quota_policy_set"
+#: Units were consumed. Replaying these is what makes a rolling window survive a
+#: restart, which a running counter never could.
+SPENT = "quota_spent"
+
+
+def _kind_of(event: object) -> str:
+    return getattr(event, "kind", None) or (
+        event.get("kind", "") if isinstance(event, dict) else "")
+
+
+def _detail_of(event: object) -> dict:
+    detail = getattr(event, "detail", None)
+    if detail is None and isinstance(event, dict):
+        detail = event.get("detail")
+    return detail or {}
 
 
 class Plan(BaseModel):
@@ -64,16 +89,81 @@ class QuotaLedger:
     windows keep working across a restart, which a counter could never do.
     """
 
-    def __init__(self, policies: list[QuotaPolicy] | None = None, *, now=None) -> None:
+    def __init__(self, policies: list[QuotaPolicy] | None = None, *, now=None,
+                 events: list | None = None,
+                 sink: Callable[[Any], None] | None = None) -> None:
+        """The allowances, and the timeline they are rebuilt from.
+
+        **Persistence belongs here, not above.** The class docstring already
+        said storing `QuotaSpend` rows and replaying them was all it would take;
+        putting it anywhere else means every caller that draws on this ledger —
+        `credits`, `fabric.budgets`, whatever comes next — needs its own answer,
+        and the second one to be written is the one that disagrees.
+
+        Without `events` this is in-memory, which is right for a test and was
+        quietly wrong for the deployment: a restart forgot every plan and every
+        unit spent, so the month's usage reset whenever the service redeployed.
+        """
         self._policies: dict[str, QuotaPolicy] = {}
         self._spends: list[QuotaSpend] = []
         #: Injected so windows and rollovers are testable without waiting a day.
         self._now = now or (lambda: datetime.now(UTC))
+        self._sink = sink
+        if events is not None:
+            self._replay(events)
         for policy in policies or []:
             self.register(policy)
 
+    # -- durability -------------------------------------------------------
+
+    def _replay(self, events: list) -> None:
+        """Rebuild policies and spends from the timeline.
+
+        Policies before spends, because a spend against an unregistered
+        resource has nowhere to go. Both are appended in the order they
+        happened, so replaying them in one pass over a chronological log is
+        enough — but the policy pass runs first regardless, since a log may be
+        read out of order and a lost policy silently discards the usage that
+        went with it.
+        """
+        found = 0
+        for event in events:
+            if _kind_of(event) != POLICY_SET:
+                continue
+            detail = _detail_of(event)
+            try:
+                self._policies[detail["resource"]] = QuotaPolicy.model_validate(
+                    detail["policy"])
+                found += 1
+            except (KeyError, ValueError):
+                log.warning("quota: a policy event could not be read; skipped")
+        for event in events:
+            if _kind_of(event) != SPENT:
+                continue
+            detail = _detail_of(event)
+            try:
+                self._spends.append(QuotaSpend.model_validate(detail["spend"]))
+            except (KeyError, ValueError):
+                log.warning("quota: a spend event could not be read; skipped")
+        if found or self._spends:
+            log.info("quota: restored %d polic(ies) and %d spend(s)",
+                     found, len(self._spends))
+
+    def _remember(self, kind: str, detail: dict) -> None:
+        if self._sink is None:
+            return
+        self._sink(BusinessEvent(business_id="", factory=FACTORY, kind=kind,
+                                 actor="quota", detail=detail))
+
     def register(self, policy: QuotaPolicy) -> None:
+        known = self._policies.get(policy.resource)
         self._policies[policy.resource] = policy
+        # Only when it actually changes. Re-registering an identical policy on
+        # every boot would grow the timeline without recording anything.
+        if known != policy:
+            self._remember(POLICY_SET, {"resource": policy.resource,
+                                        "policy": policy.model_dump(mode="json"),
+                                        "at": self._now().isoformat()})
 
     def policy(self, resource: str) -> QuotaPolicy:
         try:
@@ -133,15 +223,15 @@ class QuotaLedger:
         available = self.remaining(resource, essential=essential)
         if amount > available:
             raise QuotaExhausted(resource, policy.kind, available, amount)
-        self._spends.append(
-            QuotaSpend(
-                resource=resource,
-                amount=amount,
-                at=self._now(),
-                essential=essential,
-                note=note,
-            )
-        )
+        entry = QuotaSpend(resource=resource, amount=amount, at=self._now(),
+                           essential=essential, note=note)
+        self._spends.append(entry)
+        # Appended after the refusal above, never before: a spend recorded and
+        # then rejected would leave the timeline claiming units that were never
+        # consumed, and the next replay would believe it.
+        self._remember(SPENT, {"resource": resource, "amount": amount,
+                               "spend": entry.model_dump(mode="json"),
+                               "at": entry.at.isoformat()})
         return self.status(resource)
 
     def affords(self, resource: str, amount: float, *, essential: bool = False) -> bool:

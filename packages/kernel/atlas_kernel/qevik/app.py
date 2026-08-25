@@ -90,7 +90,16 @@ class Wiring:
     #: Conversation turns. Separate from the business timeline because a
     #: conversation is about a request, not about a customer, and one tenant's
     #: chat history should not have to be filtered out of a business's file.
+    #:
+    #: A list is in-memory and correct for a test. A deployment passes
+    #: `chat_timeline` instead: a list meant every restart forgot every
+    #: conversation, so the sentence a person typed, the plan proposed from it
+    #: and the approval that queued a mission all vanished while the mission
+    #: itself survived — leaving work in flight that nothing could explain.
     chat_events: list = field(default_factory=list)
+    #: Where conversations are read from and written to. A path, because the
+    #: console and any future worker are separate processes.
+    chat_timeline: Path | None = None
     model_selections: Any = None
     #: Where missions are read from and written to, shared with the worker
     #: process. A path, because two processes cannot share a list.
@@ -121,6 +130,9 @@ class Wiring:
     #: `/api/health` says so — rather than defaulting to a database that may
     #: not be there and failing at the first claim.
     claims_dsn: str = ""
+    #: Whether this deployment *declares* it needs multi-worker safety. When it
+    #: does, an unreachable claim database is fatal rather than a downgrade.
+    require_atomic_claims: bool = False
     repository_root: Path = field(default_factory=Path.cwd)
     #: Where the worker writes mission reports. Separate from the repository
     #: root because a deployment keeps reports on durable storage rather than
@@ -136,6 +148,10 @@ class Wiring:
     #: Without it a saved credential reverts to NOT_CONFIGURED on restart while
     #: its key sits in the vault, unreachable and impossible to forget.
     credential_timeline: Path | None = None
+    #: Where allowances and spends live. The ledger rebuilds from this, so the
+    #: month's usage is not forgotten by a redeploy — and the worker draws on
+    #: the same file, so both processes see one balance rather than two.
+    quota_timeline: Path | None = None
 
     def build_credentials(self) -> CredentialService:
         """The vault, sealed unless a master key is in the environment.
@@ -196,8 +212,13 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     timeline = (Timeline(wiring.mission_timeline)
                 if wiring.mission_timeline is not None else None)
 
-    app.state.chat_events = wiring.chat_events
-    app.state.chat_sink = wiring.chat_events.append
+    # `is not None`, never truthiness: `Timeline` defines `__len__`, so a brand
+    # new one is falsy and `or` would silently swap durable storage for a list.
+    chat = (Timeline(wiring.chat_timeline)
+            if wiring.chat_timeline is not None else None)
+    app.state.chat_events = chat if chat is not None else wiring.chat_events
+    app.state.chat_sink = (chat.append if chat is not None
+                           else wiring.chat_events.append)
     app.state.model_selections = wiring.model_selections or SelectionStore()
     app.state.business_events = wiring.business_events
     app.state.business_sink = wiring.business_events.append
@@ -219,8 +240,11 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.approvals = wiring.approvals
     app.state.credentials = wiring.build_credentials()
     app.state.connections = wiring.connections or ConnectionStore()
-    app.state.credits = wiring.credits or CreditService()
-    app.state.claims = wiring.claims or _claims_for(wiring.claims_dsn)
+    app.state.credits = wiring.credits or CreditService(
+        _ledger_for(wiring.quota_timeline))
+    app.state.quota = app.state.credits._ledger        # noqa: SLF001
+    app.state.claims = wiring.claims or _claims_for(
+        wiring.claims_dsn, insist=wiring.require_atomic_claims)
     app.state.sandbox = wiring.sandbox or sandbox_available()
     # The agents this host can actually run. A CLI agent's readiness is a
     # fact about the machine, so it is decided here — once — from the same
@@ -410,16 +434,53 @@ def health(app: FastAPI) -> dict:
     }
 
 
-def _claims_for(dsn: str) -> Any:
+class UnsafeClaiming(RuntimeError):
+    """A deployment that declared multi-worker safety cannot provide it.
+
+    Raised at start-up, so the process dies rather than serving. That is the
+    point: the failure this prevents is not an outage, it is a *quiet success* —
+    an operator believing two workers are safe while both hold the same mission.
+    """
+
+
+def _ledger_for(timeline: Path | None) -> Any:
+    """The one ledger, rebuilt from its timeline.
+
+    Everything that draws on an allowance — `credits`, `fabric.budgets` — shares
+    this. A second ledger anywhere would be a second answer to "what is left",
+    and the operator would be reading whichever one happened to be in front of
+    them.
+    """
+    from ..quota.ledger import QuotaLedger
+
+    if timeline is None:
+        return QuotaLedger()
+    events = Timeline(timeline)
+    return QuotaLedger(events=events.read(), sink=events.append)
+
+
+def _claims_for(dsn: str, *, insist: bool = False) -> Any:
     """Postgres-backed claims when a DSN is configured, otherwise one worker.
 
-    A failure to connect falls back to `LocalClaims` **and logs it**, because
-    the alternative — refusing to start — takes the whole control plane down
-    over a capability only the worker needs. What must never happen is falling
-    back silently: `/api/health` reports which one is in use, so "we are running
-    two workers" is a claim the operator can check rather than assume.
+    **`insist` is the deployment declaring what it is.** Without it, an
+    unreachable database falls back to `LocalClaims` and logs the loss loudly —
+    the right default for a single-worker deployment, where refusing to start
+    would take the control plane down over a capability only the worker needs.
+
+    With it, an unreachable database is fatal. A deployment that runs two
+    workers and silently degrades to single-worker claiming does not fail: it
+    succeeds twice, produces two commits of the same change, and nothing
+    anywhere reports an error. Dying at start-up is recoverable; that is not.
+
+    `/api/health` reports which is in use either way, so "we are running two
+    workers" stays a claim the operator can check rather than assume.
     """
     if not dsn.strip():
+        if insist:
+            raise UnsafeClaiming(
+                "QEVIK_REQUIRE_ATOMIC_CLAIMS is set and QEVIK_CLAIMS_DSN is "
+                "not. Refusing to start: this deployment says it needs "
+                "multi-worker safety and has no database to provide it.")
         return LocalClaims()
     try:
         import psycopg
@@ -431,7 +492,17 @@ def _claims_for(dsn: str) -> Any:
         claims.install()
         log.info("claims: Postgres-backed, multi-worker safe")
         return claims
-    except Exception:                            # noqa: BLE001 - reported below
+    except Exception as failure:                 # noqa: BLE001 - reported below
+        if insist:
+            # The message carries the exception *type*, never the DSN: a
+            # connection error quotes what it tried to connect to, and a DSN
+            # carries a password.
+            raise UnsafeClaiming(
+                f"the claim database could not be reached "
+                f"({type(failure).__name__}). Refusing to start rather than "
+                "falling back to single-worker claiming, which would let two "
+                "workers run one mission with no error anywhere."
+            ) from failure
         log.exception("claims: the database was configured and could not be "
                       "reached; falling back to single-worker claiming, which "
                       "is NOT safe for two workers")
@@ -470,9 +541,17 @@ def from_environment() -> FastAPI:
     if not report_root and state:
         report_root = str(Path(state) / "reports")
 
+    quota = os.environ.get("QEVIK_QUOTA_TIMELINE", "")
+    if not quota and state:
+        quota = str(Path(state) / "quota.jsonl")
+
     credentials = os.environ.get("QEVIK_CREDENTIAL_TIMELINE", "")
     if not credentials and state:
         credentials = str(Path(state) / "credentials.jsonl")
+
+    chat = os.environ.get("QEVIK_CHAT_TIMELINE", "")
+    if not chat and state:
+        chat = str(Path(state) / "chat.jsonl")
 
     turns: list = []
     if state:
@@ -484,6 +563,11 @@ def from_environment() -> FastAPI:
         vault_path=Path(vault),
         credential_timeline=Path(credentials) if credentials else None,
         reports_root=Path(report_root) if report_root else None,
+        quota_timeline=Path(quota) if quota else None,
         chat_events=turns,
+        chat_timeline=Path(chat) if chat else None,
         claims_dsn=os.environ.get("QEVIK_CLAIMS_DSN", ""),
+        require_atomic_claims=os.environ.get(
+            "QEVIK_REQUIRE_ATOMIC_CLAIMS", "").strip().lower()
+        in ("1", "true", "yes"),
     ))

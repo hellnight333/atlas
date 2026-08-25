@@ -1,0 +1,66 @@
+# The mission worker, as a service.
+#
+# Separate from qevik-control.service on purpose: restarting the API to deploy
+# must not kill a mission halfway through, and killing the worker must not take
+# the console down. They share a timeline file and nothing else.
+#
+#   cp infra/qevik-worker.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now qevik-worker
+#
+# `--require-atomic-claims` is the point of this unit. Without it a worker whose
+# claim database is unreachable quietly becomes a single-worker deployment — and
+# if a second worker is running, both take the same mission and produce two
+# commits of the same change with no error anywhere. With it, the worker refuses
+# to start, which is loud and recoverable.
+
+[Unit]
+Description=Qevik mission worker
+# Five failures in five minutes stops it. Without this the "refuses to start"
+# safety becomes a restart loop nobody reads. These belong in [Unit]; systemd
+# ignores them in [Service] with a warning that is easy to miss.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not `Requires=qevik-control.service`: the whole design is that this survives
+# the control plane restarting.
+
+[Service]
+Type=simple
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+EnvironmentFile=-/opt/qevik/control.env
+EnvironmentFile=-/opt/qevik/worker.env
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+Environment=QEVIK_STATE=/var/lib/qevik/control
+
+ExecStart=/opt/qevik/atlas/.venv/bin/python \
+  /opt/qevik/atlas/infra/mission_worker.py \
+  --timeline /var/lib/qevik/control/missions.jsonl \
+  --reports /var/lib/qevik/control/reports \
+  --worktrees /var/lib/qevik/worktrees \
+  --repository /opt/qevik/atlas \
+  --tenant tenant-qevik \
+  --name worker-1 \
+  --agent self-check \
+  --interval 10
+# --claims-dsn and --require-atomic-claims come from /opt/qevik/worker.env.
+# The DSN carries a password, and a password on an argv line is readable by
+# every user on the host through `ps`.
+
+# on-failure, not always: a worker that refuses to start because its claim
+# database is unreachable should stay down and be noticed, not restart-loop
+# quietly. A crash mid-mission is different, and that is what this covers.
+Restart=on-failure
+RestartSec=15
+# The worker writes worktrees and reports and nothing else on this host.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/qevik /opt/qevik/atlas
+
+[Install]
+WantedBy=multi-user.target

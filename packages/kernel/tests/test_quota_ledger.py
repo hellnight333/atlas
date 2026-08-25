@@ -279,3 +279,93 @@ class TestPlanIsPlainData:
     def test_a_plan_can_be_serialised_for_a_report(self) -> None:
         plan = Plan(resource="r", count=3, requested=12, shortfall=2, reason="because")
         assert plan.model_dump()["count"] == 3
+
+
+# ============================================ allowances outlive the process
+
+def _durable(events: list) -> QuotaLedger:
+    from atlas_kernel.quota.ledger import QuotaLedger
+
+    return QuotaLedger(events=events, sink=events.append)
+
+
+def test_a_months_usage_is_not_forgotten_by_a_redeploy() -> None:
+    """The ledger's own docstring said storing spends and replaying them was
+    all it would take. It was never wired, so every restart reset the month."""
+    from atlas_kernel.quota.models import QuotaPolicy
+
+    events: list = []
+    first = _durable(events)
+    first.register(QuotaPolicy(resource="r", limit=100.0))
+    first.spend("r", 30.0, note="before the restart")
+    assert first.remaining("r") == 70.0
+
+    assert _durable(events).remaining("r") == 70.0
+
+
+def test_the_policy_survives_too_not_only_the_spends() -> None:
+    """A replayed spend against an unregistered resource has nowhere to go, and
+    a lost policy silently discards the usage that went with it."""
+    from atlas_kernel.quota.models import QuotaPolicy
+
+    events: list = []
+    _durable(events).register(QuotaPolicy(resource="r", limit=50.0))
+    assert _durable(events).policy("r").limit == 50.0
+
+
+def test_re_registering_an_identical_policy_writes_nothing() -> None:
+    """Otherwise every boot grows the timeline without recording anything."""
+    from atlas_kernel.quota.models import QuotaPolicy
+
+    events: list = []
+    ledger = _durable(events)
+    ledger.register(QuotaPolicy(resource="r", limit=50.0))
+    before = len(events)
+    ledger.register(QuotaPolicy(resource="r", limit=50.0))
+    assert len(events) == before
+    ledger.register(QuotaPolicy(resource="r", limit=80.0))
+    assert len(events) == before + 1
+
+
+def test_a_refused_spend_is_never_written_to_the_timeline() -> None:
+    """A spend recorded and then rejected would leave the timeline claiming
+    units nobody consumed, and the next replay would believe it."""
+    from atlas_kernel.quota.models import QuotaExhausted, QuotaPolicy
+
+    events: list = []
+    ledger = _durable(events)
+    ledger.register(QuotaPolicy(resource="r", limit=10.0))
+    with pytest.raises(QuotaExhausted):
+        ledger.spend("r", 99.0)
+    assert _durable(events).remaining("r") == 10.0
+
+
+def test_an_in_memory_ledger_still_works_and_does_not_pretend() -> None:
+    """The negative control: no timeline means no durability, and that must be
+    the plain outcome rather than a silent half-persistence."""
+    from atlas_kernel.quota.ledger import QuotaLedger
+    from atlas_kernel.quota.models import QuotaPolicy
+
+    ledger = QuotaLedger(policies=[QuotaPolicy(resource="r", limit=10.0)])
+    ledger.spend("r", 4.0)
+    assert ledger.remaining("r") == 6.0
+    fresh = QuotaLedger(policies=[QuotaPolicy(resource="r", limit=10.0)])
+    assert fresh.remaining("r") == 10.0
+
+
+def test_credits_and_the_fabric_draw_on_one_restored_ledger() -> None:
+    """The point of persisting here rather than above: everything that draws on
+    an allowance becomes durable at once, and there is no second answer to
+    "what is left"."""
+    from atlas_kernel.credits.models import Plan
+    from atlas_kernel.credits.service import CreditService
+    from atlas_kernel.fabric.budgets import Envelope, Scope, assess
+
+    events: list = []
+    CreditService(_durable(events)).assign("tenant-x", Plan.LIST)
+
+    # A different process, same timeline.
+    restored = _durable(events)
+    verdict = assess(restored, Envelope(tenant_id="tenant-x"), 1.0)
+    assert Scope.TENANT not in verdict.unmetered
+    assert verdict.remaining["tenant"] > 0
