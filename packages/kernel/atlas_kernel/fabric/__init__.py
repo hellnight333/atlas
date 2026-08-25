@@ -19,6 +19,19 @@ lives here.
 **One registry.** `ModelRegistry` remains the only answer to "what can run";
 this maps capabilities onto it. A second registry is how an invocation gets
 recorded against a model that never saw the request.
+
+The package, in the order it was built:
+
+    agents      who could be asked, and what stands in their way
+    tools       what they may reach, and what it costs to be wrong with it
+    scheduler   what runs next, and why everything else does not
+    protocol    how they ask each other, and why it cannot run away
+    budgets     what any of it may spend, at four scopes
+    sandbox     where a coding agent is allowed to exist
+
+Each answers one question and refuses the others. The scheduler does not decide
+*whether*; the protocol does not execute; the registry decides nothing about
+permission; the sandbox never pretends to contain what it cannot.
 """
 
 from .agents import (
@@ -27,6 +40,7 @@ from .agents import (
     Backend,
     Blast,
     Capability,
+    Need,
     Placement,
     Registry,
     UnknownAgent,
@@ -49,6 +63,14 @@ from .protocol import (
     Message,
     Refused,
 )
+from .sandbox import (
+    Bubblewrap,
+    Confinement,
+    Isolation,
+    NoSandbox,
+    NotIsolated,
+    Outcome,
+)
 from .scheduler import (
     Decision,
     Demand,
@@ -58,10 +80,19 @@ from .scheduler import (
     demands_from,
     plan,
 )
+from .tools import (
+    TOOLS,
+    Tool,
+    UnknownTool,
+    for_agent,
+    needs_network,
+)
 
-__all__ = ["AGENTS", "Agent", "Assessment", "Backend", "Blast", "Capability",
-           "Conversation", "Decision", "Demand", "Envelope", "Exchange", "Kind",
-           "Limits", "Message", "Placement", "Priority", "Queue", "Refused",
-           "Registry", "Scope", "Unmetered", "UnknownAgent", "assess",
-           "capable_of", "decide", "demands_from", "describe", "plan",
-           "reserve"]
+__all__ = ["AGENTS", "Agent", "Assessment", "Backend", "Blast", "Bubblewrap",
+           "Capability", "Confinement", "Conversation", "Decision", "Demand",
+           "Envelope", "Exchange", "Isolation", "Kind", "Limits", "Message",
+           "NoSandbox", "NotIsolated", "Need", "Outcome", "Placement",
+           "Priority", "Queue", "Refused", "Registry", "Scope", "Unmetered",
+           "TOOLS", "Tool", "UnknownAgent", "UnknownTool", "assess",
+           "capable_of", "decide", "demands_from",
+           "describe", "for_agent", "needs_network", "plan", "reserve"]

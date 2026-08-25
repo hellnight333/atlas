@@ -1,0 +1,71 @@
+Sandbox — verification evidence
+================================================================
+
+Host        qevik-core-01 (2.28.62.83)
+Kernel      Linux 7.0.0-29-generic x86_64
+Sandbox     bubblewrap 0.11.1, unprivileged user namespaces enabled
+            (kernel.unprivileged_userns_clone = 1)
+Command     PYTHONPATH=... python infra/verify_sandbox.py
+Date        25 August 2026
+Exit        0
+
+Every check runs a real command inside the sandbox and asserts it could not do
+the thing. Each is paired with a control that does the same thing OUTSIDE and
+asserts it worked — a check that passes because the command was broken proves
+nothing.
+
+Two failures on the first run, both real:
+
+  * `/root` is not merely unreadable inside the sandbox, it does not exist —
+    a stronger result than the check expected. The check was reframed to accept
+    either form of containment rather than one error message.
+
+  * With `network=True` a process still could not resolve `localhost`. The
+    root is an empty tmpfs and `/etc/resolv.conf` was never bound, so an agent
+    that asked for the network would have got a confusing DNS failure. Fixed:
+    RESOLVER_PATHS is bound read-only when, and only when, the network is on.
+
+A third, in the harness rather than the sandbox: `ls … | head` reports *head's*
+exit code, which is always 0, so an exit-code assertion behind a pipe is
+unfalsifiable. The pipe was removed.
+
+----------------------------------------------------------------
+
+Sandbox — attempting the escapes that matter
+
+0. What this host can enforce
+     {"implementation": "Bubblewrap", "confinement": "FULL", "can_run_coding_agents": true, "detail": "Filesystem, network, environment and wall clock are enforced by the kernel."}
+
+1. The filesystem
+  PASS  it can read its own workspace  — the negative control: if this failed, every check below would pass because nothing ran
+  PASS  it can write inside its workspace
+  PASS  it cannot read a file outside the workspace  — exit 1
+  PASS  and that same file is readable outside the sandbox  — otherwise the check above proves only that the file was absent
+  PASS  it cannot write outside the workspace  — exit 2
+  PASS  root's home is not even present  — exit 2, stdout '', stderr "ls: cannot access '/root': No such file or directo"
+  PASS  and it does exist on the host outside the sandbox  — otherwise the check above proves only that this machine has no home directories
+
+2. The network
+  PASS  it cannot resolve a name with the network unshared  — NO-RESOLUTION
+  PASS  and it can when the work says it needs the network  — the negative control on network isolation
+
+3. The environment
+  PASS  a key in the parent environment does not reach the process  — an allow-list, so a secret nobody thought of is still dropped
+  PASS  but the variables a toolchain needs do
+  PASS  a variable passed on purpose does reach it  — otherwise the check above would pass on a sandbox that drops everything and is unusable
+
+4. Time
+  PASS  a process that will not finish is killed  — killed after 2s. A non-zero exit means the work failed; this
+  PASS  and being killed is not reported as a failed exit code  — a non-zero exit means the work failed; this means nobody knows
+
+5. The absence refuses rather than running unconfined
+  PASS  NoSandbox refuses to run  — no sandbox is available on this host. A coding agent writes files and …
+
+6. The invocation is reviewable
+  PASS  the flags can be read rather than trusted  — /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts --die-with-parent --new-session --tmpfs / …
+
+==================================================================
+  16 passed, 0 failed
+==================================================================
+
+Verified: {"implementation": "Bubblewrap", "confinement": "FULL", "can_run_coding_agents": true, "detail": "Filesystem, network, environment and wall clock are enforced by the kernel."}

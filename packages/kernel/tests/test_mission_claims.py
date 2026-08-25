@@ -100,16 +100,64 @@ def test_the_postgres_implementation_refuses_to_be_used_unverified() -> None:
 
 def test_correct_and_demonstrated_are_tracked_separately() -> None:
     """`multiprocess_safe` is about the algorithm. `verified` is about whether
-    anybody watched it run. The architecture rests on not merging them."""
+    anybody watched it run. The architecture rests on not merging them — they
+    are still two questions even now that both answers are yes."""
     local = LocalClaims()
     assert verified(local) is True
-    assert local.multiprocess_safe is False
+    assert local.multiprocess_safe is False, (
+        "a dict in one process; a second worker has its own")
 
     postgres = PostgresClaims(connection=object(), i_have_a_database=True)
     assert postgres.multiprocess_safe is True
-    assert verified(postgres) is False, (
-        "nothing has run this against a database, and saying otherwise here is "
-        "how a deployment ends up believing it can run two workers")
+
+
+def test_the_claim_of_verification_names_the_run_that_earned_it() -> None:
+    """`verified()` turned True for `PostgresClaims` on 25 August 2026. A claim
+    like that with nothing behind it is precisely what this module exists to
+    prevent, so the evidence is named in the source and a reader can go and
+    check it."""
+    from atlas_kernel.mission.claims import DEMONSTRATED_BY
+
+    assert verified(PostgresClaims(connection=object(),
+                                   i_have_a_database=True)) is True
+    for named in ("infra/verify_postgres_claims.py", "PostgreSQL",
+                  "qevik-core-01", "postgres_claims_verification.txt"):
+        assert named in DEMONSTRATED_BY, named
+
+
+def test_the_recorded_evidence_exists_and_says_it_passed() -> None:
+    """The pointer must not outlive the file. A `DEMONSTRATED_BY` naming a
+    report nobody can open is a citation, not evidence."""
+    from pathlib import Path
+
+    report = (Path(__file__).resolve().parents[3] / "docs" / "qevik-docs"
+              / "autonomous" / "reports" / "postgres_claims_verification.txt")
+    assert report.is_file(), f"{report} is named in DEMONSTRATED_BY and missing"
+    text = report.read_text(encoding="utf-8")
+    assert "0 failed" in text
+    assert "exactly one worker claimed it" in text
+
+
+def test_an_autocommit_connection_is_refused() -> None:
+    """`FOR UPDATE SKIP LOCKED` holds its lock until the transaction ends. On an
+    autocommit connection that is the semicolon, so the lock is gone before the
+    claim is recorded and two workers claim one mission — with no error, which
+    is the whole danger."""
+    class Loose:
+        autocommit = True
+
+    with pytest.raises(NotVerified, match="autocommit"):
+        PostgresClaims(connection=Loose(), i_have_a_database=True)
+
+
+def test_a_transactional_connection_is_accepted() -> None:
+    """The negative control: if every connection were refused, the check above
+    would be measuring nothing."""
+    class Proper:
+        autocommit = False
+
+    assert PostgresClaims(connection=Proper(),
+                          i_have_a_database=True).multiprocess_safe is True
 
 
 def test_the_description_says_what_this_deployment_actually_guarantees() -> None:
@@ -119,8 +167,8 @@ def test_the_description_says_what_this_deployment_actually_guarantees() -> None
 
     postgres = describe(PostgresClaims(connection=object(),
                                        i_have_a_database=True))
-    assert postgres["status"] == "PENDING_INFRASTRUCTURE"
-    assert "never been run against a real database" in postgres["detail"]
+    assert postgres["status"] == "COMPLETE"
+    assert "Two workers can run safely" in postgres["detail"]
 
 
 def test_no_fake_makes_multiprocess_safety_pass() -> None:
@@ -158,3 +206,44 @@ def test_both_implementations_satisfy_the_protocol() -> None:
     assert isinstance(LocalClaims(), Claims)
     assert isinstance(PostgresClaims(connection=object(),
                                      i_have_a_database=True), Claims)
+
+
+# ============================================ what the deployment actually gets
+
+def test_no_dsn_means_one_worker_rather_than_a_database_that_is_not_there() -> None:
+    from atlas_kernel.qevik.app import _claims_for
+
+    assert isinstance(_claims_for(""), LocalClaims)
+    assert isinstance(_claims_for("   "), LocalClaims)
+
+
+def test_an_unreachable_database_falls_back_loudly(caplog) -> None:
+    """Falling back is right — refusing to start takes the whole control plane
+    down over a capability only the worker needs. Falling back *silently* is
+    not: the operator would believe two workers were safe."""
+    import logging
+
+    from atlas_kernel.qevik.app import _claims_for
+
+    with caplog.at_level(logging.ERROR):
+        claims = _claims_for("postgresql://nobody@127.0.0.1:1/none")
+    assert isinstance(claims, LocalClaims)
+    assert any("NOT safe for two workers" in r.getMessage()
+               for r in caplog.records), (
+        "a silent fallback is how a deployment believes it has multi-worker "
+        "safety it does not have")
+
+
+def test_health_reports_which_claiming_is_in_use() -> None:
+    """So "we are running two workers" is a claim the operator can check rather
+    than assume."""
+    from fastapi.testclient import TestClient
+
+    from atlas_kernel.qevik.app import Wiring, create_app
+
+    with TestClient(create_app(Wiring())) as client:
+        body = client.get("/api/health").json()
+    claiming = body["components"]["claiming"]
+    assert claiming["implementation"] == "LocalClaims"
+    assert claiming["status"] == "SINGLE_WORKER_ONLY"
+    assert claiming["multiprocess_safe"] is False

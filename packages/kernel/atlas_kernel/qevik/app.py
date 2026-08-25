@@ -46,6 +46,10 @@ from ..credentials.service import CredentialService
 from ..credentials.vault import FileSecretStore, Vault
 from ..credits import CreditService
 from ..customer import api as customer_api
+from ..fabric import Registry as AgentRegistry
+from ..fabric.sandbox import Confinement
+from ..fabric.sandbox import available as sandbox_available
+from ..fabric.sandbox import describe as describe_sandbox
 from ..mission import api as mission_api
 from ..mission.claims import LocalClaims
 from ..mission.claims import describe as describe_claims
@@ -105,10 +109,17 @@ class Wiring:
     connections: ConnectionStore | None = None
     credits: CreditService | None = None
     auth: AuthStore | None = None
-    #: What decides who runs a mission. `LocalClaims` is safe for one worker;
-    #: multi-worker needs a database, and `mission/claims.py` says so rather
-    #: than offering a fake that makes the property appear to hold.
+    #: What decides who runs a mission. `LocalClaims` is safe for one worker.
+    #: Multi-worker needs a database: set `claims_dsn` and this builds a
+    #: `PostgresClaims` — whose algorithm has now been demonstrated against a
+    #: real database, see `mission/claims.py::DEMONSTRATED_BY`.
     claims: Any = None
+    #: What would contain a CLI coding agent. None asks the host.
+    sandbox: Any = None
+    #: A PostgreSQL DSN. Absent, the deployment stays single-worker and
+    #: `/api/health` says so — rather than defaulting to a database that may
+    #: not be there and failing at the first claim.
+    claims_dsn: str = ""
     repository_root: Path = field(default_factory=Path.cwd)
     vault_path: Path = DEFAULT_VAULT
     #: Where the control panel's files live. None uses the repository copy.
@@ -188,7 +199,15 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.credentials = wiring.build_credentials()
     app.state.connections = wiring.connections or ConnectionStore()
     app.state.credits = wiring.credits or CreditService()
-    app.state.claims = wiring.claims or LocalClaims()
+    app.state.claims = wiring.claims or _claims_for(wiring.claims_dsn)
+    app.state.sandbox = wiring.sandbox or sandbox_available()
+    # The agents this host can actually run. A CLI agent's readiness is a
+    # fact about the machine, so it is decided here — once — from the same
+    # sandbox the runner would use, rather than inferred twice.
+    app.state.agents = (
+        AgentRegistry().on_a_host_with_a_sandbox()
+        if getattr(app.state.sandbox, "confinement", None) is Confinement.FULL
+        else AgentRegistry())
     app.state.repository_root = str(wiring.repository_root)
     app.state.wiring = wiring
 
@@ -339,6 +358,15 @@ def health(app: FastAPI) -> dict:
             "configured": True,
             **describe_claims(getattr(state, "claims", LocalClaims())),
         },
+        "sandbox": {
+            # A CLI coding agent writes files and runs commands with its own
+            # tool loop. Whether this host can contain one is a property of the
+            # machine, so it is reported rather than assumed — and the answer
+            # decides whether such an agent may run here at all.
+            "configured": True,
+            **describe_sandbox(getattr(state, "sandbox", None)
+                               or sandbox_available()),
+        },
         "probes": {
             # Named separately from `credentials` because they fail differently:
             # a vault with no probes can store keys it cannot test, and showing
@@ -358,6 +386,34 @@ def health(app: FastAPI) -> dict:
                  "Nothing here reports healthy on the grounds that nothing has "
                  "broken yet."),
     }
+
+
+def _claims_for(dsn: str) -> Any:
+    """Postgres-backed claims when a DSN is configured, otherwise one worker.
+
+    A failure to connect falls back to `LocalClaims` **and logs it**, because
+    the alternative — refusing to start — takes the whole control plane down
+    over a capability only the worker needs. What must never happen is falling
+    back silently: `/api/health` reports which one is in use, so "we are running
+    two workers" is a claim the operator can check rather than assume.
+    """
+    if not dsn.strip():
+        return LocalClaims()
+    try:
+        import psycopg
+
+        from ..mission.claims import PostgresClaims
+
+        claims = PostgresClaims(psycopg.connect(dsn, autocommit=False),
+                                i_have_a_database=True)
+        claims.install()
+        log.info("claims: Postgres-backed, multi-worker safe")
+        return claims
+    except Exception:                            # noqa: BLE001 - reported below
+        log.exception("claims: the database was configured and could not be "
+                      "reached; falling back to single-worker claiming, which "
+                      "is NOT safe for two workers")
+        return LocalClaims()
 
 
 def from_environment() -> FastAPI:
@@ -391,4 +447,5 @@ def from_environment() -> FastAPI:
         mission_timeline=Path(timeline) if timeline else None,
         vault_path=Path(vault),
         chat_events=turns,
+        claims_dsn=os.environ.get("QEVIK_CLAIMS_DSN", ""),
     ))

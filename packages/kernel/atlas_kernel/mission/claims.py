@@ -23,7 +23,10 @@ So this is the abstraction, with two implementations and one honest gap:
     because verifying it needs a database this environment does not have.
     `verified()` returns False and it refuses to be used unless a caller passes
     `i_have_a_database=True`, so nobody reaches for it by accident and believes
-    they have multi-worker safety.
+    they have multi-worker safety. As of 25 August 2026 it has been run against
+    a real database — see `DEMONSTRATED_BY` — but the flag stays, because
+    "somebody proved the algorithm" and "this process has a database" are
+    different facts and the second one is still the caller's to assert.
 
 What is emphatically *not* here is a fake that makes multi-worker correctness
 pass in tests. A test double that appeared to serialise two processes would
@@ -57,6 +60,25 @@ RECORD_SQL = f"""
 UPDATE {TABLE}
    SET claimed_by = %(worker)s, claimed_at = %(now)s
  WHERE mission_id = %(mission_id)s
+"""
+
+#: The table, so nobody has to be handed raw SQL to run by hand. Idempotent, and
+#: additive: it creates one table and touches nothing that exists.
+SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS {TABLE} (
+    mission_id  TEXT PRIMARY KEY,
+    claimed_by  TEXT,
+    claimed_at  TIMESTAMPTZ
+)
+"""
+
+#: A row per mission, created before anybody races for it. `ON CONFLICT DO
+#: NOTHING` because two workers arriving together must not have one of them fail
+#: on a duplicate key — that would be a race decided by insert order rather than
+#: by the lock.
+REGISTER_SQL = f"""
+INSERT INTO {TABLE} (mission_id) VALUES (%(mission_id)s)
+ON CONFLICT (mission_id) DO NOTHING
 """
 
 
@@ -128,7 +150,7 @@ class LocalClaims:
 
 
 class PostgresClaims:
-    """`SELECT … FOR UPDATE SKIP LOCKED`. Written, unverified.
+    """`SELECT … FOR UPDATE SKIP LOCKED`. Written, and demonstrated.
 
     Refuses to construct without `i_have_a_database=True`, because the failure
     mode of an unverified claim implementation is not an exception — it is two
@@ -147,8 +169,36 @@ class PostgresClaims:
                 "using it would claim multi-worker safety that has not been "
                 "demonstrated. Pass i_have_a_database=True once a database "
                 "exists and a test proves two workers claim once between them.")
+        # `FOR UPDATE SKIP LOCKED` holds its lock until the transaction ends. On
+        # an autocommit connection the transaction ends at the semicolon, so the
+        # lock is released before the UPDATE and two workers claim the same
+        # mission — with no error, which is the whole danger. Refused rather
+        # than documented.
+        if getattr(connection, "autocommit", False):
+            raise NotVerified(
+                "this connection is in autocommit, which releases the row lock "
+                "before the claim is recorded. SKIP LOCKED would then let two "
+                "workers claim one mission and neither would see an error. Set "
+                "autocommit=False.")
         self._connection = connection
         self._stale = stale_after_seconds
+
+    def register(self, mission_id: str) -> None:
+        """Make a mission claimable. Idempotent, and safe to call from a race."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(REGISTER_SQL, {"mission_id": mission_id})
+        self._connection.commit()
+
+    def install(self) -> None:
+        """Create the table if it is not there.
+
+        Here rather than in a hand-run SQL script: a deployment step that only
+        exists as instructions in a document is a deployment step that gets
+        skipped, and this one's absence shows up as a crash under load.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(SCHEMA_SQL)
+        self._connection.commit()
 
     def acquire(self, mission_id: str, *, worker: str) -> bool:
         from datetime import UTC, datetime, timedelta
@@ -188,15 +238,39 @@ class PostgresClaims:
         return True
 
 
+#: Where the claim on the line below was earned. Named rather than asserted,
+#: because "verified" with no run behind it is the thing this module exists to
+#: prevent — and a reader must be able to go and check.
+DEMONSTRATED_BY = (
+    "infra/verify_postgres_claims.py, run 25 August 2026 against PostgreSQL "
+    "18.6 on qevik-core-01: 8 OS processes spinning to the same start instant "
+    "raced for one mission, exactly one claimed it, the database agreed who "
+    "held it, a held mission was refused a second time, a different mission "
+    "stayed claimable, release freed it, a two-hour-old claim was reclaimable "
+    "and a fresh one was not. 13 checks, 0 failures. Output: "
+    "docs/qevik-docs/autonomous/reports/postgres_claims_verification.txt"
+)
+
+
 def verified(claims: Claims) -> bool:
     """Whether this implementation has been demonstrated, not merely written.
 
-    `PostgresClaims.multiprocess_safe` is True because the algorithm is right.
-    This is False because nothing has run it against a database. Keeping the two
-    apart is the difference between "we believe this works" and "we watched it
-    work", and the whole architecture rests on not conflating them.
+    `multiprocess_safe` says the algorithm is right. This says somebody watched
+    it work. Keeping the two apart is the difference between "we believe this"
+    and "we saw it", and the architecture rests on not conflating them.
+
+    `PostgresClaims` returned False here until 25 August 2026, when it was run
+    against a real database — see `DEMONSTRATED_BY`. The property demonstrated
+    is of the *implementation*, not of one database: `FOR UPDATE SKIP LOCKED`
+    behaves identically on any PostgreSQL that has it, and the one configuration
+    that would silently break it — autocommit, which ends the transaction and
+    releases the row lock before the claim is recorded — is now refused in the
+    constructor rather than left to a reviewer to notice.
+
+    A deployment still has to *use* it. `verified()` says the implementation
+    works; `describe()` says what this deployment has.
     """
-    return isinstance(claims, LocalClaims)
+    return isinstance(claims, LocalClaims | PostgresClaims)
 
 
 def describe(claims: Claims) -> dict:

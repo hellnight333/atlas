@@ -1,0 +1,53 @@
+Postgres atomic claims — verification evidence
+================================================================
+
+Host        qevik-core-01 (2.28.62.83)
+Database    PostgreSQL 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1), database `qevik_test`
+Driver      psycopg 3.3.4
+Command     PYTHONPATH=... python infra/verify_postgres_claims.py \
+                --dsn "postgresql:///qevik_test?host=/var/run/postgresql"
+Date        25 August 2026
+Exit        0
+
+Eight separate OS processes, each with its own connection, spinning until a
+shared start instant so they reach the SELECT together. A staggered start would
+let the first finish before the second began, and the run would pass against an
+implementation with no locking at all.
+
+The rows this created were deleted at the end; `select count(*) from
+qevik_mission_claim` returned 0 afterwards.
+
+----------------------------------------------------------------
+
+Postgres atomic claims — two processes, one mission
+
+1. The table, created by code rather than by hand
+  PASS  the claim table exists  — to_regclass → qevik_mission_claim
+  PASS  registering the same mission twice makes one row  — 1 rows
+
+2. 8 processes race for mission-verify-20260825002048
+  PASS  every worker answered  — 8 of 8
+  PASS  nothing raised  — {}
+  PASS  exactly one worker claimed it  — winners: ['worker-2']
+  PASS  the database agrees who holds it  — holder is 'worker-2'
+
+3. Negative controls — a check that always passes proves nothing
+  PASS  a different mission is still claimable  — if this failed, the test above would pass against an implementation that refuses everything
+  PASS  a held mission is refused a second time  — the same call that succeeded for the winner
+  PASS  release frees it
+  PASS  and it can then be claimed again
+
+4. A dead worker's claim is reclaimable, and a live one's is not
+  PASS  a stale claim can be taken over  — otherwise a crashed worker holds a mission for ever
+  PASS  a fresh claim cannot
+
+5. Autocommit is refused rather than silently unsafe
+  PASS  an autocommit connection is refused  — this connection is in autocommit, which releases the row lock before t…
+
+==================================================================
+  13 passed, 0 failed
+==================================================================
+
+Verified: {"implementation": "PostgresClaims", "multiprocess_safe": true, "verified": false, "status": "PENDING_INFRASTRUCTURE", "detail": "The algorithm is correct and has never been run against a real database, so multi-worker operation is not demonstrated."}
+
+This run is the evidence. `verified()` in claims.py may be updated to accept PostgresClaims only with this output recorded beside it.

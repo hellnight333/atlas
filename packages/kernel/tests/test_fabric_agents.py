@@ -28,7 +28,7 @@ from atlas_kernel.fabric import (
     UnknownAgent,
     capable_of,
 )
-from atlas_kernel.fabric.agents import APPROVAL_FOR
+from atlas_kernel.fabric.agents import APPROVAL_FOR, Need
 
 # ============================================ records, not processes
 
@@ -162,27 +162,90 @@ def test_credentials_are_named_as_the_centre_names_them() -> None:
 
 def test_an_unrunnable_agent_is_listed_rather_than_absent() -> None:
     """An absence is invisible. A record saying why is a gap somebody can act
-    on."""
+    on — and the *kind* matters, because a credential is solvable by typing and
+    a machine is not.
+
+    Asserted on `blocked_by` rather than on the sentence. Matching prose would
+    break the first time somebody improved the wording, and would pass on a
+    record that merely mentioned the right words.
+    """
     unready = [a for a in AGENTS if not a.ready]
     assert unready, "the fixture must contain a designed-but-unbuilt agent"
     for agent in unready:
-        assert agent.why_not_ready, agent.id
-        assert any(kind in agent.why_not_ready
-                   for kind in ("PENDING_CREDENTIAL", "PENDING_INFRASTRUCTURE")), (
-            f"{agent.id} must say which kind of blocker it is — a credential is "
-            "solvable by typing and a machine is not")
+        assert agent.blocked_by, agent.id
+        assert agent.why_not_ready, f"{agent.id} is blocked and says nothing"
+
+
+def test_ready_is_derived_from_the_blockers_rather_than_stored_beside_them(
+        ) -> None:
+    """Two fields would be two answers to "can this run", and they drift the
+    first time somebody clears a blocker and forgets the flag."""
+    assert "ready" not in Agent.model_fields
+    for agent in AGENTS:
+        assert agent.ready is (not agent.blocked_by), agent.id
+
+
+def test_a_blocker_with_no_explanation_is_refused() -> None:
+    """A gap nobody can act on is not better than no record at all."""
+    with pytest.raises(ValueError, match="says nothing about it"):
+        Agent(id="silent", name="Silent", capability=Capability.PLAN,
+              backend=Backend.API_MODEL, role=Registry().get("planner").role,
+              blocked_by=(Need.CREDENTIAL,))
+
+
+# ============================================ a host lifts what it can
+
+def test_a_sandbox_lifts_the_sandbox_blocker_and_nothing_else() -> None:
+    """`browser` is waiting on a browser worker; `administrator` on a
+    per-action approval policy as well as a sandbox. A rule that read "CLI
+    agent → ready" would have declared both available, and one of them holds a
+    shell on a host."""
+    on_host = Registry().on_a_host_with_a_sandbox()
+
+    assert Need.SANDBOX not in on_host.get("cli-implementer").blocked_by
+    assert on_host.get("cli-implementer").blocked_by == (Need.CREDENTIAL,)
+
+    assert on_host.get("browser").blocked_by == (Need.BROWSER_WORKER,)
+    assert on_host.get("administrator").blocked_by == (Need.APPROVAL_POLICY,)
+    assert on_host.get("administrator").ready is False, (
+        "a sandbox contains a shell; it does not make what the shell does "
+        "reversible")
+
+
+def test_an_agent_whose_only_blocker_was_the_sandbox_becomes_ready() -> None:
+    """The negative control. If nothing ever became ready, the method would be
+    doing nothing and the test above would still pass."""
+    lifted = Registry(agents=(
+        Registry().get("cli-implementer").model_copy(update={
+            "credentials": (), "blocked_by": (Need.SANDBOX,),
+            "why_not_ready": "PENDING_INFRASTRUCTURE: a sandbox"}),
+    )).on_a_host_with_a_sandbox()
+    only = lifted.agents[0]
+    assert only.ready is True
+    assert only.why_not_ready == "", "a ready agent must not still explain itself"
+
+
+def test_lifting_a_blocker_an_agent_does_not_have_changes_nothing() -> None:
+    planner = Registry().get("planner")
+    assert planner.without(Need.SANDBOX) is planner
 
 
 def test_a_cli_agent_declares_that_it_needs_a_sandbox() -> None:
     """It writes files with its own tool loop. That is a container, not a
-    permission."""
+    permission.
+
+    The default registry describes a host with no sandbox, so no CLI agent is
+    ready in it. `on_a_host_with_a_sandbox()` is how a host that *can* contain
+    one says so — a fact about the machine, never baked into the record.
+    """
     for agent in AGENTS:
         if agent.backend is Backend.CLI_AGENT:
             assert agent.needs_sandbox is True
             assert agent.ready is False, (
-                f"{agent.id} is a CLI agent and Qevik has no sandbox; marking "
-                "it ready would dispatch a filesystem-writing process into a "
-                "worktree and call that isolation")
+                f"{agent.id} is a CLI agent and the default registry assumes "
+                "no sandbox; marking it ready would dispatch a "
+                "filesystem-writing process into a worktree and call that "
+                "isolation")
 
 
 def test_the_arabic_agent_still_refuses_to_translate() -> None:
@@ -237,3 +300,17 @@ def test_placement_is_a_requirement_not_a_preference() -> None:
     reason, not silently queued forever."""
     assert Registry().get("cli-implementer").placement is Placement.LOCAL
     assert Registry().get("browser").placement is Placement.CLOUD
+
+
+def test_a_record_that_still_says_ready_is_refused_rather_than_ignored() -> None:
+    """`ready` became a derived property. A record written the old way would
+    otherwise be accepted with the flag silently dropped — an agent reporting
+    itself ready while its author believed they had said the opposite.
+
+    The same failure as a pydantic model swallowing an unknown keyword, which
+    has bitten this project before.
+    """
+    with pytest.raises(Exception) as raised:  # noqa: B017 - pydantic's own type
+        Agent(id="stale", name="Stale", capability=Capability.PLAN,
+              backend=Backend.EXECUTOR, ready=False)
+    assert "ready" in str(raised.value)

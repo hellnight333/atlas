@@ -145,8 +145,9 @@ somebody entered.
 - **"Whether a human is awake"** — the night window is a fixed local range
   (01:00–06:00), not a model of the operator's day.
 - **Multi-worker capacity discovery.** `concurrency` is supplied by the caller;
-  nothing counts live workers. Step 5 (Postgres-backed atomic claims) is what
-  makes more than one worker safe at all.
+  nothing counts live workers. The atomic claim itself is now demonstrated —
+  see `POSTGRES_CLAIMS.md` — but the deployment is still single-worker, so the
+  number the caller passes is the only ceiling there is.
 - **Deadline-aware ordering.** A deadline defeats the night window but does not
   yet reorder against priority.
 

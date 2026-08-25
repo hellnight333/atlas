@@ -111,10 +111,37 @@ APPROVAL_FOR: dict[Blast, str] = {
 }
 
 
+class Need(StrEnum):
+    """What an agent is waiting for, as a fact rather than a sentence.
+
+    A sentence is for a person to read. This is for code to act on: a host that
+    gains a sandbox must be able to lift exactly that blocker and leave the
+    others alone, and matching on prose to decide it would break the first time
+    somebody rewrote the wording.
+    """
+
+    #: A container. A CLI agent writes files with its own tool loop, so a
+    #: process and a worktree are not enough.
+    SANDBOX = "PENDING_INFRASTRUCTURE: a sandbox"
+    #: A key nobody has entered. Solvable by typing.
+    CREDENTIAL = "PENDING_CREDENTIAL"
+    #: A machine that can drive a browser.
+    BROWSER_WORKER = "PENDING_INFRASTRUCTURE: a browser worker"
+    #: Rules for which individual actions a person must approve. A shell on a
+    #: host is not reversible, and a sandbox does not make it so.
+    APPROVAL_POLICY = "PENDING_INFRASTRUCTURE: a per-action approval policy"
+
+
 class Agent(BaseModel):
     """One agent, as a record. Nothing here runs."""
 
-    model_config = ConfigDict(frozen=True)
+    # `extra="forbid"` because `ready` became a derived property: a record still
+    # written as `Agent(..., ready=False)` would otherwise be *accepted* and the
+    # flag silently dropped, producing an agent that reports itself ready while
+    # its author believed they had said the opposite. The same failure as a
+    # pydantic model quietly swallowing an unknown keyword, and it has bitten
+    # this project before.
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     name: str
@@ -134,11 +161,42 @@ class Agent(BaseModel):
     #: Credentials required before it can run at all. The same ids the
     #: Credential Centre uses, so "what does this key unlock" is answerable.
     credentials: tuple[str, ...] = ()
-    #: False while the backend is designed and unbuilt. An agent that cannot run
-    #: is listed rather than absent, because an absence is invisible.
-    ready: bool = True
+    #: What stands between this agent and running. Empty means ready.
+    #:
+    #: `ready` is derived from this rather than stored beside it. Two fields
+    #: would be two answers to "can this run", and the pair drifts the first
+    #: time somebody clears a blocker and forgets the flag — an agent listed as
+    #: ready with a blocker beside it, or the reverse.
+    blocked_by: tuple[Need, ...] = ()
+    #: The sentence a person reads. The machine reads `blocked_by`.
     why_not_ready: str = ""
     notes: str = ""
+
+    def model_post_init(self, _: object) -> None:
+        if self.blocked_by and not self.why_not_ready:
+            raise ValueError(
+                f"{self.id} is blocked and says nothing about it. A blocker "
+                "with no explanation is a gap nobody can act on.")
+
+    @property
+    def ready(self) -> bool:
+        """Derived, never stored. An agent that cannot run is listed rather
+        than absent, because an absence is invisible."""
+        return not self.blocked_by
+
+    def without(self, need: Need) -> Agent:
+        """The same agent with one blocker lifted, and only that one.
+
+        A host that gains a sandbox lifts `SANDBOX`. It does not lift the
+        browser worker `browser` is waiting for, or the approval policy
+        `administrator` needs before anything holds a shell on a host.
+        """
+        if need not in self.blocked_by:
+            return self
+        left = tuple(n for n in self.blocked_by if n is not need)
+        return self.model_copy(update={
+            "blocked_by": left,
+            "why_not_ready": ("; ".join(n.value for n in left) if left else "")})
 
     @property
     def approval(self) -> str:
@@ -158,6 +216,7 @@ class Agent(BaseModel):
                 "approval": self.approval, "placement": self.placement.value,
                 "tools": list(self.tools), "credentials": list(self.credentials),
                 "ready": self.ready, "why_not_ready": self.why_not_ready,
+                "blocked_by": [n.name for n in self.blocked_by],
                 "needs_sandbox": self.needs_sandbox, "notes": self.notes}
 
 
@@ -221,46 +280,58 @@ AGENTS: tuple[Agent, ...] = (
           capability=Capability.IMPLEMENT, backend=Backend.CLI_AGENT,
           role=Role.IMPLEMENTATION, placement=Placement.LOCAL,
           tools=("shell", "filesystem", "git-worktree"),
-          credentials=("anthropic",), ready=False,
-          why_not_ready="A CLI agent writes files with its own tool loop. "
-                        "Qevik's isolation is a process and a worktree, which "
-                        "is right for an API agent and insufficient for this. "
-                        "PENDING_INFRASTRUCTURE: a container boundary.",
+          credentials=("anthropic",),
+          blocked_by=(Need.SANDBOX, Need.CREDENTIAL),
+          why_not_ready="A CLI agent writes files with its own tool loop. A "
+                        "process and a worktree are right for an API agent and "
+                        "insufficient for this. Needs a container, and the key.",
           notes="Its permission prompts must become HumanActions, never "
                 "auto-answered."),
     Agent(id="browser", name="Browser agent", capability=Capability.BROWSE,
           backend=Backend.CLI_AGENT, placement=Placement.CLOUD,
-          tools=("browser",), ready=False,
-          why_not_ready="PENDING_INFRASTRUCTURE: a browser worker."),
+          # Corrected when the tool table was written: this said REVERSIBLE. A
+          # browser that can navigate can also submit a form, buy something or
+          # send a message, and nothing about "browse" is reversible once a
+          # button is clicked. It was routed to execution approval instead of
+          # artefact approval by a single wrong word.
+          blast=Blast.IRREVERSIBLE,
+          tools=("browser",), blocked_by=(Need.BROWSER_WORKER,),
+          why_not_ready="PENDING_INFRASTRUCTURE: a browser worker. A sandbox "
+                        "does not supply one."),
     Agent(id="correspondent", name="Correspondent",
           capability=Capability.CORRESPOND, backend=Backend.EXECUTOR,
           blast=Blast.IRREVERSIBLE, tools=("smtp",), credentials=("smtp",),
-          ready=False,
+          blocked_by=(Need.CREDENTIAL,),
           why_not_ready="PENDING_CREDENTIAL: SMTP. An email cannot be unsent, "
                         "so it needs artefact approval over the exact message.",
           notes="Prepares drafts. Sending is a separate, approved act."),
     Agent(id="merchandiser", name="Marketplace agent",
           capability=Capability.MERCHANDISE, backend=Backend.EXECUTOR,
           blast=Blast.IRREVERSIBLE, tools=("amazon", "noon"),
-          credentials=("amazon", "noon"), ready=False,
+          credentials=("amazon", "noon"), blocked_by=(Need.CREDENTIAL,),
           why_not_ready="PENDING_CREDENTIAL. A marketplace token creates "
                         "orders."),
     Agent(id="social", name="Social agent", capability=Capability.PUBLISH_SOCIAL,
           backend=Backend.EXECUTOR, blast=Blast.IRREVERSIBLE,
           tools=("youtube", "instagram"), credentials=("youtube", "instagram"),
-          ready=False,
+          blocked_by=(Need.CREDENTIAL,),
           why_not_ready="PENDING_CREDENTIAL. A post cannot be recalled."),
     Agent(id="image-maker", name="Image generator",
           capability=Capability.GENERATE_IMAGE, backend=Backend.API_MODEL,
           role=Role.IMAGE, blast=Blast.COSTLY, tools=("media-provider",),
-          ready=False,
+          blocked_by=(Need.CREDENTIAL,),
           why_not_ready="PENDING_CREDENTIAL: a generation provider."),
     Agent(id="administrator", name="Server administrator",
           capability=Capability.ADMINISTER, backend=Backend.CLI_AGENT,
           blast=Blast.IRREVERSIBLE, placement=Placement.CLOUD,
-          tools=("shell",), ready=False,
+          # `host-shell`, not `shell`. The same word covered a shell whose
+          # writes `git checkout` undoes and a shell on a live machine; this
+          # is the second kind, and the tool table now says so.
+          tools=("host-shell",),
+          blocked_by=(Need.SANDBOX, Need.APPROVAL_POLICY),
           why_not_ready="PENDING_INFRASTRUCTURE: a sandbox, and a per-action "
-                        "approval policy. A shell on a host is not reversible.",
+                        "approval policy. A shell on a host is not reversible, "
+                        "and containing it does not make it so.",
           notes="The highest blast radius in the fabric."),
 )
 
@@ -293,6 +364,27 @@ class Registry(BaseModel):
         """
         return tuple(a for a in self.agents
                      if a.capability is capability and (a.ready or not ready_only))
+
+    def on_a_host_with_a_sandbox(self) -> Registry:
+        """The same registry, with the sandbox blocker lifted.
+
+        Readiness for a CLI agent is a fact about the *host*, not about the
+        code: the agent is finished, and whether it may run depends on whether
+        anything on this machine would contain it. Baking `ready=True` into the
+        record would make a laptop with no bubblewrap claim it can safely run a
+        filesystem-writing process.
+
+        It lifts **only** `Need.SANDBOX`. `browser` is waiting on a browser
+        worker and `administrator` on a per-action approval policy as well as a
+        sandbox; a rule that read "CLI agent → ready" would have declared both
+        available, and one of them holds a shell on a host.
+
+        The caller asks the sandbox and passes the answer in. A registry that
+        probed the host itself would be a second place deciding, and it would
+        disagree with `sandbox.available()` on the day it mattered.
+        """
+        return Registry(agents=tuple(agent.without(Need.SANDBOX)
+                                     for agent in self.agents))
 
     def needing(self, credential: str) -> tuple[Agent, ...]:
         """Which agents a credential unlocks.
