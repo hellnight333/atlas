@@ -42,6 +42,7 @@ ExecStart=/opt/qevik/atlas/.venv/bin/python \
   --reports /var/lib/qevik/control/reports \
   --worktrees /var/lib/qevik/worktrees \
   --repository /opt/qevik/atlas \
+  --state /var/lib/qevik/control \
   --tenant tenant-qevik \
   --name worker-1 \
   --agent self-check \

@@ -97,12 +97,12 @@ the provider accepts; nothing else is missing.
 
 The worker read `<vault_root>/credentials.json` while the control plane writes
 `<QEVIK_STATE>/vault.json`. **Two different files.** A key entered in the
-Credential Centre was invisible to the worker, and the worker's refusal would
-have read as "no credential configured" to an operator looking at a Centre
-showing one connected. `_vault_file()` now accepts either the file or the
-directory containing it, and the worker reads the record timeline too — the
-vault holds the secret, the timeline holds the record, and a worker with only
-one of them finds nothing.
+Credential Centre was invisible to the worker.
+
+The first fix accepted either shape and fell back to whichever existed, which is
+worse than the bug — two paths that usually agree diverge silently. It was
+replaced by a single canonical boundary in `credentials/location.py`; see
+`CREDENTIAL_BOUNDARY.md`.
 
 ## 4. Conversations that outlive the process
 

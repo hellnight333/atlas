@@ -145,7 +145,10 @@ def test_a_sentence_becomes_a_commit_with_the_application_destroyed_in_between(
          "--tenant", TENANT, "--name", "worker-e2e",
          "--repository", str(repository),
          "--worktrees", str(tmp_path / "worktrees"),
-         "--vault", str(tmp_path / "worker-vault"),
+         # The state directory. `--vault` named one credential file and left the
+         # records file to be resolved elsewhere, which is how the Centre and
+         # the worker ended up reading different stores.
+         "--state", str(tmp_path),
          "--agent", "fake", "--once"],
         capture_output=True, text=True, timeout=180, check=False)
     assert finished.returncode == 0, finished.stderr[-2000:]
@@ -198,7 +201,10 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
          "--tenant", TENANT, "--name", "worker-branch",
          "--repository", str(repository),
          "--worktrees", str(tmp_path / "worktrees"),
-         "--vault", str(tmp_path / "worker-vault"),
+         # The state directory. `--vault` named one credential file and left the
+         # records file to be resolved elsewhere, which is how the Centre and
+         # the worker ended up reading different stores.
+         "--state", str(tmp_path),
          "--agent", "fake", "--once"],
         capture_output=True, text=True, timeout=180, check=True)
 
@@ -241,7 +247,10 @@ def test_nothing_runs_until_somebody_approves(files, repository, tmp_path,
          "--tenant", TENANT, "--name", "worker-idle",
          "--repository", str(repository),
          "--worktrees", str(tmp_path / "worktrees"),
-         "--vault", str(tmp_path / "worker-vault"),
+         # The state directory. `--vault` named one credential file and left the
+         # records file to be resolved elsewhere, which is how the Centre and
+         # the worker ended up reading different stores.
+         "--state", str(tmp_path),
          "--agent", "fake", "--once"],
         capture_output=True, text=True, timeout=180, check=False)
     assert finished.returncode == 0

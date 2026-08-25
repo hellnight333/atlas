@@ -275,7 +275,11 @@ def main() -> int:
              "--tenant", TENANT, "--name", "worker-acceptance",
              "--repository", str(repository),
              "--worktrees", str(workspace / "worktrees"),
-             "--vault", str(workspace / "worker-vault"),
+             # The state directory, not a credential file. `--vault` named one
+             # file, which left the records file to be resolved elsewhere — the
+             # mismatch that let the Centre show a credential the worker could
+             # not see.
+             "--state", str(workspace),
              "--agent", "fake", "--once"],
             capture_output=True, text=True, timeout=180, check=False)
         check("the worker completed", finished.returncode == 0,

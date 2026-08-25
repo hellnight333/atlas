@@ -28,12 +28,18 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "kernel"))
 
+from atlas_kernel.credentials.location import (  # noqa: E402
+    CredentialPaths,
+    paths_for,
+)
+from atlas_kernel.credentials.location import (  # noqa: E402
+    describe as describe_credentials,
+)
 from atlas_kernel.credentials.models import (  # noqa: E402
     Role,
     Selection,
@@ -77,26 +83,8 @@ class NoAgent(RuntimeError):
     """No model is available, and the worker will not invent one."""
 
 
-def _vault_file(given: Path) -> Path:
-    """The secret store file, whether a file or its directory was named.
-
-    `from_environment` writes `<QEVIK_STATE>/vault.json`. Accepting either shape
-    means a worker pointed at the state directory and a worker pointed at the
-    file both read what the Credential Centre wrote, rather than one of them
-    silently reading an empty store.
-    """
-    if given.suffix == ".json":
-        return given
-    beside = given / "vault.json"
-    if beside.exists():
-        return beside
-    legacy = given / "credentials.json"
-    return legacy if legacy.exists() else beside
-
-
-def roles_for(kind: str, *, tenant: str, vault_root: Path | None = None,
-              events: list | None = None,
-              sink: Callable[[object], None] | None = None) -> Roles:
+def roles_for(kind: str, *, tenant: str,
+              credentials_at: CredentialPaths | None = None) -> Roles:
     """The agents this worker runs missions with.
 
     `--agent fake` is a real choice a person has to make, never a fallback. A
@@ -124,17 +112,15 @@ def roles_for(kind: str, *, tenant: str, vault_root: Path | None = None,
                     "be called and nothing it produces reflects real work")
         return Roles.all(FakeCodingAgent(behaviour=Behaviour.SUCCESS, writes=True))
 
-    # The same file the control plane writes, not a second convention.
-    #
-    # This was `vault_root / "credentials.json"` while `from_environment` writes
-    # `<QEVIK_STATE>/vault.json`. Two different files: a key entered in the
-    # Credential Centre was invisible to the worker, and the worker's refusal
-    # would have read as "no credential configured" to an operator looking at a
-    # Centre that showed one connected.
-    store = FileSecretStore(_vault_file(vault_root)) if vault_root else None
-    credentials = CredentialService(Vault(store), events=events,
-                                    sink=sink) if events is not None else \
-        CredentialService(Vault(store))
+    # Exactly what the Credential Centre wrote, resolved by the one module that
+    # decides where that is. Both halves together: the vault holds the secret
+    # and the timeline holds the record, and a process with only one of them
+    # finds nothing.
+    where = credentials_at or paths_for()
+    records = Timeline(where.records)
+    credentials = CredentialService(Vault(FileSecretStore(where.vault)),
+                                    events=records.read(), sink=records.append)
+    log.info("credentials: %s", where.summary())
     registry = registry_for(credentials, tenant=tenant)
     selection = Selection()
 
@@ -482,10 +468,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reports", default="",
                         help="where mission reports are written "
                              "(default: alongside the repository)")
-    parser.add_argument("--vault", default=os.environ.get("QEVIK_VAULT", ""),
-                        help="the credential vault: either the file the "
-                             "Credential Centre writes, or the state directory "
-                             "containing it. Defaults to QEVIK_VAULT")
+    parser.add_argument("--state", default="",
+                        help="the durable state directory the Credential "
+                             "Centre writes to. Defaults to QEVIK_STATE. Names "
+                             "a directory, never a file: the file names belong "
+                             "to credentials.location, and a caller choosing "
+                             "one is how the two processes drifted apart")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -500,21 +488,22 @@ def main(argv: list[str] | None = None) -> int:
     worktrees = Path(args.worktrees or tempfile.mkdtemp(prefix="qevik-missions-"))
     repository = Path(args.repository)
 
+    credentials_at = paths_for(args.state or None)
     try:
-        credential_events = Timeline(
-            Path(args.vault).parent / "credentials.jsonl"
-            if args.vault and Path(args.vault).suffix == ".json"
-            else Path(args.timeline).parent / "credentials.jsonl")
         roles = roles_for(args.agent, tenant=args.tenant,
-                          vault_root=Path(args.vault) if args.vault else None,
-                          events=credential_events.read(),
-                          sink=credential_events.append)
+                          credentials_at=credentials_at)
         claims = claims_for(args.claims_dsn,
                             insist=args.require_atomic_claims)
     except NoAgent as refusal:
         log.error("%s", refusal)
         return 2
     log.info("claiming: %s", describe_claims(claims)["status"])
+    # Where this process looks for credentials, said once at start-up whether or
+    # not this agent needs any. The bug that made this module necessary was
+    # invisible precisely because neither process ever printed which file it was
+    # reading — an operator comparing a Centre showing CONNECTED against a
+    # worker saying "no credential configured" had nothing to compare.
+    log.info("credentials: %s", describe_credentials(credentials_at.state))
 
     if args.once:
         pass_once(timeline, tenant=args.tenant, name=args.name,

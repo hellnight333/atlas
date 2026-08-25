@@ -127,6 +127,12 @@ store with a list on exactly the first run that needed it.
 
 | Item | Status | Evidence |
 |---|---|---|
+| **One credential boundary** | OPERATIONAL | `CREDENTIAL_BOUNDARY.md`. `credentials/location.py` is the only module that names a credential file; `QEVIK_VAULT` and `--vault` are gone. A source-reading test fails on any literal elsewhere **and** on any caller that stops asking. 16/16 live with both processes restarted, no second store, no secret on disk |
+| **Agent-to-agent conversation persistence** | NOT_REQUIRED (guarded) | Nothing on the live path constructs an `Exchange` — a mission runs single-agent through registry → adapter → tools → sandbox. `test_agent_conversation_persistence.py` fails the moment a producer appears and names the fold to use. Distinct from user chat, which **is** persisted in `chat.jsonl` |
+| **Second worker** | NOT ADDED, deliberately | One worker, empty queue, no throughput requirement. Two workers racing one mission is already proven 7/7; adding a permanent second would be a number, not a capability |
+
+| Item | Status | Evidence |
+|---|---|---|
 | **Atomic claims in production** | OPERATIONAL | `qevik-worker.service` active with `QEVIK_REQUIRE_ATOMIC_CLAIMS=1`; `/api/health` reports `PostgresClaims · COMPLETE`. 10/10 claim-safety (both processes refuse with no database and with an unreachable one, each with its negative control), 7/7 two workers racing one mission |
 | **Budgets charged at execution** | OPERATIONAL | Persistence went into `QuotaLedger` itself, so `credits` and `fabric.budgets` became durable at once and the worker and control plane share `quota.jsonl`. The worker calls `reserve()` after the work; an unknown cost is recorded as UNKNOWN, never as zero |
 | **Conversation persistence** | OPERATIONAL | `chat.jsonl`. A conversation survives a real server restart with the person's words intact; the console acceptance proves it still references its mission |

@@ -42,6 +42,7 @@ from ..auth.store import AuthStore, init_auth
 from ..chat import api as chat_api
 from ..control import sales as sales_api
 from ..credentials import api as credentials_api
+from ..credentials.location import DEFAULT_STATE, paths_for
 from ..credentials.probes import PROBES
 from ..credentials.service import CredentialService
 from ..credentials.vault import FileSecretStore, Vault
@@ -71,8 +72,10 @@ SURFACES: tuple[str, ...] = (
 )
 
 #: Where the vault keeps ciphertext when a deployment does not say otherwise.
+#: Derived from `credentials.location`, which is the only module that decides
+#: credential file names — see its docstring for why there is no second answer.
 #: Outside the repository on purpose.
-DEFAULT_VAULT = Path.home() / ".qevik" / "vault.json"
+DEFAULT_VAULT = paths_for(DEFAULT_STATE).vault
 
 
 @dataclass
@@ -527,9 +530,10 @@ def from_environment() -> FastAPI:
     if not timeline and state:
         timeline = str(Path(state) / "missions.jsonl")
 
-    vault = os.environ.get("QEVIK_VAULT", "")
-    if not vault:
-        vault = str(Path(state) / "vault.json") if state else str(DEFAULT_VAULT)
+    # Both credential files come from one place. `QEVIK_VAULT` is gone: it named
+    # a single file, which meant the records file was resolved separately and
+    # the two could point at different directories.
+    credentials_at = paths_for(Path(state) if state else DEFAULT_STATE)
 
     # Beside the vault, in the same durable directory. Its own file rather than
     # the mission timeline: both are append-only JSONL and mixing them would
@@ -545,10 +549,6 @@ def from_environment() -> FastAPI:
     if not quota and state:
         quota = str(Path(state) / "quota.jsonl")
 
-    credentials = os.environ.get("QEVIK_CREDENTIAL_TIMELINE", "")
-    if not credentials and state:
-        credentials = str(Path(state) / "credentials.jsonl")
-
     chat = os.environ.get("QEVIK_CHAT_TIMELINE", "")
     if not chat and state:
         chat = str(Path(state) / "chat.jsonl")
@@ -560,8 +560,8 @@ def from_environment() -> FastAPI:
     return create_app(Wiring(
         repository_root=root,
         mission_timeline=Path(timeline) if timeline else None,
-        vault_path=Path(vault),
-        credential_timeline=Path(credentials) if credentials else None,
+        vault_path=credentials_at.vault,
+        credential_timeline=credentials_at.records,
         reports_root=Path(report_root) if report_root else None,
         quota_timeline=Path(quota) if quota else None,
         chat_events=turns,

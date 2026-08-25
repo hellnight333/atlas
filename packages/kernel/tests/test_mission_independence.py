@@ -98,7 +98,10 @@ def _run_worker(timeline: Timeline, repository: Path, tmp_path: Path,
         [sys.executable, str(WORKER), "--timeline", str(timeline.path),
          "--tenant", TENANT, "--name", name, "--repository", str(repository),
          "--worktrees", str(tmp_path / f"worktrees-{name}"), "--agent", agent,
-         "--vault", str(tmp_path / f"vault-{name}"), "--once"],
+         # The state directory, not a file: the credential file names belong to
+         # `credentials.location`, and a caller choosing one is how the control
+         # plane and the worker drifted apart.
+         "--state", str(tmp_path / f"state-{name}"), "--once"],
         capture_output=True, text=True, timeout=180, check=False)
 
 
