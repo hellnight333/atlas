@@ -205,10 +205,18 @@ def approve(conversation: Conversation, *, tenant: TenantId | None,
     mission, event = mission_service.attach_plan(mission, plan, tenant=tenant,
                                                  actor=approved_by)
     events.append(event)
-    mission, event = mission_service.transition(
-        mission, MissionStatus.QUEUED, tenant=tenant, actor=approved_by,
-        note=f"approved in conversation {conversation.id}")
-    events.append(event)
+    # Only if policy has not already queued it.
+    #
+    # `attach_plan` used to route on the planner's own `approval_required`,
+    # which was always True for a real plan, so this transition always ran from
+    # AWAITING_APPROVAL. Policy decides now, and a cheap reversible plan lands
+    # in QUEUED directly — where an unconditional QUEUED → QUEUED is refused by
+    # `ALLOWED` and would have failed the approval a person just gave.
+    if mission.status is not MissionStatus.QUEUED:
+        mission, event = mission_service.transition(
+            mission, MissionStatus.QUEUED, tenant=tenant, actor=approved_by,
+            note=f"approved in conversation {conversation.id}")
+        events.append(event)
 
     updated = conversation.model_copy(update={
         "status": ConversationStatus.MISSION_CREATED,

@@ -242,13 +242,47 @@ def test_an_unverifiable_website_produces_no_opportunity_at_all() -> None:
     assert [r.opportunity_key for r in recommendations] == []
 
 
-def test_dns_is_what_separates_absent_from_unverified() -> None:
-    """A name server saying "no such host" has answered. A timeout has not."""
-    assert resolution("definitely-not-a-real-qevik-host.invalid") is Resolution.NO_SUCH_HOST
+def test_dns_is_what_separates_absent_from_unverified(monkeypatch) -> None:
+    """A name server saying "no such host" has answered. A timeout has not.
+
+    Driven with a controlled resolver rather than a `.invalid` name. This
+    machine's DNS answers *every* name from `198.18.0.0/15` — a VPN catch-all —
+    so the version that asked the real resolver reported NO_SUCH_HOST as
+    RESOLVED and failed depending on whether a VPN was up. A suite that fails on
+    network state teaches people to re-run rather than to look.
+    """
+    import socket as socket_module
+
+    from atlas_kernel.research import net
+
+    def answering(kind: str):
+        def resolver(host, *args, **kwargs):
+            if kind == "resolved":
+                return [(2, 1, 6, "", ("93.184.216.34", 0))]
+            error = socket_module.gaierror(
+                socket_module.EAI_NONAME if kind == "absent" else -3,
+                "controlled")
+            error.errno = (socket_module.EAI_NONAME if kind == "absent"
+                           else socket_module.EAI_AGAIN)
+            raise error
+        return resolver
+
+    monkeypatch.setattr(net.socket, "getaddrinfo", answering("absent"))
+    assert resolution("anything.example") is Resolution.NO_SUCH_HOST
+
+    monkeypatch.setattr(net.socket, "getaddrinfo", answering("timeout"))
+    assert resolution("anything.example") is Resolution.UNKNOWN, (
+        "a resolver that could not answer establishes nothing; recording it as "
+        "an absence invents a finding about the business")
+
+    monkeypatch.setattr(net.socket, "getaddrinfo", answering("resolved"))
+    assert resolution("anything.example") is Resolution.RESOLVED
+
+    # No resolver involved at all.
     assert resolution("") is Resolution.UNKNOWN
 
 
-def test_research_records_the_distinction_it_observed() -> None:
+def test_research_records_the_distinction_it_observed(monkeypatch) -> None:
     from atlas_kernel.research.discovery import discover
 
     _found, findings = discover("")
@@ -256,7 +290,20 @@ def test_research_records_the_distinction_it_observed() -> None:
     assert [f.status.value for f in website] == ["not_found"]
     assert "no website recorded" in website[0].evidence
 
-    _found, findings = discover("https://not-a-real-qevik-host.invalid")
+    # Controlled, for the same reason as the test above: on a machine whose
+    # resolver answers everything, a `.invalid` host resolves and this recorded
+    # the opposite of what it meant to.
+    import socket as socket_module
+
+    from atlas_kernel.research import net
+
+    def absent(host, *args, **kwargs):
+        error = socket_module.gaierror(socket_module.EAI_NONAME, "controlled")
+        error.errno = socket_module.EAI_NONAME
+        raise error
+
+    monkeypatch.setattr(net.socket, "getaddrinfo", absent)
+    _found, findings = discover("https://anything.example")
     website = [f for f in findings if f.feature == "website"]
     assert [f.status.value for f in website] == ["not_found"]
     assert "no such host" in website[0].evidence

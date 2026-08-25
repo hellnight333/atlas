@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Look at the console, at both viewports, instead of asserting it is fine.
+
+Every visual defect in this project was found by reading a screenshot and none
+were found by a test: a completion bar escaping its card, a banner covering the
+button underneath it, the app shell visible before sign-in. So this renders the
+real `apps/control/src/index.html` in a real browser and saves the pictures.
+
+    python3 infra/screenshot_console.py            # both viewports
+    python3 infra/screenshot_console.py --page more
+
+**The console is served unmodified.** A one-line wrapper page seeds the session
+token and redirects, so nothing in the shipped artefact knows this exists — a
+screenshot of a file with a test hook in it is a screenshot of a different file.
+
+The API is stubbed here rather than run for real: the point is the layout at
+390×844, and standing up Postgres and a worker to look at a nav bar would make
+this too slow to run every time, which means it would stop being run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import threading
+import time
+from functools import partial
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CONSOLE = ROOT / "apps" / "control" / "src"
+
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+#: 390×844 is an iPhone 14/15; 1280×900 a laptop. The design pass requires both,
+#: because a layout designed at one and checked at the other is a layout that
+#: was checked once.
+VIEWPORTS = {"phone": (390, 844), "desktop": (1280, 900)}
+
+TOKEN = "screenshot-session-not-a-real-token"
+
+#: Enough shape for the layout to be real. Not enough to be mistaken for data:
+#: every string says so, because a screenshot with plausible-looking figures in
+#: it is one somebody eventually quotes.
+FIXTURES: dict[str, object] = {
+    "/api/me": {"username": "operator", "tenant_id": "tenant-example",
+                "scopes": ["read", "execute", "admin"]},
+    "/api/health": {"status": "ok", "components": {
+        "claiming": {"status": "COMPLETE", "detail": "Two workers can run safely.",
+                     "implementation": "PostgresClaims"},
+        "sandbox": {"confinement": "FULL", "can_run_coding_agents": True},
+        "credentials": {"configured": True}, "probes": {"configured": True}}},
+    "/api/missions": {"missions": [
+        {"mission_id": "mission-000000000001", "title": "Sample: a mission that needs review",
+         "status": "awaiting_approval", "updated_at": "2026-08-25T09:00:00+00:00",
+         "claimed_by": "", "plan": {"goal": "sample goal"}},
+        {"mission_id": "mission-000000000002", "title": "Sample: a mission in flight",
+         "status": "processing", "updated_at": "2026-08-25T09:05:00+00:00",
+         "claimed_by": "worker-1"},
+    ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
+    "/api/missions/blockers": {"by_kind": {}},
+    # The real shape `/api/missions/costs` returns. The first version of this
+    # fixture invented `{"total": None}`, the card read `costs.known_total` and
+    # rendered the string `undefined` — a fixture that does not match the API
+    # tests a page that does not exist.
+    "/api/missions/costs": {"reported": 0.0, "estimated": 0.0, "known_total": 0.0,
+                            "priced_calls": 0, "unpriced_calls": 2, "currency": "",
+                            "mixed_currencies": False,
+                            "note": "2 call(s) reported no cost"},
+    "/api/missions/schedule": {"queues": {
+        "NOW": [{"mission_id": "mission-000000000002", "why": "ready, and there is capacity",
+                 "priority": "normal", "runs_after": "", "placement": "either"}],
+        "NEXT": [], "SCHEDULED": [],
+        "WAITING": [{"mission_id": "mission-000000000001",
+                     "why": "waiting for a person to approve or supply something",
+                     "priority": "normal", "runs_after": "", "placement": "either"}],
+        "BLOCKED": []},
+        "counts": {"NOW": 1, "NEXT": 0, "SCHEDULED": 0, "WAITING": 1, "BLOCKED": 0},
+        "dispatchable": ["mission-000000000002"],
+        "note": "WAITING resolves on its own; BLOCKED never will."},
+    "/api/chat": {"conversations": []},
+    "/api/credentials": {"credentials": [], "connected": [], "action_required": [],
+                         "vault": {"sealed": False, "locked": False}, "note": "sample"},
+    "/api/status": {"version": "sample", "changed": False},
+}
+
+
+class Stub(BaseHTTPRequestHandler):
+    """The console's files, plus enough API to render. Nothing writes."""
+
+    def log_message(self, *_: object) -> None:            # quiet
+        return
+
+    def do_GET(self) -> None:                             # noqa: N802
+        path = self.path.split("?")[0]
+        if path == "/__measure":
+            # Which element is actually wider than the viewport. Guessing at CSS
+            # from a screenshot is how an afternoon disappears; this names the
+            # node.
+            page = self.path.split("page=")[-1] if "page=" in self.path else ""
+            body = ("<!doctype html><meta charset=utf-8>"
+                    "<style>html,body{margin:0;background:#111;color:#eee;"
+                    "font:12px ui-monospace}</style><pre id=out>measuring…</pre>"
+                    f"<script>sessionStorage.setItem('qevik.token',"
+                    f"{json.dumps(TOKEN)});</script>"
+                    "<iframe id=f style='width:390px;height:844px;border:0;"
+                    "position:absolute;left:-9999px'></iframe><script>"
+                    "const f=document.getElementById('f');"
+                    f"f.src='/index.html#/{page}';"
+                    "f.onload=()=>setTimeout(()=>{"
+                    "const d=f.contentDocument,w=390,lines=[];"
+                    "lines.push('viewport '+w+'  doc.scrollWidth '+"
+                    "d.documentElement.scrollWidth);"
+                    "lines.push('body.scrollWidth '+d.body.scrollWidth);"
+                    "d.querySelectorAll('main *').forEach(el=>{"
+                    "const r=el.getBoundingClientRect();"
+                    "const over=r.right>w+1||el.scrollWidth>Math.ceil(r.width)+1;"
+                    "lines.push((over?'OVER ':'     ')+"
+                    "[el.tagName.toLowerCase()+(el.id?'#'+el.id:'')+"
+                    "(el.className&&typeof el.className==='string'?'.'+"
+                    "el.className.trim().split(/\\s+/).join('.'):''),"
+                    "'x='+Math.round(r.left),'right='+Math.round(r.right),"
+                    "'w='+Math.round(r.width),'scrollW='+el.scrollWidth].join(' '));});"
+                    "document.getElementById('out').textContent="
+                    "lines.slice(0,34).join('\\n');},2500);</script>")
+            return self._send(200, body.encode(), "text/html; charset=utf-8")
+        if path == "/__frame":
+            # The console inside an iframe of exactly the target width.
+            #
+            # `--window-size` did not reliably drive the *layout* viewport: the
+            # image came out 390px wide while the page had laid out wider, so
+            # content looked clipped and a navigation item appeared missing
+            # when measurement showed everything fitted. An iframe with an
+            # explicit width is not subject to that — the layout width is the
+            # width, whatever the browser does with its window.
+            query = self.path.split("?", 1)[-1] if "?" in self.path else ""
+            fields = dict(pair.split("=", 1) for pair in query.split("&")
+                          if "=" in pair)
+            page = fields.get("page", "")
+            width = int(fields.get("w", "390"))
+            height = int(fields.get("h", "844"))
+            body = (f"<!doctype html><meta charset=utf-8><style>"
+                    f"html,body{{margin:0;background:#3a3a3a}}"
+                    f"iframe{{width:{width}px;height:{height}px;border:0;"
+                    f"display:block}}</style>"
+                    f"<script>sessionStorage.setItem('qevik.token',"
+                    f"{json.dumps(TOKEN)});</script>"
+                    f"<iframe src='/index.html#/{page}'></iframe>")
+            return self._send(200, body.encode(), "text/html; charset=utf-8")
+        if path == "/__seed":
+            # Seeds the session and redirects. Kept out of index.html so the
+            # artefact photographed is the artefact shipped.
+            page = self.path.split("page=")[-1] if "page=" in self.path else ""
+            body = (f"<!doctype html><meta charset=utf-8><script>"
+                    f"sessionStorage.setItem('qevik.token', {json.dumps(TOKEN)});"
+                    f"location.replace('/index.html#/{page}');</script>")
+            return self._send(200, body.encode(), "text/html; charset=utf-8")
+        if path.startswith("/api/") or path.startswith("/auth/"):
+            return self._json(path)
+        name = "index.html" if path in ("/", "") else path.lstrip("/")
+        target = (CONSOLE / name).resolve()
+        if not target.is_file() or CONSOLE.resolve() not in target.parents:
+            return self._send(404, b"not here", "text/plain")
+        kind = ("text/html; charset=utf-8" if target.suffix == ".html"
+                else "text/plain; charset=utf-8")
+        return self._send(200, target.read_bytes(), kind)
+
+    def do_POST(self) -> None:                            # noqa: N802
+        self._json(self.path.split("?")[0])
+
+    def _json(self, path: str) -> None:
+        # Exact match first, then the longest prefix.
+        #
+        # This walked the dict in insertion order and took the first prefix
+        # hit, so `/api/missions/costs` was served the *missions list* because
+        # `/api/missions` was declared earlier — and the cost card rendered from
+        # the wrong payload. A stub that answers the wrong endpoint produces a
+        # screenshot of a page that cannot exist.
+        if path in FIXTURES:
+            return self._send(200, json.dumps(FIXTURES[path]).encode(),
+                              "application/json")
+        matches = [k for k in FIXTURES if path.startswith(k + "/")]
+        if matches:
+            best = max(matches, key=len)
+            return self._send(200, json.dumps(FIXTURES[best]).encode(),
+                              "application/json")
+        return self._send(200, b"{}", "application/json")
+
+    def _send(self, code: int, body: bytes, kind: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def shoot(url: str, out: Path, width: int, height: int) -> bool:
+    if not Path(CHROME).exists():
+        print(f"  no browser at {CHROME}")
+        return False
+    done = subprocess.run(
+        [CHROME, "--headless", "--disable-gpu", "--hide-scrollbars",
+         f"--screenshot={out}", f"--window-size={width},{height}",
+         "--virtual-time-budget=4000", url],
+        capture_output=True, text=True, timeout=90, check=False)
+    if not out.exists():
+        print(f"  chrome wrote nothing: {done.stderr.strip()[:160]}")
+        return False
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--page", default="dashboard")
+    parser.add_argument("--port", type=int, default=8623)
+    parser.add_argument("--out", default="")
+    parser.add_argument("--measure", action="store_true",
+                        help="name the elements wider than the viewport")
+    args = parser.parse_args()
+
+    out = Path(args.out) if args.out else ROOT / ".screenshots"
+    out.mkdir(parents=True, exist_ok=True)
+
+    server = HTTPServer(("127.0.0.1", args.port), partial(Stub))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.4)
+
+    if args.measure:
+        target = out / f"measure-{args.page}.png"
+        target.unlink(missing_ok=True)
+        shoot(f"http://127.0.0.1:{args.port}/__measure?page={args.page}",
+              target, 900, 700)
+        server.shutdown()
+        print(f"  {target}")
+        return 0
+
+    written = []
+    try:
+        for name, (width, height) in VIEWPORTS.items():
+            target = out / f"console-{args.page}-{name}.png"
+            target.unlink(missing_ok=True)
+            # The iframe fixes the layout width; the window only has to be big
+            # enough to hold it.
+            url = (f"http://127.0.0.1:{args.port}/__frame"
+                   f"?page={args.page}&w={width}&h={height}")
+            print(f"{name} {width}x{height} → {target.name}")
+            if shoot(url, target, width, height):
+                written.append(target)
+    finally:
+        server.shutdown()
+
+    if not written:
+        print("\nnothing was captured; the layout has not been looked at")
+        return 1
+    for path in written:
+        print(f"  {path}  ({path.stat().st_size // 1024} KB)")
+    print("\nNow read them. A rendered page is not a working one.")
+    return 0
+
+
+if __name__ == "__main__":
+    if shutil.which("true") is None:                      # pragma: no cover
+        pass
+    raise SystemExit(main())

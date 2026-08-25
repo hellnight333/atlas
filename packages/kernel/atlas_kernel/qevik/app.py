@@ -88,8 +88,15 @@ class Wiring:
     """
 
     #: The business timeline. A list here is a development default; production
-    #: passes something backed by a database.
+    #: passes `business_timeline` instead.
+    #:
+    #: This is Atlas's permanent memory of a company — every factory writes to
+    #: it, and metrics are derived from it rather than from mutable stage
+    #: fields. In production it was a plain list, so a restart erased the whole
+    #: history of every business while the businesses themselves remained.
     business_events: list = field(default_factory=list)
+    #: Where that memory actually lives.
+    business_timeline: Path | None = None
     #: Conversation turns. Separate from the business timeline because a
     #: conversation is about a request, not about a customer, and one tenant's
     #: chat history should not have to be filtered out of a business's file.
@@ -223,8 +230,14 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.chat_sink = (chat.append if chat is not None
                            else wiring.chat_events.append)
     app.state.model_selections = wiring.model_selections or SelectionStore()
-    app.state.business_events = wiring.business_events
-    app.state.business_sink = wiring.business_events.append
+    # `is not None`, never truthiness: `Timeline` defines `__len__`, so a new
+    # one is falsy and `or` would swap durable storage for a list.
+    business = (Timeline(wiring.business_timeline)
+                if wiring.business_timeline is not None else None)
+    app.state.business_events = (business if business is not None
+                                 else wiring.business_events)
+    app.state.business_sink = (business.append if business is not None
+                               else wiring.business_events.append)
     # `is not None`, not truthiness. `Timeline` defines `__len__`, so a brand
     # new timeline — the one every first run has — is falsy, and `if timeline`
     # silently replaced the durable store with an in-memory list on exactly the
@@ -553,6 +566,10 @@ def from_environment() -> FastAPI:
     if not chat and state:
         chat = str(Path(state) / "chat.jsonl")
 
+    businesses = os.environ.get("QEVIK_BUSINESS_TIMELINE", "")
+    if not businesses and state:
+        businesses = str(Path(state) / "businesses.jsonl")
+
     turns: list = []
     if state:
         Path(state).mkdir(parents=True, exist_ok=True)
@@ -566,6 +583,7 @@ def from_environment() -> FastAPI:
         quota_timeline=Path(quota) if quota else None,
         chat_events=turns,
         chat_timeline=Path(chat) if chat else None,
+        business_timeline=Path(businesses) if businesses else None,
         claims_dsn=os.environ.get("QEVIK_CLAIMS_DSN", ""),
         require_atomic_claims=os.environ.get(
             "QEVIK_REQUIRE_ATOMIC_CLAIMS", "").strip().lower()

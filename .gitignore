@@ -113,3 +113,7 @@ apps/public/dist/
 .qevik-vault.json
 *.vault.json
 vault/
+
+# Screenshots from infra/screenshot_console.py. Regenerated on demand and
+# large; the design decision lives in the CSS, not in a PNG.
+.screenshots/

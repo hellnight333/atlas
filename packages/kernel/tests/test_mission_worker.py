@@ -44,13 +44,28 @@ FAILING = Acceptance(check=lambda mission, outcome: (False, "2 tests failed"))
 
 
 def _queued(tenant=A, *, approval_required=False):
+    """A mission a worker may take, reached the way a real one is.
+
+    This used to rely on `attach_plan` honouring `approval_required=False` and
+    queueing the plan directly — which was the defect: the planner decided its
+    own authorisation. Policy decides now, and this plan is unpriced, names no
+    agent and writes outside the reviewed-free paths, so policy holds it.
+
+    So the fixture approves it, which is what actually happens. A fixture that
+    routed around approval would be testing a path production does not have.
+    """
     mission, first = create(tenant=tenant, title="Build a thing",
                             requested_by="ayoub")
     mission, second = transition(mission, MissionStatus.PLANNING, tenant=tenant)
     plan = Plan(goal="a thing", approval_required=approval_required,
                 steps=(PlanStep(order=1, title="x", files=("README.md",)),))
     mission, third = attach_plan(mission, plan, tenant=tenant)
-    return mission, [first, second, third]
+    events = [first, second, third]
+    if not approval_required and mission.status is MissionStatus.AWAITING_APPROVAL:
+        mission, fourth = transition(mission, MissionStatus.QUEUED, tenant=tenant,
+                                     actor="ayoub", note="approved by a person")
+        events.append(fourth)
+    return mission, events
 
 
 def _worker(behaviour=Behaviour.SUCCESS, acceptance=PASSING, *, name="w1",

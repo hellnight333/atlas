@@ -28,6 +28,7 @@ from uuid import uuid4
 from ..opportunity.models import BusinessEvent
 from ..opportunity.tenancy import TenantId, owns
 from ..opportunity.tenancy import require as _require_tenant
+from . import policy
 from .models import (
     CLAIMABLE,
     AgentInvocation,
@@ -123,21 +124,33 @@ def transition(mission: Mission, to: MissionStatus, *, tenant: TenantId | None,
 
 
 def attach_plan(mission: Mission, plan: Plan, *, tenant: TenantId | None,
-                actor: str = "agent") -> tuple[Mission, BusinessEvent]:
-    """Record a proposed plan and route it by whether policy needs a human.
+                actor: str = "agent", agent_id: str = "") -> tuple[Mission, BusinessEvent]:
+    """Record a proposed plan and route it by what **policy** decides.
 
     The plan is the safety boundary: arbitrary text never becomes execution, it
     becomes something a person can read first. A plan whose own analysis found
     blockers goes to BLOCKED rather than to a queue.
+
+    This routed on `plan.approval_required` — a field set by whatever produced
+    the plan. `FakeCodingAgent` sets it to `False`, so its plans went straight to
+    QUEUED with no approval at all, and an LLM emitting the same value would
+    have been obeyed identically. That is the model authorising its own work.
+
+    `mission.policy.decide()` now answers instead: deterministic, deny by
+    default, and able only to be *raised* by the planner's request. The verdict
+    is recorded on the transition so "why did this need a person" has an answer
+    somebody can check.
     """
     if plan.blockers:
         return transition(mission, MissionStatus.BLOCKED, tenant=tenant,
                           actor=actor, plan=plan, blockers=plan.blockers,
                           note="planning found blockers")
-    destination = (MissionStatus.AWAITING_APPROVAL if plan.approval_required
+
+    verdict = policy.decide(plan, agent_id=agent_id)
+    destination = (MissionStatus.AWAITING_APPROVAL if verdict.needs_a_person
                    else MissionStatus.QUEUED)
     return transition(mission, destination, tenant=tenant, actor=actor, plan=plan,
-                      note="plan attached")
+                      note=f"plan attached; policy: {verdict.because}")
 
 
 def claim(mission: Mission, *, worker: str, tenant: TenantId | None

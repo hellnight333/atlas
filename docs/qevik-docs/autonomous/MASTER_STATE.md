@@ -127,6 +127,17 @@ store with a list on exactly the first run that needed it.
 
 | Item | Status | Evidence |
 |---|---|---|
+| **Mobile control experience** | PARTIAL — dashboard done | `MOBILE_CONSOLE.md`. Answer-first lead in the display face, four thumb-reachable destinations, brand teal replacing a generic admin blue. Verified by reading screenshots at 390×844 and 1280×900. Found three real defects including `COST` rendering `undefined` — and worse, `0` where nothing was priced, which reads as *free*. Mission detail, Chat and Credentials render acceptably but have not had the same pass |
+| **Test feedback loop** | IMPROVED | `pytest -n 6` runs the suite in **2:15** against 7:00 serial. Seven tests fail under parallelism from shared state and pass serially, so `-n` is for iteration and the serial run remains the gate. The isolation issue is recorded, not fixed |
+
+| Item | Status | Evidence |
+|---|---|---|
+| **Deterministic policy above the planner** | OPERATIONAL | `POLICY_ABOVE_THE_PLANNER.md`. `attach_plan` routed on `Plan.approval_required` — a field the *planner* sets, and `FakeCodingAgent` sets it to `False`, so its plans reached QUEUED with nobody asked. `mission/policy.py` decides now: deny by default, three requirements (NONE / EXECUTION / ARTEFACT), and the planner may only raise the bar. A source test forbids it importing a model, a network client, `random` or `time` |
+| **Business memory is durable** | OPERATIONAL | `businesses.jsonl`. `business_events` was a plain list in production, so a restart erased the entire history of every business while the businesses remained |
+| **Provider-backed missions** | BLOCKED_EXTERNAL_PROVIDER | Not a project blocker. Wired and proven to the provider's auth boundary; the single configured DashScope key is rejected by the provider. No further capacity spent on it |
+
+| Item | Status | Evidence |
+|---|---|---|
 | **One credential boundary** | OPERATIONAL | `CREDENTIAL_BOUNDARY.md`. `credentials/location.py` is the only module that names a credential file; `QEVIK_VAULT` and `--vault` are gone. A source-reading test fails on any literal elsewhere **and** on any caller that stops asking. 16/16 live with both processes restarted, no second store, no secret on disk |
 | **Agent-to-agent conversation persistence** | NOT_REQUIRED (guarded) | Nothing on the live path constructs an `Exchange` — a mission runs single-agent through registry → adapter → tools → sandbox. `test_agent_conversation_persistence.py` fails the moment a producer appears and names the fold to use. Distinct from user chat, which **is** persisted in `chat.jsonl` |
 | **Second worker** | NOT ADDED, deliberately | One worker, empty queue, no throughput requirement. Two workers racing one mission is already proven 7/7; adding a permanent second would be a number, not a capability |

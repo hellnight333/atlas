@@ -37,13 +37,25 @@ A, B = "tenant-alpha", "tenant-beta"
 
 
 def _queued(tenant=A):
+    """A queued mission, reached through approval rather than around it.
+
+    `attach_plan` used to honour `approval_required=False` and queue directly.
+    Policy decides now and holds this plan — it is unpriced, names no agent and
+    writes to `themes/clean.py`. So a person approves it, which is the path
+    production actually has.
+    """
     mission, first = create(tenant=tenant, title="Build multi-page support",
                             requested_by="ayoub")
     mission, second = transition(mission, MissionStatus.PLANNING, tenant=tenant)
     plan = Plan(goal="Multi-page", approval_required=False,
                 steps=(PlanStep(order=1, title="Add nav", files=("themes/clean.py",)),))
     mission, third = attach_plan(mission, plan, tenant=tenant)
-    return mission, [first, second, third]
+    events = [first, second, third]
+    if mission.status is MissionStatus.AWAITING_APPROVAL:
+        mission, fourth = transition(mission, MissionStatus.QUEUED, tenant=tenant,
+                                     actor="ayoub", note="approved by a person")
+        events.append(fourth)
+    return mission, events
 
 
 # ============================================ the shortcut is refused
@@ -225,11 +237,15 @@ def test_history_keeps_every_transition() -> None:
     events.append(claimed)
 
     entries = history(events, mission.id, tenant=A)
-    assert [e["status"] for e in entries] == ["draft", "planning", "queued",
+    # `awaiting_approval` is in the record now because approval is a real step:
+    # policy decides whether a person is needed, and the plan no longer
+    # authorises itself straight into the queue.
+    assert [e["status"] for e in entries] == ["draft", "planning",
+                                              "awaiting_approval", "queued",
                                               "processing"]
     # And folding gives the current state without losing the log.
     assert fold(events, tenant=A)[0]["status"] == "processing"
-    assert len(history(events, mission.id, tenant=A)) == 4
+    assert len(history(events, mission.id, tenant=A)) == 5
 
 
 def test_the_fold_is_the_current_state_not_the_first_one() -> None:
@@ -288,5 +304,9 @@ def test_history_reads_forwards_whatever_order_it_arrived_in() -> None:
     mission, claimed = claim(mission, worker="w1", tenant=A)
 
     entries = history([claimed, *events], mission.id, tenant=A)
-    assert [e["status"] for e in entries] == ["draft", "planning", "queued",
+    # `awaiting_approval` is in the record now because approval is a real step:
+    # policy decides whether a person is needed, and the plan no longer
+    # authorises itself straight into the queue.
+    assert [e["status"] for e in entries] == ["draft", "planning",
+                                              "awaiting_approval", "queued",
                                               "processing"]

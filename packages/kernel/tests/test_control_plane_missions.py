@@ -30,12 +30,23 @@ A, B = "tenant-alpha", "tenant-beta"
 
 
 def _mission(title: str, tenant=A, *, approval_required=False):
+    """A queued mission, reached through approval rather than around it.
+
+    Policy, not the plan's own flag, decides whether a person is needed — so
+    this approves what policy holds instead of relying on a planner that used to
+    be able to authorise itself.
+    """
     mission, first = create(tenant=tenant, title=title, requested_by="ayoub")
     mission, second = transition(mission, MissionStatus.PLANNING, tenant=tenant)
     plan = Plan(goal=f"goal for {title}", approval_required=approval_required,
                 steps=(PlanStep(order=1, title="step"),))
     mission, third = attach_plan(mission, plan, tenant=tenant)
-    return mission, [first, second, third]
+    events = [first, second, third]
+    if not approval_required and mission.status is MissionStatus.AWAITING_APPROVAL:
+        mission, fourth = transition(mission, MissionStatus.QUEUED, tenant=tenant,
+                                     actor="ayoub", note="approved by a person")
+        events.append(fourth)
+    return mission, events
 
 
 # ============================================ ordering surfaces the blocked
@@ -138,8 +149,11 @@ def test_detail_carries_the_whole_timeline() -> None:
 
     found = detail(events, mission.id, tenant=A)
     assert found is not None
+    # `awaiting_approval` is in the timeline now: policy decides whether a
+    # person is needed, so approval is a step the record shows rather than one
+    # the planner skipped by setting a flag on its own plan.
     assert [entry["status"] for entry in found["timeline"]] == [
-        "draft", "planning", "queued", "processing"]
+        "draft", "planning", "awaiting_approval", "queued", "processing"]
     assert found["plan"]["goal"] == "goal for traceable"
 
 
