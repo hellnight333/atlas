@@ -428,3 +428,61 @@ def test_the_planner_marks_a_provider_failure_differently_from_a_missing_one(
                                credentials=app.state.credentials)
     assert proposal.plan.blockers[0].kind == planner.NO_MODEL
     assert planner.PLANNING_FAILED != planner.NO_MODEL
+
+
+# ============================================ a rejected key is not a missing one
+
+def test_a_provider_refusing_a_key_is_not_reported_as_a_missing_key(
+        tmp_path, monkeypatch) -> None:
+    """These need opposite actions from the person reading the screen.
+
+    "Add a model credential" is useless advice to somebody who already added
+    one, and it sends them to re-enter a key that is present and working as
+    intended — the provider is the one refusing it.
+    """
+    from atlas_kernel.chat import planner, service
+    from atlas_kernel.credentials.location import paths_for
+    from atlas_kernel.credentials.service import CredentialService, Status
+    from atlas_kernel.credentials.vault import FileSecretStore, Vault
+    from atlas_kernel.mission.timeline import Timeline
+
+    monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
+    where = paths_for(tmp_path)
+    records = Timeline(where.records)
+    credentials = CredentialService(Vault(FileSecretStore(where.vault)),
+                                    events=records.read(), sink=records.append)
+    conversation, _ = service.start(tenant="t1", text="Add a dark mode toggle.",
+                                    started_by="ayoub")
+
+    absent = planner.propose(conversation, tenant="t1", credentials=credentials)
+    assert absent.plan.blockers[0].kind == planner.NO_MODEL
+
+    credentials.store(provider="qwen", tenant="t1", secret="sk-not-a-real-key")
+    credentials.verify(provider="qwen", tenant="t1",
+                       probe=lambda _: (Status.INVALID_CREDENTIAL, "refused"))
+
+    refused = planner.propose(conversation, tenant="t1", credentials=credentials)
+    assert refused.plan.blockers[0].kind == planner.EXTERNAL_PROVIDER
+    assert "qwen" in refused.plan.blockers[0].detail
+    assert "not a missing credential" in refused.plan.blockers[0].action
+
+
+def test_neither_case_invents_a_plan(tmp_path, monkeypatch) -> None:
+    """The rule the whole planner rests on: a plan is produced by a model that
+    saw the request, or it is a blocker. There is no third kind."""
+    from atlas_kernel.chat import planner, service
+    from atlas_kernel.credentials.location import paths_for
+    from atlas_kernel.credentials.service import CredentialService
+    from atlas_kernel.credentials.vault import FileSecretStore, Vault
+
+    monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
+    where = paths_for(tmp_path)
+    credentials = CredentialService(Vault(FileSecretStore(where.vault)))
+    conversation, _ = service.start(tenant="t1", text="Add a dark mode toggle.",
+                                    started_by="ayoub")
+
+    proposal = planner.propose(conversation, tenant="t1",
+                               credentials=credentials)
+    assert proposal.blocked is True
+    assert proposal.plan.steps == ()
+    assert proposal.model == "", "no model may be named when none was reached"

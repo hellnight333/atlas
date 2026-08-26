@@ -81,7 +81,61 @@ FIXTURES: dict[str, object] = {
         "counts": {"NOW": 1, "NEXT": 0, "SCHEDULED": 0, "WAITING": 1, "BLOCKED": 0},
         "dispatchable": ["mission-000000000002"],
         "note": "WAITING resolves on its own; BLOCKED never will."},
-    "/api/chat": {"conversations": []},
+    "/api/chat": {"conversations": [
+        {"conversation_id": "conv-000000000001",
+         "title": "Add this feature: record approval wait time",
+         "status": "plan_proposed", "at": "2026-08-26T09:00:00+00:00",
+         "mission_id": ""}]},
+    # A conversation whose plan is only a blocker — the state this deployment is
+    # actually in, and the one the screen most has to get right.
+    "/api/chat/conv-000000000001": {
+        "conversation_id": "conv-000000000001",
+        "title": "Add this feature: record approval wait time",
+        "status": "plan_proposed", "mission_id": "",
+        "plan": {
+            "goal": "", "why": "", "steps": [], "estimated_cost": None,
+            "cost_status": "UNKNOWN",
+            "blockers": [{
+                "kind": "BLOCKED_EXTERNAL_PROVIDER",
+                "detail": "A credential for qwen is configured and the provider "
+                          "is refusing it, so no model could be reached. Qevik "
+                          "will not invent a plan without one.",
+                "action": "This is a problem at qwen, not a missing credential. "
+                          "Nothing here can fix it."}]},
+        "messages": [
+            {"role": "user", "text": "Add this feature: record how long each "
+                                     "mission spends waiting for approval.",
+             "at": "2026-08-26T09:00:00+00:00", "provider": "", "model": ""},
+            {"role": "system", "text": "This cannot proceed yet:\n  "
+                                       "[BLOCKED_EXTERNAL_PROVIDER] the provider "
+                                       "is refusing the configured credential",
+             "at": "2026-08-26T09:00:04+00:00", "provider": "", "model": ""}]},
+    # The other state that matters: a real plan a person must decide on. This is
+    # the screen where somebody takes responsibility for what runs against
+    # Qevik's own source, so it is the one that must not be skimmable.
+    "/api/chat/conv-000000000002": {
+        "conversation_id": "conv-000000000002",
+        "title": "Add this feature: record approval wait time",
+        "status": "plan_proposed", "mission_id": "",
+        "plan": {
+            "goal": "Record how long each mission waits for approval",
+            "why": "Sample plan. Nothing here was produced by a model.",
+            "estimated_cost": 0.42, "cost_status": "ESTIMATED",
+            "security_impact": "No new capability; reads existing timestamps.",
+            "test_plan": "A unit test asserting the recorded gap.",
+            "rollback": "Revert the commit; the field is additive.",
+            "blockers": [],
+            "steps": [
+                {"order": 1, "title": "record the approval moment",
+                 "why": "the gap needs both ends",
+                 "files": ["packages/kernel/atlas_kernel/mission/models.py"]},
+                {"order": 2, "title": "show it on mission detail",
+                 "why": "a number nobody sees is not a feature",
+                 "files": ["apps/control/src/index.html"]}]},
+        "messages": [
+            {"role": "user", "text": "Add this feature: record how long each "
+                                     "mission spends waiting for approval.",
+             "at": "2026-08-26T09:00:00+00:00", "provider": "", "model": ""}]},
     "/api/credentials": {"credentials": [], "connected": [], "action_required": [],
                          "vault": {"sealed": False, "locked": False}, "note": "sample"},
     "/api/status": {"version": "sample", "changed": False},
@@ -241,7 +295,11 @@ def main() -> int:
     written = []
     try:
         for name, (width, height) in VIEWPORTS.items():
-            target = out / f"console-{args.page}-{name}.png"
+            # A page like `chat/conv-1` would otherwise become a directory in
+            # the filename, and Chrome writes nothing to a path that does not
+            # exist — reported as "nothing was captured" with no reason.
+            slug = args.page.replace("/", "-") or "root"
+            target = out / f"console-{slug}-{name}.png"
             target.unlink(missing_ok=True)
             # The iframe fixes the layout width; the window only has to be big
             # enough to hold it.

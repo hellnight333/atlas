@@ -127,6 +127,11 @@ store with a list on exactly the first run that needed it.
 
 | Item | Status | Evidence |
 |---|---|---|
+| **Self-improvement: "add this feature"** | OPERATIONAL (deterministic agent) | `SELF_IMPROVEMENT.md`. Phone → request → conversation → plan **or** explicit blocker → policy → approval → mission → worker → report, on the existing pipeline with no second orchestrator. 26/26 acceptance with real processes and real restarts; both screens read at 390×844 and 1280×900. A model-backed plan needs a working provider and no architectural change |
+| **`BLOCKED_EXTERNAL_PROVIDER`** | OPERATIONAL | A rejected credential reported as `PENDING_CREDENTIAL` — *"add a model credential"* — which is useless advice to somebody who already added one. Now classified honestly and drawn differently from a local failure, because a provider refusing is not the deployment's fault |
+
+| Item | Status | Evidence |
+|---|---|---|
 | **Mobile control experience** | PARTIAL — dashboard done | `MOBILE_CONSOLE.md`. Answer-first lead in the display face, four thumb-reachable destinations, brand teal replacing a generic admin blue. Verified by reading screenshots at 390×844 and 1280×900. Found three real defects including `COST` rendering `undefined` — and worse, `0` where nothing was priced, which reads as *free*. Mission detail, Chat and Credentials render acceptably but have not had the same pass |
 | **Test feedback loop** | IMPROVED | `pytest -n 6` runs the suite in **2:15** against 7:00 serial. Seven tests fail under parallelism from shared state and pass serially, so `-n` is for iteration and the serial run remains the gate. The isolation issue is recorded, not fixed |
 

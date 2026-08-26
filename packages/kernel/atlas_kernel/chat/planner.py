@@ -40,6 +40,23 @@ log = logging.getLogger(__name__)
 NO_MODEL = "PENDING_CREDENTIAL"
 PLANNING_FAILED = "PENDING_PROVIDER"
 
+#: A credential **is** configured and the provider will not accept it.
+#:
+#: Distinct from `PENDING_CREDENTIAL`, and the distinction is the whole point:
+#: that one says "add a credential", which is useless advice to somebody who
+#: already added one. This says the key is present and the provider rejected it,
+#: which is a fact about the provider rather than about the deployment.
+#:
+#: It is also not `PENDING_PROVIDER` — that means the provider was reached and
+#: gave a bad answer, which is worth retrying. This is not.
+EXTERNAL_PROVIDER = "BLOCKED_EXTERNAL_PROVIDER"
+
+#: Credential statuses that mean the provider itself refused. A credential in
+#: any of these states is configured; the problem is on the other end.
+_PROVIDER_REFUSED = frozenset({
+    "INVALID_CREDENTIAL", "INSUFFICIENT_PERMISSION", "RATE_LIMITED",
+})
+
 
 class Proposal:
     """A plan and the provenance of it. Never one without the other."""
@@ -90,6 +107,20 @@ def propose(conversation: Conversation, *, tenant: TenantId | None,
     registry = registry_for(credentials, tenant=tenant)
     spec, why = chosen_for(registry, selection or Selection(), Role.PLANNING)
     if spec is None:
+        # Which of the two this is matters more than the fact of it. A rejected
+        # key and an absent one look identical from here and need opposite
+        # actions from the person reading the screen.
+        refused = _refused_providers(credentials, tenant)
+        if refused:
+            named = ", ".join(sorted(refused))
+            return _blocked(
+                f"A credential for {named} is configured and the provider is "
+                "refusing it, so no model could be reached. Qevik will not "
+                "invent a plan without one — a template plan looks like "
+                "understanding and is not.",
+                f"This is a problem at {named}, not a missing credential. "
+                "Nothing here can fix it.",
+                kind=EXTERNAL_PROVIDER, reason=why)
         wanted = ", ".join(sorted(set(PROVIDER_CREDENTIAL.values())))
         return _blocked(
             f"No model is available for planning: {why}. Qevik will not "
@@ -135,6 +166,25 @@ def propose(conversation: Conversation, *, tenant: TenantId | None,
             kind=PLANNING_FAILED, reason="empty plan")
 
     return Proposal(plan, provider=provider, model=spec.id, reason=why)
+
+
+def _refused_providers(credentials: CredentialService,
+                       tenant: TenantId) -> set[str]:
+    """Model providers whose credential exists and is being refused.
+
+    Only the providers that could actually plan: a rejected Stripe key says
+    nothing about whether a plan can be produced, and naming it here would send
+    somebody to fix the wrong thing.
+    """
+    refused: set[str] = set()
+    for provider in sorted(set(PROVIDER_CREDENTIAL)):
+        try:
+            record = credentials.record(provider=provider, tenant=tenant)
+        except Exception:            # noqa: BLE001 - a sealed vault is not a plan blocker
+            continue
+        if record is not None and record.status.value in _PROVIDER_REFUSED:
+            refused.add(provider)
+    return refused
 
 
 def _models_by_provider() -> dict[str, tuple[str, ...]]:
