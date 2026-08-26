@@ -92,14 +92,30 @@ class Verdict(BaseModel):
 
 
 def decide(plan: Plan, *, agent_id: str = "", registry: Registry | None = None,
-           tenant_is_metered: bool = True) -> Verdict:
+           tenant_is_metered: bool = True,
+           modifies_qevik_itself: bool = True) -> Verdict:
     """Whether this plan needs a person, and which kind of approval.
 
     `agent_id` names who would carry it out. Absent, the answer is EXECUTION:
     work whose performer is unknown has an unknown blast radius, and the
     architecture's own rule is that an unknown blast radius is the one thing
     approval cannot work around.
+
+    `modifies_qevik_itself` defaults to **True**, and a caller has to state
+    otherwise. The production worker's `--repository` is Qevik's own source, so
+    every mission today edits the system that is deciding whether to allow it. A
+    cheap docs-only plan satisfied every rule below and reached the queue with
+    nobody asked — self-modification arriving as a side effect of a path
+    allow-list rather than as anybody's decision.
     """
+    # 1a. Changing Qevik itself. Above every other rule, including the cheap
+    #     paths: "reversible" is doing a lot of work when the thing being
+    #     changed is the thing that decides what reversible means.
+    if modifies_qevik_itself:
+        return _with_planner(
+            plan, Requirement.EXECUTION,
+            "this changes Qevik's own source, and Qevik does not authorise "
+            "changes to Qevik")
     # 1. Irreversible work always needs approval of the exact artefact. Checked
     #    first because nothing below can lower it — an email cannot be unsent
     #    however cheap it was.

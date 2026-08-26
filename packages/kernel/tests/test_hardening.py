@@ -709,3 +709,41 @@ def test_backup_export_scales_to_a_project() -> None:
     backups.export_project(project_id)
     elapsed = time.perf_counter() - start
     assert elapsed < SMOKE_BUDGET_SECONDS, f"project backup took {elapsed:.3f}s"
+
+
+def test_recovery_survives_an_execution_whose_worker_is_gone() -> None:
+    """A vanished worker is the situation recovery exists for.
+
+    `_release_placement` raised `WorkerRegistryError` when the worker record had
+    been removed, so `recover_orphaned_executions` aborted on the first such
+    execution and requeued **none** of the others. Recovery failing hardest
+    precisely when something has been lost is the wrong way round.
+
+    Found because this test failed in isolation and passed in a full run: the
+    orphan referencing a missing worker was left behind by a different test, so
+    whether recovery worked depended on execution order.
+    """
+    missing_worker = _orphaned_execution()
+    record = repository.get_runtime_execution(missing_worker)
+    assert record is not None
+    record.worker_id = "worker-that-was-removed"
+    record.lease_id = _unique("lease")
+    record.reservation_id = _unique("reservation")
+    repository.update_runtime_execution(record)
+
+    alongside = _orphaned_execution()
+
+    actions = recovery.recover_orphaned_executions()
+    recovered = {a.target_id for a in actions}
+    assert missing_worker in recovered
+    assert alongside in recovered, (
+        "one execution with a missing worker must not stop the others being "
+        "recovered")
+
+    restored = repository.get_runtime_execution(missing_worker)
+    assert restored is not None
+    assert restored.status is RuntimeExecutionStatus.QUEUED
+    # Cleared even though the release failed. Leaving it set would wedge the
+    # execution: it could never be released, because the release is what fails.
+    assert restored.lease_id is None
+    assert restored.worker_id is None

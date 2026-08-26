@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from ..cluster.events import ExecutionRecovered
+from ..cluster.lease_manager import LeaseManagerError
+from ..cluster.worker_registry import WorkerRegistryError
 from ..models import CapabilityRequest, Job, JobStatus, Run
 from ..repository import AtlasRepository
 from ..worker import Worker
@@ -34,6 +37,8 @@ from .schedule_models import (
     RuntimeRetryPolicy,
     ScheduleQueueEntry,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -467,13 +472,36 @@ class AgentRuntime:
         permanently shrink cluster capacity."""
         if self.placement_gate is None or execution.lease_id is None:
             return
-        self.placement_gate.release(
-            worker_id=execution.worker_id,
-            reservation_id=execution.reservation_id,
-            lease_id=execution.lease_id,
-            reason=reason,
-            expired=expired,
-        )
+        try:
+            self.placement_gate.release(
+                worker_id=execution.worker_id,
+                reservation_id=execution.reservation_id,
+                lease_id=execution.lease_id,
+                reason=reason,
+                expired=expired,
+            )
+        except (WorkerRegistryError, LeaseManagerError) as already_gone:
+            # The worker record or the lease is already gone. Neither is an
+            # error here — both are the exact situation recovery exists for, and
+            # a worker that no longer exists took its capacity with it, so there
+            # is no slot to return.
+            #
+            # These raised, which meant `recover_orphaned_executions` aborted on
+            # the first execution whose worker or lease had been removed and
+            # requeued **none** of the others. Recovery failing hardest
+            # precisely when something has been lost is the wrong way round.
+            #
+            # Both, not just the worker: a lease is cleaned up independently, so
+            # an orphan can outlive either one. Catching only the first meant
+            # the same bug survived under a different exception.
+            logger.warning(
+                "releasing a placement whose worker or lease is already gone",
+                extra={"execution_id": execution.execution_id,
+                       "worker_id": execution.worker_id, "reason": reason,
+                       "detail": str(already_gone)},
+            )
+        # Cleared either way. Leaving the lease set would wedge the execution:
+        # it could never be released, because the release is what is failing.
         execution.lease_id = None
         execution.reservation_id = None
 

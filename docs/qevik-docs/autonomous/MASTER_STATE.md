@@ -132,6 +132,7 @@ store with a list on exactly the first run that needed it.
 
 | Item | Status | Evidence |
 |---|---|---|
+| **Qevik does not authorise Qevik** | OPERATIONAL | The production worker's repository *is* Qevik's own source, so every mission edits the system deciding whether to allow it — and a cheap docs-only plan reached the queue unattended. Now checked above every other rule, defaulting to require approval. This is the precondition for self-improvement, not an obstacle to it |
 | **Deterministic policy above the planner** | OPERATIONAL | `POLICY_ABOVE_THE_PLANNER.md`. `attach_plan` routed on `Plan.approval_required` — a field the *planner* sets, and `FakeCodingAgent` sets it to `False`, so its plans reached QUEUED with nobody asked. `mission/policy.py` decides now: deny by default, three requirements (NONE / EXECUTION / ARTEFACT), and the planner may only raise the bar. A source test forbids it importing a model, a network client, `random` or `time` |
 | **Business memory is durable** | OPERATIONAL | `businesses.jsonl`. `business_events` was a plain list in production, so a restart erased the entire history of every business while the businesses remained |
 | **Provider-backed missions** | BLOCKED_EXTERNAL_PROVIDER | Not a project blocker. Wired and proven to the provider's auth boundary; the single configured DashScope key is rejected by the provider. No further capacity spent on it |

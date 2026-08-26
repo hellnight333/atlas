@@ -41,6 +41,28 @@ indistinguishable from policy.
 live" are different decisions made at different times. Collapsing them turns an
 execution approval into permission to publish.
 
+### Qevik does not authorise Qevik
+
+Checked **above every other rule**, including the cheap paths.
+
+The production worker's `--repository` is `/opt/qevik/atlas` — Qevik's own
+source. So every mission today edits the system that is deciding whether to
+allow it, and a cheap docs-only plan satisfied every rule below and reached the
+queue with nobody asked. Self-modification arrived as a side effect of a path
+allow-list rather than as anybody's decision.
+
+"Reversible" is doing a lot of work when the thing being changed is the thing
+that decides what reversible means.
+
+`modifies_qevik_itself` defaults to **True** — a caller has to state otherwise
+to get the cheaper path, so forgetting the argument produces approval rather
+than a bypass. A test asserts that default, because a safe default that drifts
+to `False` is a bypass nobody notices.
+
+This is the precondition for the self-improvement feature, not an obstacle to
+it: "tell Qevik to add a feature" is exactly a mission that edits Qevik, and it
+must reach a person before it runs.
+
 ### The rules
 
 1. **Irreversible work always needs artefact approval.** Checked first, because

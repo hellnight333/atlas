@@ -32,6 +32,16 @@ from atlas_kernel.mission.policy import (
 TENANT = "tenant-a"
 
 
+def _decide(plan: Plan, **over):
+    """The cheaper rules are all about *customer* work.
+
+    Qevik changing Qevik is answered before any of them, so a test of
+    the cost or path rules has to say it is not that — otherwise it
+    would pass for the wrong reason.
+    """
+    return decide(plan, modifies_qevik_itself=False, **over)
+
+
 def _plan(**over) -> Plan:
     base = {"goal": "do the thing", "approval_required": False,
             "estimated_cost": 1.0,
@@ -72,7 +82,10 @@ def test_the_transition_records_which_rule_decided() -> None:
         mission, _plan(estimated_cost=None), tenant=TENANT,
         agent_id="implementer")
     assert "policy:" in event.detail["note"]
-    assert "unpriced" in event.detail["note"]
+    # Every mission today edits Qevik's own source, so that is the rule that
+    # answers first and the note says so. The reason recorded has to be the one
+    # that actually decided, not the first one a reader would guess.
+    assert "does not authorise changes to Qevik" in event.detail["note"]
 
 
 def test_approving_in_chat_still_works_when_policy_already_queued_it() -> None:
@@ -110,11 +123,51 @@ def test_and_when_policy_holds_it_the_person_still_queues_it() -> None:
     assert mission.status is MissionStatus.QUEUED
 
 
+# ============================================ Qevik does not authorise Qevik
+
+def test_changing_qevik_itself_always_needs_a_person() -> None:
+    """The production worker's `--repository` is `/opt/qevik/atlas`, so every
+    mission today edits the system deciding whether to allow it.
+
+    A cheap docs-only plan satisfied every other rule and reached the queue with
+    nobody asked. Self-modification is not something that should arrive as a
+    side effect of a path allow-list.
+    """
+    verdict = decide(_plan(), agent_id="implementer")
+    assert verdict.needs_a_person is True
+    assert "does not authorise changes to Qevik" in verdict.because
+
+
+def test_it_outranks_every_cheaper_rule() -> None:
+    """"Reversible" is doing a lot of work when the thing being changed is the
+    thing that decides what reversible means."""
+    cheapest = _plan(estimated_cost=0.0,
+                     steps=(PlanStep(order=1, title="note",
+                                     files=("docs/a.md",)),))
+    assert decide(cheapest, agent_id="implementer").needs_a_person is True
+
+
+def test_customer_work_is_not_held_by_this_rule() -> None:
+    """The negative control. If it blocked everything, the rule would be a
+    stop switch rather than a boundary — and the cheap path below would be
+    unreachable, which the remaining tests in this file would not notice."""
+    assert decide(_plan(), agent_id="implementer",
+                  modifies_qevik_itself=False).requirement is Requirement.NONE
+
+
+def test_the_safe_default_is_the_cautious_one() -> None:
+    """A caller that forgets the argument gets approval, not a bypass."""
+    import inspect
+
+    signature = inspect.signature(decide)
+    assert signature.parameters["modifies_qevik_itself"].default is True
+
+
 # ============================================ the planner may only raise it
 
 def test_a_planner_asking_for_review_gets_review() -> None:
     """More cautious than the rule is allowed."""
-    verdict = decide(_plan(approval_required=True), agent_id="implementer")
+    verdict = _decide(_plan(approval_required=True), agent_id="implementer")
     assert verdict.needs_a_person is True
     assert verdict.planner_raised_it is True
     assert "asked for review anyway" in verdict.because
@@ -123,8 +176,8 @@ def test_a_planner_asking_for_review_gets_review() -> None:
 def test_and_that_is_visible_rather_than_indistinguishable() -> None:
     """A planner that always asks should be noticeable, not silently identical
     to policy requiring it."""
-    by_policy = decide(_plan(estimated_cost=None), agent_id="implementer")
-    by_planner = decide(_plan(approval_required=True), agent_id="implementer")
+    by_policy = _decide(_plan(estimated_cost=None), agent_id="implementer")
+    by_planner = _decide(_plan(approval_required=True), agent_id="implementer")
     assert by_policy.planner_raised_it is False
     assert by_planner.planner_raised_it is True
 
@@ -132,7 +185,7 @@ def test_and_that_is_visible_rather_than_indistinguishable() -> None:
 def test_the_same_plan_without_the_request_is_cleared() -> None:
     """The negative control. If everything needed approval the tests above
     would pass against a policy that is simply always yes."""
-    assert decide(_plan(), agent_id="implementer").requirement is Requirement.NONE
+    assert _decide(_plan(), agent_id="implementer").requirement is Requirement.NONE
 
 
 # ============================================ deny by default
@@ -140,39 +193,39 @@ def test_the_same_plan_without_the_request_is_cleared() -> None:
 def test_an_unnamed_agent_needs_approval() -> None:
     """Work whose performer is unknown has an unknown blast radius, and an
     unknown blast radius is the one thing approval cannot work around."""
-    verdict = decide(_plan(), agent_id="")
+    verdict = _decide(_plan(), agent_id="")
     assert verdict.requirement is Requirement.EXECUTION
     assert "blast radius is unknown" in verdict.because
 
 
 def test_an_agent_nobody_declared_is_treated_as_the_worst_case() -> None:
     """Not the best case. The registry is the record of what an agent may do."""
-    assert decide(_plan(), agent_id="not-in-the-registry"
+    assert _decide(_plan(), agent_id="not-in-the-registry"
                   ).requirement is Requirement.ARTEFACT
 
 
 def test_an_unpriced_plan_needs_approval_on_a_metered_tenant() -> None:
     """The same rule the scheduler applies: an unpriced call is not a free
     one."""
-    assert decide(_plan(estimated_cost=None), agent_id="implementer"
+    assert _decide(_plan(estimated_cost=None), agent_id="implementer"
                   ).requirement is Requirement.EXECUTION
 
 
 def test_an_unpriced_plan_is_ordinary_where_nothing_is_metered() -> None:
     """A self-hosted deployment with no plan configured must still work."""
-    assert decide(_plan(estimated_cost=None), agent_id="implementer",
+    assert _decide(_plan(estimated_cost=None), agent_id="implementer",
                   tenant_is_metered=False).requirement is Requirement.NONE
 
 
 def test_expensive_work_needs_approval() -> None:
-    verdict = decide(_plan(estimated_cost=COSTLY_UNITS + 1),
+    verdict = _decide(_plan(estimated_cost=COSTLY_UNITS + 1),
                      agent_id="implementer")
     assert verdict.requirement is Requirement.EXECUTION
     assert str(int(COSTLY_UNITS)) in verdict.because
 
 
 def test_writing_outside_the_reviewed_free_paths_needs_approval() -> None:
-    verdict = decide(_plan(steps=(PlanStep(order=1, title="edit",
+    verdict = _decide(_plan(steps=(PlanStep(order=1, title="edit",
                                            files=("infra/deploy.sh",)),)),
                      agent_id="implementer")
     assert verdict.requirement is Requirement.EXECUTION
@@ -183,7 +236,7 @@ def test_writing_outside_the_reviewed_free_paths_needs_approval() -> None:
 def test_the_reviewed_free_paths_really_are_free(prefix: str) -> None:
     """Each one, individually. A list where only the first entry works would
     pass a test that checked the list as a whole."""
-    assert decide(_plan(steps=(PlanStep(order=1, title="write",
+    assert _decide(_plan(steps=(PlanStep(order=1, title="write",
                                         files=(f"{prefix}thing.md",)),)),
                   agent_id="implementer").requirement is Requirement.NONE
 
@@ -194,7 +247,7 @@ def test_irreversible_work_needs_the_artefact_not_the_intention() -> None:
     """"Somebody agreed this work should happen" is not "somebody agreed to
     this exact output going live". Collapsing them turns an execution approval
     into permission to publish."""
-    verdict = decide(_plan(), agent_id="correspondent")
+    verdict = _decide(_plan(), agent_id="correspondent")
     assert verdict.requirement is Requirement.ARTEFACT
     assert Registry().get("correspondent").blast is Blast.IRREVERSIBLE
 
@@ -204,12 +257,12 @@ def test_irreversible_beats_every_cheaper_rule() -> None:
     at all — so neither the cost rule nor the path rule may clear it."""
     cheap = _plan(estimated_cost=0.0, steps=(PlanStep(order=1, title="draft",
                                                       files=("docs/a.md",)),))
-    assert decide(cheap, agent_id="correspondent"
-                  ).requirement is Requirement.ARTEFACT
+    assert _decide(cheap, agent_id="correspondent"
+                   ).requirement is Requirement.ARTEFACT
 
 
 def test_costly_work_needs_execution_approval() -> None:
-    assert decide(_plan(), agent_id="image-maker"
+    assert _decide(_plan(), agent_id="image-maker"
                   ).requirement is Requirement.EXECUTION
 
 
@@ -239,9 +292,9 @@ def test_policy_consults_no_model_and_nothing_outside_itself() -> None:
 def test_the_same_inputs_always_give_the_same_verdict() -> None:
     """What makes "the model proposed X and policy allowed it" checkable."""
     plan = _plan(estimated_cost=None)
-    first = decide(plan, agent_id="implementer")
+    first = _decide(plan, agent_id="implementer")
     for _ in range(20):
-        assert decide(plan, agent_id="implementer") == first
+        assert _decide(plan, agent_id="implementer") == first
 
 
 def test_attach_plan_no_longer_reads_the_planners_flag_to_route() -> None:
