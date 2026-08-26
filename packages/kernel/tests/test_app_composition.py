@@ -305,7 +305,25 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         source, re.I)
     assert literals == [], literals
     assert "sk-" not in source
-    assert Path(CONSOLE / "index.html").stat().st_size < 80_000
+    # A proxy for "still a thin arranger", not an architectural invariant. It
+    # is raised when a genuine surface is added and never to make a failure go
+    # away — the assertions below are the actual rule, and they got stricter at
+    # the same time this number moved for the opportunities view.
+    assert Path(CONSOLE / "index.html").stat().st_size < 88_000
+
+    # The real invariant: the console renders what the API returns and decides
+    # nothing. A threshold here is a second answer to a question the kernel
+    # already answers, and the one on screen is the untested one.
+    decisions = re.findall(
+        r"""(?:score|confidence|value|amount)\s*[<>]=?\s*[0-9]""", source)
+    assert decisions == [], (
+        f"the console compares {decisions} against a number. Ranking, "
+        "confidence and worth are decided in the kernel; a threshold here is a "
+        "second answer nobody tests.")
+
+    # It must not invent the words the evidence rules exist to prevent.
+    for invented in ("is new to Google", "definitely", "guaranteed"):
+        assert invented.lower() not in source.lower(), invented
 
 
 def test_the_console_asset_route_refuses_to_escape_its_directory(client) -> None:

@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from .models import Business
 
-STRONG_PREFIXES = ("place:", "domain:", "email:", "phone:")
+STRONG_PREFIXES = ("place:", "source:", "domain:", "email:", "phone:")
 WEAK_PREFIXES = ("name:",)
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -106,11 +106,37 @@ def place_id(business: Business) -> str | None:
     return str(value).strip() or None if value else None
 
 
+def source_keys(business: Business) -> list[str]:
+    """The stable ids the sources that reported this gave it.
+
+    A business a source records no website, phone or email for has **no strong
+    key at all**, and `resolve_business` matches on strong keys only — so a
+    nightly scan created a new company every night for every website-less
+    business. Its OpenStreetMap node id is a perfectly good identity; it was
+    simply not being used as one.
+
+    Namespaced by source (`source:openstreetmap:node/9002`) for two reasons.
+    Two providers draw ids from different spaces and could in principle name the
+    same string; and a key scoped to one source cannot accidentally merge
+    records that only two *different* sources have seen.
+
+    Deliberately **not** `place:`. That prefix carries "this is a different
+    physical location, and it overrides every other agreement" — the rule that
+    stopped Dr. Joy's three branches becoming one record. Giving every source id
+    that meaning would make two mapping providers unable to agree on one
+    business for ever, because their ids necessarily differ.
+    """
+    recorded = (business.metadata or {}).get("source_ids") or {}
+    return [f"source:{source}:{value}"
+            for source, value in sorted(recorded.items()) if value]
+
+
 def identity_keys(business: Business) -> list[str]:
     """Every key this business can be recognised by, strongest first."""
     keys: list[str] = []
     if place := place_id(business):
         keys.append(f"place:{place}")
+    keys.extend(source_keys(business))
     if domain := normalise_domain(business.website):
         keys.append(f"domain:{domain}")
     if email := normalise_email(business.email):

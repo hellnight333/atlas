@@ -62,6 +62,55 @@ FIXTURES: dict[str, object] = {
          "claimed_by": "worker-1"},
     ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
     "/api/missions/blockers": {"by_kind": {}},
+    # Two real shapes: one the source was silent about, one merely new. Both
+    # with UNKNOWN worth, because nothing has measured one.
+    "/api/discovery/opportunities": {
+        # Derived from the rows below, not typed independently: one row says
+        # `needs_approval` and a count that disagreed produced a screenshot of a
+        # state the API cannot return.
+        "counts": {"total": 2, "needing_approval": 1, "valued": 0},
+        "note": ("Every opportunity carries the evidence it rests on. An "
+                 "inference is labelled as one. A value of UNKNOWN means "
+                 "nobody measured it, and is not zero."),
+        "opportunities": [
+            {"id": "sig-1", "business_id": "b-1", "kind": "missing_service",
+             "source": "openstreetmap", "score": 0.598,
+             "detected_at": "2026-08-27T04:15:00+00:00",
+             "needs_approval": False,
+             "evidence_fingerprints": ["8c23957ade3bb410"],
+             "value": {"amount": None, "status": "UNKNOWN"},
+             "detail": {
+                 "observations": [{"statement": "openstreetmap records no "
+                                                "website for Marina Dental."}],
+                 "inferences": [{
+                     "statement": "The business may have no website, or may "
+                                  "have one this source does not record.",
+                     "confidence": 0.35, "is_an_inference": True,
+                     "would_be_wrong_if": "the business has a website that "
+                                          "openstreetmap simply does not list"}],
+                 "actions": [{"statement": "Check whether this business has a "
+                                           "website before treating it as a "
+                                           "prospect for one."}]}},
+            {"id": "sig-2", "business_id": "b-2", "kind": "new_business",
+             "source": "openstreetmap", "score": 0.585,
+             "detected_at": "2026-08-27T04:15:00+00:00",
+             "needs_approval": True,
+             "evidence_fingerprints": ["8c23957ade3bb410"],
+             "value": {"amount": None, "status": "UNKNOWN"},
+             "detail": {
+                 "observations": [{"statement": "Jumeirah Smile Studio appears "
+                                                "in openstreetmap (Dubai), and "
+                                                "Qevik had no record of it."}],
+                 "inferences": [{
+                     "statement": "A business Qevik has not seen before may be "
+                                  "worth assessing for the services Qevik offers.",
+                     "confidence": 0.3, "is_an_inference": True,
+                     "would_be_wrong_if": "it is already a customer under "
+                                          "another name, or it is closed"}],
+                 "actions": [{"statement": "Assess Jumeirah Smile Studio "
+                                           "against the services Qevik can "
+                                           "deliver."}]}},
+        ]},
     # Two rows on purpose: one merely new to Qevik and one the source actually
     # evidenced. The whole point of this screen is that those read differently.
     "/api/discovery": {
@@ -276,7 +325,31 @@ def _no_duplicate_keys() -> None:
             "so it proved nothing. Fix the check rather than removing it.")
 
 
+def _fixtures_agree_with_themselves() -> None:
+    """Refuse a fixture whose summary contradicts its own rows.
+
+    A count typed independently of the rows it counts is a screenshot of a page
+    the API cannot return — and the whole value of this harness is that what it
+    renders could actually happen. Caught once, when the header said "0 needing
+    you" above a row saying "needs you".
+    """
+    listed = FIXTURES.get("/api/discovery/opportunities") or {}
+    rows = listed.get("opportunities") or []
+    counts = listed.get("counts") or {}
+    if rows and counts:
+        real = sum(1 for row in rows if row.get("needs_approval"))
+        if counts.get("needing_approval") != real:
+            raise SystemExit(
+                f"the opportunities fixture says {counts.get('needing_approval')} "
+                f"need approval and {real} of its rows say so.")
+        if counts.get("total") != len(rows):
+            raise SystemExit(
+                f"the opportunities fixture says {counts.get('total')} total "
+                f"and carries {len(rows)} rows.")
+
+
 _no_duplicate_keys()
+_fixtures_agree_with_themselves()
 
 
 class Stub(BaseHTTPRequestHandler):

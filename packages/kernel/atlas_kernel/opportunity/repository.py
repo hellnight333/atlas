@@ -365,6 +365,101 @@ class OpportunityRepository:
             if row["observed_at"] else "",
         } for row in rows]
 
+    # ---------------------------------------------------------------- signals
+
+    def save_signal(self, signal, ranked, *,
+                    tenant: TenantId | None = None) -> bool:
+        """Store one detected opportunity. Returns whether it was new.
+
+        `False` means this business already has an open signal of this kind
+        from this source, so the nightly scan re-detected something already on
+        the operator's list. Not an error, and not an update either: the
+        detection that is on the list is the one that was made, and quietly
+        overwriting its score and evidence would rewrite what somebody is
+        looking at while they look at it.
+        """
+        payload = {
+            "id": signal.id, "tenant_id": str(tenant or ""),
+            "business_id": signal.business_id, "kind": signal.kind.value,
+            "source": signal.source, "scope": signal.scope,
+            "payload": json.dumps(signal.summary()),
+            "fingerprints": json.dumps(sorted(
+                {f for o in signal.observations for f in o.fingerprints})),
+            "score": ranked.score,
+            # `None` stays `None`. See the column comment: a DEFAULT 0 here
+            # would undo the whole cost_status rule from a schema definition.
+            "value_amount": signal.estimated_value,
+            "value_status": signal.value_status,
+            "needs_approval": not signal.is_actionable_without_a_person,
+            "detected_at": signal.created_at,
+        }
+        with SessionLocal() as session:
+            done = session.execute(
+                text("""
+                INSERT INTO atlas_signals (
+                    id, tenant_id, business_id, kind, source, scope, payload,
+                    evidence_fingerprints, score, value_amount, value_status,
+                    needs_approval, detected_at)
+                VALUES (
+                    :id, :tenant_id, :business_id, :kind, :source, :scope,
+                    :payload, :fingerprints, :score, :value_amount,
+                    :value_status, :needs_approval, :detected_at)
+                ON CONFLICT DO NOTHING
+                """),
+                payload)
+            session.commit()
+            return bool(done.rowcount)
+
+    def open_signals(self, *, limit: int = 25,
+                     tenant: TenantId | None = None) -> list[dict]:
+        """Detected opportunities, best first. Never demo rows.
+
+        Ordered by score then detected_at, both descending, with the id as the
+        final tiebreak so two reads of the same data give the same order.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT * FROM atlas_signals
+                WHERE state = 'open'
+                  AND (:tenant = '' OR tenant_id = :tenant)
+                ORDER BY score DESC NULLS LAST, detected_at DESC, id
+                LIMIT :limit
+                """),
+                {"limit": max(1, min(int(limit), 200)),
+                 "tenant": str(tenant or "")},
+            ).mappings().all()
+        return [self._signal_from_row(row) for row in rows]
+
+    def get_signal(self, signal_id: str, *,
+                   tenant: TenantId | None = None) -> dict | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT * FROM atlas_signals
+                WHERE id = :id AND (:tenant = '' OR tenant_id = :tenant)
+                """),
+                {"id": signal_id, "tenant": str(tenant or "")},
+            ).mappings().first()
+        return self._signal_from_row(row) if row else None
+
+    @staticmethod
+    def _signal_from_row(row) -> dict:
+        return {
+            "id": row["id"], "business_id": row["business_id"],
+            "kind": row["kind"], "source": row["source"], "scope": row["scope"],
+            "score": row["score"],
+            "evidence_fingerprints": _decoded(row["evidence_fingerprints"]) or [],
+            # The four parts, exactly as the signal recorded them.
+            "detail": _decoded(row["payload"]) or {},
+            "value": {"amount": row["value_amount"],
+                      "status": row["value_status"]},
+            "needs_approval": row["needs_approval"],
+            "state": row["state"],
+            "detected_at": row["detected_at"].isoformat()
+            if row["detected_at"] else "",
+        }
+
     def save_finding(self, finding: Finding) -> Finding:
         with SessionLocal() as session:
             session.execute(

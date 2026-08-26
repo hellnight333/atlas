@@ -41,6 +41,7 @@ memory — neither of which this file can see, deliberately.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +70,9 @@ COMMANDS: frozenset[str] = frozenset({"shell", "filesystem", "git-worktree"})
 #: Deliberately short. A tool joins this when the adapter for it has been
 #: written — not because the contract mentions it.
 DISPATCHABLE: frozenset[str] = frozenset({"http-fetch", "dns"}) | COMMANDS
+
+
+log = logging.getLogger(__name__)
 
 
 class NotDispatchable(RuntimeError):
@@ -325,14 +329,27 @@ class ToolAgent:
 
     def __init__(self, recipe: Recipe, *, registry: Registry | None = None,
                  client: object | None = None,
-                 check_addresses: bool = True) -> None:
+                 check_addresses: bool = True,
+                 repository: object | None = None,
+                 tenant: str | None = None) -> None:
         self._recipe = recipe
         self._registry = registry
         self._client = client
         self._check_addresses = check_addresses
+        #: Where sightings are remembered. `None` means this run produces
+        #: evidence and a report and nothing durable — which is the right
+        #: behaviour for a recipe with no extractor, and for a test that does
+        #: not want a database.
+        self._repository = repository
+        self._tenant = tenant
         #: The last run, so the worker's committer and reporter can read what
         #: was actually invoked rather than parsing it back out of prose.
         self.result: Result | None = None
+        #: What the extractor read and what memory made of it. Empty when the
+        #: recipe declares no extractor.
+        self.recorded: list = []
+        #: Opportunities detected from this run, best first.
+        self.signals: list = []
 
     @property
     def name(self) -> str:
@@ -375,14 +392,121 @@ class ToolAgent:
                                          "registry entry; neither is a runtime "
                                          "decision"),))
         found = self.result
+        remembered = self._remember(found)
         return AgentOutcome(
             summary=(f"{len(found.evidence)} piece(s) of evidence from "
                      f"{len(found.steps)} step(s) via "
-                     f"{', '.join(found.tools_invoked) or 'nothing'}"),
+                     f"{', '.join(found.tools_invoked) or 'nothing'}"
+                     + (f"; {remembered} sighting(s) recorded" if remembered
+                        else "")),
             files=(),
             evidence_count=len(found.evidence),
             claims_done=found.passed,
-            notes=_readable(found))
+            notes=_readable(found, self.recorded, self.signals))
+
+    def _remember(self, found: Result) -> int:
+        """Extract, identify, classify and persist. Returns how many were new.
+
+        Runs inside `implement` so one mission is one chain: fetch, extract,
+        resolve against memory, classify, remember. Splitting it across two
+        missions would mean evidence with no sighting whenever the second never
+        ran, which is the state discovery spent three sessions not being in.
+
+        Nothing here decides anything about a business. `scan.record` resolves
+        identity on strong keys and `discovery.classify` decides what kind of
+        new it is, both against Qevik's own memory, and both were already
+        proven. This is the join.
+
+        A failure to remember does not fail the run: the evidence is real and
+        already recorded, and losing it because the database was briefly away
+        would be the worse outcome. It is reported instead.
+        """
+        if not self._recipe.extractor or self._repository is None:
+            return 0
+        from ..opportunity import scan
+        from ..opportunity.extractors import (
+            ExtractionError,
+            extract_overpass,
+            sighting_from,
+        )
+        from ..opportunity.extractors import (
+            get as extractor_for,
+        )
+
+        extractor = extractor_for(self._recipe.extractor)
+        sightings = []
+        extractions: list = []
+        for piece in found.evidence:
+            try:
+                for extraction in extract_overpass(piece, extractor=extractor):
+                    extractions.append(extraction)
+                    sightings.append(
+                        sighting_from(extraction, piece, source=extractor.source))
+            except ExtractionError as refused:
+                log.warning("%s could not read %s: %s", extractor.id,
+                            piece.source, refused)
+                found.steps.append(Step(
+                    tool="extract", invoked=extractor.id,
+                    proves="what the source stated, by declared rules",
+                    passed=False, detail=str(refused)[:300]))
+        if not sightings:
+            return 0
+
+        try:
+            pass_ = scan.record(sightings, repository=self._repository,
+                                tenant=self._tenant)
+        except Exception:                         # noqa: BLE001 - reported, not fatal
+            log.exception("could not record %d sighting(s); the evidence "
+                          "stands and is in the report", len(sightings))
+            found.steps.append(Step(
+                tool="extract", invoked=extractor.id, proves="sightings recorded",
+                passed=False,
+                detail="the evidence was read and memory could not be written"))
+            return 0
+
+        self.recorded = pass_.recorded
+        found.steps.append(Step(
+            tool="extract", invoked=extractor.id,
+            proves="what the source stated, by declared rules", passed=True,
+            detail=(f"{pass_.seen} extracted, {len(pass_.new_to_qevik)} new to "
+                    f"Qevik, {len(pass_.proven_new)} evidenced as new by the "
+                    "source")))
+        self._detect(found, extractions, source=extractor.source)
+        return len(pass_.recorded)
+
+    def _detect(self, found: Result, extractions: list, *, source: str) -> None:
+        """Turn what memory now knows into ranked opportunities.
+
+        In the same mission for the same reason extraction is: a pass that
+        found forty businesses and detected nothing because a second mission
+        never ran is the state this was built to leave.
+
+        Detection is deterministic and so is the ranking — both before any
+        model, so "why is this first" has an answer somebody can disagree with
+        six weeks later.
+        """
+        from ..opportunity import detect, ranking
+
+        signals = detect.from_pass(self.recorded, extractions, source=source)
+        if not signals:
+            return
+        self.signals = ranking.order(signals)
+
+        stored = 0
+        by_id = {s.id: s for s in signals}
+        for scored in self.signals:
+            try:
+                if self._repository.save_signal(by_id[scored.signal_id], scored,
+                                                tenant=self._tenant):
+                    stored += 1
+            except Exception:                     # noqa: BLE001 - reported
+                log.exception("could not store signal %s", scored.signal_id)
+        found.steps.append(Step(
+            tool="detect", invoked="opportunity detection",
+            proves="what the evidence supports saying about these businesses",
+            passed=True,
+            detail=(f"{len(signals)} detected, {stored} new; "
+                    f"{len(signals) - stored} already on the list")))
 
     def review(self, plan: Plan, outcome: AgentOutcome, *,
                context: str = "") -> AgentOutcome:
@@ -405,15 +529,38 @@ class ToolAgent:
         return outcome.model_copy(update={"claims_done": found.passed})
 
     def summarize(self, plan: Plan, outcome: AgentOutcome) -> str:
-        return _readable(self.result) if self.result else "nothing ran"
+        return (_readable(self.result, self.recorded, self.signals)
+                if self.result else "nothing ran")
 
 
-def _readable(found: Result | None) -> str:
+def _readable(found: Result | None, extra: list | None = None,
+              signals: list | None = None) -> str:
     """The run as text for a report. Facts, in the order they happened."""
     if found is None:
         return "nothing ran"
     lines = [f"recipe: {found.recipe}", f"agent: {found.agent_id}",
              f"tools invoked: {', '.join(found.tools_invoked) or 'none'}", ""]
+    if signals:
+        lines.append("opportunities, best first")
+        for scored in signals:
+            lines.append(f"  {scored.score:.3f}  {scored.kind}  "
+                         f"{scored.business_id}")
+            lines.append(f"      value: {scored.value_status}"
+                         + (f" {scored.value_amount:g}"
+                            if scored.value_amount is not None else ""))
+            for part in scored.components:
+                lines.append(f"      {part.name}={part.raw:.2f}  {part.because}")
+        lines.append("")
+    if extra:
+        lines.append("sightings")
+        for item in extra:
+            lines.append(f"  {item.classification.state.value}  "
+                         f"{item.business.name}  ({item.business.id})")
+            lines.append(f"      {item.classification.because}")
+            for piece in item.sighting.evidence:
+                lines.append(f"      evidence {piece.fingerprint[:12]} "
+                             f"{piece.source}")
+        lines.append("")
     for step in found.steps:
         lines.append(f"{'ok' if step.passed else 'FAILED'}  {step.tool}  "
                      f"{step.invoked}")

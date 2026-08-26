@@ -1110,6 +1110,62 @@ def init_db() -> None:
         )
         """)
         )
+        # Detected signals — observation, evidence, inference, action.
+        #
+        # **Not** `atlas_opportunities`, which already exists and holds the
+        # findings-based funnel Opportunity (niche, stage, finding_ids). Those
+        # are different things: a funnel Opportunity is a scored bundle of
+        # confirmed website defects moving through a sales pipeline, and a
+        # Signal is something noticed with a reading attached. Forcing one into
+        # the other's table was the first attempt here, and `CREATE TABLE IF
+        # NOT EXISTS` silently did nothing while the index below failed on a
+        # column the existing table has never had.
+        #
+        # Persisted rather than derived on read:
+        # deriving would mean re-running the extractors over stored bodies every
+        # time somebody opens the list, and would silently change history when a
+        # detector is improved. What was detected on the day is what was
+        # detected, and the fingerprints say what it rested on.
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS atlas_signals (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            business_id TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT '',
+            payload JSONB NOT NULL,
+            evidence_fingerprints JSONB NOT NULL DEFAULT '[]',
+            score DOUBLE PRECISION,
+            -- Nullable on purpose. A business nobody has valued is not one
+            -- worth nothing, and a DEFAULT 0 here would be the whole
+            -- cost_status rule undone by a column definition.
+            value_amount DOUBLE PRECISION,
+            value_status TEXT NOT NULL DEFAULT 'UNKNOWN',
+            needs_approval BOOLEAN NOT NULL DEFAULT TRUE,
+            state TEXT NOT NULL DEFAULT 'open',
+            detected_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+        )
+        """)
+        )
+        conn.execute(
+            text("""
+        CREATE INDEX IF NOT EXISTS atlas_signals_open
+            ON atlas_signals (state, score DESC, detected_at DESC)
+        """)
+        )
+        # One open opportunity of one kind per business. A nightly scan that
+        # re-detected the same thing would otherwise produce one row per night
+        # for ever, and the operator's list would be the same business repeated.
+        conn.execute(
+            text("""
+        CREATE UNIQUE INDEX IF NOT EXISTS atlas_signals_once
+            ON atlas_signals (business_id, kind, source)
+            WHERE business_id <> ''
+        """)
+        )
         conn.execute(
             text("""
         CREATE INDEX IF NOT EXISTS atlas_sightings_business

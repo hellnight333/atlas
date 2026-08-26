@@ -372,7 +372,8 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
 def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                  origin: origins.Origin, roles: Roles,
                  scratch_root: Path, agent_choice: str = "",
-                 mission: Mission | None = None) -> tuple[Worker, dict]:
+                 mission: Mission | None = None,
+                 tenant: str = "") -> tuple[Worker, dict]:
     """A worker with an isolated workspace per mission.
 
     `held` carries the workspace out so the caller can commit and clean up; the
@@ -402,8 +403,27 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     if agent_choice == "research" and mission is not None and mission.recipe:
         from atlas_kernel.mission.toolrunner import ToolAgent
 
-        roles = Roles.all(ToolAgent(recipes.get(mission.recipe)))
-        log.info("%s: recipe %s", mission.id, mission.recipe)
+        # The repository is what turns evidence into memory. Without it the
+        # role fetches, records evidence and a report, and remembers nothing —
+        # which is a legitimate mode for a recipe with no extractor and is
+        # silently wrong for one that has a extractor.
+        memory = None
+        if recipes.get(mission.recipe).extractor:
+            try:
+                from atlas_kernel.opportunity.repository import (
+                    OpportunityRepository,
+                )
+
+                memory = OpportunityRepository()
+            except Exception:                     # noqa: BLE001 - reported
+                log.exception("%s declares an extractor and the business "
+                              "memory could not be opened; the run will "
+                              "produce evidence and remember nothing",
+                              mission.recipe)
+        roles = Roles.all(ToolAgent(recipes.get(mission.recipe),
+                                    repository=memory, tenant=tenant))
+        log.info("%s: recipe %s%s", mission.id, mission.recipe,
+                 "" if memory is None else " (sightings will be remembered)")
 
     def workspace_for(mission: Mission) -> Path:
         area = scratch.prepare(origin.location(), mission_id=mission.id,
@@ -699,7 +719,7 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
                                       origin=origin, roles=roles,
                                       scratch_root=scratch_root,
                                       agent_choice=agent_choice,
-                                      mission=mission)
+                                      mission=mission, tenant=tenant)
     held, scratches = workspaces["worktrees"], workspaces["scratch"]
 
     # The origin is a fact; what the plan declared about it is a field. They can

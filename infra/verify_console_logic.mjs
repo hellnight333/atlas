@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -90,12 +90,13 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 }
 const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice,
-        discoveryLine } = sandbox.__under_test || {};
+        discoveryLine, opportunityCard } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
     || typeof cost !== 'function' || typeof originOf !== 'function'
     || typeof originChoice !== 'function'
-    || typeof discoveryLine !== 'function' || !STAGE) {
+    || typeof discoveryLine !== 'function'
+    || typeof opportunityCard !== 'function' || !STAGE) {
   console.error('the functions under test were not defined — the script did not '
                 + 'reach the end, or they were renamed');
   process.exit(1);
@@ -254,6 +255,46 @@ const missingFlag = discoveryLine({ name: 'X', source: 'g',
                                     state: 'PROVEN_NEW_TO_SOURCE' });
 check('a row with no flag is treated as the weaker claim',
       /new to qevik/i.test(missingFlag.word), missingFlag.word);
+
+/* ---- opportunityCard: four parts, and an honest worth ------------------ */
+
+const OPP = {
+  id: 'sig-1', kind: 'missing_service', source: 'openstreetmap',
+  score: 0.598, detected_at: '2026-08-27T04:15:00+00:00',
+  business_id: 'b-1', needs_approval: false,
+  evidence_fingerprints: ['8c23957ade3bb410'],
+  value: { amount: null, status: 'UNKNOWN' },
+  detail: {
+    observations: [{ statement: 'openstreetmap records no website for Marina Dental.' }],
+    inferences: [{ statement: 'The business may have no website, or may have one this source does not record.',
+                   confidence: 0.35, is_an_inference: true,
+                   would_be_wrong_if: 'the business has a website openstreetmap does not list' }],
+    actions: [{ statement: 'Check whether this business has a website.' }],
+  },
+};
+
+const card = opportunityCard(OPP);
+check('the observation leads, as the headline',
+      card.indexOf('records no website') < card.indexOf('may have no website'),
+      'the inference came first');
+check('the inference is labelled as an inference on screen',
+      /Inference/.test(card));
+check('...and the observation is not', !/>Observation</.test(card));
+check('the falsifier is shown, so a reader can disagree',
+      /Wrong if/.test(card));
+check('the evidence fingerprint is shown', /8c23957ade/.test(card));
+check('UNKNOWN worth never renders as a number',
+      !/Worth[\s\S]{0,120}>0</.test(card), 'a zero appeared under Worth');
+check('...it renders as UNKNOWN', /UNKNOWN/.test(card));
+
+const gated = opportunityCard({ ...OPP, needs_approval: true });
+check('an action needing a person says so', /needs you/.test(gated));
+check('...and one that does not, does not',
+      !/needs you/.test(card));
+
+const bare = opportunityCard({ id: 'x', kind: 'new_business', detail: {} });
+check('a row with no inference does not invent one',
+      typeof bare === 'string' && !/Inference/.test(bare));
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

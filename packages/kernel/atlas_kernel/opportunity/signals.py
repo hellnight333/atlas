@@ -200,6 +200,18 @@ class Signal(BaseModel):
     #: `Finding` could not carry them.
     business_id: str = ""
     scope: str = ""
+    #: Which source this came out of, so a reader can weigh it. An opportunity
+    #: from a directory somebody edits and one from a regulator's register are
+    #: not the same strength of claim.
+    source: str = ""
+    #: What the work might be worth, and whether anybody measured it.
+    #:
+    #: `None` with `UNKNOWN` is the honest and overwhelmingly common answer. It
+    #: is **not** zero: a business whose value nobody has estimated is not a
+    #: business worth nothing, and rendering it as 0 would sort it last for a
+    #: reason that does not exist.
+    estimated_value: float | None = None
+    value_status: str = "UNKNOWN"
     observations: list[Observation] = Field(min_length=1)
     inferences: list[Inference] = Field(default_factory=list)
     actions: list[SuggestedAction] = Field(default_factory=list)
@@ -219,6 +231,21 @@ class Signal(BaseModel):
                     f"carry: {', '.join(missing)}. A conclusion whose support "
                     "is not present is one nobody can check, which is the same "
                     "as one that was made up.")
+        return self
+
+    @model_validator(mode="after")
+    def _a_value_needs_a_measurement(self) -> Signal:
+        """A number and its provenance travel together or not at all."""
+        if self.estimated_value is not None and self.value_status == "UNKNOWN":
+            raise ValueError(
+                "a value of "
+                f"{self.estimated_value:g} is labelled UNKNOWN. Either "
+                "something measured or estimated it, and the status says which, "
+                "or there is no number.")
+        if self.estimated_value is None and self.value_status != "UNKNOWN":
+            raise ValueError(
+                f"value_status is {self.value_status!r} with no value. A status "
+                "without a number claims a measurement that is not there.")
         return self
 
     @property
@@ -249,6 +276,12 @@ class Signal(BaseModel):
                  "needs_approval": a.needs_approval,
                  "capability": a.capability}
                 for a in self.actions],
+            "source": self.source,
+            "detected_at": self.created_at.isoformat(),
+            # Never a bare number: the status travels with it, and UNKNOWN
+            # stays UNKNOWN rather than becoming 0.
+            "value": {"amount": self.estimated_value,
+                      "status": self.value_status},
             "created_at": self.created_at.isoformat(),
         }
 

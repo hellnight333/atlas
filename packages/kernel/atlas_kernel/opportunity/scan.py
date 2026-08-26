@@ -112,15 +112,32 @@ def business_from(sighting: Sighting) -> Business:
     to Places than to Overpass, and one column called `source_id` holding both
     is a column nobody can join on.
     """
+    metadata: dict = {sighting.source: {"source_id": sighting.source_id,
+                                       "source_url": sighting.source_url,
+                                       "country": sighting.country,
+                                       "city": sighting.city}}
+    # The source's stable id becomes a `source:` identity key.
+    #
+    # Without this, a business the source records no website, phone or email for
+    # has **no strong key at all**, and `resolve_business` — which matches on
+    # strong keys only, deliberately — creates a new company every scan. A
+    # nightly discovery run would have produced one duplicate per night per
+    # website-less business, for ever. Found by scanning the same fixture twice
+    # and getting two of everything.
+    #
+    # Namespaced by source, and deliberately **not** `place:` — that prefix
+    # means "a different physical location, overriding every other agreement",
+    # and giving every source id that meaning would stop two mapping providers
+    # ever agreeing on one business, because their ids necessarily differ.
+    if sighting.source_id:
+        metadata["source_ids"] = {sighting.source: sighting.source_id}
+
     return Business(
         name=sighting.name,
         geography=", ".join(p for p in (sighting.city, sighting.country) if p),
         website=sighting.source_url or None,
         sources=[sighting.source],
-        metadata={sighting.source: {"source_id": sighting.source_id,
-                                    "source_url": sighting.source_url,
-                                    "country": sighting.country,
-                                    "city": sighting.city}},
+        metadata=metadata,
     )
 
 

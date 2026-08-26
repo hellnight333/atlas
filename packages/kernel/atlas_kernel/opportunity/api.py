@@ -93,6 +93,56 @@ def build_router() -> APIRouter:
                      "source, and new to a source is not new to the world."),
         }
 
+    @router.get("/opportunities")
+    def opportunities(request: Request, limit: int = 25,
+                      tenant: TenantId = Depends(current_tenant),
+                      _: User = Depends(requires(Scope.READ))) -> dict:
+        """What was detected, best first. **No demo rows.**
+
+        Everything here came out of a real scan against a real source, and an
+        empty list means nothing was detected — not that the feature is
+        unfinished. The four parts arrive as four parts, so a client cannot
+        render an inference as an observation without ignoring the labels.
+
+        Declared above `/{business_id}/sightings` so `opportunities` is never
+        read as a business id: FastAPI matches in declaration order, and a
+        route losing that race is how `/api/missions/origins` was once served
+        by the mission-detail handler.
+        """
+        try:
+            found = repository(request).open_signals(limit=limit, tenant=tenant)
+        except Exception as unavailable:          # noqa: BLE001 - reported
+            raise HTTPException(
+                status_code=503,
+                detail="the opportunity memory could not be read. This is not "
+                       "the same as there being no opportunities.",
+            ) from unavailable
+        return {
+            "opportunities": found,
+            "counts": {
+                "total": len(found),
+                "needing_approval": sum(1 for row in found
+                                        if row.get("needs_approval")),
+                "valued": sum(1 for row in found
+                              if row["value"]["status"] != "UNKNOWN"),
+            },
+            "note": ("Every opportunity carries the evidence it rests on. An "
+                     "inference is labelled as one. A value of UNKNOWN means "
+                     "nobody measured it, and is not zero."),
+        }
+
+    @router.get("/opportunities/{signal_id}")
+    def opportunity(signal_id: str, request: Request,
+                    tenant: TenantId = Depends(current_tenant),
+                    _: User = Depends(requires(Scope.READ))) -> dict:
+        """One opportunity, with its observation, evidence, inference and
+        suggested action kept apart."""
+        found = repository(request).get_signal(signal_id, tenant=tenant)
+        if found is None:
+            # Absent, not forbidden: a 403 would confirm it exists.
+            raise HTTPException(status_code=404, detail="no such opportunity")
+        return found
+
     @router.get("/{business_id}/sightings")
     def sightings(business_id: str, request: Request,
                   tenant: TenantId = Depends(current_tenant),

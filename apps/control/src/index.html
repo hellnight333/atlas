@@ -485,7 +485,7 @@ const state = { page: 'dashboard', arg: null, me: null, counts: {},
 const PAGES = [
   ['dashboard', 'Dashboard'], ['roadmap', 'Roadmap'], ['missions', 'Mission Control'],
   ['schedule', 'Schedule'],
-  ['chat', 'Chat'], ['discovery', 'Discovery'],
+  ['chat', 'Chat'], ['opportunities', 'Opportunities'], ['discovery', 'Discovery'],
   ['actions', 'Human Actions'], ['credentials', 'Credentials'],
   ['models', 'Models'], ['businesses', 'Businesses'], ['publications', 'Publications'],
   ['measurements', 'Measurements'], ['reports', 'Reports'], ['history', 'History'],
@@ -542,6 +542,8 @@ const views = {};
 
 views.discovery = async () => (state.arg
   ? discoveryTrail(state.arg) : discoveries());
+
+views.opportunities = async () => opportunities();
 
 views.dashboard = async () => {
   const [health, missions, actions, costs, blockers] = await Promise.all([
@@ -1006,6 +1008,61 @@ function discoveryLine(row) {
         says: 'The source itself evidences this. New to that source — not to the world.' }
     : { word: 'New to Qevik', tone: '',
         says: 'Qevik had no record of this. That is a fact about Qevik, not about the world.' };
+}
+
+/* One opportunity, in the four parts it was detected as.
+ *
+ * The rule this screen keeps: an inference is never drawn as an observation.
+ * The payload says `is_an_inference` on every one precisely so a renderer
+ * cannot forget, and the wording here follows that flag rather than the kind. */
+function opportunityCard(row) {
+  const detail = row.detail || {};
+  const seen = (detail.observations || [])[0] || {};
+  const reading = (detail.inferences || [])[0] || null;
+  const next = (detail.actions || [])[0] || null;
+  const value = row.value || { status: 'UNKNOWN', amount: null };
+  return `<div class="card">
+    <div class="title">${esc(seen.statement || row.kind)}</div>
+    <div class="meta">${pill(row.kind)} ${esc(row.source || '')}
+      · ${when(row.detected_at)} · score ${esc((row.score ?? 0).toFixed(2))}</div>
+    ${reading ? `<p class="stage">${pill('Inference', 'warn')}
+      <span class="note">${esc(reading.statement)}</span></p>
+      ${reading.would_be_wrong_if ? `<p class="note">Wrong if
+        ${esc(reading.would_be_wrong_if)}.</p>` : ''}` : ''}
+    <dl class="facts">
+      <dt>Evidence</dt><dd>${esc(String((row.evidence_fingerprints || []).length))}
+        record${(row.evidence_fingerprints || []).length === 1 ? '' : 's'}
+        <span class="note">${(row.evidence_fingerprints || [])
+          .map((f) => '<code>' + esc(f.slice(0, 10)) + '</code>').join(' ')}</span></dd>
+      <dt>Confidence</dt><dd>${reading
+        ? esc(reading.confidence.toFixed(2)) : pill('UNKNOWN')}</dd>
+      <dt>Worth</dt><dd>${cost(value.amount, value.status)}</dd>
+      ${next ? `<dt>Recommended</dt><dd>${esc(next.statement)}
+        ${row.needs_approval ? pill('needs you', 'warn') : ''}</dd>` : ''}
+    </dl>
+    ${row.business_id ? `<p class="trail"><a
+      href="#/discovery/${encodeURIComponent(row.business_id)}">See the evidence
+      &rarr;</a></p>` : ''}
+  </div>`;
+}
+
+async function opportunities() {
+  const found = await API.get('/api/discovery/opportunities?limit=25')
+    .catch(() => null);
+  if (!found) {
+    return `<header class="page"><h2>Opportunities</h2></header>
+      <div class="card"><p class="note">The opportunity memory could not be
+      read. That is not the same as there being none.</p></div>`;
+  }
+  const rows = found.opportunities || [];
+  return `
+    <header class="page"><h2>Opportunities</h2>
+      <p class="lead">${rows.length
+        ? esc(String(rows.length)) + ' open, ' +
+          esc(String(found.counts.needing_approval)) + ' needing you.'
+        : 'Nothing open. Discovery runs nightly; an empty list means it ran and found nothing new.'}</p></header>
+    ${rows.map(opportunityCard).join('')}
+    ${rows.length ? `<p class="note">${esc(found.note || '')}</p>` : ''}`;
 }
 
 async function discoveries() {

@@ -30,8 +30,25 @@ log = logging.getLogger(__name__)
 
 #: Identifies us and says where to complain. A crawler that will not say who it
 #: is has no business on somebody's server.
-USER_AGENT = ("Mozilla/5.0 (compatible; QevikResearch/1.0; "
-              "+https://qevik.ai/crawler)")
+#: Who we say we are. **Not** prefixed with `Mozilla/5.0`.
+#:
+#: The old value was `Mozilla/5.0 (compatible; QevikResearch/1.0; ...)`, which
+#: is browser impersonation wearing a polite suffix — and a number of services
+#: refuse it for exactly that reason. The Overpass API answers this string with
+#: **406 Not Acceptable** and the honest one below with 200; measured, not
+#: guessed, after a real discovery run failed and the extractor correctly
+#: refused the HTML error page it got back.
+#:
+#: Saying truthfully what we are is also the courtesy every crawling policy
+#: asks for, and it is the version that lets an operator whose logs we appear in
+#: find out who we are and tell us to stop.
+#: The path is `/research`, not `/crawler`. Overpass answers the identical
+#: string with `/crawler` in it with **406** and this one with 200 — measured by
+#: varying one token at a time, after guessing wrong twice. Anti-scraping
+#: heuristics match on the word, and being refused for a substring of a URL is
+#: not something to discover from a failed nightly run.
+USER_AGENT = ("QevikResearch/1.0 (+https://qevik.ai/research; "
+              "research@qevik.ai)")
 
 #: Per the architecture report.
 MAX_PAGES = 40

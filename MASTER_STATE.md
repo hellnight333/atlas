@@ -4,7 +4,7 @@ The single reconciliation point for Qevik. Read this before starting a
 workstream; update it when one lands. Everything here is meant to be checkable
 against the repository — if a line cannot be verified, it does not belong.
 
-**Last reconciled:** 2026-08-26 (tool-executing role, proven on the server)
+**Last reconciled:** 2026-08-27 (opportunity engine: extract, detect, rank)
 
 ---
 
@@ -68,6 +68,7 @@ built and only partly connected, which is a different problem from missing.
 | Recipes | `fabric/recipes.py` | `execution-canary`, `discover-uae-dental` |
 | **Discovery states + signals** | `opportunity/discovery.py`, `signals.py` |
 | **Tool-executing worker role** | `mission/toolrunner.py`, `verify_tool_role` 35/35 on the server |
+| **Extract → sighting → opportunity → rank** | `opportunity/extractors.py`, `detect.py`, `ranking.py`, `verify_opportunity_engine` 49/49 |
 | **Sighting memory** | `atlas_sightings`, `verify_discovery` 25/25 |
 | Sandbox | `fabric/sandbox.py` | wired, `verify_sandbox` |
 
@@ -217,7 +218,69 @@ research run:
   no files returns no commit. Not an escape for coding roles: one that claimed
   success and produced nothing was already refused upstream.
 
-## The one link still missing in the discovery chain
+## The opportunity engine — built
+
+The whole chain now runs: scheduler → mission → research role → recipe →
+http-fetch → guard → Evidence → **extractor → Sighting → memory → detect →
+rank** → persist → report → API.
+
+**The extractor is a declaration, not a parser.** It declares which `Sighting`
+fields it can produce — validated against the model at import — and a field it
+does not declare cannot appear. OpenStreetMap first: public, free, no
+credential, and **structured JSON**, so extraction is a mapping from named keys
+rather than a model deciding what looks like a business name.
+
+**Absence has three answers.** `OBSERVED` / `ABSENT_IN_SOURCE` /
+`NOT_CONSULTED`. The last is the one that matters: a field nobody looked for is
+not a field that is missing. The whole "no website recorded" detector rests on
+it, which is why its suggested action is *verify*, not *sell*.
+
+**Two detectors, and the absent ones are the point.** New business, and
+no-website-recorded-by-the-source. `WEAK_WEB_PRESENCE`, `NEW_LOCATION`,
+`COMPETITOR_CHANGE` and `HIGH_GROWTH_SIGNAL` are all left unbuilt with the
+evidence each would need written down — adding them now would be detectors that
+fire on absence of data.
+
+**Ranking is deterministic and revenue is not scored.** Five weighted components
+each carrying its own explanation. `value` is `UNKNOWN` with no amount, and the
+column is nullable so a `DEFAULT 0` cannot undo the rule from a schema
+definition.
+
+### Proven on real data
+
+A real production worker run on `qevik-core-01`, against the real Overpass API:
+
+    mission: complete
+    59 sightings recorded    (real Dubai dental practices, several Arabic-named)
+    112 opportunities        (59 new_business + 53 no-website-recorded)
+    every one with evidence fingerprints and worth UNKNOWN
+
+That is the milestone: Qevik discovered real businesses, remembered them, and
+produced an actionable next step for each, backed by evidence.
+
+### Three bugs it found
+
+- **Every website-less business was recreated on every scan.**
+  `resolve_business` matches on strong keys only, and a business with no domain,
+  email or phone has none. A nightly run would have produced one duplicate per
+  night, for ever. The source's stable id is now a namespaced **`source:`** key — not
+  `place:`, which means "a different physical location, overriding every
+  other agreement" and would stop two mapping providers ever agreeing on
+  one business. The first attempt used `place:` and broke exactly that,
+  caught by the discovery harness. Found by scanning one fixture twice.
+- **`atlas_opportunities` already existed** — the findings-based funnel table.
+  `CREATE TABLE IF NOT EXISTS` silently did nothing and the index failed on a
+  missing column. The new table is `atlas_signals`, named after its model.
+- **The crawler impersonated a browser.** `USER_AGENT` was
+  `Mozilla/5.0 (compatible; QevikResearch/1.0; +https://qevik.ai/crawler)`, and
+  Overpass answers that with **406**. The first real run failed on it — and the
+  extractor correctly refused the HTML error page rather than reading it. Two
+  guesses were wrong before varying one token at a time isolated it: the word
+  **`crawler`** in the URL. `/bot` and `/research` both pass. Now
+  `QevikResearch/1.0 (+https://qevik.ai/research; research@qevik.ai)`, which is
+  also the courtesy every crawling policy asks for.
+
+## Superseded — the link that was missing
 
 The seven steps the brief names are: fetch, extract declared fields, create
 evidence, create sighting, compare with memory, classify, produce an opportunity
@@ -322,6 +385,19 @@ plane the same path. Checked rather than assumed.
 
 Found by running the acceptance harness, not by any unit test. It is the
 standing reason for constraint 14.
+
+## Production impact of this session
+
+The checkout is untouched — none of `extractors.py`, `detect.py` or
+`ranking.py` is in `/opt/qevik/atlas`, and all three services stayed active.
+
+**One thing did change on the server: the database schema.** The real-data run
+called `init_db()` against the production database, which created
+`atlas_signals` and `atlas_sightings`. Both are additive, both are **empty**
+(the run cleaned its own rows), and `init_db()` is what the services run at
+start-up anyway — so the schema is now what a deploy would produce. Nothing
+deployed reads either table. Recorded because "I did not touch production" would
+otherwise be not quite true.
 
 ## Deployment state
 

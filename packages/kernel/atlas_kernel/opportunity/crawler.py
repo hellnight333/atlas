@@ -61,6 +61,19 @@ class Refused:
             summary=f"not fetched: {self.because}", detector=detector)
 
 
+#: How much of a response body is kept in the evidence.
+#:
+#: Kept at all because an extractor has to read *something*, and because
+#: evidence that cannot be re-read is not evidence — "we saw a business called X
+#: at this URL" is only checkable if the bytes that said so are still there.
+#:
+#: Bounded because a response can be tens of megabytes and this goes in a
+#: timeline. Truncation is **recorded**, never silent: an extractor reading a
+#: cut-off body would otherwise report the businesses in the first 256 KB as
+#: though they were all of them.
+BODY_KEPT = 256 * 1024
+
+
 def evidence_from(page: Page, *, detector: str) -> Evidence:
     """What the server said, as a record somebody can re-check.
 
@@ -68,6 +81,8 @@ def evidence_from(page: Page, *, detector: str) -> Evidence:
     record of truth — a summarised observation cannot be re-checked, which is
     the whole reason `Evidence.observed` exists.
     """
+    body = page.html or ""
+    truncated = len(body) > BODY_KEPT
     return Evidence(
         kind=EvidenceKind.HTTP_RESPONSE if not page.is_html
         else EvidenceKind.HTML_CONTENT,
@@ -79,6 +94,10 @@ def evidence_from(page: Page, *, detector: str) -> Evidence:
             "elapsed_ms": page.elapsed_ms,
             "redirect_chain": list(page.redirect_chain),
             "error": page.error,
+            "body": body[:BODY_KEPT],
+            # An extractor must be able to tell "this is everything the server
+            # sent" from "this is the part that fitted".
+            "body_truncated": truncated,
         },
         summary=(f"HTTP {page.status}" if not page.error
                  else f"failed: {page.error}"),

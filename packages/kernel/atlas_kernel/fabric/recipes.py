@@ -110,6 +110,11 @@ class Recipe(BaseModel):
     agent_id: str
     capability: Capability
     steps: tuple[Step, ...]
+    #: Which declared extractor reads this recipe's evidence, by name. Empty
+    #: means the recipe produces evidence and nothing more — a report, not a
+    #: sighting. A key like every other: the extractor decides which fields it
+    #: can fill, and a recipe cannot widen that.
+    extractor: str = ""
     notes: str = ""
 
     @field_validator("steps")
@@ -165,7 +170,7 @@ class Recipe(BaseModel):
         return {"id": self.id, "version": self.version, "does": self.does,
                 "agent_id": self.agent_id, "capability": self.capability.value,
                 "tools": list(self.tools), "steps": len(self.steps),
-                "notes": self.notes}
+                "extractor": self.extractor, "notes": self.notes}
 
 
 def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
@@ -200,6 +205,16 @@ def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
             raise RecipeRefused(
                 f"{recipe.id} uses tool {step.tool!r}, which is not declared in "
                 "`fabric.tools`.") from missing
+
+    if recipe.extractor:
+        from ..opportunity.extractors import UnknownExtractor
+        from ..opportunity.extractors import get as extractor_for
+        try:
+            extractor_for(recipe.extractor)
+        except UnknownExtractor as unknown:
+            raise RecipeRefused(
+                f"{recipe.id} names extractor {recipe.extractor!r}, which is "
+                "not declared. A recipe cannot bring its own reader.") from unknown
 
     if agent.capability is not recipe.capability:
         raise RecipeRefused(
@@ -238,6 +253,33 @@ RECIPES: tuple[Recipe, ...] = (
         notes=("The third step is the one that matters. The first two would "
                "pass on a host with no sandbox at all."),
     ),    Recipe(
+        id="discover-dubai-dental-osm",
+        does=("Ask OpenStreetMap which dental practices it records in Dubai, "
+              "and read them out by declared rules. Produces sightings; "
+              "concludes nothing about any of them."),
+        agent_id="researcher",
+        capability=Capability.RESEARCH,
+        extractor="openstreetmap",
+        steps=(
+            Step(tool="http-fetch",
+                 command=("https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D"
+                          "%5Btimeout%3A120%5D%3B%28nwr%5Bamenity%3D%22dentist%22%5D"
+                          "%5B%22name%22%5D%2824.79%2C54.89%2C25.36%2C55.57%29%3B"
+                          "nwr%5Bhealthcare%3D%22dentist%22%5D%5B%22name%22%5D"
+                          "%2824.79%2C54.89%2C25.36%2C55.57%29%3B%29%3B"
+                          "out%20center%2060%3B",),
+                 proves="what OpenStreetMap records for dentists in the Dubai "
+                        "bounding box, verbatim"),
+        ),
+        notes=("The query is part of the declaration, not a parameter — the "
+               "bounding box, the tags and the limit are all reviewable in git. "
+               "A second area or niche is a second recipe.\n\n"
+               "OpenStreetMap first because it is public, free, needs no "
+               "credential, and answers in **structured JSON**: extraction is a "
+               "declared mapping from named keys rather than a model reading a "
+               "page and deciding what looks like a business name."),
+    ),
+    Recipe(
         id="discover-uae-dental",
         does=("Look at the homepages of known dental clinics in the UAE and "
               "record what the servers actually said. Produces evidence; "

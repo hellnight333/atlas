@@ -392,3 +392,56 @@ def test_the_discovery_surface_accepts_no_writes(tmp_path):
 
     with TestClient(_composed(tmp_path), raise_server_exceptions=False) as client:
         assert client.post("/api/discovery").status_code in (401, 405)
+
+
+# ============================= a business the source knows nothing else about
+
+def test_a_business_with_no_contact_details_is_still_recognised_again(repo):
+    """The bug this closes: `resolve_business` matches on strong keys only —
+    domain, email, phone — and a business the source records none of had **no
+    strong key at all**. A nightly scan created a new company every night for
+    every website-less business, for ever.
+
+    Found by scanning the same fixture twice and getting two of everything.
+    """
+    bare = a_sighting(source_url="", source_id="node/silent")
+    first = scan.record([bare], repository=repo, tenant=TENANT)
+    second = scan.record([bare], repository=repo, tenant=TENANT)
+
+    assert first.recorded[0].business.id == second.recorded[0].business.id
+    assert second.recorded[0].classification.state is DiscoveryState.KNOWN
+
+
+def test_the_source_id_becomes_a_strong_key(repo):
+    from atlas_kernel.opportunity.identity import source_keys, strong_keys, with_identity
+
+    business = scan.business_from(a_sighting(source_url="",
+                                             source_id="node/silent"))
+    stamped = with_identity(business)
+    assert source_keys(business) == ["source:test-disc-places:node/silent"]
+    assert strong_keys(stamped.identity_keys), "no strong key at all"
+
+
+def test_a_source_id_is_not_treated_as_a_place_id(repo):
+    """`place:` means "a different physical location, overriding every other
+    agreement" — the rule that stopped one clinic's three branches becoming one
+    record. Giving every source id that meaning would stop two mapping
+    providers ever agreeing on one business, because their ids differ."""
+    business = scan.business_from(a_sighting(source_id="node/1"))
+    assert "place_id" not in business.metadata
+    assert business.metadata["source_ids"] == {"test-disc-places": "node/1"}
+
+
+def test_two_sources_can_still_agree_on_one_business(repo):
+    """A source-scoped key must not block the cross-source merge that domain,
+    email and phone are for."""
+    site = "https://disc-shared.example/"
+    from_places = a_sighting(source="test-disc-places", source_id="PL-shared",
+                             source_url=site)
+    from_directory = a_sighting(source="test-disc-directory",
+                                source_id="DIR-shared", source_url=site)
+
+    first = scan.record([from_places], repository=repo, tenant=TENANT)
+    second = scan.record([from_directory], repository=repo, tenant=TENANT)
+    assert first.recorded[0].business.id == second.recorded[0].business.id, \
+        "a shared domain no longer merges two sources"
