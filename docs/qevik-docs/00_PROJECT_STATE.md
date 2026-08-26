@@ -352,6 +352,28 @@ against a 0.62 threshold (`infra/differentiation.py`).
   (which emits a `/ar/` link) is only claimed by a site that has one.
 
 
+## Scheduled work — 2026-08-26
+
+The database backup had failed on every run since **2026-08-18**: eight days, no
+verified backup, and no signal in the console, on the phone, or in any report.
+The unit ran as `User=qevik` and its script sourced a root-owned `0600` env file
+itself; the other four units use `EnvironmentFile=`, which systemd reads as root
+before the privilege drop. Fixed there rather than by loosening the file.
+
+That nothing reported it is the finding. **Recurring work is now expressed as
+missions** (`mission/recurrence.py`), so a scheduled failure appears where every
+other mission failure appears. It creates missions and stops — it does not
+claim, dispatch or run, and `AutomationEngine` was deliberately not used because
+it feeds a different execution path than the one in production.
+
+`RECURRENCES` is empty on purpose. The production worker runs
+`--repository /opt/qevik/atlas` and commits into a worktree of it, so nothing
+can honestly claim `modifies_qevik_itself=False`. **The next architectural
+dependency is an execution workspace that is not Qevik's repository**, and it is
+the precondition for unattended overnight work and autonomous discovery.
+
+See `docs/RECURRENCE.md`.
+
 ## Deferred
 - Broad package/schema/database rename.
 - High-volume autonomous prospecting.
