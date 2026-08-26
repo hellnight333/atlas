@@ -28,6 +28,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,7 @@ from atlas_kernel.fabric.budgets import (  # noqa: E402
     reserve,
 )
 from atlas_kernel.fabric.scheduler import demands_from  # noqa: E402
-from atlas_kernel.mission import reports, service  # noqa: E402
+from atlas_kernel.mission import recurrence, reports, service  # noqa: E402
 from atlas_kernel.mission.agents import (  # noqa: E402
     Behaviour,
     CodingAgent,
@@ -352,6 +353,53 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     return worker, held
 
 
+def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
+                     claims: object, at: datetime | None = None) -> int:
+    """Create missions for any recurrence that has come due. Returns how many.
+
+    Runs inside the worker rather than as a daemon of its own, because a second
+    process that also puts work in the queue is a second orchestrator however
+    small it is. This only ever calls `service.create` and `service.attach_plan`
+    — the same two functions a request typed into the console goes through — and
+    then stops. It never claims, dispatches or runs anything.
+
+    Two workers tick at the same time, so the occurrence key is held through the
+    same `Claims` the missions themselves use. Losing that race is ordinary. The
+    lock is not the only guard: `assess` independently refuses an occurrence
+    that already has a mission, which is what covers the case where a lock was
+    reclaimed after a crash. A lock is a hint about now; a mission is a fact.
+    """
+    moment = at or datetime.now(UTC)
+    due = recurrence.declared(tenant=tenant)
+    if not due:
+        return 0
+
+    folded = service.fold(timeline.read(), tenant=tenant)
+    created = 0
+    for rule in due:
+        firing = recurrence.assess(rule, at=moment, missions=folded)
+        if not firing.fires:
+            log.debug("recurrence %s held: %s (%s)", rule.id,
+                      firing.hold.value if firing.hold else "?", firing.detail)
+            continue
+
+        claims.register(firing.key) if hasattr(claims, "register") else None
+        if not claims.acquire(firing.key, worker=name):
+            log.info("recurrence %s: %s is being created by another worker",
+                     rule.id, firing.key)
+            continue
+        try:
+            mission, events = recurrence.enqueue(rule, firing, tenant=tenant)
+            for event in events:
+                timeline.append(event)
+            created += 1
+            log.info("recurrence %s created %s (%s) as %s", rule.id, mission.id,
+                     firing.key, mission.status.value)
+        finally:
+            claims.release(firing.key, worker=name)
+    return created
+
+
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
               repository: Path, roles: Roles, claims: object, ledger: object,
               report_root: Path | None = None) -> int:
@@ -359,6 +407,13 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     freed = release_stale(timeline, tenant=tenant)
     if freed:
         log.info("released %d stale mission(s)", freed)
+
+    # Before looking for work, create any that has come due. A recurrence that
+    # fires into an empty queue should be picked up on this same pass rather
+    # than waiting for the next one.
+    made = tick_recurrences(timeline, tenant=tenant, name=name, claims=claims)
+    if made:
+        log.info("%d recurring mission(s) created", made)
 
     waiting = queued(timeline, tenant=tenant)
     if not waiting:

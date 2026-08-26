@@ -89,7 +89,7 @@ def _event(mission: Mission, *, actor: str, note: str = "",
 
 
 def create(*, tenant: TenantId | None, title: str, description: str = "",
-           requested_by: str = "", priority: int = 0
+           requested_by: str = "", priority: int = 0, occurrence: str = ""
            ) -> tuple[Mission, BusinessEvent]:
     """A new request, in DRAFT. Nothing runs from this."""
     tenant = _require_tenant(tenant, method="mission.create")
@@ -98,7 +98,8 @@ def create(*, tenant: TenantId | None, title: str, description: str = "",
                            "is one nobody can approve")
     mission = Mission(id=f"mission-{uuid4().hex[:12]}", tenant_id=str(tenant),
                       title=title.strip(), description=description,
-                      requested_by=requested_by, priority=priority)
+                      requested_by=requested_by, priority=priority,
+                      occurrence=occurrence)
     return mission, _event(mission, actor=requested_by or "operator",
                            note="created")
 
@@ -124,7 +125,9 @@ def transition(mission: Mission, to: MissionStatus, *, tenant: TenantId | None,
 
 
 def attach_plan(mission: Mission, plan: Plan, *, tenant: TenantId | None,
-                actor: str = "agent", agent_id: str = "") -> tuple[Mission, BusinessEvent]:
+                actor: str = "agent", agent_id: str = "",
+                modifies_qevik_itself: bool = True
+                ) -> tuple[Mission, BusinessEvent]:
     """Record a proposed plan and route it by what **policy** decides.
 
     The plan is the safety boundary: arbitrary text never becomes execution, it
@@ -146,7 +149,14 @@ def attach_plan(mission: Mission, plan: Plan, *, tenant: TenantId | None,
                           actor=actor, plan=plan, blockers=plan.blockers,
                           note="planning found blockers")
 
-    verdict = policy.decide(plan, agent_id=agent_id)
+    # `modifies_qevik_itself` defaults to True and is passed through unchanged,
+    # so every existing caller keeps the behaviour it had. Only a caller that
+    # can *state* the work is not a change to Qevik's own source may lower it —
+    # and stating it is what makes unattended recurring work possible at all,
+    # because a mission that edits Qevik is one policy will never run without a
+    # person, at three in the morning least of all.
+    verdict = policy.decide(plan, agent_id=agent_id,
+                            modifies_qevik_itself=modifies_qevik_itself)
     destination = (MissionStatus.AWAITING_APPROVAL if verdict.needs_a_person
                    else MissionStatus.QUEUED)
     return transition(mission, destination, tenant=tenant, actor=actor, plan=plan,

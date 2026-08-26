@@ -8,6 +8,9 @@ Type=oneshot
 User=qevik
 Group=qevik
 WorkingDirectory=/opt/qevik/atlas
+# Read as root, before the drop to User=qevik. The script cannot source this
+# file itself: it is root-owned 0600 and the service user cannot read it.
+EnvironmentFile=/opt/qevik/atlas.env
 ExecStart=/opt/qevik/atlas/infra/qevik_backup.sh
 Nice=15
 NoNewPrivileges=true

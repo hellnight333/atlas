@@ -229,6 +229,8 @@ header.page p { margin: 0; color: var(--muted); }
 .blocker.external { border-left-color: var(--wait); }
 .blocker .what { margin-top: .25rem; }
 .blocker .do { margin-top: .25rem; color: var(--muted); font-size: 13px; }
+.card.why { border-left: 3px solid var(--bad); }
+.card.why p { margin: 0; overflow-wrap: anywhere; }
 
 .decide { border-color: var(--signal); }
 .report {
@@ -653,11 +655,14 @@ async function missionDetail(id) {
   const html = `
     <header class="page"><h2>${esc(mission.title)}</h2>
       <p><code>${esc(mission.mission_id)}</code> · requested by ${esc(mission.requested_by || '—')}
-      · ${when(mission.created_at)}</p></header>
+      · ${when(mission.created_at)}${mission.occurrence
+        ? ' · recurring <code>' + esc(mission.occurrence) + '</code>' : ''}</p></header>
     <div class="card" style="margin-bottom:1rem">
       ${pill(mission.status)} ${track(mission.status)}
       <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
     </div>
+    ${whyItEnded(mission) ? `<div class="card why" style="margin-bottom:1rem">
+      <h3>Why it stopped</h3><p>${esc(whyItEnded(mission))}</p></div>` : ''}
     ${(mission.blockers || []).length ? `<div class="card" style="margin-bottom:1rem">
       <h3>Blocked</h3>${mission.blockers.map((b) =>
         `<div class="meta">${pill(b.kind)} ${esc(b.detail)}${b.action ? ' → <strong>' + esc(b.action) + '</strong>' : ''}</div>`
@@ -840,7 +845,29 @@ const STAGE = {
   complete: { word: 'Complete',           tone: 'ok',   says: 'Done. The report is below.' },
   drafting: { word: 'Drafting',           tone: '',     says: 'No plan has been proposed yet.' },
   declined: { word: 'Declined',           tone: '',     says: 'You declined this plan. It is kept on the record.' },
+  closed:   { word: 'Closed',             tone: '',     says: 'This conversation was closed without a mission.' },
+  /* A mission exists and its status could not be read. Deliberately not
+   * 'drafting': that sentence says nothing is happening, which is a claim this
+   * screen has no basis for. A failed read is NOT_VERIFIED, never an absence. */
+  unread:   { word: 'Status unread',      tone: 'warn', says: 'A mission exists for this request, but its status could not be read just now. It may well be running.' },
 };
+
+/* Why a mission ended badly, in one line, without making the person read a
+ * report to find out. The reason is already recorded: the worker attaches a
+ * note to the transition into `failed` ("acceptance did not pass after 3
+ * attempt(s): …"), and `fold` merges that note into the summary the API
+ * returns. Nothing new is computed here.
+ *
+ * Returns '' when there is nothing to say. A missing note is reported as a
+ * missing note — inventing a plausible reason for a failure is worse than
+ * admitting none was recorded. */
+function whyItEnded(mission) {
+  if (!mission) return '';
+  if (mission.status !== 'failed' && mission.status !== 'cancelled') return '';
+  const note = (mission.note || '').trim();
+  if (!note) return 'No reason was recorded for this. The report below is the only account of what happened.';
+  return note;
+}
 
 function stageOf(conversation, mission) {
   /* Derived from the mission where one exists, because the mission is what is
@@ -857,6 +884,10 @@ function stageOf(conversation, mission) {
             && !(conversation.plan.steps || []).length) ? 'blocked' : 'waiting';
   }
   if (conversation.status === 'plan_rejected') return 'declined';
+  /* Reached with no mission object. If the conversation says one was created,
+   * the fetch failed — say so rather than reporting the mission missing. */
+  if (conversation.status === 'mission_created') return 'unread';
+  if (conversation.status === 'closed') return 'closed';
   return 'drafting';
 }
 
@@ -921,6 +952,10 @@ async function conversation(id) {
   const html = `
     <header class="page"><h2>${esc(c.title)}</h2>
       <p class="stage">${pill(shown.word, shown.tone)} ${esc(shown.says)}</p></header>
+
+    ${whyItEnded(mission) ? `<div class="card why">
+        <h3>Why it stopped</h3>
+        <p>${esc(whyItEnded(mission))}</p></div>` : ''}
 
     ${planPreview(plan)}
 

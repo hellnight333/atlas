@@ -171,6 +171,12 @@ class Mission(BaseModel):
     #: delay. Durable, because "why has this not run" must survive a restart
     #: with an answer that is not "the queue is long".
     not_before: datetime | None = None
+    #: The recurring occurrence that created this mission, empty for one-off
+    #: work. Carried on the mission rather than in a table of its own so the
+    #: timeline stays the single record: "has tonight's scan already been
+    #: created" is then answered by the missions themselves, and a second store
+    #: cannot drift from them.
+    occurrence: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -204,6 +210,7 @@ class Mission(BaseModel):
             "blockers": [b.model_dump(mode="json") for b in self.blockers],
             "report_path": self.report_path, "claimed_by": self.claimed_by,
             "not_before": self.not_before.isoformat() if self.not_before else None,
+            "occurrence": self.occurrence,
             "total_cost": self.total_cost,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),

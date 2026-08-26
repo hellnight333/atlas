@@ -19,9 +19,29 @@ DIR="${QEVIK_BACKUP_DIR:-${BASE}/backups}"
 KEEP="${QEVIK_BACKUP_KEEP:-14}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
-# The URL carries the password, so it is read from the 0600 env file and never
-# echoed. Nothing below prints $PGPASSWORD or the URL.
-set -a; . "$ENV_FILE"; set +a
+# The URL carries the password and is never echoed. Nothing below prints
+# $PGPASSWORD or the URL.
+#
+# Prefer what the environment already holds. Under systemd this script runs as
+# `User=qevik` while `/opt/qevik/atlas.env` is root-owned 0600, so *sourcing* it
+# here fails with "Permission denied" — which is exactly how every backup from
+# 2026-08-22 to 2026-08-26 failed, five days with no verified backup and no
+# signal anywhere. The other four units never hit it because they use
+# `EnvironmentFile=`, which systemd reads as root *before* dropping privileges.
+#
+# So the unit now does the same, and this fallback is for a human running the
+# script by hand as root. The file's permissions are deliberately unchanged:
+# loosening them to fix this would have handed the database URL to any process
+# running as qevik, to repair a service that never needed to read the file
+# itself.
+if [ -z "${ATLAS_DATABASE_URL:-}" ]; then
+  if [ ! -r "$ENV_FILE" ]; then
+    echo "ATLAS_DATABASE_URL is not set and $ENV_FILE is not readable by $(id -un)." >&2
+    echo "Under systemd this comes from EnvironmentFile=; by hand, run as root." >&2
+    exit 1
+  fi
+  set -a; . "$ENV_FILE"; set +a
+fi
 URL="${ATLAS_DATABASE_URL#*://}"
 CRED="${URL%%@*}"; HOSTDB="${URL#*@}"
 PGUSER_="${CRED%%:*}"; PGPASSWORD="${CRED#*:}"
