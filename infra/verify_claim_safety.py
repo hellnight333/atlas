@@ -71,7 +71,7 @@ def worker(state: Path, *, dsn: str, insist: bool,
     command = [sys.executable, str(ROOT / "infra" / "mission_worker.py"),
                "--timeline", str(state / "missions.jsonl"),
                "--tenant", "tenant-claimcheck", "--name", "worker-check",
-               "--repository", str(ROOT), "--worktrees", str(state / "wt"),
+               "--worktrees", str(state / "wt"),
                "--reports", str(state / "reports"),
                "--agent", "self-check", "--once"]
     if dsn:

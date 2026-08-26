@@ -273,7 +273,7 @@ def main() -> int:
             [sys.executable, str(ROOT / "infra" / "mission_worker.py"),
              "--timeline", str(workspace / "missions.jsonl"),
              "--tenant", TENANT, "--name", "worker-acceptance",
-             "--repository", str(repository),
+             "--origin", f"acme={repository}",
              "--worktrees", str(workspace / "worktrees"),
              # The state directory, not a credential file. `--vault` named one
              # file, which left the records file to be resolved elsewhere — the

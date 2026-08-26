@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -89,10 +89,10 @@ function check(name, ok, detail = '') {
   (ok ? PASS : FAIL).push(name);
   console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 }
-const { stageOf, whyItEnded, cost, STAGE } = sandbox.__under_test || {};
+const { stageOf, whyItEnded, cost, STAGE, originOf } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
-    || typeof cost !== 'function' || !STAGE) {
+    || typeof cost !== 'function' || typeof originOf !== 'function' || !STAGE) {
   console.error('the functions under test were not defined — the script did not '
                 + 'reach the end, or they were renamed');
   process.exit(1);
@@ -175,6 +175,23 @@ check('a zero cost that was actually measured still renders',
       /0/.test(cost(0, 'REPORTED')), cost(0, 'REPORTED'));
 check('an undefined cost never renders "undefined"',
       !/undefined/.test(cost(undefined, 'UNKNOWN')), cost(undefined, 'UNKNOWN'));
+
+/* ---- originOf: which repository is being approved --------------------- */
+
+check('an unnamed origin reads as Qevik itself, not as "none"',
+      /qevik/i.test(originOf('').word), originOf('').word);
+check('...and says a person is required',
+      /cannot run without you/i.test(originOf('').says));
+check('the qevik origin is marked for attention',
+      originOf('qevik').tone === 'warn');
+check('an empty origin says nothing is at risk',
+      /nothing is at risk/i.test(originOf('none').says), originOf('none').says);
+check('...and is not marked for attention', originOf('none').tone === '');
+check('a customer origin is named and says Qevik is untouched',
+      originOf('acme-web').word === 'acme-web'
+      && /untouched/i.test(originOf('acme-web').says));
+check('a customer origin is never described as Qevik',
+      !/qevik's own/i.test(originOf('acme-web').word));
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

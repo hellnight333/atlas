@@ -47,16 +47,25 @@ from atlas_kernel.credentials.models import (  # noqa: E402
     chosen_for,
     registry_for,
 )
-from atlas_kernel.credentials.service import CredentialService  # noqa: E402
+from atlas_kernel.credentials.service import CredentialService, usable_for  # noqa: E402
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
 from atlas_kernel.fabric import scheduler  # noqa: E402
+from atlas_kernel.fabric.agents import Registry as AgentRegistry  # noqa: E402
 from atlas_kernel.fabric.budgets import (  # noqa: E402
     Envelope,
     Unmetered,
+    assess,
     reserve,
 )
 from atlas_kernel.fabric.scheduler import demands_from  # noqa: E402
-from atlas_kernel.mission import policy, recurrence, reports, scratch, service  # noqa: E402
+from atlas_kernel.mission import (  # noqa: E402
+    origins,
+    policy,
+    recurrence,
+    reports,
+    scratch,
+    service,
+)
 from atlas_kernel.mission.agents import (  # noqa: E402
     Behaviour,
     CodingAgent,
@@ -147,9 +156,19 @@ def roles_for(kind: str, *, tenant: str,
                  reviewer=agent_for(Role.REVIEW))
 
 
+#: What each `--agent` choice is called in the agent registry. The scheduler
+#: needs the *declared* agent to know a mission's placement and which
+#: credentials it requires; `_agent_of` cannot help, because it reads the
+#: invocations a mission has already recorded and dispatch happens before there
+#: are any. `fake` is deliberately absent: it is not a declared agent, and the
+#: scheduler treating it as unknown is the correct answer.
+REGISTERED_AS = {"self-check": "self-check", "llm": "implementer"}
+
+
 def queued(timeline: Timeline, *, tenant: str,
            connected: frozenset[str] = frozenset(),
-           remaining_units: float | None = None) -> list[Mission]:
+           remaining_units: float | None = None,
+           agent_id: str = "") -> list[Mission]:
     """Missions the **scheduler** says may run, in the order it chose.
 
     This used to sort by timestamp and take the first. That is not an ordering
@@ -163,7 +182,21 @@ def queued(timeline: Timeline, *, tenant: str,
     folded = service.fold(timeline.read(), tenant=tenant)
     done = frozenset(m["mission_id"] for m in folded
                      if m.get("status") == MissionStatus.COMPLETE.value)
-    demands = demands_from(folded, connected=connected,
+    # Which agent would carry each of these out — this worker's, since this
+    # worker is the one asking. Without it every demand had `placement=EITHER`
+    # and **no credential requirements at all**, so the scheduler's rule about a
+    # missing credential could never fire: a mission whose agent needs a key
+    # nobody configured was dispatched, told the operator it was running, and
+    # failed at the provider.
+    # The mission's own recorded agent wins: it is what policy was told when the
+    # plan was approved. This worker's configured agent is the fallback for a
+    # mission whose plan named nobody — an older one, or one from a path that
+    # does not name an agent.
+    routes = {str(m.get("mission_id", "")): (str(m.get("agent_id", "")) or agent_id)
+              for m in folded}
+    routes = {k: v for k, v in routes.items() if v}
+    demands = demands_from(folded, agents=AgentRegistry(), agent_for=routes,
+                           connected=connected,
                            remaining_units=remaining_units)
     plan = scheduler.plan(demands, tenant=tenant, done=done, concurrency=1)
 
@@ -312,21 +345,22 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
 
 
 def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
-                 repository: Path | None, roles: Roles,
+                 origin: origins.Origin, roles: Roles,
                  scratch_root: Path) -> tuple[Worker, dict]:
     """A worker with an isolated workspace per mission.
 
     `held` carries the workspace out so the caller can commit and clean up; the
     worker itself is not given a repository, only a directory it may write in.
 
-    `repository` is the **origin**, and it is only ever read. Each mission gets
+    `origin` has already been resolved from the mission's declared name
+    against the allow-list, and is only ever read. Each mission gets
     its own clone under `scratch_root`, and the worktree is added inside that
     clone. Before this, `git worktree add` ran in the origin and wrote a ref, a
     worktree entry and every committed object into it — so a mission modified
     the production checkout simply by running, and a failed one left its branch
     behind there.
 
-    `repository=None` gives an empty scratch repository instead. Work that has
+    An EMPTY origin gives a fresh repository instead. Work that has
     no source to start from still needs somewhere to write, and handing it a
     clone of Qevik because that is what was lying around is how unrelated work
     gets classified as self-modification.
@@ -335,7 +369,7 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     spaces: dict = {}
 
     def workspace_for(mission: Mission) -> Path:
-        area = scratch.prepare(repository, mission_id=mission.id,
+        area = scratch.prepare(origin.location(), mission_id=mission.id,
                                root=scratch_root)
         spaces[mission.id] = area
         space = GitWorkspace.create(area.path, branch=f"mission/{mission.id}",
@@ -372,8 +406,46 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     return worker, {"worktrees": held, "scratch": spaces}
 
 
+def credential_service(credentials_at: CredentialPaths) -> object:
+    """The vault this worker reads, opened once.
+
+    Separate from `roles_for` so the dispatch check and the agents share one
+    view: two `CredentialService` objects over the same files would answer the
+    same question at different moments and disagree about what is configured.
+    """
+    records = Timeline(credentials_at.records)
+    return CredentialService(Vault(FileSecretStore(credentials_at.vault)),
+                             events=records.read(), sink=records.append)
+
+
+def tenant_headroom(ledger: object, tenant: str) -> float | None:
+    """What this tenant can still afford, or None if nothing meters it.
+
+    `budgets.assess` exists so "the scheduler can decline to start work it
+    cannot finish", and nothing was calling it: `queued()` accepted
+    `remaining_units` and `pass_once` never passed one, so the budget was
+    consulted **after** the work — by `_charge` — and never before it. A mission
+    beyond its tenant's allowance dispatched, ran, cost money, and was refused
+    at the ledger afterwards.
+
+    `None` is UNKNOWN and stays UNKNOWN all the way to the scheduler, which has
+    its own rule for unpriced work. It is never turned into a number here, and
+    an unmetered tenant is not one with an infinite balance — it is one nobody
+    measured.
+    """
+    try:
+        return assess(ledger, Envelope(tenant_id=str(tenant)), 0.0).headroom
+    except Unmetered:
+        return None
+    except Exception:                             # noqa: BLE001 - logged, not fatal
+        log.exception("could not read the allowance for %s; treating it as "
+                      "unknown rather than as plenty", tenant)
+        return None
+
+
 def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
-                     claims: object, at: datetime | None = None) -> int:
+                     claims: object, registry: origins.Registry,
+                     at: datetime | None = None) -> int:
     """Create missions for any recurrence that has come due. Returns how many.
 
     Runs inside the worker rather than as a daemon of its own, because a second
@@ -402,27 +474,40 @@ def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
                       firing.hold.value if firing.hold else "?", firing.detail)
             continue
 
+        # Resolved before the mission exists. A recurrence naming an origin
+        # this worker cannot serve is a configuration error, and the place to
+        # find that out is here — not after a mission has been created that
+        # nothing can dispatch.
+        try:
+            origin = registry.resolve(rule.origin_name)
+        except origins.UnknownOrigin as refusal:
+            log.error("recurrence %s names an origin this worker does not have: "
+                      "%s", rule.id, refusal)
+            continue
+
         claims.register(firing.key) if hasattr(claims, "register") else None
         if not claims.acquire(firing.key, worker=name):
             log.info("recurrence %s: %s is being created by another worker",
                      rule.id, firing.key)
             continue
         try:
-            mission, events = recurrence.enqueue(rule, firing, tenant=tenant)
+            mission, events = recurrence.enqueue(rule, firing, tenant=tenant,
+                                                 origin=origin)
             for event in events:
                 timeline.append(event)
             created += 1
-            log.info("recurrence %s created %s (%s) as %s", rule.id, mission.id,
-                     firing.key, mission.status.value)
+            log.info("recurrence %s created %s (%s) as %s in origin %s",
+                     rule.id, mission.id, firing.key, mission.status.value,
+                     origin.name)
         finally:
             claims.release(firing.key, worker=name)
     return created
 
 
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
-              repository: Path | None, roles: Roles, claims: object,
-              ledger: object, scratch_root: Path,
-              report_root: Path) -> int:
+              registry: origins.Registry, roles: Roles, claims: object,
+              ledger: object, scratch_root: Path, report_root: Path,
+              credentials: object = None, agent_choice: str = "") -> int:
     """Recover, then take at most one mission. Returns how many ran."""
     freed = release_stale(timeline, tenant=tenant)
     if freed:
@@ -431,18 +516,21 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # Before looking for work, create any that has come due. A recurrence that
     # fires into an empty queue should be picked up on this same pass rather
     # than waiting for the next one.
-    made = tick_recurrences(timeline, tenant=tenant, name=name, claims=claims)
+    made = tick_recurrences(timeline, tenant=tenant, name=name, claims=claims,
+                            registry=registry)
     if made:
         log.info("%d recurring mission(s) created", made)
 
-    waiting = queued(timeline, tenant=tenant)
+    # The allowance, before choosing work rather than after doing it. The
+    # scheduler refuses a mission whose estimate the tenant cannot carry, and an
+    # unpriced mission needs headroom of its own.
+    waiting = queued(timeline, tenant=tenant,
+                     connected=usable_for(credentials, tenant=tenant),
+                     remaining_units=tenant_headroom(ledger, tenant),
+                     agent_id=REGISTERED_AS.get(agent_choice, ""))
     if not waiting:
         return 0
 
-    worker, workspaces = build_worker(name, timeline, worktrees=worktrees,
-                                      repository=repository, roles=roles,
-                                      scratch_root=scratch_root)
-    held, scratches = workspaces["worktrees"], workspaces["scratch"]
     mission = waiting[0]
 
     # The atomic claim, before anything else touches the mission. The scheduler
@@ -454,13 +542,35 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
         log.info("%s went to another worker", mission.id)
         return 0
 
+    # Which repository this mission is allowed to touch. The mission names a
+    # key; the registry — built at start-up from code and deployment
+    # configuration — is the only thing that turns a key into a location. A name
+    # nobody registered is a refusal, never a fall back to the default, because
+    # the default is Qevik.
+    try:
+        origin = registry.resolve(mission.origin_name)
+    except origins.UnknownOrigin as refusal:
+        log.error("refusing %s: %s", mission.id, refusal)
+        blocked, event = service.transition(
+            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
+            claimed_by="", note=str(refusal)[:300])
+        timeline.append(event)
+        claims.release(mission.id, worker=name)
+        return 0
+    log.info("%s: origin %s (%s)", mission.id, origin.name, origin.kind.value)
+
+    worker, workspaces = build_worker(name, timeline, worktrees=worktrees,
+                                      origin=origin, roles=roles,
+                                      scratch_root=scratch_root)
+    held, scratches = workspaces["worktrees"], workspaces["scratch"]
+
     # The origin is a fact; what the plan declared about it is a field. They can
     # disagree, and this is where that is caught — after the claim, so the
     # refusal is recorded against a mission somebody can find, and before any
     # agent runs.
     refusal = policy.refuse_unapproved_self_modification(
         service.history(timeline.read(), mission.id, tenant=tenant),
-        origin_is_qevik=scratch.classify(repository) is scratch.Origin.QEVIK)
+        origin_is_qevik=origin.modifies_qevik_itself)
     if refusal:
         log.error("refusing %s: %s", mission.id, refusal)
         blocked, event = service.transition(
@@ -555,7 +665,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="the JSONL mission timeline shared with the API")
     parser.add_argument("--tenant", default="tenant-qevik")
     parser.add_argument("--name", default="worker-1")
-    parser.add_argument("--repository", default=str(ROOT))
+    parser.add_argument("--origin", action="append", default=[], metavar="NAME=PATH",
+                        help="a customer repository a mission may name. "
+                             "Repeatable. The built-in origins are 'qevik' "
+                             "(this checkout, self-modification) and 'none' "
+                             "(no source). An entry pointing at Qevik's own "
+                             "repository is refused at start-up")
+    # --repository is gone on purpose. It was one global repository for the
+    # whole process, which meant every mission on a worker was the same kind of
+    # mission. Refused rather than ignored: a unit file still passing it would
+    # otherwise start successfully and silently do something else.
+    parser.add_argument("--repository", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--scratch", default="",
                         help="where each mission's clone of the origin goes "
                              "(default: a temp dir). The origin itself is only "
@@ -612,22 +732,35 @@ def main(argv: list[str] | None = None) -> int:
     ledger = QuotaLedger(events=quota_events.read(), sink=quota_events.append)
     worktrees = Path(args.worktrees or tempfile.mkdtemp(prefix="qevik-missions-"))
     scratch_root = Path(args.scratch or tempfile.mkdtemp(prefix="qevik-scratch-"))
-    # `--repository none` means "give missions an empty repository". Spelled
-    # rather than left as an empty string, so it reads as a decision in the unit
-    # file instead of looking like a missing argument.
-    repository = (None if args.repository.strip().lower() in {"none", ""}
-                  else Path(args.repository))
     # Resolved once. `report_root or repository` was the old fallback, and it
-    # stops being safe the moment the repository may legitimately be absent.
+    # stops being safe the moment there is no single repository to fall back to.
     report_root = Path(args.reports) if args.reports else Path(
         tempfile.mkdtemp(prefix="qevik-reports-"))
-    if repository is None:
-        log.info("missions get an empty scratch repository (--repository none)")
-    else:
-        log.info("origin %s — read only; each mission works in a clone under %s",
-                 repository, scratch_root)
+
+    # The allow-list, built here so a bad entry fails at start-up in front of
+    # whoever configured it. There is deliberately no global repository any
+    # more: each mission names an origin and the registry resolves it.
+    try:
+        registry = origins.Registry.build(origins.parse_pairs(args.origin))
+    except origins.OriginRefused as refusal:
+        log.error("origins: %s", refusal)
+        return 2
+    log.info("origins: %s — each mission names one; a name nobody registered is "
+             "refused, never defaulted", ", ".join(
+                 f"{o.name}({o.kind.value})" for o in registry.origins))
+    log.info("clones go under %s; every origin is read-only", scratch_root)
+
+    if args.repository is not None:
+        log.error(
+            "--repository is gone. It set one repository for the whole worker, "
+            "so every mission on it was the same kind of mission. A mission now "
+            "names its own origin and the worker resolves it against an "
+            "allow-list: use --origin NAME=PATH for a customer repository. The "
+            "built-ins 'qevik' and 'none' need no configuration.")
+        return 2
 
     credentials_at = paths_for(args.state or None)
+    credentials = credential_service(credentials_at)
     try:
         roles = roles_for(args.agent, tenant=args.tenant,
                           credentials_at=credentials_at)
@@ -646,18 +779,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         pass_once(timeline, tenant=args.tenant, name=args.name,
-                  worktrees=worktrees, repository=repository, roles=roles,
+                  worktrees=worktrees, registry=registry, roles=roles,
                   claims=claims, ledger=ledger, scratch_root=scratch_root,
-                  report_root=report_root)
+                  report_root=report_root, credentials=credentials,
+                  agent_choice=args.agent)
         return 0
 
     log.info("watching %s for %s", timeline.path, args.tenant)
     while True:
         try:
             pass_once(timeline, tenant=args.tenant, name=args.name,
-                      worktrees=worktrees, repository=repository, roles=roles,
+                      worktrees=worktrees, registry=registry, roles=roles,
                       claims=claims, ledger=ledger, scratch_root=scratch_root,
-                      report_root=report_root)
+                      report_root=report_root, credentials=credentials,
+                      agent_choice=args.agent)
         except KeyboardInterrupt:
             log.info("stopping")
             return 0

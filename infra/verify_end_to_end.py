@@ -228,7 +228,6 @@ def main() -> int:
         command = [sys.executable, str(ROOT / "infra" / "mission_worker.py"),
                    "--timeline", str(state / "missions.jsonl"),
                    "--tenant", TENANT, "--name", "worker-e2e",
-                   "--repository", str(ROOT),
                    "--worktrees", str(workspace / "worktrees"),
                    "--reports", str(reports),
                    "--agent", "self-check", "--once"]

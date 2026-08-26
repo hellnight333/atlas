@@ -99,6 +99,39 @@ and the worker logs where each mission's commits are.
 delete a path equal to its own origin. The whole purpose of the clone is that
 the origin survives; deleting the source would invert it.
 
+## Origin is a property of the mission, not of the worker
+
+`--repository` is gone. It set one repository for the whole process, so every
+mission on a worker was the same kind of mission — the CUSTOMER case could not be
+exercised at all, and one worker could not serve both self-improvement and
+unattended work. Passing it now makes the worker **refuse to start** rather than
+silently doing something else.
+
+A mission declares `origin_name`. That is a **key**, never a path:
+
+    mission.origin_name = "acme-web"     <- meaningless on its own
+    registry.resolve("acme-web")         <- code decides what that is, if anything
+
+`mission/origins.py` is the only thing that turns a name into a location. A
+planner emitting `"../../etc"`, `"/opt/qevik/atlas"` or `"qevik "` gets
+`UnknownOrigin` and the mission is **BLOCKED** — never a fall back to the
+default, because the default is Qevik. There is no path in the mission at all,
+so there is nothing to traverse.
+
+| origin | source | kind | who decides |
+|---|---|---|---|
+| `qevik` | derived from `__file__` | QEVIK | a person, every time |
+| `none` | — | EMPTY | nobody; may run unattended |
+| *configured* | `--origin NAME=PATH` | CUSTOMER | policy, on the plan |
+
+**The registration check that matters:** a CUSTOMER entry whose path resolves to
+Qevik's own repository is refused **at start-up**. Without it, "register the
+customer `totally-not-qevik` pointing at /opt/qevik/atlas" routes
+self-modification through the customer path, where policy does not ask for
+approval — a bypass by configuration, silently. Every refusal happens at
+start-up, in front of whoever configured it, rather than blocking one mission at
+three in the morning.
+
 ## Self-modification is decided by the origin, not the workspace
 
 **A clone of Qevik is still Qevik.** The work is intended to become the running
@@ -164,6 +197,26 @@ more. A `chown` would have handed write access to every process running as
 The underlying cause is the deploy method; `rsync -a` should carry
 `--no-owner --no-group` here.
 
+## Cleaning the residue
+
+`infra/prune_mission_branches.py`. Dry run by default; `--apply` performs what
+it just listed.
+
+The rule is inverted from the usual cleanup: **delete nothing unless it can be
+proven stale.** Proof means the branch names a mission that appears in none of
+the timelines it was checked against and in no report. Anything else — a live
+mission, a mission a report cites, a branch that is not a mission branch, or a
+timeline that could not be read — is protected, with the reason printed.
+
+A *missing* timeline protects everything, deliberately. An *existing but empty*
+one is evidence: it says "this deployment records missions here, and there are
+none". A missing one says "you may be looking in the wrong place", and the
+optimistic reading of that difference deletes somebody's work.
+
+A worktree registered under `/tmp` is reported as corroboration — "probably a
+harness run" — and never as a deletion rule. Guessing from a path is how a
+cleanup removes something that mattered.
+
 ## Residue from before the change
 
 `/opt/qevik/atlas` currently carries **13 `mission/*` branches and 8 stale
@@ -185,6 +238,13 @@ Verified after the change: the two-worker run's commit `54a0186b` is **absent**
 from `/opt/qevik/atlas`, and the newest `mission/*` branch there predates it by
 four hours.
 
+**Inspected 2026-08-26 — 0 provably stale, 13 protected.** The control plane has
+no `missions.jsonl` at all, so there is nothing to check the branches against and
+the tool correctly refuses to delete any of them. Three carry corroborating
+evidence of harness origin (worktrees registered under `/tmp/qevik-e2e-*`), which
+is reported and deliberately does not make them deletable. Once the worker has
+actually recorded missions, the check becomes meaningful and the cleanup can run.
+
 ## Three independent levels
 
 The boundary does not rest on the code being right:
@@ -201,6 +261,39 @@ The boundary does not rest on the code being right:
 3. **Filesystem** — `/opt/qevik/atlas` is mode 755 owned by uid 501, and a
    write probe as `qevik` returns `Permission denied`.
 
+## What the origin model uncovered in dispatch
+
+Two things next to it turned out to be built and not connected — a different
+problem from missing, and one that looks fine until you check.
+
+**The scheduler could not see any credential requirement.** `demands_from` was
+called with no `agent_for`, so every mission got `placement=EITHER` and an empty
+`missing_credentials`. A mission whose agent needed a model credential nobody had
+configured was dispatched, reported as running, and failed at the provider —
+exactly what `usable_credentials`'s own docstring warns about:
+
+    no agent_for (how it ran)      dispatchable=['m-1']  missing=()
+    with agent_for, no creds       dispatchable=[]       missing=('qwen','anthropic','openai')
+    with agent_for, qwen present   dispatchable=['m-1']  missing=()
+
+`Mission.agent_id` is now recorded when the plan is attached, from the same value
+`policy.decide` was given, so the blast radius a person approved and the one read
+at dispatch are the same value. The worker prefers it and falls back to its own
+configured agent only for a mission whose plan named nobody. The control plane's
+schedule view uses it too — it was showing missions as dispatchable that the
+worker would hold.
+
+**The budget was consulted after the work, never before it.**
+`budgets.assess()` exists, in its own words, so "the scheduler can decline to
+start work it cannot finish", and nothing called it. `queued()` accepted
+`remaining_units` and `pass_once` never passed one. `tenant_headroom()` now asks
+before dispatch; `None` stays `None` all the way to the scheduler, because an
+unmetered tenant is not one with an infinite balance — it is one nobody measured.
+
+`usable_for()` moved into `credentials/service.py` so the worker and the API ask
+one implementation. Two definitions of "usable" would disagree on the day one of
+them mattered.
+
 ## Files
 
 | Path | What |
@@ -210,4 +303,8 @@ The boundary does not rest on the code being right:
 | `infra/verify_scratch_isolation.py` | 28 checks, real repo, real mission, with the negative control |
 | `infra/verify_self_improvement.py` | production fingerprinted across a real self-modification mission |
 | `packages/kernel/atlas_kernel/mission/policy.py` | `refuse_unapproved_self_modification` |
-| `infra/mission_worker.py` | `--scratch`, `--repository none` |
+| `infra/mission_worker.py` | `--scratch`, `--origin NAME=PATH`, dispatch wiring |
+| `packages/kernel/atlas_kernel/mission/origins.py` | the allow-list |
+| `packages/kernel/tests/test_origins.py` | 31 tests, cross-origin confusion |
+| `packages/kernel/tests/test_worker_dispatch.py` | 14 tests, the three blanks |
+| `infra/prune_mission_branches.py` | provable cleanup, dry run by default |

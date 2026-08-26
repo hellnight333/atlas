@@ -70,8 +70,8 @@ def main() -> int:
         before = scratch.fingerprint(origin)
 
         # ---- the classifier -------------------------------------------
-        check("a repository that is not the one this code runs from is external",
-              scratch.classify(origin) is scratch.Origin.EXTERNAL,
+        check("a repository that is not the one this code runs from is a customer",
+              scratch.classify(origin) is scratch.Origin.CUSTOMER,
               scratch.classify(origin).value)
         check("Qevik's own repository classifies as qevik",
               scratch.classify(ROOT) is scratch.Origin.QEVIK,
@@ -140,7 +140,7 @@ def main() -> int:
               and scratch.fingerprint(origin) == before)
 
         pinned = scratch.Scratch(origin=origin, path=origin,
-                                 kind=scratch.Origin.EXTERNAL)
+                                 kind=scratch.Origin.CUSTOMER)
         try:
             pinned.discard()
             check("discard refuses to delete the origin", False, "it deleted it")
@@ -183,7 +183,7 @@ def main() -> int:
         back = service.rehydrate(mission.summary(), tenant=TENANT)
         check("the mission records the repository and workspace it used",
               back.origin == str(origin) and back.workspace == str(area.path)
-              and back.origin_kind == "external",
+              and back.origin_kind == "customer",
               f"{back.origin_kind}")
 
         # ---- the requirement, in its own words -------------------------
@@ -211,7 +211,7 @@ def autonomous(tmp: Path) -> None:
     timeline = Timeline(tmp / "auto" / "missions.jsonl")
 
     mission, event = service.create(tenant=TENANT, title="autonomous change",
-                                    requested_by="scheduler")
+                                    requested_by="scheduler", origin_name="acme")
     timeline.append(event)
     mission, event = service.transition(mission, MissionStatus.PLANNING,
                                         tenant=TENANT, actor="scheduler")
@@ -229,7 +229,7 @@ def autonomous(tmp: Path) -> None:
     done = subprocess.run(
         [_sys.executable, str(ROOT / "infra" / "mission_worker.py"),
          "--timeline", str(timeline.path), "--tenant", TENANT,
-         "--name", "worker-autonomous", "--repository", str(origin),
+         "--name", "worker-autonomous", "--origin", f"acme={origin}",
          "--worktrees", str(tmp / "auto" / "wt"),
          "--scratch", str(tmp / "auto" / "scratch"),
          "--reports", str(tmp / "auto" / "reports"),
@@ -252,13 +252,55 @@ def autonomous(tmp: Path) -> None:
     # that looks right and points somewhere else.
     check("it recorded the origin it was cloned from",
           Path(folded.get("origin", "")) == origin.resolve()
-          and folded.get("origin_kind") == "external",
+          and folded.get("origin_kind") == "customer",
           f"{folded.get('origin')!r} vs {origin.resolve()}")
 
     after = scratch.fingerprint(origin)
     differing = [k for k in before if before[k] != after[k]]
     check("AND THE ORIGIN IS BYTE-FOR-BYTE UNCHANGED", not differing,
           ", ".join(f"{k}: {before[k]!r} -> {after[k]!r}" for k in differing))
+
+    # ---- a mission that names an origin nobody registered ------------------
+    #
+    # The dangerous convenience would be to treat this as "use the default".
+    # The default is Qevik.
+    qevik_before = scratch.fingerprint(ROOT)
+    stray, event = service.create(tenant=TENANT, title="names a stranger",
+                                  requested_by="planner",
+                                  origin_name="acme-web-production")
+    timeline.append(event)
+    stray, event = service.transition(stray, MissionStatus.PLANNING,
+                                      tenant=TENANT, actor="planner")
+    timeline.append(event)
+    stray, event = service.attach_plan(stray, plan, tenant=TENANT,
+                                       agent_id="self-check",
+                                       modifies_qevik_itself=False)
+    timeline.append(event)
+
+    refused = subprocess.run(
+        [_sys.executable, str(ROOT / "infra" / "mission_worker.py"),
+         "--timeline", str(timeline.path), "--tenant", TENANT,
+         "--name", "worker-stray", "--origin", f"acme={origin}",
+         "--worktrees", str(tmp / "stray" / "wt"),
+         "--scratch", str(tmp / "stray" / "scratch"),
+         "--reports", str(tmp / "stray" / "reports"),
+         "--state", str(tmp / "stray" / "state"),
+         "--agent", "self-check", "--once"],
+        capture_output=True, text=True, timeout=600, check=False)
+
+    strays = [m for m in service.fold(Timeline(timeline.path).read(), tenant=TENANT)
+              if m["mission_id"] == stray.id]
+    landed = strays[0] if strays else {}
+    check("a mission naming an unregistered origin is BLOCKED, not defaulted",
+          landed.get("status") == MissionStatus.BLOCKED.value,
+          f"status={landed.get('status')} rc={refused.returncode}")
+    check("...and the refusal says which names exist",
+          "acme" in (landed.get("note") or "") or "no origin named"
+          in (landed.get("note") or ""), (landed.get("note") or "")[:90])
+    check("...and it never reached any workspace",
+          not landed.get("workspace"), landed.get("workspace", ""))
+    check("...and Qevik's own repository was not touched by it",
+          scratch.fingerprint(ROOT) == qevik_before)
 
 
 if __name__ == "__main__":

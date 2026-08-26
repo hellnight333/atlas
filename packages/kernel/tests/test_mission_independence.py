@@ -96,7 +96,7 @@ def _run_worker(timeline: Timeline, repository: Path, tmp_path: Path,
     """
     return subprocess.run(
         [sys.executable, str(WORKER), "--timeline", str(timeline.path),
-         "--tenant", TENANT, "--name", name, "--repository", str(repository),
+         "--tenant", TENANT, "--name", name, "--origin", f"acme={repository}",
          "--worktrees", str(tmp_path / f"worktrees-{name}"), "--agent", agent,
          # The state directory, not a file: the credential file names belong to
          # `credentials.location`, and a caller choosing one is how the control

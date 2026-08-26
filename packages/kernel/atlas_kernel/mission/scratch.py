@@ -90,7 +90,10 @@ class Origin(StrEnum):
     #: A clone of the repository this very code is running from. Self-modification.
     QEVIK = "qevik"
     #: Somebody else's repository — a customer, a business. Normal path.
-    EXTERNAL = "external"
+    #: Named CUSTOMER rather than EXTERNAL because the origin registry, the
+    #: mission field and the operator all call it that, and one concept with two
+    #: names is the drift that makes two lists stop agreeing.
+    CUSTOMER = "customer"
     #: No source at all. A fresh repository, nothing at risk.
     EMPTY = "empty"
 
@@ -118,7 +121,7 @@ def classify(origin: Path | None) -> Origin:
     resolved = Path(origin).resolve()
     if mine is not None and resolved == mine.resolve():
         return Origin.QEVIK
-    return Origin.EXTERNAL
+    return Origin.CUSTOMER
 
 
 @dataclass

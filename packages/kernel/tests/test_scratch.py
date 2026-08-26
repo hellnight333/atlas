@@ -41,7 +41,7 @@ def test_qeviks_own_repository_is_recognised_as_itself():
 
 
 def test_someone_elses_repository_is_external(tmp_path):
-    assert scratch.classify(a_repo(tmp_path / "customer")) is scratch.Origin.EXTERNAL
+    assert scratch.classify(a_repo(tmp_path / "customer")) is scratch.Origin.CUSTOMER
 
 
 def test_no_repository_is_empty():
@@ -135,7 +135,7 @@ def test_discarding_removes_the_clone_and_nothing_else(tmp_path):
 def test_discard_refuses_to_delete_the_origin(tmp_path):
     origin = a_repo(tmp_path / "origin")
     pinned = scratch.Scratch(origin=origin, path=origin,
-                             kind=scratch.Origin.EXTERNAL)
+                             kind=scratch.Origin.CUSTOMER)
     with pytest.raises(scratch.ScratchError, match="refusing to delete the origin"):
         pinned.discard()
     assert (origin / "file.txt").is_file()

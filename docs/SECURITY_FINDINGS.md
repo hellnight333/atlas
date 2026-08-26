@@ -47,6 +47,12 @@ host is `qevik`, which already receives that URL legitimately through
 `EnvironmentFile=`. So the practical escalation is small; the finding is that a
 credential sat in a world-readable path at all.
 
+### Status 2026-08-26 (unchanged)
+
+Re-confirmed: still not read, still not deleted, still `0600`. No rotation
+raised — the current test credentials are deliberately in use for
+provider-boundary testing.
+
 ### The decision that is open
 
 1. Inspect and delete, or

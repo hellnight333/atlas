@@ -70,8 +70,8 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from ..opportunity.tenancy import TenantId
-from . import service
-from .models import TERMINAL, Mission, MissionStatus, Plan
+from . import origins, service
+from .models import TERMINAL, Mission, MissionStatus, Plan, PlanStep
 
 #: The shortest period a recurrence may declare. A recurrence is a way to put
 #: work in a queue; one that fires every few seconds is a queue flood with a
@@ -126,9 +126,13 @@ class Recurrence(BaseModel):
     anchor: datetime
     description: str = ""
     enabled: bool = True
-    #: Whether this changes Qevik's own source. True means it can never run
-    #: unattended, however cheap it looks. Stated by the declaration, in code.
-    modifies_qevik_itself: bool = True
+    #: Which repository this works on, **by name**. Not a boolean about whether
+    #: it changes Qevik: a boolean is a claim that can disagree with what the
+    #: worker actually hands the mission, and the first version of this file had
+    #: exactly that gap. The name resolves through the origin registry, and the
+    #: kind — and therefore whether a person is asked — comes from the resolved
+    #: origin rather than from anything declared here.
+    origin_name: str = origins.DEFAULT_NAME
     requested_by: str = "recurrence"
     notes: str = ""
 
@@ -274,22 +278,35 @@ def assess(recurrence: Recurrence, *, at: datetime,
 
 
 def enqueue(recurrence: Recurrence, firing: Firing, *,
-            tenant: TenantId | None) -> tuple[Mission, tuple[object, ...]]:
+            tenant: TenantId | None, origin: origins.Origin
+            ) -> tuple[Mission, tuple[object, ...]]:
     """Create the mission for a firing, through the ordinary mission path.
 
-    Returns the mission and the events to persist. Two calls, both existing:
-    `service.create` then `service.attach_plan` — which runs `policy.decide` and
-    routes the mission to QUEUED or AWAITING_APPROVAL exactly as it would for
-    work a person typed in. A recurrence cannot reach the queue by any route a
-    person's request could not.
+    Returns the mission and the events to persist. Three calls, all existing:
+    `service.create`, a transition to PLANNING, then `service.attach_plan` —
+    which runs `policy.decide` and routes the mission to QUEUED or
+    AWAITING_APPROVAL exactly as it would for work a person typed in. A
+    recurrence cannot reach the queue by any route a person's request could not.
+
+    `origin` is **resolved by the caller** and passed in, rather than looked up
+    from the name here. The caller is the worker, which owns the registry, and
+    resolving there means a recurrence naming an origin nobody registered fails
+    when the mission would be created rather than after it exists — and that
+    whether a person is asked comes from the origin the worker will actually
+    use, not from a field the declaration could have set to anything.
     """
     if not firing.fires:
         raise ValueError(f"{recurrence.id} is not firing: {firing.detail}")
+    if origin.name != recurrence.origin_name:
+        raise ValueError(
+            f"{recurrence.id} declares origin {recurrence.origin_name!r} but was "
+            f"given {origin.name!r}. Creating the mission anyway would record "
+            "one repository and use another.")
 
     mission, created = service.create(
         tenant=tenant, title=recurrence.title,
         description=recurrence.description, requested_by=recurrence.requested_by,
-        occurrence=firing.key)
+        occurrence=firing.key, origin_name=origin.name)
     # DRAFT -> PLANNING -> (QUEUED | AWAITING_APPROVAL). The middle step is not
     # ceremony: `ALLOWED` refuses `draft -> queued` outright, which is the state
     # machine correctly rejecting a mission that reached a queue without ever
@@ -302,35 +319,75 @@ def enqueue(recurrence: Recurrence, firing: Firing, *,
     mission, planned = service.attach_plan(
         mission, recurrence.plan, tenant=tenant, actor=recurrence.requested_by,
         agent_id=recurrence.agent_id,
-        modifies_qevik_itself=recurrence.modifies_qevik_itself)
+        modifies_qevik_itself=origin.modifies_qevik_itself)
     return mission, (created, planning, planned)
 
 
 # ============================================ the declared recurrences
 #
 # In code, beside `AGENTS` and `EXECUTORS`, for the reason given in the module
-# note: `modifies_qevik_itself=False` is a claim policy trusts, and a claim
-# policy trusts must not be editable at runtime. Adding one is a change to
-# Qevik's own source — which is itself a mission a person approves.
-#
-# ## Why this is empty, and what has to change before it is not
-#
-# Nothing here can honestly declare `modifies_qevik_itself=False` yet. The
-# production worker runs with `--repository /opt/qevik/atlas` — Qevik's own
-# checkout — and its committer writes a real commit into a worktree of that
-# repository on every mission. The branch is never merged and nothing it writes
-# reaches the running system, but "a mission that writes into Qevik's own repo"
-# is exactly what that flag is asked about, and answering False because the
-# branch is discardable would be choosing the convenient reading of a claim the
-# policy layer is relying on.
-#
-# So recurring work today can be *created* on a schedule and will wait for a
-# person, which is useful and correct. Recurring work that runs **unattended
-# overnight** needs one specific thing that does not exist yet: an execution
-# workspace that is not Qevik's repository. Until then this stays empty rather
-# than carrying a declaration that is true only if nobody looks closely.
+# note: which origin a recurrence names decides whether a person is asked, and a
+# decision policy relies on must not be editable at runtime. Adding one is a
+# change to Qevik's own source — which is itself a mission a person approves.
 
-RECURRENCES: tuple[Recurrence, ...] = ()
+#: The production tenant. Named here because a recurrence is deployment
+#: configuration expressed in code; `declared(tenant)` filters on it, so a
+#: deployment with a different tenant simply gets none of these.
+QEVIK_TENANT = "tenant-qevik"
+
+#: Runs every night. Cheap, writes only under `reports/`, and works in an
+#: **empty** origin — no source repository, so nothing is at risk and no person
+#: is asked. That combination is the only one that reaches a queue unattended,
+#: and it is the whole reason the origin registry had to come first.
+_CANARY_PLAN = Plan(
+    goal="prove the whole execution path still works, unattended",
+    why=("A path that is only exercised when somebody asks for something is a "
+         "path that breaks quietly. The backup on this host failed every night "
+         "from 2026-08-18 to 2026-08-26 — eight days — and nothing reported it, "
+         "because it ran as a systemd timer rather than as a mission. This is "
+         "the same work done the other way round: if the scheduler, the claim, "
+         "the workspace, the sandbox, the agent, the evidence or the report "
+         "stops working, a failed mission appears on the phone the next "
+         "morning instead of being discovered during a restore."),
+    steps=(
+        PlanStep(order=1, title="write into the workspace",
+                 why="proves the workspace exists and is writable",
+                 files=("reports/canary.md",)),
+        PlanStep(order=2, title="read it back",
+                 why="proves what was written survives the step boundary"),
+        PlanStep(order=3, title="confirm nothing outside the workspace is reachable",
+                 why="proves the sandbox is still confining, not merely present"),
+    ),
+    test_plan="each step reports pass or fail, and the evidence is in the report",
+    security_impact=("None. Empty origin, no network, no credentials, and every "
+                     "effect is inside a discardable repository."),
+    rollback="nothing to roll back; the mission writes nowhere that persists",
+    estimated_cost=0.0,
+    cost_status="REPORTED",
+    approval_required=False,
+)
+
+RECURRENCES: tuple[Recurrence, ...] = (
+    Recurrence(
+        id="rec-execution-canary",
+        tenant_id=QEVIK_TENANT,
+        title="Nightly execution-path canary",
+        description=("Runs the self-check agent end to end so a broken "
+                     "execution path is discovered by a failed mission rather "
+                     "than by needing one."),
+        plan=_CANARY_PLAN,
+        agent_id="self-check",
+        origin_name=origins.EMPTY_NAME,
+        every=timedelta(days=1),
+        # 02:30 UTC — inside the scheduler's night window (01:00–06:00) and
+        # clear of the 03:30 backup, so the two do not contend for the disk.
+        anchor=datetime(2026, 8, 27, 2, 30, tzinfo=UTC),
+        requested_by="recurrence",
+        notes=("The first unattended recurrence. Reaches the queue with nobody "
+               "asked only because its origin is EMPTY; the same plan against "
+               "the 'qevik' origin would wait for a person."),
+    ),
+)
 
 
 def declared(tenant: TenantId | None = None) -> tuple[Recurrence, ...]:
@@ -346,7 +403,7 @@ def describe(at: datetime | None = None) -> list[dict]:
     return [{"id": r.id, "title": r.title, "tenant_id": r.tenant_id,
              "agent_id": r.agent_id, "enabled": r.enabled,
              "every_seconds": r.every.total_seconds(),
-             "modifies_qevik_itself": r.modifies_qevik_itself,
+             "origin_name": r.origin_name,
              "next_at": next_after(r, at=moment).isoformat(),
              "notes": r.notes}
             for r in RECURRENCES]

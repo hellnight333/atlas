@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from atlas_kernel.mission import policy, recurrence, service
+from atlas_kernel.mission import origins, policy, recurrence, service
 from atlas_kernel.mission.models import MissionStatus, Plan, PlanStep
 
 TENANT = "tenant-recurrence"
@@ -30,9 +30,18 @@ def a_plan(*, files=("reports/scan.md",), cost=0.5) -> Plan:
 def a_recurrence(**over) -> recurrence.Recurrence:
     fields = dict(id="rec-daily", tenant_id=TENANT, title="Daily check",
                   plan=a_plan(), agent_id="self-check", every=DAY,
-                  anchor=ANCHOR, modifies_qevik_itself=False)
+                  anchor=ANCHOR, origin_name=origins.EMPTY_NAME)
     fields.update(over)
     return recurrence.Recurrence(**fields)
+
+
+REGISTRY = origins.Registry.build()
+
+
+def enqueue(rule: recurrence.Recurrence, firing: recurrence.Firing):
+    """`enqueue` with the origin resolved the way the worker resolves it."""
+    return recurrence.enqueue(rule, firing, tenant=TENANT,
+                              origin=REGISTRY.resolve(rule.origin_name))
 
 
 def summary_of(mission, *, status=None, occurrence=None) -> dict:
@@ -123,7 +132,7 @@ def test_an_occurrence_that_already_has_a_mission_does_not_fire_again():
     first = recurrence.assess(rec, at=at, missions=[])
     assert first.fires
 
-    mission, _ = recurrence.enqueue(rec, first, tenant=TENANT)
+    mission, _ = enqueue(rec, first)
     again = recurrence.assess(
         rec, at=at + timedelta(hours=2),
         missions=[summary_of(mission, status=MissionStatus.COMPLETE)])
@@ -133,8 +142,7 @@ def test_an_occurrence_that_already_has_a_mission_does_not_fire_again():
 
 def test_a_completed_occurrence_does_not_block_the_next_one():
     rec = a_recurrence()
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     done = [summary_of(mission, status=MissionStatus.COMPLETE)]
     tomorrow = recurrence.assess(rec, at=ANCHOR + DAY, missions=done)
     assert tomorrow.fires
@@ -147,8 +155,7 @@ def test_a_completed_occurrence_does_not_block_the_next_one():
 def test_a_slow_run_does_not_stack(status):
     """Yesterday still going means today does not start."""
     rec = a_recurrence()
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     live = [summary_of(mission, status=status)]
     tomorrow = recurrence.assess(rec, at=ANCHOR + DAY, missions=live)
     assert not tomorrow.fires
@@ -164,8 +171,7 @@ def test_a_blocked_occurrence_does_not_end_the_series():
     silence, which is how eight days of backups went missing.
     """
     rec = a_recurrence()
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     blocked = [summary_of(mission, status=MissionStatus.BLOCKED)]
     tomorrow = recurrence.assess(rec, at=ANCHOR + DAY, missions=blocked)
     assert tomorrow.fires
@@ -175,8 +181,7 @@ def test_another_recurrences_missions_are_not_confused_with_this_one():
     """The prefix match must not treat `rec-daily-extra` as `rec-daily`."""
     rec = a_recurrence()
     other = a_recurrence(id="rec-daily-extra")
-    theirs, _ = recurrence.enqueue(
-        other, recurrence.assess(other, at=ANCHOR, missions=[]), tenant=TENANT)
+    theirs, _ = enqueue(other, recurrence.assess(other, at=ANCHOR, missions=[]))
     firing = recurrence.assess(
         rec, at=ANCHOR, missions=[summary_of(theirs, status=MissionStatus.PROCESSING)])
     assert firing.fires, "another recurrence's live mission held this one"
@@ -187,8 +192,7 @@ def test_another_recurrences_missions_are_not_confused_with_this_one():
 def test_a_recurring_mission_goes_through_the_same_policy():
     """Cheap, reversible, confined, non-self-modifying: it reaches the queue."""
     rec = a_recurrence()
-    mission, events = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, events = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     assert mission.status is MissionStatus.QUEUED
     assert mission.occurrence == recurrence.key_for(rec.id, ANCHOR)
     assert len(events) == 3      # created, planning, planned
@@ -196,23 +200,20 @@ def test_a_recurring_mission_goes_through_the_same_policy():
 
 def test_a_recurrence_that_touches_qeviks_source_can_never_run_unattended():
     """A schedule is not a person, at three in the morning least of all."""
-    rec = a_recurrence(modifies_qevik_itself=True)
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    rec = a_recurrence(origin_name="qevik")
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     assert mission.status is MissionStatus.AWAITING_APPROVAL
 
 
 def test_an_expensive_recurrence_still_needs_a_person():
     rec = a_recurrence(plan=a_plan(cost=policy.COSTLY_UNITS + 1))
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     assert mission.status is MissionStatus.AWAITING_APPROVAL
 
 
 def test_a_recurrence_writing_outside_the_reviewed_free_paths_needs_a_person():
     rec = a_recurrence(plan=a_plan(files=("packages/kernel/atlas_kernel/api.py",)))
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     assert mission.status is MissionStatus.AWAITING_APPROVAL
 
 
@@ -220,8 +221,7 @@ def test_an_undeclared_agent_is_treated_as_the_worst_case():
     """`policy` gives an unknown agent an unbounded blast radius. Unattended
     work by something nobody declared must not slip past that."""
     rec = a_recurrence(agent_id="nobody-declared-this")
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     assert mission.status is MissionStatus.AWAITING_APPROVAL
 
 
@@ -229,7 +229,7 @@ def test_enqueue_refuses_a_firing_that_is_not_firing():
     rec = a_recurrence(enabled=False)
     held = recurrence.assess(rec, at=ANCHOR, missions=[])
     with pytest.raises(ValueError, match="not firing"):
-        recurrence.enqueue(rec, held, tenant=TENANT)
+        enqueue(rec, held)
 
 
 # ------------------------------------------------------------- the declaration
@@ -266,7 +266,7 @@ def test_the_declared_set_is_code_controlled_and_tenant_scoped():
 def test_describe_says_when_each_one_next_fires():
     for entry in recurrence.describe(at=ANCHOR):
         assert entry["next_at"]
-        assert "modifies_qevik_itself" in entry
+        assert entry["origin_name"]
 
 
 def test_the_settled_set_agrees_with_the_canonical_terminal_set():
@@ -277,8 +277,100 @@ def test_the_settled_set_agrees_with_the_canonical_terminal_set():
 
 
 def test_a_recurring_mission_is_not_claimable_before_it_is_queued():
-    rec = a_recurrence(modifies_qevik_itself=True)
-    mission, _ = recurrence.enqueue(
-        rec, recurrence.assess(rec, at=ANCHOR, missions=[]), tenant=TENANT)
+    rec = a_recurrence(origin_name="qevik")
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
     with pytest.raises(service.NotPermitted, match="not claimable"):
         service.claim(mission, worker="w-1", tenant=TENANT)
+
+
+# ------------------------------------------- the origin decides, not a boolean
+
+def test_a_recurrence_cannot_be_given_an_origin_it_did_not_declare():
+    """The gap the boolean left.
+
+    `modifies_qevik_itself` was a field on the recurrence, so a declaration
+    saying "this is not a change to Qevik" could be handed a clone of Qevik
+    anyway — the mission would record one repository and use another. The name
+    and the resolved origin are now checked against each other.
+    """
+    rec = a_recurrence(origin_name=origins.EMPTY_NAME)
+    firing = recurrence.assess(rec, at=ANCHOR, missions=[])
+    with pytest.raises(ValueError, match="declares origin"):
+        recurrence.enqueue(rec, firing, tenant=TENANT,
+                           origin=REGISTRY.resolve("qevik"))
+
+
+def test_the_empty_origin_is_what_makes_unattended_work_possible():
+    rec = a_recurrence(origin_name=origins.EMPTY_NAME)
+    mission, _ = enqueue(rec, recurrence.assess(rec, at=ANCHOR, missions=[]))
+    assert mission.status is MissionStatus.QUEUED
+    assert mission.origin_name == origins.EMPTY_NAME
+
+
+def test_the_same_plan_against_qevik_waits_for_a_person():
+    """Identical plan, identical agent, identical cost. Only the origin differs."""
+    unattended = a_recurrence(id="rec-a", origin_name=origins.EMPTY_NAME)
+    gated = a_recurrence(id="rec-b", origin_name="qevik")
+    assert unattended.plan == gated.plan
+
+    a, _ = enqueue(unattended, recurrence.assess(unattended, at=ANCHOR, missions=[]))
+    b, _ = enqueue(gated, recurrence.assess(gated, at=ANCHOR, missions=[]))
+    assert a.status is MissionStatus.QUEUED
+    assert b.status is MissionStatus.AWAITING_APPROVAL
+
+
+def test_a_recurrence_naming_an_unregistered_origin_cannot_be_enqueued():
+    rec = a_recurrence(origin_name="acme-web")
+    with pytest.raises(origins.UnknownOrigin):
+        REGISTRY.resolve(rec.origin_name)
+
+
+# ------------------------------------------------- the declared canary is real
+
+def test_the_declared_recurrences_are_all_resolvable_and_honest():
+    """Every entry in RECURRENCES must name an origin the built-in registry has,
+    or the worker creates nothing and logs an error nobody reads."""
+    registry = origins.Registry.build()
+    for rule in recurrence.RECURRENCES:
+        origin = registry.resolve(rule.origin_name)
+        assert origin.name == rule.origin_name
+        # An entry that runs unattended must be EMPTY. Anything else reaching a
+        # queue without a person would be a policy hole shaped like a schedule.
+        if not origin.modifies_qevik_itself:
+            assert origin.may_run_unattended, (
+                f"{rule.id} names {origin.name!r}, which is neither Qevik nor "
+                "empty; it would run unattended against somebody's repository")
+
+
+def test_the_canary_actually_reaches_the_queue_unattended():
+    canary = next(r for r in recurrence.RECURRENCES
+                  if r.id == "rec-execution-canary")
+    registry = origins.Registry.build()
+    firing = recurrence.assess(canary, at=canary.anchor, missions=[])
+    assert firing.fires
+    mission, events = recurrence.enqueue(
+        canary, firing, tenant=canary.tenant_id,
+        origin=registry.resolve(canary.origin_name))
+    assert mission.status is MissionStatus.QUEUED, (
+        "the canary is the first unattended recurrence; if it needs a person "
+        "then nothing recurring runs overnight")
+    assert len(events) == 3
+    assert mission.occurrence.startswith("rec-execution-canary@")
+
+
+def test_the_canary_is_scheduled_inside_the_night_window():
+    from atlas_kernel.fabric import scheduler
+    canary = next(r for r in recurrence.RECURRENCES
+                  if r.id == "rec-execution-canary")
+    at = canary.anchor.timetz().replace(tzinfo=None)
+    assert scheduler.NIGHT_START <= at < scheduler.NIGHT_END
+
+
+def test_the_canary_only_writes_to_reviewed_free_paths():
+    """What lets it clear policy without a person. If a future edit adds a step
+    that writes elsewhere, this fails rather than the mission silently starting
+    to wait for approval every night."""
+    canary = next(r for r in recurrence.RECURRENCES
+                  if r.id == "rec-execution-canary")
+    for path in canary.plan.files:
+        assert path.startswith(policy.SAFE_PREFIXES), path

@@ -89,8 +89,8 @@ def _event(mission: Mission, *, actor: str, note: str = "",
 
 
 def create(*, tenant: TenantId | None, title: str, description: str = "",
-           requested_by: str = "", priority: int = 0, occurrence: str = ""
-           ) -> tuple[Mission, BusinessEvent]:
+           requested_by: str = "", priority: int = 0, occurrence: str = "",
+           origin_name: str = "") -> tuple[Mission, BusinessEvent]:
     """A new request, in DRAFT. Nothing runs from this."""
     tenant = _require_tenant(tenant, method="mission.create")
     if not title.strip():
@@ -99,7 +99,7 @@ def create(*, tenant: TenantId | None, title: str, description: str = "",
     mission = Mission(id=f"mission-{uuid4().hex[:12]}", tenant_id=str(tenant),
                       title=title.strip(), description=description,
                       requested_by=requested_by, priority=priority,
-                      occurrence=occurrence)
+                      occurrence=occurrence, origin_name=origin_name)
     return mission, _event(mission, actor=requested_by or "operator",
                            note="created")
 
@@ -159,7 +159,13 @@ def attach_plan(mission: Mission, plan: Plan, *, tenant: TenantId | None,
                             modifies_qevik_itself=modifies_qevik_itself)
     destination = (MissionStatus.AWAITING_APPROVAL if verdict.needs_a_person
                    else MissionStatus.QUEUED)
+    # The agent is recorded here, not merely passed to `decide`. Without it the
+    # scheduler had no idea which agent a queued mission needed, so it could not
+    # tell that the mission required a credential nobody had configured — and
+    # offered it for dispatch. Storing what policy was told keeps the blast
+    # radius somebody approved and the one read later the same value.
     return transition(mission, destination, tenant=tenant, actor=actor, plan=plan,
+                      agent_id=agent_id or mission.agent_id,
                       note=f"plan attached; policy: {verdict.because}")
 
 

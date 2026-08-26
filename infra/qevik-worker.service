@@ -42,12 +42,17 @@ ExecStart=/opt/qevik/atlas/.venv/bin/python \
   --reports /var/lib/qevik/control/reports \
   --worktrees /var/lib/qevik/worktrees \
   --scratch /var/lib/qevik/scratch \
-  --repository /opt/qevik/atlas \
   --state /var/lib/qevik/control \
   --tenant tenant-qevik \
   --name worker-1 \
   --agent self-check \
   --interval 10
+# No --repository. It set one repository for the whole worker, so every mission
+# on it was the same kind of mission. A mission now names its own origin and the
+# worker resolves it against an allow-list; the built-ins 'qevik' (this
+# checkout, self-modification) and 'none' (no source) need no configuration.
+# A customer repository is added with --origin NAME=PATH, and an entry pointing
+# at Qevik's own repository is refused at start-up.
 # --claims-dsn and --require-atomic-claims come from /opt/qevik/worker.env.
 # The DSN carries a password, and a password on an argv line is readable by
 # every user on the host through `ps`.

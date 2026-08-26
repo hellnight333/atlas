@@ -58,31 +58,15 @@ REPORTS = Path("docs/qevik-docs/autonomous/reports")
 
 
 def usable_credentials(request: Request, tenant: TenantId) -> frozenset[str]:
-    """Which providers `resolve()` would actually hand over a secret for.
+    """Which providers `resolve()` would hand over a secret for.
 
-    Deliberately the same rule `resolve()` applies — `UNUSABLE` — rather than
-    "has a row". A credential somebody typed and nothing ever verified is
-    exactly the case where the scheduler would dispatch work that fails at the
-    provider, after telling the operator it was running.
-
-    An unreachable or sealed vault yields the empty set: not knowing which keys
-    work is not the same as knowing they all do, and scheduling on the
-    optimistic reading is how a queue full of doomed missions gets built.
+    The rule itself lives in `credentials.service.usable_for`, because the
+    worker asks the same question and two implementations of "usable" would
+    disagree on the day one of them mattered.
     """
-    service_ = getattr(request.app.state, "credentials", None)
-    if service_ is None:
-        return frozenset()
-    from ..credentials.service import UNUSABLE
-    from ..integrations import INTEGRATIONS
-
-    usable: set[str] = set()
-    for integration in INTEGRATIONS:
-        try:
-            if service_.status(provider=integration.id, tenant=tenant) not in UNUSABLE:
-                usable.add(integration.id)
-        except Exception:  # noqa: BLE001 - a sealed vault is not a scheduling error
-            continue
-    return frozenset(usable)
+    from ..credentials.service import usable_for
+    return usable_for(getattr(request.app.state, "credentials", None),
+                      tenant=tenant)
 
 
 def tenant_balance(request: Request, tenant: TenantId) -> float | None:
@@ -246,6 +230,13 @@ class Submission(BaseModel):
     title: str = Field(min_length=3, max_length=300)
     description: str = Field(default="", max_length=8000)
     priority: int = 0
+    #: Which repository this is about, **by name**. A key from the worker's
+    #: allow-list, never a path — see `mission/origins.py`. Not validated here:
+    #: the registry is built by the worker from deployment configuration this
+    #: process does not have, and a name the worker cannot resolve blocks the
+    #: mission there with the reason attached. Empty means Qevik's own source,
+    #: which needs a person.
+    origin: str = Field(default="", max_length=64)
 
 
 class Decision(BaseModel):
@@ -353,7 +344,12 @@ def build_router() -> APIRouter:
         found = _folded(request, tenant)
         done = frozenset(m["mission_id"] for m in found
                          if m.get("status") == MissionStatus.COMPLETE.value)
+        # Which agent each mission needs, recorded when its plan was attached.
+        # Without it every demand looked like it required no credentials, so
+        # this view showed a mission as dispatchable that the worker would hold.
         demands = demands_from(found,
+                               agent_for={str(m.get("mission_id", "")):
+                                          str(m.get("agent_id", "")) for m in found},
                                connected=usable_credentials(request, tenant),
                                remaining_units=tenant_balance(request, tenant))
         return scheduler.plan(demands, tenant=tenant, done=done,
@@ -435,7 +431,8 @@ def build_router() -> APIRouter:
         try:
             mission, event = service.create(
                 tenant=tenant, title=body.title, description=body.description,
-                requested_by=user.username, priority=body.priority)
+                requested_by=user.username, priority=body.priority,
+                origin_name=body.origin)
         except service.NotPermitted as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         _append(request, event)

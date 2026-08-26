@@ -112,6 +112,10 @@ class Verdict(BaseModel):
 
     approved: bool
     why: str = Field(default="", max_length=2000)
+    #: Which repository the resulting mission is about, by name. Empty means
+    #: Qevik's own source, which is the right default here and needs a person
+    #: either way. A key from the worker's allow-list, never a path.
+    origin: str = Field(default="", max_length=64)
 
 
 def build_router() -> APIRouter:
@@ -239,7 +243,8 @@ def build_router() -> APIRouter:
         sink = _mission_sink(request)
         try:
             updated, mission, events = service.approve(
-                conversation, tenant=tenant, approved_by=user.username)
+                conversation, tenant=tenant, approved_by=user.username,
+                origin_name=body.origin)
         except PlanRejected as refused:
             raise HTTPException(status_code=409, detail=str(refused)) from refused
 

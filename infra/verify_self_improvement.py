@@ -262,7 +262,7 @@ def main() -> int:
         finished = subprocess.run(
             [sys.executable, str(ROOT / "infra" / "mission_worker.py"),
              "--timeline", str(timeline.path), "--tenant", TENANT,
-             "--name", "worker-selfimprove", "--repository", str(ROOT),
+             "--name", "worker-selfimprove",
              "--worktrees", str(workspace / "worktrees"),
              "--scratch", str(workspace / "scratch"),
              "--reports", str(state / "reports"), "--state", str(state),

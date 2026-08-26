@@ -143,7 +143,7 @@ def test_a_sentence_becomes_a_commit_with_the_application_destroyed_in_between(
     finished = subprocess.run(
         [sys.executable, str(WORKER), "--timeline", str(files["missions"]),
          "--tenant", TENANT, "--name", "worker-e2e",
-         "--repository", str(repository),
+         "--origin", f"acme={repository}",
          "--worktrees", str(tmp_path / "worktrees"),
          # The state directory. `--vault` named one credential file and left the
          # records file to be resolved elsewhere, which is how the Centre and
@@ -192,14 +192,18 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
                           steps=(PlanStep(order=1, title="Note"),)),
             tenant=TENANT, provider="test", model="test-model")
         app.state.chat_sink(event)
+        # Names the origin. The worker below registers it as `acme=<repo>`; the
+        # mission carries the *key*, and the registry is the only thing that
+        # turns a key into a location.
         mission_id = client.post(f"/api/chat/{conversation_id}/decide",
-                                 json={"approved": True}).json()["mission_id"]
+                                 json={"approved": True,
+                                       "origin": "acme"}).json()["mission_id"]
     del app, client
 
     subprocess.run(
         [sys.executable, str(WORKER), "--timeline", str(files["missions"]),
          "--tenant", TENANT, "--name", "worker-branch",
-         "--repository", str(repository),
+         "--origin", f"acme={repository}",
          "--worktrees", str(tmp_path / "worktrees"),
          # The state directory. `--vault` named one credential file and left the
          # records file to be resolved elsewhere, which is how the Centre and
@@ -235,7 +239,7 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
                             capture_output=True, text=True, check=False)
     assert absent.returncode != 0 or f"mission/{mission_id}" not in absent.stdout, (
         "the mission's branch reached the origin repository")
-    assert mission["origin_kind"] == "external"
+    assert mission["origin_kind"] == "customer"
 
 
 @pytest.mark.integration
@@ -262,7 +266,7 @@ def test_nothing_runs_until_somebody_approves(files, repository, tmp_path,
     finished = subprocess.run(
         [sys.executable, str(WORKER), "--timeline", str(files["missions"]),
          "--tenant", TENANT, "--name", "worker-idle",
-         "--repository", str(repository),
+         "--origin", f"acme={repository}",
          "--worktrees", str(tmp_path / "worktrees"),
          # The state directory. `--vault` named one credential file and left the
          # records file to be resolved elsewhere, which is how the Centre and

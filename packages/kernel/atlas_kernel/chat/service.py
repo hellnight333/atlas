@@ -166,11 +166,17 @@ def _describe(plan: Plan) -> str:
 
 
 def approve(conversation: Conversation, *, tenant: TenantId | None,
-            approved_by: str) -> tuple[Conversation, Mission, list[BusinessEvent]]:
+            approved_by: str, origin_name: str = ""
+            ) -> tuple[Conversation, Mission, list[BusinessEvent]]:
     """Turn an approved plan into a queued mission.
 
     Returns the mission and the events; **it does not run anything**. The worker
     is a different process and finds the mission by folding the timeline.
+
+    `origin_name` names the repository the mission is about, by key. It defaults
+    to empty, which the registry reads as Qevik's own source — the right default
+    for this path, because a conversation in the console is almost always "add
+    this feature to Qevik", and that needs a person either way.
 
     The mission goes through the ordinary lifecycle — draft → planning →
     awaiting_approval → queued — rather than being constructed already queued.
@@ -197,7 +203,7 @@ def approve(conversation: Conversation, *, tenant: TenantId | None,
     mission, event = mission_service.create(
         tenant=tenant, title=conversation.title,
         description=conversation.last_user_message,
-        requested_by=approved_by)
+        requested_by=approved_by, origin_name=origin_name)
     events.append(event)
     mission, event = mission_service.transition(mission, MissionStatus.PLANNING,
                                                 tenant=tenant, actor=approved_by)

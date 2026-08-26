@@ -499,3 +499,33 @@ def read(events: list, *, tenant: TenantId | None = None) -> list[dict]:
             continue
         found.append({**dict(detail), "kind": kind})
     return sorted(found, key=lambda d: d.get("at", ""), reverse=True)
+
+def usable_for(service: object, *, tenant: object) -> frozenset[str]:
+    """Which providers `resolve()` would actually hand over a secret for.
+
+    Deliberately the same rule `resolve()` applies — `UNUSABLE` — rather than
+    "has a row". A credential somebody typed and nothing ever verified is
+    exactly the case where the scheduler would dispatch work that fails at the
+    provider, after telling the operator it was running.
+
+    An unreachable or sealed vault yields the empty set: not knowing which keys
+    work is not the same as knowing they all do, and scheduling on the
+    optimistic reading is how a queue full of doomed missions gets built.
+
+    Lives here rather than in the API because the worker needs the same answer,
+    and two implementations of "usable" would disagree on the day one of them
+    mattered.
+    """
+    if service is None:
+        return frozenset()
+    from ..integrations import INTEGRATIONS
+
+    usable: set[str] = set()
+    for integration in INTEGRATIONS:
+        try:
+            if service.status(provider=integration.id,
+                              tenant=tenant) not in UNUSABLE:
+                usable.add(integration.id)
+        except Exception:  # noqa: BLE001 - a sealed vault is not a scheduling error
+            continue
+    return frozenset(usable)

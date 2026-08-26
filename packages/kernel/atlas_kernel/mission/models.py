@@ -185,6 +185,21 @@ class Mission(BaseModel):
     #: `origin_kind` is `qevik` / `external` / `empty` — decided by comparing the
     #: origin against the repository this code is running from, so it cannot be
     #: set to the convenient answer from a config file.
+    #: **Declared before execution**: which origin this mission asks for, by
+    #: name. A key, never a path — see `mission/origins.py`. Empty means it did
+    #: not ask, and the registry's default applies, which is Qevik and therefore
+    #: needs a person.
+    origin_name: str = ""
+    #: Which agent is expected to carry this out, by registry id. Set when the
+    #: plan is attached, from the same value `policy.decide` was given — so the
+    #: blast radius a person approved and the blast radius anything else reads
+    #: later are the same one. Empty means nobody named an agent, which policy
+    #: already treats as the worst case.
+    agent_id: str = ""
+    #: **Recorded after execution**: where the work actually happened, what it
+    #: was cloned from, and what that was. Separate from `origin_name` on
+    #: purpose: one is a request and the other is what happened, and a single
+    #: field would make a mission that was refused look like one that ran.
     workspace: str = ""
     origin: str = ""
     origin_kind: str = ""
@@ -222,6 +237,7 @@ class Mission(BaseModel):
             "report_path": self.report_path, "claimed_by": self.claimed_by,
             "not_before": self.not_before.isoformat() if self.not_before else None,
             "occurrence": self.occurrence,
+            "origin_name": self.origin_name, "agent_id": self.agent_id,
             "workspace": self.workspace, "origin": self.origin,
             "origin_kind": self.origin_kind,
             "total_cost": self.total_cost,

@@ -656,7 +656,9 @@ async function missionDetail(id) {
     <header class="page"><h2>${esc(mission.title)}</h2>
       <p><code>${esc(mission.mission_id)}</code> · requested by ${esc(mission.requested_by || '—')}
       · ${when(mission.created_at)}${mission.occurrence
-        ? ' · recurring <code>' + esc(mission.occurrence) + '</code>' : ''}</p></header>
+        ? ' · recurring <code>' + esc(mission.occurrence) + '</code>' : ''}
+      · ${pill(originOf(mission.origin_name).word,
+               originOf(mission.origin_name).tone)}</p></header>
     <div class="card" style="margin-bottom:1rem">
       ${pill(mission.status)} ${track(mission.status)}
       <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
@@ -902,9 +904,31 @@ function cost(value, status) {
   return `<strong>${esc(String(value))}</strong> <span class="note">(${esc(status || 'ESTIMATED')})</span>`;
 }
 
-function planPreview(plan) {
+/* Which repository this work touches, said in words rather than as a key.
+ *
+ * The one fact somebody approving needs and could not see: "add this feature"
+ * against Qevik's own source and the same sentence against a customer's
+ * repository are very different decisions, and the screen showed neither. The
+ * name alone ("qevik", "acme-web") is a key from a config file and means
+ * nothing to a person, so it is spelled out. */
+function originOf(name) {
+  const key = (name || '').trim();
+  if (!key || key === 'qevik') {
+    return { word: "Qevik's own source", tone: 'warn',
+             says: 'This changes Qevik itself. It cannot run without you.' };
+  }
+  if (key === 'none') {
+    return { word: 'No repository', tone: '',
+             says: 'Nothing is at risk; this works in a throwaway checkout.' };
+  }
+  return { word: key, tone: '',
+           says: 'A customer repository. Qevik\'s own source is untouched.' };
+}
+
+function planPreview(plan, originName) {
   if (!plan) return '';
   const steps = plan.steps || [];
+  const where = originOf(originName);
   const blockers = plan.blockers || [];
   return `
     <div class="card plan">
@@ -925,6 +949,8 @@ function planPreview(plan) {
         </li>`).join('')}</ol>`
         : (blockers.length ? '' : '<p class="note">No steps were proposed.</p>')}
       <dl class="facts">
+        <dt>Repository</dt><dd>${pill(where.word, where.tone)}
+          <span class="note">${esc(where.says)}</span></dd>
         <dt>Estimated cost</dt><dd>${cost(plan.estimated_cost, plan.cost_status)}</dd>
         ${plan.security_impact ? `<dt>Security</dt><dd>${esc(plan.security_impact)}</dd>` : ''}
         ${plan.test_plan ? `<dt>How it is checked</dt><dd>${esc(plan.test_plan)}</dd>` : ''}
@@ -957,7 +983,7 @@ async function conversation(id) {
         <h3>Why it stopped</h3>
         <p>${esc(whyItEnded(mission))}</p></div>` : ''}
 
-    ${planPreview(plan)}
+    ${planPreview(plan, mission && mission.origin_name)}
 
     ${awaiting ? `<div class="card decide">
         <h3>Your decision</h3>

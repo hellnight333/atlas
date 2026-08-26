@@ -85,7 +85,48 @@ FIXTURES: dict[str, object] = {
         {"conversation_id": "conv-000000000001",
          "title": "Add this feature: record approval wait time",
          "status": "plan_proposed", "at": "2026-08-26T09:00:00+00:00",
+         "mission_id": ""},
+        {"conversation_id": "conv-000000000003",
+         "title": "Add this feature: show which repository a mission touches",
+         "status": "plan_proposed", "at": "2026-08-26T09:30:00+00:00",
          "mission_id": ""}]},
+    # A real plan awaiting approval, so the approval screen can be looked at
+    # with something on it.
+    #
+    # Deliberately a change to Qevik itself, not to a customer repository. The
+    # console can only create Qevik-origin missions today — `/decide` sends an
+    # empty origin, which the registry reads as `qevik` — so a fixture showing a
+    # customer plan on this screen would be a screenshot of a capability that
+    # does not exist. Targeting a customer origin from the console needs an
+    # endpoint listing the registered origins and a control to choose one;
+    # recorded in MASTER_STATE rather than faked here.
+    "/api/chat/conv-000000000003": {
+        "conversation_id": "conv-000000000003",
+        "title": "Add this feature: show which repository a mission touches",
+        "status": "plan_proposed", "mission_id": "",
+        "plan": {
+            "goal": "Show which repository a mission will change, before it is approved.",
+            "why": "Approving a change to Qevik itself and approving one to a "
+                   "customer repository are different decisions, and the "
+                   "screen showed neither.",
+            "steps": [
+                {"order": 1, "title": "Name the origin in words, not as a key",
+                 "why": "\"qevik\" means nothing to a person",
+                 "files": ["apps/control/src/index.html"]},
+                {"order": 2, "title": "Assert each origin reads differently",
+                 "files": ["infra/verify_console_logic.mjs"]},
+            ],
+            "blockers": [], "estimated_cost": 2.5, "cost_status": "ESTIMATED",
+            "security_impact": "None. No credentials and no network.",
+            "test_plan": "verify_console_logic asserts all three origins.",
+            "rollback": "Revert the branch; it is never merged automatically.",
+        },
+        "messages": [
+            {"role": "user", "text": "I cannot tell what a plan is going to "
+                                     "change. Show me the repository.",
+             "at": "2026-08-26T09:30:00+00:00"},
+        ],
+            },
     # A conversation whose plan is only a blocker — the state this deployment is
     # actually in, and the one the screen most has to get right.
     "/api/chat/conv-000000000001": {
@@ -140,6 +181,52 @@ FIXTURES: dict[str, object] = {
                          "vault": {"sealed": False, "locked": False}, "note": "sample"},
     "/api/status": {"version": "sample", "changed": False},
 }
+
+
+def _no_duplicate_keys() -> None:
+    """Refuse a fixture declared twice.
+
+    A Python dict literal takes the **last** of a repeated key and says nothing.
+    A fixture added above one that already existed is therefore silently
+    discarded, and the stub then answers with the other endpoint's payload —
+    which is the same failure the prefix-matching comment above describes,
+    arriving by a different route. It cost one screenshot of a page that could
+    not exist, which is the only kind of bug a screenshot harness must not have.
+    """
+    import ast
+
+    source = Path(__file__).read_text()
+    found = None
+    for node in ast.walk(ast.parse(source)):
+        # Both forms. The first version of this checked `ast.Assign` only, and
+        # `FIXTURES` is annotated — so it matched nothing, found no duplicates,
+        # and passed. A checker that cannot fail is worse than no checker,
+        # because it is also a claim.
+        if isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.Assign):
+            targets = node.targets
+        else:
+            continue
+        if not any(getattr(t, "id", "") == "FIXTURES" for t in targets):
+            continue
+        found = node
+        keys = [k.value for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        repeated = {k for k in keys if keys.count(k) > 1}
+        if repeated:
+            raise SystemExit(
+                f"screenshot_console.py declares these fixtures twice: "
+                f"{', '.join(sorted(repeated))}. Python keeps the last one and "
+                "discards the other silently, so the stub would answer with a "
+                "payload nobody meant.")
+    if found is None:
+        raise SystemExit(
+            "the duplicate-fixture check could not find the FIXTURES literal, "
+            "so it proved nothing. Fix the check rather than removing it.")
+
+
+_no_duplicate_keys()
 
 
 class Stub(BaseHTTPRequestHandler):

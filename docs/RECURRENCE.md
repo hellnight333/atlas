@@ -74,9 +74,46 @@ person.**
 `attach_plan` gained a `modifies_qevik_itself` passthrough, defaulting to `True`,
 so no existing caller changed behaviour.
 
-## What is blocked, precisely
+## The first real recurrence
 
-`RECURRENCES` is **empty**, and it is empty for one specific reason.
+`rec-execution-canary` — nightly at 02:30 UTC, inside the scheduler's night
+window and clear of the 03:30 backup so the two do not contend for the disk.
+
+It runs the self-check agent end to end: write into the workspace, read it back,
+confirm nothing outside the workspace is reachable. If the scheduler, the claim,
+the workspace, the sandbox, the agent, the evidence or the report stops working,
+a **failed mission appears on the phone the next morning** — instead of the
+failure being discovered when somebody needs the path to work.
+
+That is the backup incident done the other way round.
+
+It reaches the queue **with nobody asked**, and only because its origin is
+`none`:
+
+| | origin | outcome |
+|---|---|---|
+| the canary | `none` (EMPTY) | queued, unattended |
+| the identical plan | `qevik` | awaiting approval |
+
+Same plan, same agent, same cost. Only the origin differs — asserted directly in
+`test_the_same_plan_against_qevik_waits_for_a_person`.
+
+Proven end to end in `infra/verify_recurrence.py`: the tick creates it, policy
+queues it, the real worker claims and runs it in an empty origin, and the report
+is read back through a fresh `Timeline` object. A second tick in the same window
+creates nothing.
+
+## Origin, not a boolean
+
+`Recurrence.modifies_qevik_itself` was a **field** — a claim that could disagree
+with what the worker actually handed the mission. It is now `origin_name`, and
+the kind comes from the resolved origin. `enqueue` additionally refuses a firing
+whose resolved origin does not match the name the recurrence declared, because
+creating the mission anyway would record one repository and use another.
+
+## What was blocked, and no longer is
+
+`RECURRENCES` was **empty**, for one specific reason.
 
 Nothing can honestly declare `modifies_qevik_itself=False` today. The production
 worker runs with `--repository /opt/qevik/atlas` — Qevik's own checkout — and its
@@ -86,14 +123,12 @@ mission. The branch is never merged and nothing reaches the running system, but
 about. Answering `False` because the branch is discardable would be picking the
 convenient reading of a claim the policy layer relies on.
 
-So today a recurrence can **create** work on a schedule, which then waits for a
-person — useful, correct, and visible. Recurring work that runs **unattended
-overnight** needs one thing that does not exist yet:
+That was resolved by `mission/scratch.py` and `mission/origins.py`: a mission
+with an EMPTY origin has a real repository to work in that is not a clone of
+Qevik, so it can honestly say it does not modify Qevik — and unattended overnight
+work follows.
 
-> **an execution workspace that is not Qevik's repository.**
-
-That is the next architectural dependency, and it is a precondition for
-autonomous business discovery, not a separate concern.
+A recurrence naming `qevik` still waits for a person. A schedule is not a person.
 
 ## Files
 

@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "kernel"))
 
-from atlas_kernel.mission import recurrence, service  # noqa: E402
+from atlas_kernel.mission import origins, recurrence, service  # noqa: E402
 from atlas_kernel.mission.claims import LocalClaims, PostgresClaims  # noqa: E402
 from atlas_kernel.mission.models import MissionStatus, Plan, PlanStep  # noqa: E402
 from atlas_kernel.mission.timeline import Timeline  # noqa: E402
@@ -32,6 +32,8 @@ from atlas_kernel.mission.timeline import Timeline  # noqa: E402
 TENANT = "tenant-recurrence-proof"
 ANCHOR = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
 DAY = timedelta(days=1)
+
+REGISTRY = origins.Registry.build()
 
 PASSED: list[str] = []
 FAILED: list[str] = []
@@ -50,7 +52,7 @@ def a_recurrence(**over) -> recurrence.Recurrence:
                   steps=(PlanStep(order=1, title="check", files=("reports/r.md",)),),
                   estimated_cost=0.25, approval_required=False),
         agent_id="self-check", every=DAY, anchor=ANCHOR,
-        modifies_qevik_itself=False)
+        origin_name=origins.EMPTY_NAME)
     fields.update(over)
     return recurrence.Recurrence(**fields)
 
@@ -64,7 +66,8 @@ def durability(tmp: Path) -> None:
 
     timeline = Timeline(path)
     firing = recurrence.assess(rule, at=ANCHOR, missions=[])
-    mission, events = recurrence.enqueue(rule, firing, tenant=TENANT)
+    mission, events = recurrence.enqueue(
+        rule, firing, tenant=TENANT, origin=REGISTRY.resolve(rule.origin_name))
     for event in events:
         timeline.append(event)
     created_id = mission.id
@@ -96,9 +99,10 @@ def durability(tmp: Path) -> None:
 
 def self_modifying_waits(tmp: Path) -> None:
     """A schedule is not a person."""
-    rule = a_recurrence(id="rec-self", modifies_qevik_itself=True)
+    rule = a_recurrence(id="rec-self", origin_name="qevik")
     mission, _ = recurrence.enqueue(
-        rule, recurrence.assess(rule, at=ANCHOR, missions=[]), tenant=TENANT)
+        rule, recurrence.assess(rule, at=ANCHOR, missions=[]), tenant=TENANT,
+        origin=REGISTRY.resolve(rule.origin_name))
     check("a recurrence that touches Qevik's source waits for approval",
           mission.status is MissionStatus.AWAITING_APPROVAL,
           mission.status.value)
@@ -112,11 +116,14 @@ def self_modifying_waits(tmp: Path) -> None:
 
 def registry_is_honest() -> None:
     """The declared set must not contain a claim we cannot stand behind."""
-    check("no declared recurrence claims to be non-self-modifying while the "
-          "worker runs inside Qevik's own repository",
-          all(r.modifies_qevik_itself for r in recurrence.RECURRENCES)
-          or not recurrence.RECURRENCES,
-          f"{len(recurrence.RECURRENCES)} declared")
+    registry = origins.Registry.build()
+    for rule in recurrence.RECURRENCES:
+        origin = registry.resolve(rule.origin_name)
+        check(f"declared recurrence {rule.id} names a resolvable origin",
+              origin.name == rule.origin_name, origin.kind.value)
+        check(f"...and {rule.id} is either gated or genuinely sourceless",
+              origin.modifies_qevik_itself or origin.may_run_unattended,
+              origin.kind.value)
 
 
 # ------------------------------------------------------------- the actual race
@@ -184,6 +191,85 @@ def race(dsn: str) -> None:
           "which is what the Postgres lock is preventing", all(both), str(both))
 
 
+def the_canary_runs(tmp: Path) -> None:
+    """The declared nightly recurrence, driven by the real worker.
+
+    Everything above tests the decision. This runs it: the tick creates the
+    mission, policy queues it with nobody asked, the worker claims it in an
+    empty origin, the agent proves the sandbox is still confining, and the
+    report is read back from a *new* Timeline object — the closest a single
+    process gets to "the worker restarted".
+    """
+    import subprocess
+    import sys as _sys
+
+    from atlas_kernel.mission.models import MissionStatus
+    from atlas_kernel.mission.timeline import Timeline
+
+    canary = next((r for r in recurrence.RECURRENCES
+                   if r.id == "rec-execution-canary"), None)
+    if canary is None:
+        check("the execution canary is declared", False, "RECURRENCES is empty")
+        return
+    check("the execution canary is declared", True, canary.origin_name)
+
+    tenant = canary.tenant_id
+    timeline = Timeline(tmp / "canary" / "missions.jsonl")
+    origin = REGISTRY.resolve(canary.origin_name)
+
+    firing = recurrence.assess(canary, at=canary.anchor, missions=[])
+    check("it is due at its anchor", firing.fires, firing.detail)
+    mission, events = recurrence.enqueue(canary, firing, tenant=tenant,
+                                         origin=origin)
+    for event in events:
+        timeline.append(event)
+    check("IT REACHES THE QUEUE WITH NOBODY ASKED",
+          mission.status is MissionStatus.QUEUED, mission.status.value)
+
+    done = subprocess.run(
+        [_sys.executable, str(ROOT / "infra" / "mission_worker.py"),
+         "--timeline", str(timeline.path), "--tenant", tenant,
+         "--name", "worker-canary",
+         "--worktrees", str(tmp / "canary" / "wt"),
+         "--scratch", str(tmp / "canary" / "scratch"),
+         "--reports", str(tmp / "canary" / "reports"),
+         "--state", str(tmp / "canary" / "state"),
+         "--agent", "self-check", "--once"],
+        capture_output=True, text=True, timeout=600, check=False)
+    check("the worker ran it", done.returncode == 0,
+          f"exit {done.returncode}: {done.stderr[-300:]}" if done.returncode else "")
+
+    # Re-read from a new Timeline — a restart, as far as this process can manage.
+    folded = service.fold(Timeline(timeline.path).read(), tenant=tenant)
+    landed = next((m for m in folded if m["mission_id"] == mission.id), {})
+    check("THE UNATTENDED MISSION COMPLETED",
+          landed.get("status") == MissionStatus.COMPLETE.value,
+          landed.get("status", "missing"))
+    check("it ran in the empty origin it declared",
+          landed.get("origin_kind") == "empty" and landed.get("origin") == "",
+          f"kind={landed.get('origin_kind')!r} origin={landed.get('origin')!r}")
+    check("it is tagged with the recurrence occurrence",
+          (landed.get("occurrence") or "").startswith("rec-execution-canary@"),
+          landed.get("occurrence", ""))
+
+    report = Path(landed.get("report_path") or "")
+    written = (tmp / "canary" / "reports" / report) if report.parts else None
+    check("the report survives being read by another process",
+          bool(written and written.is_file()), str(written))
+    if written and written.is_file():
+        body = written.read_text()
+        check("...and says what was actually checked",
+              "workspace" in body.lower() or "sandbox" in body.lower(),
+              body[:80].replace("\n", " "))
+
+    # And a second tick creates nothing: the occurrence already has a mission.
+    again = recurrence.assess(canary, at=canary.anchor + timedelta(hours=3),
+                              missions=folded)
+    check("a second tick in the same window creates nothing",
+          not again.fires and again.hold is recurrence.Hold.ALREADY_CREATED,
+          again.detail)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dsn", default=os.environ.get("QEVIK_CLAIMS_DSN", ""))
@@ -195,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         durability(tmp)
         self_modifying_waits(tmp)
         registry_is_honest()
+        the_canary_runs(tmp)
 
     if args.dsn:
         race(args.dsn)
