@@ -374,6 +374,30 @@ the precondition for unattended overnight work and autonomous discovery.
 
 See `docs/RECURRENCE.md`.
 
+## Workspace isolation — 2026-08-26
+
+Missions no longer run inside the production checkout. `/opt/qevik/atlas` is the
+**origin**, read once per mission and never written; each mission gets its own
+`git clone --no-hardlinks` and the worktree is created inside that. The
+promotion boundary — getting a mission's branch into production — is unchanged
+and still an explicit human act, now with the guarantee that *not* performing it
+leaves production untouched.
+
+Self-modification policy is unchanged. A clone of Qevik is still Qevik, decided
+from the origin rather than the workspace, derived from `__file__` so no
+configuration disables it. A second guard in the worker refuses a Qevik-origin
+mission that reached the queue without a person.
+
+`Origin.EMPTY` (`--repository none`) is what unattended recurring work was
+waiting for: work with no source repository can now honestly declare it does not
+modify Qevik, and an autonomous mission has been run end to end on that path.
+
+The worker's `--repository` is still a *worker* flag, so one worker serves one
+origin. Making it a per-mission property with an allow-list is the next step.
+
+See `docs/WORKSPACE_ISOLATION.md`. Open security findings are recorded in
+`docs/SECURITY_FINDINGS.md`.
+
 ## Deferred
 - Broad package/schema/database rename.
 - High-volume autonomous prospecting.
