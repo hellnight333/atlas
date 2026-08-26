@@ -460,6 +460,32 @@ class OpportunityRepository:
             if row["detected_at"] else "",
         }
 
+    def recorded_websites(self, *, limit: int = 40,
+                          tenant: TenantId | None = None) -> list[str]:
+        """Websites Qevik has evidence for, oldest first.
+
+        The allow-list a verification recipe fetches. Every address here came
+        from an evidenced sighting, which is what makes "the targets come from
+        memory" a safety property rather than a convenience: nothing can put a
+        URL in this list except a source Qevik actually read.
+
+        Oldest first so a bounded run works through the backlog rather than
+        re-checking the same recent few every night.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT DISTINCT ON (website) website
+                FROM atlas_businesses
+                WHERE website IS NOT NULL AND website <> ''
+                ORDER BY website, first_seen_at
+                LIMIT :limit
+                """),
+                {"limit": max(1, min(int(limit), 200))},
+            ).scalars().all()
+        return [str(row) for row in rows if str(row).startswith(("http://",
+                                                                "https://"))]
+
     def save_finding(self, finding: Finding) -> Finding:
         with SessionLocal() as session:
             session.execute(

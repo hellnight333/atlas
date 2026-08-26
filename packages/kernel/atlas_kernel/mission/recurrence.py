@@ -419,7 +419,16 @@ RECURRENCES: tuple[Recurrence, ...] = (
                      "whenever somebody last ran a script."),
         plan=_DISCOVERY_PLAN,
         agent_id="researcher",
-        recipe="discover-uae-dental",
+        # The recipe that actually produces sightings. It named
+        # `discover-uae-dental` — the placeholder that proved the tool role by
+        # fetching a regulator's homepage and declaring **no extractor** — so
+        # the nightly run would have fetched a page, extracted nothing and
+        # recorded no business, night after night, while reporting success.
+        #
+        # Caught by reading what the *deployed* recurrence said it would run,
+        # rather than by trusting that the recipe used in a manual proof was the
+        # one the schedule points at.
+        recipe="discover-dubai-dental-osm",
         origin_name=origins.EMPTY_NAME,
         every=timedelta(days=1),
         # 04:15 UTC — inside the night window, clear of the 02:30 canary and the

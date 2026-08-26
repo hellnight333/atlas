@@ -220,6 +220,21 @@ def queued(timeline: Timeline, *, tenant: str,
     routes = {str(m.get("mission_id", "")): (str(m.get("agent_id", "")) or agent_id)
               for m in folded}
     routes = {k: v for k, v in routes.items() if v}
+
+    # Missions this worker cannot carry out are not offered to it at all.
+    #
+    # `policy.refuse_agent_substitution` catches a mismatch after the claim, and
+    # that is the right backstop — but the claim is a race, so with two workers
+    # running each one took the other's mission and refused it. Both nightly
+    # recurrences ended BLOCKED within a minute of deploying, each blocked by
+    # the worker that was never meant to run it.
+    #
+    # A worker filtering its own queue is the fix. The backstop stays, and now
+    # releases instead of blocking: "not by me" is not a defect in the mission.
+    if agent_id:
+        mine = {m.get("mission_id") for m in folded
+                if not m.get("agent_id") or m.get("agent_id") == agent_id}
+        folded = [m for m in folded if m.get("mission_id") in mine]
     demands = demands_from(folded, agents=AgentRegistry(), agent_for=routes,
                            connected=connected,
                            remaining_units=remaining_units)
@@ -674,6 +689,31 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
         log.info("%s went to another worker", mission.id)
         return 0
 
+    # Everything from here to the run is inside `_refuse`, which releases the
+    # claim whatever happens.
+    #
+    # It did not used to be. Each refusal released the claim on its own normal
+    # path, and one of them raised on the line *before* the release — a
+    # `PermissionError` appending to the timeline — so the claim was stranded
+    # and **both** workers reported "went to another worker" for fifteen
+    # minutes, until the staleness reclaim freed it. Found in production, on the
+    # first real deploy, because a file had the wrong owner.
+    #
+    # A refusal that leaks a claim is worse than the thing it refuses.
+    def _refuse(note: str) -> int:
+        log.error("refusing %s: %s", mission.id, note)
+        try:
+            blocked, event = service.transition(
+                mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
+                claimed_by="", note=note[:300])
+            timeline.append(event)
+        except Exception:                         # noqa: BLE001 - logged, not fatal
+            log.exception("could not record the refusal of %s; releasing the "
+                          "claim anyway so it is not stranded", mission.id)
+        finally:
+            claims.release(mission.id, worker=name)
+        return 0
+
     # Which repository this mission is allowed to touch. The mission names a
     # key; the registry — built at start-up from code and deployment
     # configuration — is the only thing that turns a key into a location. A name
@@ -682,38 +722,20 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     try:
         origin = registry.resolve(mission.origin_name)
     except origins.UnknownOrigin as refusal:
-        log.error("refusing %s: %s", mission.id, refusal)
-        blocked, event = service.transition(
-            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
-            claimed_by="", note=str(refusal)[:300])
-        timeline.append(event)
-        claims.release(mission.id, worker=name)
-        return 0
+        return _refuse(str(refusal))
     log.info("%s: origin %s (%s)", mission.id, origin.name, origin.kind.value)
 
     # A research mission must name the recipe it carries out. Refused rather
     # than defaulted: a worker that picked one would be choosing the work.
     if agent_choice == "research" and not mission.recipe:
-        refusal = ("this worker runs declared recipes and the mission names "
-                   f"none. Known: {', '.join(sorted(r.id for r in recipes.RECIPES))}")
-        log.error("refusing %s: %s", mission.id, refusal)
-        blocked, event = service.transition(
-            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
-            claimed_by="", note=refusal)
-        timeline.append(event)
-        claims.release(mission.id, worker=name)
-        return 0
+        return _refuse(
+            "this worker runs declared recipes and the mission names none. "
+            f"Known: {', '.join(sorted(r.id for r in recipes.RECIPES))}")
     if agent_choice == "research" and mission.recipe:
         try:
             recipes.get(mission.recipe)
         except recipes.UnknownRecipe as unknown:
-            log.error("refusing %s: %s", mission.id, unknown)
-            blocked, event = service.transition(
-                mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
-                claimed_by="", note=str(unknown)[:300])
-            timeline.append(event)
-            claims.release(mission.id, worker=name)
-            return 0
+            return _refuse(str(unknown))
 
     worker, workspaces = build_worker(name, timeline, worktrees=worktrees,
                                       origin=origin, roles=roles,
@@ -731,13 +753,26 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # asks about a different thing that could have changed between the moment a
     # person approved the plan and the moment this worker picked it up.
     serves = REGISTERED_AS.get(agent_choice, "")
+
+    # A mismatch here means this worker cannot run it — **not** that the mission
+    # is bad. It is released for a worker that serves the right agent, and left
+    # queued. Blocking it would take a perfectly good mission out of the queue
+    # because the wrong process happened to win a race for it.
+    mismatch = policy.refuse_agent_substitution(mission.agent_id, serves)
+    if mismatch:
+        log.info("%s is not for this worker: %s", mission.id, mismatch)
+        claims.release(mission.id, worker=name)
+        return 0
+
     for refusal in (
         # ...the repository it will actually touch
         policy.refuse_unapproved_self_modification(
             service.history(timeline.read(), mission.id, tenant=tenant),
             origin_is_qevik=origin.modifies_qevik_itself),
-        # ...the agent that will actually carry it out
-        policy.refuse_agent_substitution(mission.agent_id, serves),
+        # ...the repository and the budget below. The agent is checked
+        # separately, just above, because its answer is "not by me" rather than
+        # "not at all" and the two must not share an outcome.
+
         # ...and whether every allowance it sits inside can still carry it. The
         # scheduler already checked the tenant's headroom, which is advice
         # computed from a fold that may be seconds old; this asks the ledger
@@ -746,13 +781,7 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     ):
         if not refusal:
             continue
-        log.error("refusing %s: %s", mission.id, refusal)
-        blocked, event = service.transition(
-            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
-            claimed_by="", note=refusal)
-        timeline.append(event)
-        claims.release(mission.id, worker=name)
-        return 0
+        return _refuse(refusal)
 
     log.info("claiming %s — %s", mission.id, mission.title)
     try:

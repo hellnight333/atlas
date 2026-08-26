@@ -352,8 +352,11 @@ def the_whole_chain(tmp: Path, *, honest_dns: bool) -> None:
     folded = service.fold(Timeline(timeline.path).read(), tenant=rule.tenant_id)
     discovery = next((m for m in folded
                       if (m.get("occurrence") or "").startswith(rule.id)), None)
+    # The recurrence's own recipe, not a name pinned here. Pinning one is how
+    # the recurrence went on naming a recipe with no extractor while the suite
+    # stayed green.
     check("...naming the recipe and the role",
-          bool(discovery) and discovery["recipe"] == RECIPE
+          bool(discovery) and discovery["recipe"] == rule.recipe
           and discovery["agent_id"] == "researcher",
           f"{discovery.get('recipe')} / {discovery.get('agent_id')}"
           if discovery else "no mission")
@@ -392,12 +395,29 @@ def the_whole_chain(tmp: Path, *, honest_dns: bool) -> None:
             if report.parts and (tmp / "chain" / "reports" / report).is_file()
             else "")
     check("...and the report carries the recipe, the tools and the evidence",
-          RECIPE in body and "http-fetch" in body and "evidence " in body,
+          rule.recipe in body and "http-fetch" in body and "evidence " in body,
           body[:60].replace("\n", " ") if body else "no report")
-    drew = [claim for claim in ("is new", "new business", "opportunity",
-                                "good fit") if claim in body.lower()]
-    check("...and claims nothing about any business", not drew,
-          f"the report drew: {', '.join(drew)}" if drew else "")
+    # The property, not a keyword scan.
+    #
+    # The scan forbade "is new" — and flagged the report for containing the
+    # caveat *"Says nothing about whether the entity is new to anybody else"*,
+    # which is the sentence that prevents the overclaim. It also flagged
+    # "opportunity detection", a section label.
+    #
+    # What must actually hold: the report may say a business is new **to
+    # Qevik**, and may never say it is new to the world or to a source that did
+    # not say so. So novelty and its caveat travel together.
+    low = body.lower()
+    overclaims = [phrase for phrase in
+                  ("new to google", "new to the world", "newly opened",
+                   "recently opened", "guaranteed", "definitely")
+                  if phrase in low]
+    check("...and claims nothing about the world", not overclaims,
+          f"the report claimed: {', '.join(overclaims)}" if overclaims else "")
+    if "discovered_by_qevik" in low:
+        check("...and every novelty state carries its caveat",
+              "says nothing about whether" in low,
+              "a discovery state appeared without the sentence that bounds it")
 
 
 def main() -> int:

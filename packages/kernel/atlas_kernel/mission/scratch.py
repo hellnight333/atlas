@@ -183,12 +183,34 @@ def prepare(origin: Path | str | None, *, mission_id: str,
     if not mission_id.strip():
         raise ScratchError("a scratch repository must belong to a named mission")
 
-    path = Path(root).resolve() / mission_id / "repo"
-    if path.exists():
-        raise ScratchError(
-            f"{path} already exists. Two missions sharing one scratch repository "
-            "would mix their commits, which is the thing this prevents.")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    #: A retry gets its own directory beside the previous attempt's, which is
+    #: kept.
+    #:
+    #: This used to refuse outright — "two missions sharing one scratch would
+    #: mix their commits" — and that reasoning is about two *different*
+    #: missions, which the `mission_id` in the path already prevents. A mission
+    #: retried after a failure found its own scratch and could never run again:
+    #: seen in production when a mission was requeued and failed on attempt
+    #: zero, before any agent ran.
+    #:
+    #: The earlier attempt is not deleted. A failed attempt's directory, branch
+    #: and diff are the evidence for what went wrong, and tidying them away to
+    #: make room is how the record of a failure disappears.
+    base = Path(root).resolve() / mission_id
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "repo"
+    attempt = 1
+    while path.exists():
+        attempt += 1
+        path = base / f"repo-{attempt}"
+        if attempt > 50:
+            raise ScratchError(
+                f"{base} already holds 50 attempts. Something is retrying "
+                "without ever succeeding, and creating a 51st directory would "
+                "hide that rather than surface it.")
+    if attempt > 1:
+        log.info("scratch for %s: attempt %d (earlier attempts kept at %s)",
+                 mission_id, attempt, base)
 
     kind = classify(Path(origin) if origin is not None else None)
 

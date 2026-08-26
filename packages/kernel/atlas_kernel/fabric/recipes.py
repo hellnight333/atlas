@@ -110,6 +110,18 @@ class Recipe(BaseModel):
     agent_id: str
     capability: Capability
     steps: tuple[Step, ...]
+    #: Where this recipe's fetch targets come from, when not the steps.
+    #:
+    #: Empty means the steps name every URL, which is the ordinary case and the
+    #: safe one. `"business_websites"` means the targets are the websites Qevik
+    #: has **already recorded evidence for** — a verification recipe is
+    #: inherently per-business, and recipes have no variables on purpose.
+    #:
+    #: This is not a variable and not a parameter. Nothing proposes a URL: the
+    #: allow-list is computed from Qevik's own memory, so the only addresses
+    #: reachable are ones an earlier evidenced sighting put there. A model
+    #: cannot widen it, because a model cannot write a sighting.
+    targets_from: str = ""
     #: Which declared extractor reads this recipe's evidence, by name. Empty
     #: means the recipe produces evidence and nothing more — a report, not a
     #: sighting. A key like every other: the extractor decides which fields it
@@ -135,6 +147,10 @@ class Recipe(BaseModel):
                 f"{name!r} looks like a path. Recipe ids are keys, and a key "
                 "that can express a location defeats the point of having them")
         return name
+
+    #: The only sources of targets there are. A recipe naming anything else is
+    #: refused at import, like every other key in this system.
+    TARGET_SOURCES: ClassVar[frozenset[str]] = frozenset({"business_websites"})
 
     @property
     def tools(self) -> tuple[str, ...]:
@@ -170,6 +186,7 @@ class Recipe(BaseModel):
         return {"id": self.id, "version": self.version, "does": self.does,
                 "agent_id": self.agent_id, "capability": self.capability.value,
                 "tools": list(self.tools), "steps": len(self.steps),
+                "targets_from": self.targets_from,
                 "extractor": self.extractor, "notes": self.notes}
 
 
@@ -205,6 +222,13 @@ def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
             raise RecipeRefused(
                 f"{recipe.id} uses tool {step.tool!r}, which is not declared in "
                 "`fabric.tools`.") from missing
+
+    if recipe.targets_from and recipe.targets_from not in Recipe.TARGET_SOURCES:
+        raise RecipeRefused(
+            f"{recipe.id} takes targets from {recipe.targets_from!r}, which is "
+            f"not a declared source. Known: "
+            f"{', '.join(sorted(Recipe.TARGET_SOURCES))}. A recipe cannot "
+            "invent somewhere to get URLs from.")
 
     if recipe.extractor:
         from ..opportunity.extractors import UnknownExtractor
@@ -278,6 +302,28 @@ RECIPES: tuple[Recipe, ...] = (
                "credential, and answers in **structured JSON**: extraction is a "
                "declared mapping from named keys rather than a model reading a "
                "page and deciding what looks like a business name."),
+    ),
+    Recipe(
+        id="verify-recorded-websites",
+        does=("Fetch the websites Qevik has recorded for discovered businesses "
+              "and record what each server actually said. Turns 'the source "
+              "lists a website' into 'the website answers, or does not'."),
+        agent_id="researcher",
+        capability=Capability.RESEARCH,
+        targets_from="business_websites",
+        steps=(
+            Step(tool="http-fetch", command=("TARGETS",),
+                 proves="whether each recorded website answers, with what "
+                        "status, over which protocol, and how quickly"),
+        ),
+        notes=("`TARGETS` is not a variable. The addresses come from Qevik's "
+               "own memory — every one put there by an evidenced sighting — so "
+               "nothing can widen the allow-list except a source Qevik actually "
+               "read. A model cannot add a URL because a model cannot write a "
+               "sighting.\n\n"
+               "Verifying that a business has **no** website is a different "
+               "problem and is not this recipe: it needs a search provider, "
+               "which is a real external dependency and is recorded as one."),
     ),
     Recipe(
         id="discover-uae-dental",

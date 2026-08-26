@@ -152,6 +152,35 @@ way to execute anything.
 
 No demo rows. An empty list means the scan ran and found nothing new.
 
+## Verifying a website: targets from memory, never from a proposal
+
+Verification is inherently per-business, and recipes have no variables. The
+collision is resolved by `targets_from`, which is not a parameter: the addresses
+come from Qevik's **own memory**, every one put there by an evidenced sighting.
+A model cannot widen the allow-list because a model cannot write a sighting.
+
+`verify-recorded-websites` fetched 40 recorded sites on real data — 37 answered,
+3 did not — recording status, protocol and timing for each. That is the evidence
+that turns "the source lists a website" into "the website answers, or does not".
+
+**Verifying that a business has no website is a different problem** and is not
+this recipe. It needs a search provider to look for one, which is a real
+external dependency and is recorded as one rather than guessed at.
+
+### `Budget` is per prospect, not per pass
+
+`Budget` is "what one prospect is allowed to cost" — forty pages deep into one
+site. Sharing it across forty *different* businesses exhausted it, and every
+target after the fortieth page was refused: a run that fetched real results and
+then reported failure. `fetch_steps(..., per_target=True)` gives each address a
+one-page allowance, and the bound on the run is the number of targets.
+
+A refusal is still evidence. An **address-guard** refusal fails the step,
+because it means the recipe was pointed somewhere it must not go. Anything else
+— a site that will not answer, a robots policy — is one target out of many, and
+failing the whole pass because the fortieth site was down would throw away
+thirty-nine real results.
+
 ## Files
 
 | Path | What |
@@ -162,3 +191,4 @@ No demo rows. An empty list means the scan ran and found nothing new.
 | `packages/kernel/tests/test_extractors.py` | 20 tests |
 | `packages/kernel/tests/test_detect_and_rank.py` | 20 tests |
 | `infra/verify_opportunity_engine.py` | 49 checks, real database, negative controls |
+| `verify-recorded-websites` | targets from memory; 40 real sites fetched |

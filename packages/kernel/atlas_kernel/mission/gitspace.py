@@ -144,11 +144,34 @@ class GitWorkspace:
         if not (repository / ".git").exists():
             raise GitError(f"{repository} is not a git repository")
 
+        # A retry gets its own directory beside the previous attempt's.
+        #
+        # This refused outright, reasoning that "two missions chose one branch".
+        # That is true of two *different* missions and the branch name already
+        # prevents it — but a mission retried after a failure found its own
+        # worktree and could never run again. Seen in production immediately
+        # after the same bug was fixed one layer down in `scratch.prepare`: the
+        # scratch clone was fresh and the worktree directory was not.
+        #
+        # The branch name is unchanged. Each attempt clones the origin afresh,
+        # so `mission/<id>` does not exist in the new clone and there is nothing
+        # to collide with. Only the directory is shared, and only across
+        # attempts of one mission.
+        #
+        # The earlier attempt is kept. Its directory and diff are the evidence
+        # for why it failed.
         root = Path(worktrees).resolve() / branch
-        if root.exists():
-            raise GitError(
-                f"{root} already exists. A collision means two missions chose "
-                "one branch, and silently reusing it would mix their work.")
+        attempt = 1
+        while root.exists():
+            attempt += 1
+            root = Path(worktrees).resolve() / f"{branch}-{attempt}"
+            if attempt > 50:
+                raise GitError(
+                    f"{Path(worktrees).resolve() / branch} already has 50 "
+                    "attempts. Something is retrying without ever succeeding, "
+                    "and a 51st would hide that rather than surface it.")
+        if attempt > 1:
+            log.info("worktree for %s: attempt %d", branch, attempt)
 
         resolved = subprocess.run(
             ["git", "rev-parse", base], cwd=str(repository), capture_output=True,

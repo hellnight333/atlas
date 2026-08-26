@@ -93,10 +93,19 @@ def test_an_empty_scratch_has_a_resolvable_head(tmp_path):
 
 
 def test_two_missions_may_not_share_a_scratch(tmp_path):
+    """Keyed by mission id, so two missions cannot collide however many times
+    either is retried.
+
+    This used to assert that a *second call for the same id* raised. It does not
+    any more, and should not: that is a retry, and refusing it meant a mission
+    that failed once could never run again. What must never happen is two
+    different missions in one directory, which is what this now asserts.
+    """
     origin = a_repo(tmp_path / "origin")
-    scratch.prepare(origin, mission_id="m-1", root=tmp_path / "scratch")
-    with pytest.raises(scratch.ScratchError, match="already exists"):
-        scratch.prepare(origin, mission_id="m-1", root=tmp_path / "scratch")
+    one = scratch.prepare(origin, mission_id="m-1", root=tmp_path / "scratch")
+    two = scratch.prepare(origin, mission_id="m-2", root=tmp_path / "scratch")
+    assert one.path.parent != two.path.parent
+    assert "m-1" in str(one.path) and "m-2" in str(two.path)
 
 
 def test_a_scratch_must_belong_to_a_named_mission(tmp_path):
@@ -205,3 +214,58 @@ def test_the_fingerprint_notices_a_stray_branch(tmp_path):
     assert before["head"] == after["head"], "the change was invisible to HEAD"
     assert before["status"] == after["status"], "and invisible to status"
     assert before["refs"] != after["refs"]
+
+
+def test_a_retry_of_one_mission_gets_a_clean_directory(tmp_path):
+    """A mission retried after a failure found its own scratch and could never
+    run again — seen in production, failing on attempt zero before any agent
+    ran. The earlier attempt is kept: its directory, branch and diff are the
+    evidence for what went wrong."""
+    origin = a_repo(tmp_path / "origin")
+    first = scratch.prepare(origin, mission_id="m-retry", root=tmp_path / "s")
+    (first.path / "worked-on.txt").write_text("attempt one\n")
+
+    second = scratch.prepare(origin, mission_id="m-retry", root=tmp_path / "s")
+    assert second.path != first.path
+    assert first.path.exists(), "the earlier attempt was destroyed"
+    assert not (second.path / "worked-on.txt").exists(), "the retry inherited state"
+
+
+def test_two_different_missions_still_never_share_a_scratch(tmp_path):
+    origin = a_repo(tmp_path / "origin")
+    one = scratch.prepare(origin, mission_id="m-1", root=tmp_path / "s")
+    two = scratch.prepare(origin, mission_id="m-2", root=tmp_path / "s")
+    assert one.path.parent != two.path.parent
+
+
+def test_endless_retries_are_refused_rather_than_accumulating(tmp_path):
+    """Creating a fifty-first directory would hide a retry loop rather than
+    surface it."""
+    origin = a_repo(tmp_path / "origin")
+    for _ in range(50):
+        scratch.prepare(origin, mission_id="m-loop", root=tmp_path / "s")
+    with pytest.raises(scratch.ScratchError, match="50 attempts"):
+        scratch.prepare(origin, mission_id="m-loop", root=tmp_path / "s")
+
+
+def test_a_retry_gets_a_fresh_worktree_too(tmp_path):
+    """The same bug one layer down. After `scratch.prepare` learned to retry,
+    the mission failed again on the *worktree* directory — the clone was fresh
+    and the checkout was not. Seen in production, in that order."""
+    from atlas_kernel.mission.gitspace import GitWorkspace
+
+    origin = a_repo(tmp_path / "origin")
+    one = scratch.prepare(origin, mission_id="m-r", root=tmp_path / "s")
+    first = GitWorkspace.create(one.path, branch="mission/m-r",
+                                worktrees=tmp_path / "wt")
+    (first.root / "half-done.txt").write_text("attempt one\n")
+
+    two = scratch.prepare(origin, mission_id="m-r", root=tmp_path / "s")
+    second = GitWorkspace.create(two.path, branch="mission/m-r",
+                                 worktrees=tmp_path / "wt")
+    assert second.root != first.root
+    assert first.root.exists(), "the earlier attempt was destroyed"
+    assert not (second.root / "half-done.txt").exists()
+    # The branch name is unchanged: each attempt clones afresh, so there is
+    # nothing for it to collide with.
+    assert second.branch == "mission/m-r"

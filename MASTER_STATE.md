@@ -147,6 +147,47 @@ mission at 3am.
 `SELF_CHECK_STEPS` is now derived from the `execution-canary` recipe rather than
 being a second copy of the same three commands.
 
+## Deployed and running — 2026-08-27
+
+The opportunity engine is **live on `qevik-core-01`**. Both nightly recurrences
+executed on the deployed system, on their own workers:
+
+    execution-canary            complete
+    discover-dubai-dental-osm   complete
+    120 sightings · 59 businesses · 53 opportunities
+
+A second worker unit was needed: `policy.refuse_agent_substitution` refuses a
+mission whose plan named a different agent, so the canary (`self-check`) and
+discovery (`researcher`) cannot share one. `qevik-worker-research.service` is
+that second worker; atomic claims already made it safe.
+
+**Website verification runs on real data.** `verify-recorded-websites` fetched
+40 recorded sites: 37 answered, 3 did not, with status, protocol and timing
+recorded for each. Its targets come from Qevik's own memory rather than from any
+proposal — a model cannot add a URL because a model cannot write a sighting.
+
+### Four production faults this deploy found
+
+None of these appear without two real workers and a real filesystem.
+
+1. **Running a script as `root` against a service-owned state directory** left
+   `missions.jsonl` root-owned. Both workers then failed to append; one crashed
+   mid-claim.
+2. **A refusal that could not write its event stranded its claim.** The refusal
+   paths released on the normal path and not on an exception, so a
+   `PermissionError` one line earlier left the mission held for the full
+   fifteen-minute staleness window with both workers reporting "went to another
+   worker". A refusal that leaks a claim is worse than the thing it refuses.
+3. **Each worker claimed the other's mission and blocked it.** The agent guard
+   is correct but runs *after* the claim, and the claim is a race — so both
+   recurrences were BLOCKED within a minute. A worker now filters its own queue,
+   and the backstop **releases instead of blocking**: "not by me" is not a defect
+   in the mission.
+4. **A retried mission could never run again.** `scratch.prepare` and
+   `GitWorkspace.create` both refused to reuse a directory, reasoning about two
+   *different* missions — which the mission id already prevents. A retry now
+   gets a fresh directory beside the previous attempt, which is kept as evidence.
+
 ## Business discovery — built
 
 **The sentence this exists to make unsayable:** *Qevik found it, therefore it is
@@ -297,12 +338,36 @@ explicit that the goal is not to make dental discovery work but to prove the
 generic primitive. Building an extractor now would be picking a source before
 reassessing the architecture, which is the step the brief asks for next.
 
+## Blocked, precisely
+
+**Verifying that a business has no website needs a search provider.** 53 of the
+59 discovered businesses have no website recorded by OpenStreetMap. That is a
+fact about OpenStreetMap, and upgrading it to a fact about the business means
+looking for one — which needs a search API. Brave was approved and never
+supplied. Until then those 53 stay honestly labelled "the source records none",
+with a suggested action of *verify*, and the 6 with recorded sites are verified
+for real.
+
+This is an external dependency, not a design problem, and nothing downstream is
+waiting on it: the six verified sites already produce evidenced opportunities.
+
 ## Next — chosen on dependency, not roadmap order
 
 The three candidates were: (A) a mobile opportunity surface, (B) CLI/tool
 agents, (C) the flagship site.
 
-**B, narrowed to one thing: a worker role that executes tool-step recipes.**
+*(Superseded — that shipped. See "Deployed and running".)*
+
+The next milestone is **an evidenced `WEAK_WEB_PRESENCE` detector**: the
+verification recipe now records what each site returned, and nothing yet turns
+those responses into findings. `detectors/website.py` already audits a page;
+joining it to the verification evidence turns "the site answered 200 over
+plain HTTP in 3.4 seconds" into an opportunity `offer-website` can execute.
+
+That is a small, unblocked, deterministic piece, and it is the first opportunity
+Qevik could actually sell against.
+
+**Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
 The reasoning is a dependency chain, not a preference. Discovery's
 `http-fetch` recipe is declared and nothing runs it, because every worker role
@@ -358,6 +423,84 @@ worktrees), reported and deliberately not treated as proof. Re-run once the
 worker has recorded missions.
 
 ---
+
+## Reserved milestone: Agent Compute Fabric
+
+Qevik must eventually register and dispatch to external machines — the HP and
+the Lenovo — as execution nodes: capabilities (CPU/GPU/RAM), heartbeat and
+health, workload dispatch, agent isolation, per-node execution policy.
+
+**Not started, and the dependency analysis says not yet.** What it needs, and
+where each stands:
+
+| needs | state |
+|---|---|
+| agents as declarative records, not processes | **done** — `fabric/agents.py` |
+| the scheduler as the only dispatcher | **done** |
+| atomic claims across processes | **done** — Postgres, proven by two real workers today |
+| worker independence and disposability | **done** — two units, each refusing the other's work |
+| execution isolation per unit of work | **done** — scratch clone, origin allow-list, sandbox |
+| budgets bounding a unit of work | **done** — `budgets.assess` before dispatch |
+| **a network-reachable mission ledger** | **missing, and this is the blocker** |
+| node identity and registration | missing |
+| capability advertisement (CPU/GPU/RAM) | missing |
+| heartbeat / liveness distinct from claim staleness | missing |
+| per-node execution policy | missing |
+
+### The one real blocker
+
+**The mission ledger is a local JSONL file.** `/var/lib/qevik/control/missions.jsonl`
+is what every worker folds to find work, and two workers share it today only
+because they share a filesystem. A machine in another building cannot read it.
+
+Claims already crossed that line — they are Postgres-backed and proven — so the
+pattern exists and the timeline has simply not followed it. Until it does, no
+off-host node can exist, and every other item above is unreachable.
+
+Note what is *not* blocking: isolation, policy, budgets, claims and worker
+independence are all done and were exercised in production today. The fabric is
+closer than it looks, and it is gated on one thing.
+
+### OpenJarvis, evaluated
+
+[OpenJarvis](https://scalingintelligence.stanford.edu/blogs/openjarvis/)
+(Stanford Scaling Intelligence Lab) is a framework for personal AI on personal
+devices: composable agent roles under bounded context and memory, with energy,
+FLOPs, latency and cost treated as first-class constraints.
+
+**Its Orchestrator role decomposes tasks and delegates them.** That is Qevik's
+scheduler, policy layer and mission ledger, and adopting it wholesale would be
+the second orchestration system this architecture refuses. It is not a candidate
+for the control plane.
+
+It *is* a credible reference for the layer below: what runs **on** a node once
+Qevik has dispatched to it, and how to run agents well on constrained local
+hardware. Its cost-as-a-constraint framing maps directly onto `fabric/budgets`
+and onto the `cost_status` rule.
+
+Two caveats before treating it as more than a reference:
+
+- It is built around **LLM agents** reasoning under bounded context. Qevik's
+  fabric today executes **deterministic declared recipes** and needs no model,
+  so most of what OpenJarvis solves is not yet a problem Qevik has.
+- Its value is therefore contingent on model-backed agents, which remain
+  `BLOCKED_EXTERNAL_PROVIDER`.
+
+Position: **reference for the node runtime, never for orchestration.** Qevik
+remains the control plane, the policy and approval layer, the scheduler, the
+evidence and memory, and the mission ledger.
+
+## Reserved milestone: voice as a first-class interface
+
+Voice is an interface requirement across desktop and mobile, both directions:
+voice command → mission, and mission result → text **and optional** audio.
+
+The deterministic half already exists — `chat → plan → policy → approval →
+mission → worker → report` is proven, and a transcript entering it is just text.
+What is missing is transcription and speech, both of which are provider
+dependencies. Recorded here so the interface is designed for rather than
+retrofitted: a mission result must remain readable as text, with audio as an
+addition and never the only form.
 
 ## Roadmap, in dependency order
 

@@ -185,11 +185,16 @@ def test_an_inconclusive_dns_answer_records_nothing_and_does_not_fail():
 # -------------------------------------------------- the recurrence names it
 
 def test_the_daily_discovery_recurrence_names_its_recipe():
+    """Asserts that it names *a* recipe and which agent runs it — deliberately
+    not a specific id. The earlier version pinned the placeholder's name, which
+    is how the recurrence went on pointing at a recipe with no extractor while
+    the suite stayed green."""
     from atlas_kernel.mission import recurrence
 
     daily = next(r for r in recurrence.RECURRENCES
                  if r.id == "rec-daily-business-discovery")
-    assert daily.recipe == RECIPE
+    assert daily.recipe
+    assert recipes.get(daily.recipe).agent_id == RESEARCHER
     assert daily.agent_id == RESEARCHER
 
 
@@ -210,7 +215,7 @@ def test_the_mission_a_recurrence_creates_carries_the_recipe():
     firing = recurrence.assess(daily, at=daily.anchor, missions=[])
     mission, _ = recurrence.enqueue(daily, firing, tenant=daily.tenant_id,
                                     origin=registry.resolve(daily.origin_name))
-    assert mission.recipe == RECIPE
+    assert mission.recipe == daily.recipe
     assert mission.agent_id == RESEARCHER
 
 
@@ -245,3 +250,82 @@ def test_the_refusals_follow_the_declaration_and_not_a_hardcoded_list(tool):
 def test_dispatchable_is_derived_so_the_two_sets_cannot_drift():
     assert toolrunner.COMMANDS <= toolrunner.DISPATCHABLE
     assert {"http-fetch", "dns"} <= toolrunner.DISPATCHABLE
+
+
+def test_a_recurrence_that_should_produce_sightings_names_a_recipe_that_can():
+    """The nightly discovery entry pointed at a recipe with **no extractor**,
+    so it would have fetched a page, extracted nothing and recorded no business
+    — night after night, reporting success each time.
+
+    A recurrence whose whole purpose is to remember businesses must name a
+    recipe that can produce them.
+    """
+    from atlas_kernel.mission import recurrence
+
+    daily = next(r for r in recurrence.RECURRENCES
+                 if r.id == "rec-daily-business-discovery")
+    assert daily.recipe, "the discovery recurrence names no recipe"
+    assert recipes.get(daily.recipe).extractor, (
+        f"{daily.recipe} declares no extractor, so it produces evidence and "
+        "never a sighting")
+
+
+# ------------------------------------- targets from memory, not from a proposal
+
+def test_a_recipe_without_a_target_source_ignores_offered_targets():
+    """The ordinary case: the steps name every URL, and nothing widens that."""
+    declared = recipes.get(RECIPE)
+    assert not declared.targets_from
+    assert toolrunner.permitted_urls(
+        declared, targets=["https://attacker.example/"]) == \
+        toolrunner.permitted_urls(declared)
+
+
+def test_a_verification_recipe_may_fetch_what_memory_holds():
+    verify = recipes.get("verify-recorded-websites")
+    assert verify.targets_from == "business_websites"
+    allowed = toolrunner.permitted_urls(
+        verify, targets=["https://clinic.example/"])
+    assert "https://clinic.example/" in allowed
+
+
+def test_a_target_source_nobody_declared_is_refused():
+    with pytest.raises(recipes.RecipeRefused, match="not a declared source"):
+        recipes.validate(recipes.Recipe(
+            id="invented", does="x", agent_id=RESEARCHER,
+            capability=recipes.Capability.RESEARCH, targets_from="anywhere",
+            steps=(recipes.Step(tool="http-fetch",
+                                command=("https://x.test/",), proves="p"),)))
+
+
+def test_targets_are_bounded():
+    """A market that grows to ten thousand businesses must not become ten
+    thousand fetches in one mission."""
+    class Everything:
+        def recorded_websites(self, *, limit, tenant=None):
+            assert limit <= 200, "the repository was asked for an unbounded list"
+            return [f"https://s{n}.example/" for n in range(limit)]
+
+    found = toolrunner.targets_for(recipes.get("verify-recorded-websites"),
+                                   repository=Everything(), limit=10)
+    assert len(found) == 10
+
+
+def test_no_repository_means_no_targets():
+    """A verification run with nowhere to read from fetches nothing rather than
+    falling back to something."""
+    assert toolrunner.targets_for(recipes.get("verify-recorded-websites"),
+                                  repository=None) == []
+
+
+def test_an_address_guard_refusal_still_fails_a_multi_target_step():
+    """One site being down is one target out of many. Being pointed at an
+    address the guard refuses is worth stopping for."""
+    step = toolrunner._fetch(
+        recipes.Step(tool="http-fetch",
+                     command=("http://169.254.169.254/", "http://10.0.0.1/"),
+                     proves="p"),
+        allowed=frozenset({"http://169.254.169.254/", "http://10.0.0.1/"}),
+        client=None, check_addresses=True)
+    assert not step.passed
+    assert step.evidence, "the refusals were not recorded as evidence"

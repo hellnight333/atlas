@@ -164,9 +164,14 @@ def test_attaching_a_plan_records_the_agent_policy_was_told_about():
     assert service.rehydrate(mission.summary(), tenant=TENANT).agent_id == "implementer"
 
 
-def test_the_missions_own_agent_beats_the_workers_configured_one(tmp_path):
-    """A mission approved as `self-check` work must not be dispatched as though
-    it were the worker's default agent."""
+def test_a_worker_is_not_offered_a_mission_it_cannot_carry_out(tmp_path):
+    """The fault this closes, found on the first real two-worker deploy.
+
+    `policy.refuse_agent_substitution` catches a mismatch after the claim, and
+    the claim is a race — so each worker took the *other's* mission and refused
+    it, and both nightly recurrences were BLOCKED within a minute. A worker that
+    filters its own queue never enters that race.
+    """
     timeline = worker.Timeline(tmp_path / "m.jsonl")
     from atlas_kernel.mission import service
     from atlas_kernel.mission.models import Mission, MissionStatus
@@ -174,11 +179,14 @@ def test_the_missions_own_agent_beats_the_workers_configured_one(tmp_path):
                        status=MissionStatus.QUEUED, agent_id="self-check")
     timeline.append(service._event(recorded, actor="test", note="queued"))
 
-    # The worker is configured for the model-backed agent, which needs a
-    # credential. The mission's own agent needs none, and wins.
-    offered = worker.queued(timeline, tenant=TENANT, connected=frozenset(),
-                            agent_id="implementer")
-    assert [m.id for m in offered] == ["m-1"]
+    assert worker.queued(timeline, tenant=TENANT, connected=frozenset(),
+                         agent_id="implementer") == [], (
+        "a worker was offered a mission approved for a different agent")
+
+    served = worker.queued(timeline, tenant=TENANT, connected=frozenset(),
+                           agent_id="self-check")
+    assert [m.id for m in served] == ["m-1"], (
+        "the worker that serves it was not offered it")
 
 
 def test_a_mission_with_no_recorded_agent_falls_back_to_the_workers(tmp_path):

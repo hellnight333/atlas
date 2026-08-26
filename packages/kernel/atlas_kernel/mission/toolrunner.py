@@ -130,17 +130,41 @@ class Result:
                 "steps": [s.summary() for s in self.steps]}
 
 
-def permitted_urls(recipe: Recipe) -> frozenset[str]:
-    """Exactly the URLs this recipe names. The fetch allow-list.
+def permitted_urls(recipe: Recipe, *, targets: list[str] | None = None
+                   ) -> frozenset[str]:
+    """Exactly the URLs this recipe may fetch. The allow-list.
 
     Computed from the declaration rather than passed in, so a caller — a model,
     a mission, an operator in a hurry — cannot widen it. A recipe that wants to
     fetch a second page is a recipe with a second step, reviewed in git.
+
+    A recipe that declares `targets_from` gets those as well. They are not a
+    parameter: they come from Qevik's **own memory**, so the only addresses
+    reachable are ones an earlier evidenced sighting recorded. A model cannot
+    widen the list because a model cannot write a sighting.
     """
-    return frozenset(
+    declared = frozenset(
         argument
         for step in recipe.steps if step.tool == "http-fetch"
         for argument in step.command)
+    if recipe.targets_from and targets:
+        return declared | frozenset(targets)
+    return declared
+
+
+def targets_for(recipe: Recipe, *, repository: object,
+                tenant: str | None = None, limit: int = 40) -> list[str]:
+    """The addresses this recipe's targets source yields.
+
+    Bounded. A verification recipe over a market that grows to ten thousand
+    businesses would otherwise fetch ten thousand sites in one mission, which is
+    neither polite to them nor recoverable for us.
+    """
+    if recipe.targets_from != "business_websites" or repository is None:
+        return []
+    found = repository.recorded_websites(limit=limit, tenant=tenant)
+    log.info("%s: %d recorded website(s) to verify", recipe.id, len(found))
+    return found
 
 
 def refusals(recipe: Recipe, agent: Agent) -> list[str]:
@@ -167,7 +191,8 @@ def refusals(recipe: Recipe, agent: Agent) -> list[str]:
 def run(recipe: Recipe, *, registry: Registry | None = None,
         workspace: Path | None = None,
         client: object | None = None,
-        check_addresses: bool = True) -> Result:
+        check_addresses: bool = True,
+        targets: list[str] | None = None) -> Result:
     """Carry out every step, stopping at the first failure.
 
     Stopping matters for the same reason it does in `Adapter.run`: a later step
@@ -185,12 +210,18 @@ def run(recipe: Recipe, *, registry: Registry | None = None,
     if refused:
         raise NotDispatchable(" ".join(refused))
 
-    allowed = permitted_urls(recipe)
+    allowed = permitted_urls(recipe, targets=targets)
     outcome = Result(recipe=recipe.id, agent_id=agent.id)
 
     for step in recipe.steps:
         if step.tool == "http-fetch":
-            done = _fetch(step, allowed=allowed, client=client,
+            # A targets step fetches what memory holds; a declared step fetches
+            # what it names. Either way the allow-list decides, and it was
+            # computed before the first request.
+            wanted = (list(targets) if recipe.targets_from and targets
+                      and "TARGETS" in step.command else list(step.command))
+            done = _fetch(step.model_copy(update={"command": tuple(wanted)}),
+                          allowed=allowed, client=client,
                           check_addresses=check_addresses)
         elif step.tool == "dns":
             done = _resolve(step)
@@ -223,18 +254,30 @@ def _fetch(step, *, allowed: frozenset[str], client: object | None,
                             "recipe. A fetch target comes from the declaration, "
                             "not from whatever asked for the run."))
 
+    many = len(step.command) > 1
     evidence, refused = crawler.fetch_steps(
         list(step.command), detector=f"recipe:{step.tool}", client=client,
-        check_addresses=check_addresses)
+        check_addresses=check_addresses, per_target=many)
+
+    # A refusal is evidence too — "this address was refused" is a fact. What it
+    # does to the *step* depends on which kind it is.
+    #
+    # An address-guard refusal always fails the step: it means the recipe was
+    # pointed somewhere it must not go, and that is worth stopping for. Anything
+    # else — a site that would not answer, a robots policy — is one target out
+    # of many, and failing the whole pass because the fortieth site was down
+    # would throw away thirty-nine real results.
+    blocked = [r for r in refused if crawler.was_refused_by_the_guard(r)]
+    recorded = evidence + [r.as_evidence(f"recipe:{step.tool}") for r in refused]
+    passed = bool(evidence) and not blocked
+    detail = f"{len(evidence)} response(s) recorded"
     if refused:
-        return Step(tool=step.tool, invoked=", ".join(step.command),
-                    proves=step.proves, passed=False,
-                    evidence=[r.as_evidence(f"recipe:{step.tool}")
-                              for r in refused],
-                    detail="; ".join(r.because for r in refused)[:300])
-    return Step(tool=step.tool, invoked=", ".join(step.command),
-                proves=step.proves, passed=bool(evidence), evidence=evidence,
-                detail=f"{len(evidence)} response(s) recorded")
+        detail += f"; {len(refused)} not fetched"
+    if blocked:
+        detail = "; ".join(r.because for r in blocked)[:300]
+    return Step(tool=step.tool, invoked=", ".join(step.command)[:200],
+                proves=step.proves, passed=passed, evidence=recorded,
+                detail=detail)
 
 
 def _resolve(step) -> Step:
@@ -301,7 +344,7 @@ def _command(step, *, agent: Agent, workspace: Path | None,
 
 
 __all__ = ["COMMANDS", "DISPATCHABLE", "NotDispatchable", "Result", "Step",
-           "ToolAgent", "permitted_urls", "refusals", "run"]
+           "ToolAgent", "permitted_urls", "refusals", "run", "targets_for"]
 
 
 # ============================================================ the worker role
@@ -383,7 +426,10 @@ class ToolAgent:
             self.result = run(self._recipe, registry=self._registry,
                               workspace=Path(workspace_root),
                               client=self._client,
-                              check_addresses=self._check_addresses)
+                              check_addresses=self._check_addresses,
+                              targets=targets_for(
+                                  self._recipe, repository=self._repository,
+                                  tenant=self._tenant))
         except NotDispatchable as refused:
             return AgentOutcome(
                 summary=str(refused)[:400], claims_done=False,

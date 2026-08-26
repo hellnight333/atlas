@@ -124,12 +124,24 @@ def unreachable(url: str, *, detector: str) -> Evidence | None:
 def fetch_steps(urls: list[str], *, detector: str = "recipe-fetch",
                 budget: Budget | None = None,
                 client: object | None = None,
-                check_addresses: bool = True) -> tuple[list[Evidence], list[Refused]]:
+                check_addresses: bool = True,
+                per_target: bool = False
+                ) -> tuple[list[Evidence], list[Refused]]:
     """Fetch each URL through the guard, returning evidence and refusals.
 
-    One `Budget` across every URL, passed down rather than created per fetch:
-    every request spends from the same allowance, so a long list cannot quietly
-    get itself a bigger one.
+    Two shapes of budget, because there are two shapes of work.
+
+    A recipe that names a few URLs shares one `Budget`, and that is what it is
+    for: "what one prospect is allowed to cost", forty pages deep into one site,
+    so a stage cannot quietly get itself a bigger allowance by constructing a
+    second fetcher.
+
+    A verification pass over forty *different* businesses is not that. Sharing
+    one 40-page budget across forty homepages exhausted it, and every target
+    after the fortieth page was refused — a run that fetched real results and
+    then reported failure. So `per_target` gives each address its own one-page
+    allowance, and the bound on the whole run is the **number of targets**,
+    which the caller already limits.
 
     A refusal is returned rather than raised. One private address in a list of
     forty should not abandon the other thirty-nine — it should be recorded as
@@ -141,7 +153,10 @@ def fetch_steps(urls: list[str], *, detector: str = "recipe-fetch",
 
     for url in urls:
         root = f"{'/'.join(url.split('/')[:3])}"
-        fetcher = Fetcher(root, budget=shared, client=client,
+        # One page each when the targets are different businesses; the shared
+        # allowance when they are pages of one thing.
+        allowance = Budget(max_pages=1) if per_target else shared
+        fetcher = Fetcher(root, budget=allowance, client=client,
                           check_addresses=check_addresses)
         try:
             page = fetcher.get(url)
