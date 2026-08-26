@@ -248,6 +248,11 @@ header.page p { margin: 0; color: var(--muted); }
 /* Clear of the last option. Flush against it, the buttons read as part of that
  * choice rather than as the decision about all of them. */
 .decide .actions { margin-top: 1.1rem; }
+/* A link, not a control. Inside `.actions` the pill stretched to the flex row
+ * and read as an empty input — a thing you type in rather than follow. */
+.trail { margin: .9rem 0 0; font-size: 14px; }
+.trail a { color: var(--accent); text-decoration: none; }
+.trail a:hover, .trail a:focus { text-decoration: underline; }
 .card.why p { margin: 0; overflow-wrap: anywhere; }
 
 .decide { border-color: var(--signal); }
@@ -480,7 +485,8 @@ const state = { page: 'dashboard', arg: null, me: null, counts: {},
 const PAGES = [
   ['dashboard', 'Dashboard'], ['roadmap', 'Roadmap'], ['missions', 'Mission Control'],
   ['schedule', 'Schedule'],
-  ['chat', 'Chat'], ['actions', 'Human Actions'], ['credentials', 'Credentials'],
+  ['chat', 'Chat'], ['discovery', 'Discovery'],
+  ['actions', 'Human Actions'], ['credentials', 'Credentials'],
   ['models', 'Models'], ['businesses', 'Businesses'], ['publications', 'Publications'],
   ['measurements', 'Measurements'], ['reports', 'Reports'], ['history', 'History'],
   ['more', 'More'], ['settings', 'Settings'],
@@ -533,6 +539,9 @@ function drawNav() {
 
 /* --------------------------------------------------------------- pages */
 const views = {};
+
+views.discovery = async () => (state.arg
+  ? discoveryTrail(state.arg) : discoveries());
 
 views.dashboard = async () => {
   const [health, missions, actions, costs, blockers] = await Promise.all([
@@ -979,6 +988,78 @@ function originChoice(available) {
       </label>`;
     }).join('')}
   </fieldset>`;
+}
+
+/* What discovery found, on a phone.
+ *
+ * Deliberately one screen and no charts. The useful thing is: what turned up,
+ * how sure we are about *what kind of new it is*, and what it rests on.
+ *
+ * The one rule this screen exists to keep: a row that is merely new to Qevik
+ * must not read as "a new business appeared". The API sends
+ * `claims_about_the_world` on every row precisely so this cannot be guessed,
+ * and the wording below changes with it rather than with the state name. */
+function discoveryLine(row) {
+  const claims = row.claims_about_the_world === true;
+  return claims
+    ? { word: 'New to ' + esc(row.source || 'the source'), tone: 'ok',
+        says: 'The source itself evidences this. New to that source — not to the world.' }
+    : { word: 'New to Qevik', tone: '',
+        says: 'Qevik had no record of this. That is a fact about Qevik, not about the world.' };
+}
+
+async function discoveries() {
+  const found = await API.get('/api/discovery?limit=25').catch(() => null);
+  if (!found) {
+    return `<header class="page"><h2>Discovery</h2></header>
+      <div class="card"><p class="note">The discovery memory could not be read.
+      That is not the same as nothing having been discovered.</p></div>`;
+  }
+  const rows = found.discoveries || [];
+  return `
+    <header class="page"><h2>Discovery</h2>
+      <p class="lead">${rows.length
+        ? esc(String(rows.length)) + ' since the last scan, ' +
+          esc(String(found.counts.claiming_about_the_world)) +
+          ' of them evidenced as new by their source.'
+        : 'Nothing new since the last scan.'}</p></header>
+    ${rows.length ? rows.map((r) => {
+      const how = discoveryLine(r);
+      return `<div class="card">
+        <div class="title">${esc(r.name)}</div>
+        <p class="stage">${pill(how.word, how.tone)} ${esc(how.says)}</p>
+        <dl class="facts">
+          <dt>Where</dt><dd>${esc([r.city, r.country].filter(Boolean).join(', ') || '—')}</dd>
+          <dt>Source</dt><dd>${esc(r.source)}</dd>
+          <dt>Seen</dt><dd>${when(r.observed_at)}</dd>
+          <dt>Why this state</dt><dd><span class="note">${esc(r.because || '')}</span></dd>
+        </dl>
+        <p class="trail"><a href="#/discovery/${encodeURIComponent(r.business_id)}">See the evidence &rarr;</a></p>
+      </div>`;
+    }).join('') : `<div class="card"><p class="note">Discovery runs nightly.
+      An empty list means the scan ran and found nothing Qevik did not already
+      have — not that it did not run.</p></div>`}
+    <p class="note">${esc(found.note || '')}</p>`;
+}
+
+async function discoveryTrail(id) {
+  const trail = await API.get('/api/discovery/' + encodeURIComponent(id) + '/sightings')
+    .catch(() => null);
+  if (!trail) {
+    return `<header class="page"><h2>Evidence</h2></header>
+      <div class="card"><p class="note">No sightings for that id.</p></div>`;
+  }
+  return `
+    <header class="page"><h2>${esc((trail.sightings[0] || {}).name || 'Evidence')}</h2>
+      <p class="lead">First seen ${when(trail.first_seen_at)}, last seen
+      ${when(trail.last_seen_at)}. ${esc(String(trail.sightings.length))}
+      observation${trail.sightings.length === 1 ? '' : 's'}.</p></header>
+    ${trail.sightings.map((s) => `<div class="card">
+      <div class="meta">${pill(s.state)} ${esc(s.source)} · ${when(s.observed_at)}</div>
+      <p class="note">${esc(s.because || '')}</p>
+      ${(s.evidence || []).map((e) => `<pre class="report">${
+        esc(JSON.stringify(e.observed, null, 1))}</pre>`).join('')}
+    </div>`).join('')}`;
 }
 
 function planPreview(plan, originName) {

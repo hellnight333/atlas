@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -89,12 +89,13 @@ function check(name, ok, detail = '') {
   (ok ? PASS : FAIL).push(name);
   console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 }
-const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice } =
-  sandbox.__under_test || {};
+const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice,
+        discoveryLine } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
     || typeof cost !== 'function' || typeof originOf !== 'function'
-    || typeof originChoice !== 'function' || !STAGE) {
+    || typeof originChoice !== 'function'
+    || typeof discoveryLine !== 'function' || !STAGE) {
   console.error('the functions under test were not defined — the script did not '
                 + 'reach the end, or they were renamed');
   process.exit(1);
@@ -229,6 +230,30 @@ check('...and names the origin that would be used',
       /Qevik/i.test(unreadable));
 check('a null response is handled without throwing',
       typeof originChoice(null) === 'string');
+
+/* ---- discoveryLine: the claim a row is allowed to make ------------------ */
+
+const merelyOurs = discoveryLine({ name: 'X', source: 'google-places',
+                                   claims_about_the_world: false });
+check('a row new only to Qevik does not read as a new business',
+      !/new business/i.test(merelyOurs.word + merelyOurs.says), merelyOurs.word);
+check('...it says whose fact it is',
+      /fact about Qevik/i.test(merelyOurs.says), merelyOurs.says);
+check('...and names Qevik, not the source', /new to qevik/i.test(merelyOurs.word));
+
+const evidenced = discoveryLine({ name: 'X', source: 'google-places',
+                                  claims_about_the_world: true });
+check('an evidenced row names the source it is new to',
+      /google-places/.test(evidenced.word), evidenced.word);
+check('...and still refuses to say new to the world',
+      /not to the world/i.test(evidenced.says), evidenced.says);
+
+/* The wording must follow the flag, not the state name — a client that read
+ * the name would have to know which names are strong. */
+const missingFlag = discoveryLine({ name: 'X', source: 'g',
+                                    state: 'PROVEN_NEW_TO_SOURCE' });
+check('a row with no flag is treated as the weaker claim',
+      /new to qevik/i.test(missingFlag.word), missingFlag.word);
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

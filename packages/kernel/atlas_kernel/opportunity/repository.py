@@ -249,6 +249,122 @@ class OpportunityRepository:
             )
         return [self._business_from_row(row) for row in rows]
 
+    # ---------------------------------------------------------------- sightings
+
+    def record_sighting(self, sighting, classification, *,
+                        tenant: TenantId | None = None) -> bool:
+        """Store one observation of one entity. Returns whether it was stored.
+
+        `False` means this exact sighting — same business, same source, same
+        source id, same instant — was already recorded, so the scan is being
+        replayed. Not an error: a scan re-run after a crash must be safe, and
+        the unique index is what makes it so rather than a check that races
+        itself the moment two workers scan the same market.
+
+        The classification is stored **as it was at the time** and never
+        recomputed. A sighting that was DISCOVERED_BY_QEVIK in August stays
+        that, even though the business is KNOWN by September; rewriting it
+        would make the history agree with the present.
+        """
+        payload = {
+            "business_id": sighting.business_id,
+            "tenant_id": str(tenant or ""),
+            "name": sighting.name,
+            "source": sighting.source,
+            "source_id": sighting.source_id,
+            "source_url": sighting.source_url,
+            "country": sighting.country,
+            "city": sighting.city,
+            "origin": sighting.origin.value,
+            "state": classification.state.value,
+            "because": classification.because,
+            "claims": classification.claims_about_the_world,
+            "novelty": json.dumps(
+                sighting.novelty.model_dump(mode="json")
+                if sighting.novelty else None),
+            "evidence": json.dumps(
+                [e.model_dump(mode="json") for e in sighting.evidence]),
+            "observed_at": sighting.observed_at,
+        }
+        with SessionLocal() as session:
+            done = session.execute(
+                text("""
+                INSERT INTO atlas_sightings (
+                    business_id, tenant_id, name, source, source_id, source_url,
+                    country, city, origin, state, because,
+                    claims_about_the_world, novelty, evidence, observed_at)
+                VALUES (
+                    :business_id, :tenant_id, :name, :source, :source_id,
+                    :source_url, :country, :city, :origin, :state, :because,
+                    :claims, :novelty, :evidence, :observed_at)
+                ON CONFLICT DO NOTHING
+                """),
+                payload)
+            session.commit()
+            return bool(done.rowcount)
+
+    def sightings_for(self, business_id: str, *,
+                      tenant: TenantId | None = None) -> list[dict]:
+        """Every recorded observation of one entity, oldest first.
+
+        The "previous observations" a discovery record has to carry. Returned
+        as dicts because a sighting row is a historical record rather than a
+        live model — reconstructing `Sighting` objects would invite somebody to
+        edit and save one.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT * FROM atlas_sightings
+                WHERE business_id = :business_id
+                  AND (:tenant = '' OR tenant_id = :tenant)
+                ORDER BY observed_at, id
+                """),
+                {"business_id": business_id, "tenant": str(tenant or "")},
+            ).mappings().all()
+        return [{
+            "business_id": row["business_id"], "name": row["name"],
+            "source": row["source"], "source_id": row["source_id"],
+            "source_url": row["source_url"], "country": row["country"],
+            "city": row["city"], "origin": row["origin"],
+            "state": row["state"], "because": row["because"],
+            "claims_about_the_world": row["claims_about_the_world"],
+            "novelty": _decoded(row["novelty"]),
+            "evidence": _decoded(row["evidence"]) or [],
+            "observed_at": row["observed_at"].isoformat()
+            if row["observed_at"] else "",
+        } for row in rows]
+
+    def recent_discoveries(self, *, limit: int = 50,
+                           tenant: TenantId | None = None) -> list[dict]:
+        """The newest sightings that were not already known, newest first.
+
+        `KNOWN` is excluded because a list of things Qevik already had is not a
+        discovery feed. The state is returned verbatim so a surface can show
+        which of them actually claim anything about the world.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT * FROM atlas_sightings
+                WHERE state <> 'KNOWN'
+                  AND (:tenant = '' OR tenant_id = :tenant)
+                ORDER BY observed_at DESC, id DESC
+                LIMIT :limit
+                """),
+                {"limit": max(1, min(int(limit), 500)),
+                 "tenant": str(tenant or "")},
+            ).mappings().all()
+        return [{
+            "business_id": row["business_id"], "name": row["name"],
+            "source": row["source"], "source_url": row["source_url"],
+            "country": row["country"], "city": row["city"],
+            "state": row["state"], "because": row["because"],
+            "claims_about_the_world": row["claims_about_the_world"],
+            "observed_at": row["observed_at"].isoformat()
+            if row["observed_at"] else "",
+        } for row in rows]
+
     def save_finding(self, finding: Finding) -> Finding:
         with SessionLocal() as session:
             session.execute(

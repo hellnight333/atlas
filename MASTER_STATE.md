@@ -4,7 +4,7 @@ The single reconciliation point for Qevik. Read this before starting a
 workstream; update it when one lands. Everything here is meant to be checkable
 against the repository — if a line cannot be verified, it does not belong.
 
-**Last reconciled:** 2026-08-26 (origin surface, no-fallback gates, recipes)
+**Last reconciled:** 2026-08-26 (discovery, signals, sighting memory)
 
 ---
 
@@ -65,7 +65,9 @@ built and only partly connected, which is a different problem from missing.
 | Budgets | `fabric/budgets.py` | **now checked before dispatch.** `assess()` exists so "the scheduler can decline to start work it cannot finish" and nothing called it — the budget was consulted only *after* the work, by `_charge` |
 | Message protocol | `fabric/protocol.py` | **built, imported by nothing.** Its consumer is agent-to-agent capability routing, which needs the CLI/tool agents. Not wired speculatively |
 | Tools | `fabric/tools.py` | wired, **and now enforced per step** |
-| Recipes | `fabric/recipes.py` | the unit of work; `execution-canary` declared |
+| Recipes | `fabric/recipes.py` | `execution-canary`, `discover-uae-dental` |
+| **Discovery states + signals** | `opportunity/discovery.py`, `signals.py` |
+| **Sighting memory** | `atlas_sightings`, `verify_discovery` 25/25 |
 | Sandbox | `fabric/sandbox.py` | wired, `verify_sandbox` |
 
 ### What the two dispatch gaps cost
@@ -143,11 +145,73 @@ mission at 3am.
 `SELF_CHECK_STEPS` is now derived from the `execution-canary` recipe rather than
 being a second copy of the same three commands.
 
-## Next
+## Business discovery — built
 
-**Business discovery / opportunity engine** — the first recipe-driven assistant
-that is not about code, and the thing that proves the abstraction is generic.
-Then the mobile control surface and flagship `qevik.ai`.
+**The sentence this exists to make unsayable:** *Qevik found it, therefore it is
+new to Google Maps.* Qevik's memory being empty is a fact about Qevik.
+
+Four states; exactly one claims anything about the world, and it says
+`TO_SOURCE` so nobody can round it up. `PROVEN_NEW_TO_SOURCE` is unreachable
+without a `Novelty`, which cannot be constructed without naming the source, the
+field read and the value read — so the strong state requires having looked
+something up, and a reviewer can check the same field.
+
+**Observation / evidence / inference / action are four types, not four fields.**
+Prose cannot be validated, so the rules are structural: an observation has no
+confidence field; an inference names the evidence it rests on by fingerprint and
+may not be certain; an outward action cannot be constructed without
+`needs_approval`. A test asserts the label agrees with `mission/policy.py`,
+which is the actual boundary.
+
+Memory extends the existing `OpportunityRepository` — `resolve_business` already
+resolves on strong keys only. `atlas_sightings` is one row per *observation*,
+with a unique index so a replayed scan is safe, and a sighting keeps the state it
+had at the time rather than being rewritten to agree with the present.
+
+`rec-daily-business-discovery` at 04:15 UTC, origin `none`, reaches the queue
+with nobody asked. Discovery running unattended and contacting nobody unattended
+are both true at once.
+
+`GET /api/discovery` only — the surface offers no way to execute anything, and a
+test asserts every route is GET.
+
+### The exact next dependency
+
+The recipe's `http-fetch` steps are **declared and not executed by a worker**.
+`for_adapter()` refuses them by design — a URL is not a program — and the
+worker's roles are code-writing shaped (planner / implementer / reviewer). A
+non-code-writing worker role is a real architectural addition, not wiring.
+
+Everything either side is proven: the guard fetches and refuses, evidence is
+recorded and survives a reconnection, sightings resolve and classify, and the
+recurrence creates its mission unattended.
+
+## Next — chosen on dependency, not roadmap order
+
+The three candidates were: (A) a mobile opportunity surface, (B) CLI/tool
+agents, (C) the flagship site.
+
+**B, narrowed to one thing: a worker role that executes tool-step recipes.**
+
+The reasoning is a dependency chain, not a preference. Discovery's
+`http-fetch` recipe is declared and nothing runs it, because every worker role
+is code-writing shaped — plan, implement in a worktree, review a diff. A fetch
+recipe has no diff. Until that role exists:
+
+- **A has nothing to show.** The opportunity surface is built and returns real
+  rows, but the only rows are ones a test or a script put there. Making it
+  prettier before discovery can fill it is decorating an empty room.
+- **C is furthest from evidence.** A flagship site whose headline capability
+  cannot run unattended is a claim rather than a product.
+- **B unblocks both**, and it is the generic piece: the same role that runs a
+  fetch recipe runs a research, media or publishing recipe. That is what makes
+  the agent abstraction infrastructure for 300 assistants rather than a coding
+  tool with general-sounding names.
+
+Scope it as: a `Roles` variant whose implementer interprets a recipe's steps by
+tool — `crawler.fetch_steps` for `http-fetch`, the adapter for `shell` — and
+returns `Evidence` rather than a commit. The acceptance is `discover-uae-dental`
+running through the real worker and leaving sightings in the database.
 
 `fabric/protocol.py` remains built and unconsumed. Its consumer is agent-to-agent
 capability routing; a single recipe execution does not need it, and wiring it

@@ -62,6 +62,32 @@ FIXTURES: dict[str, object] = {
          "claimed_by": "worker-1"},
     ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
     "/api/missions/blockers": {"by_kind": {}},
+    # Two rows on purpose: one merely new to Qevik and one the source actually
+    # evidenced. The whole point of this screen is that those read differently.
+    "/api/discovery": {
+        "counts": {"total": 2, "claiming_about_the_world": 1},
+        "note": ("A discovery is new to Qevik. Only rows with "
+                 "claims_about_the_world are evidenced as new to their source, "
+                 "and new to a source is not new to the world."),
+        "discoveries": [
+            {"business_id": "b-1", "name": "Marina Dental Clinic",
+             "source": "google-places", "source_url": "https://marinadental.ae/",
+             "country": "AE", "city": "Dubai",
+             "state": "PROVEN_NEW_TO_SOURCE", "claims_about_the_world": True,
+             "because": ("google-places reports it as new: "
+                         "first_review_at=2026-08-20. This is new to "
+                         "google-places, which is not the same as new to the "
+                         "world"),
+             "observed_at": "2026-08-26T04:15:00+00:00"},
+            {"business_id": "b-2", "name": "Jumeirah Smile Studio",
+             "source": "overpass", "source_url": "",
+             "country": "AE", "city": "Dubai",
+             "state": "DISCOVERED_BY_QEVIK", "claims_about_the_world": False,
+             "because": ("absent from Qevik's memory, and surfaced by a scan "
+                         "rather than supplied. Says nothing about whether the "
+                         "entity is new to anybody else"),
+             "observed_at": "2026-08-26T04:15:00+00:00"},
+        ]},
     # Three origins, so the approval screen has a real choice on it. Names and
     # kinds only — the real endpoint returns no paths, and a fixture that
     # carried one would be a screenshot of a leak that does not exist.

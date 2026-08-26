@@ -1072,6 +1072,61 @@ def init_db() -> None:
         )
         """)
         )
+        # Every sighting, not just the current state of the business.
+        #
+        # A separate table rather than columns on `atlas_businesses`, because a
+        # business has one identity and many sightings: the same clinic seen by
+        # Places in August and by Overpass in September is two observations of
+        # one company, and collapsing them into "last source" throws away the
+        # thing discovery is for. `first_seen_at` on the business answers "how
+        # long have we known"; this answers "how did we come to know, and what
+        # did the source actually say".
+        #
+        # `state` is the discovery state at the moment of the sighting and is
+        # never recomputed: a sighting that was DISCOVERED_BY_QEVIK in August
+        # stays that, even though the business is KNOWN by September. Rewriting
+        # it would make the history agree with the present, which is the one
+        # thing a history must not do.
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS atlas_sightings (
+            id BIGSERIAL PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_id TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            country TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            origin TEXT NOT NULL DEFAULT 'scan',
+            state TEXT NOT NULL,
+            because TEXT NOT NULL DEFAULT '',
+            claims_about_the_world BOOLEAN NOT NULL DEFAULT FALSE,
+            novelty JSONB,
+            evidence JSONB NOT NULL DEFAULT '[]',
+            observed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+        )
+        """)
+        )
+        conn.execute(
+            text("""
+        CREATE INDEX IF NOT EXISTS atlas_sightings_business
+            ON atlas_sightings (business_id, observed_at)
+        """)
+        )
+        # One row per (source, source_id) per business. The same scan run twice
+        # must not double-count, and a unique index is the only place that can
+        # be guaranteed — a check in the service races itself the moment two
+        # workers scan the same market.
+        conn.execute(
+            text("""
+        CREATE UNIQUE INDEX IF NOT EXISTS atlas_sightings_once
+            ON atlas_sightings (business_id, source, source_id, observed_at)
+        """)
+        )
+
         # Additive columns for databases that predate identity resolution.
         conn.execute(
             text("""

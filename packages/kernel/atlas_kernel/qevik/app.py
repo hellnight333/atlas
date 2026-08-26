@@ -58,6 +58,7 @@ from ..mission.claims import describe as describe_claims
 from ..mission.timeline import Timeline
 from ..modelchoice import api as models_api
 from ..modelchoice.store import SelectionStore
+from ..opportunity import api as discovery_api
 from ..publication import ConnectionStore
 from . import live
 
@@ -218,6 +219,7 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     models_api.install(app)
     chat_api.install(app)
     sales_api.install(app)
+    discovery_api.install(app)
 
     timeline = (Timeline(wiring.mission_timeline)
                 if wiring.mission_timeline is not None else None)

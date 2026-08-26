@@ -367,7 +367,63 @@ _CANARY_PLAN = Plan(
     approval_required=False,
 )
 
+#: Discovery's plan. Writes nothing outside `reports/`, works in an **empty**
+#: origin — it has no source repository, because what it changes is the business
+#: memory in Postgres, not a checkout — and therefore reaches the queue with
+#: nobody asked.
+#:
+#: What it may *do* with what it finds is a separate question with a separate
+#: answer: every outward action a signal suggests carries `needs_approval`, and
+#: `policy.decide` is what actually gates it. Discovery running unattended and
+#: contacting nobody unattended are both true at once, and they have to be.
+_DISCOVERY_PLAN = Plan(
+    goal="Look at a market and record what was actually there",
+    why=("A market that was scanned once and written down is a market nobody "
+         "has looked at since. Businesses appear, sites change, and the value "
+         "of the memory is that it is current — but only a scheduled scan keeps "
+         "it that way, and a scan somebody has to remember to run is one that "
+         "stops being run."),
+    steps=(
+        PlanStep(order=1, title="fetch what the recipe names",
+                 why="through the guarded fetcher: budget, robots, and every "
+                     "resolved address on every redirect hop",
+                 files=("reports/discovery.md",)),
+        PlanStep(order=2, title="resolve each sighting against memory",
+                 why="strong keys only, so the same clinic from two sources is "
+                     "one company"),
+        PlanStep(order=3, title="classify and record",
+                 why="new to Qevik is a fact about Qevik; only the source can "
+                     "make it a fact about the world"),
+    ),
+    test_plan="the pass reports what it saw, what was new, and to whom",
+    security_impact=("Outbound HTTP to public addresses only, refused on every "
+                     "private one. No credentials. Contacts nobody."),
+    rollback="the sightings are additive; nothing is overwritten",
+    estimated_cost=0.0,
+    cost_status="REPORTED",
+    approval_required=False,
+)
+
 RECURRENCES: tuple[Recurrence, ...] = (
+    Recurrence(
+        id="rec-daily-business-discovery",
+        tenant_id=QEVIK_TENANT,
+        title="Daily business discovery",
+        description=("Scans a declared market and records what was there, so "
+                     "the business memory is current rather than a snapshot of "
+                     "whenever somebody last ran a script."),
+        plan=_DISCOVERY_PLAN,
+        agent_id="researcher",
+        origin_name=origins.EMPTY_NAME,
+        every=timedelta(days=1),
+        # 04:15 UTC — inside the night window, clear of the 02:30 canary and the
+        # 03:30 backup, so the three do not contend.
+        anchor=datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        requested_by="recurrence",
+        notes=("Runs unattended because its origin is EMPTY and it contacts "
+               "nobody. Anything it suggests doing about what it finds is "
+               "gated by policy like any other outward act."),
+    ),
     Recurrence(
         id="rec-execution-canary",
         tenant_id=QEVIK_TENANT,

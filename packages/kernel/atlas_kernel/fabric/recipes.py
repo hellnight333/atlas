@@ -37,6 +37,8 @@ recipes and something deterministic chooses between them.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from .agents import Capability, Registry, UnknownAgent
@@ -65,9 +67,10 @@ class Step(BaseModel):
 
     #: The tool this step uses. Must be one the recipe's agent declares.
     tool: str
-    #: Argv. No shell string, because a shell string is a place to hide a second
-    #: command, and the whole point of naming the tool is that the step is
-    #: inspectable before it runs.
+    #: What the tool is invoked with. Argv for `shell` and `filesystem`; a URL
+    #: for `http-fetch`; a hostname for `dns`. Never a shell string — a shell
+    #: string is a place to hide a second command, and the whole point of naming
+    #: the tool is that the step is inspectable before it runs.
     command: tuple[str, ...]
     #: What this establishes. A step whose output nobody can interpret produces
     #: noise in the evidence, and evidence nobody reads is the same as none.
@@ -132,8 +135,28 @@ class Recipe(BaseModel):
     def tools(self) -> tuple[str, ...]:
         return tuple(sorted({step.tool for step in self.steps}))
 
+    #: Tools whose steps are argv and may be executed as commands. Anything
+    #: else is invoked by something that understands it — `http-fetch` by the
+    #: guarded fetcher, for instance — and must never reach a process launcher.
+    EXECUTABLE_TOOLS: ClassVar[frozenset[str]] = frozenset(
+        {"shell", "filesystem", "git-worktree"})
+
     def for_adapter(self) -> list:
-        """The steps as the execution layer wants them."""
+        """The steps as the command-running execution layer wants them.
+
+        Refuses a recipe containing a step that is not argv. `http-fetch`
+        steps carry a **URL**, and handing one to a process launcher would try
+        to execute `https://example.com/` as a program — which fails, but only
+        after the recipe has been dispatched, and for a reason that reads like
+        a missing binary rather than a category error.
+        """
+        wrong = sorted({s.tool for s in self.steps
+                        if s.tool not in self.EXECUTABLE_TOOLS})
+        if wrong:
+            raise RecipeRefused(
+                f"{self.id} contains {', '.join(wrong)} step(s), which are not "
+                "commands. A URL is not a program; these are carried out by the "
+                "tool that understands them, not by a process launcher.")
         from ..mission.adapter import Step as RunStep
         return [RunStep(command=list(s.command), proves=s.proves, tool=s.tool)
                 for s in self.steps]
@@ -214,6 +237,30 @@ RECIPES: tuple[Recipe, ...] = (
         ),
         notes=("The third step is the one that matters. The first two would "
                "pass on a host with no sandbox at all."),
+    ),    Recipe(
+        id="discover-uae-dental",
+        does=("Look at the homepages of known dental clinics in the UAE and "
+              "record what the servers actually said. Produces evidence; "
+              "concludes nothing."),
+        agent_id="researcher",
+        capability=Capability.RESEARCH,
+        steps=(
+            Step(tool="http-fetch",
+                 command=("https://www.dha.gov.ae/",),
+                 proves="the regulator's directory is reachable, and what it "
+                        "returned"),
+            Step(tool="dns",
+                 command=("dha.gov.ae",),
+                 proves="whether the host resolves at all, which is a "
+                        "different fact from the site being down"),
+        ),
+        notes=("A market is part of the declaration, not a parameter. Recipes "
+               "have no variables on purpose, so scanning a second market is a "
+               "second recipe — a reviewed change in git rather than a string "
+               "somebody passed at three in the morning. The two steps here are "
+               "deliberately modest: this recipe exists to carry the shape "
+               "end to end, and widening the crawl is a decision with a cost "
+               "attached."),
     ),
 )
 
