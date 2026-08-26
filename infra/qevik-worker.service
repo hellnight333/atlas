@@ -41,6 +41,7 @@ ExecStart=/opt/qevik/atlas/.venv/bin/python \
   --timeline /var/lib/qevik/control/missions.jsonl \
   --reports /var/lib/qevik/control/reports \
   --worktrees /var/lib/qevik/worktrees \
+  --scratch /var/lib/qevik/scratch \
   --repository /opt/qevik/atlas \
   --state /var/lib/qevik/control \
   --tenant tenant-qevik \
@@ -59,9 +60,22 @@ RestartSec=15
 # The worker writes worktrees and reports and nothing else on this host.
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
+# strict, not full. `full` only makes /usr, /boot and /etc read-only — /opt is
+# left writable, so removing /opt/qevik/atlas from ReadWritePaths below did
+# nothing at all until this line changed. Measured, not assumed: under `full` a
+# write probe into /opt/qevik/atlas succeeded; under `strict` it returns
+# "Read-only file system".
+ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/qevik /opt/qevik/atlas
+# /opt/qevik/atlas is deliberately NOT here. The worker reads the production
+# checkout to clone it and never writes to it, so the kernel refuses the write
+# even if the code regresses. It used to be writable because `git worktree add`
+# ran inside it — which is precisely the thing that was wrong: a mission left a
+# ref, a worktree entry and its objects behind in production simply by running.
+#
+# If this unit ever fails with EACCES under /opt/qevik/atlas, that is the guard
+# working. Find what is writing there; do not add the path back.
+ReadWritePaths=/var/lib/qevik
 
 [Install]
 WantedBy=multi-user.target

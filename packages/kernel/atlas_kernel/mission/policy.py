@@ -184,6 +184,37 @@ def _with_planner(plan: Plan, decided: Requirement, because: str) -> Verdict:
     return Verdict(requirement=decided, because=because)
 
 
+def refuse_unapproved_self_modification(
+        history: list[dict], *, origin_is_qevik: bool) -> str:
+    """Why this mission must not run against Qevik's own source, or "".
+
+    A second, later check than `decide`, and deliberately not a repetition of
+    it. `decide` runs when a plan is attached, using what the planner *declared*
+    about the work. This runs in the worker, using what the origin repository
+    *actually is* — and the two can disagree, because the declaration is a
+    field and the origin is a fact.
+
+    Without it, a plan declaring `modifies_qevik_itself=False` reaches QUEUED
+    with nobody asked, and the worker then hands it a clone of Qevik. The scratch
+    clone makes that harmless to the production checkout and does not make it
+    harmless: the whole point of staging work in a clone is that somebody later
+    promotes it.
+
+    Approval is detected structurally rather than by reading a note. The only
+    route from AWAITING_APPROVAL is a person acting, so a mission that was ever
+    in that state was approved by one; a mission that went PLANNING -> QUEUED
+    was cleared by policy alone. Matching on the words "approved by operator"
+    would pass for any mission whose note happened to contain them.
+    """
+    if not origin_is_qevik:
+        return ""
+    if any(entry.get("status") == "awaiting_approval" for entry in history):
+        return ""
+    return ("this mission would run against Qevik's own repository, and no "
+            "person ever approved it — it reached the queue on policy alone, "
+            "which means something declared it was not a change to Qevik")
+
+
 def describe() -> dict:
     """The rules, for a report or a review screen."""
     return {

@@ -177,6 +177,17 @@ class Mission(BaseModel):
     #: created" is then answered by the missions themselves, and a second store
     #: cannot drift from them.
     occurrence: str = ""
+    #: Where the work actually happened, and what it started from. A report
+    #: saying "committed abc1234" names a sha that now exists only in a scratch
+    #: clone; without these three, nothing anywhere says which repository to
+    #: look in, and the commit becomes a rumour.
+    #:
+    #: `origin_kind` is `qevik` / `external` / `empty` — decided by comparing the
+    #: origin against the repository this code is running from, so it cannot be
+    #: set to the convenient answer from a config file.
+    workspace: str = ""
+    origin: str = ""
+    origin_kind: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -211,6 +222,8 @@ class Mission(BaseModel):
             "report_path": self.report_path, "claimed_by": self.claimed_by,
             "not_before": self.not_before.isoformat() if self.not_before else None,
             "occurrence": self.occurrence,
+            "workspace": self.workspace, "origin": self.origin,
+            "origin_kind": self.origin_kind,
             "total_cost": self.total_cost,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),

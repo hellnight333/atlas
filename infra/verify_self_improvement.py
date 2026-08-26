@@ -41,6 +41,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "kernel"))
 
+from atlas_kernel.mission import scratch  # noqa: E402
+
 TENANT = "tenant-selfimprove"
 USER = "selfimprove-operator"
 REQUEST = ("Add this feature: record how long each mission spends waiting for "
@@ -251,21 +253,40 @@ def main() -> int:
         check("the control plane is not running while the work happens",
               call(base, "/api/health")[0] == 0)
 
+        # This repository is the origin for the run below — a real
+        # self-improvement mission against Qevik's own source. Fingerprinted
+        # first, so "the production checkout is untouched" is measured on the
+        # actual path rather than on a stand-in.
+        before = scratch.fingerprint(ROOT)
+
         finished = subprocess.run(
             [sys.executable, str(ROOT / "infra" / "mission_worker.py"),
              "--timeline", str(timeline.path), "--tenant", TENANT,
              "--name", "worker-selfimprove", "--repository", str(ROOT),
              "--worktrees", str(workspace / "worktrees"),
+             "--scratch", str(workspace / "scratch"),
              "--reports", str(state / "reports"), "--state", str(state),
              "--agent", "self-check", "--once"],
             capture_output=True, text=True, timeout=600, check=False)
         check("the worker ran", finished.returncode == 0,
               f"exit {finished.returncode}")
 
+        after = scratch.fingerprint(ROOT)
+        differing = [k for k in before if before[k] != after[k]]
+        check("THE PRODUCTION CHECKOUT IS UNCHANGED BY A REAL MISSION",
+              not differing,
+              ", ".join(f"{k}: {before[k]!r} -> {after[k]!r}" for k in differing))
+
         print("\n7. The result survives another restart")
         server = serve(state, args.port)
         token = sign_in()
         code, done = call(base, f"/api/missions/{mission.id}", token=token)
+        check("the mission records where it actually worked",
+              bool(done.get("workspace")) and str(ROOT) not in done.get("workspace", "x"),
+              f"workspace={done.get('workspace')!r}")
+        check("...and that its origin was Qevik's own repository",
+              done.get("origin_kind") == "qevik" and done.get("origin") == str(ROOT),
+              f"kind={done.get('origin_kind')!r}")
         check("THE MISSION IS COMPLETE AFTER A RESTART",
               done.get("status") == "complete", f"status={done.get('status')}")
         code, report = call(base, f"/api/missions/{mission.id}/report",

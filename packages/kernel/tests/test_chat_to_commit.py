@@ -212,13 +212,30 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
     mission = next(m for m in folded if m["mission_id"] == mission_id)
     sha = mission["commits"][0]
 
-    on_main = subprocess.run(["git", "log", "--oneline", "main"], cwd=repository,
+    # The commit lives in the mission's own clone, not in the origin. This test
+    # used to look for it in `repository` and passed, because `git worktree add`
+    # ran there and left the branch behind — which was the bug, seen from the
+    # other side.
+    workspace = Path(mission["workspace"])
+    assert workspace.is_dir(), (
+        "the scratch clone holds the mission's only copy of the commit and must "
+        "survive the mission; discarding it on success destroys the artefact "
+        "the promotion boundary exists to hand over")
+
+    on_main = subprocess.run(["git", "log", "--oneline", "main"], cwd=workspace,
                              capture_output=True, text=True, check=True).stdout
     assert sha[:8] not in on_main, "a mission must never commit to main"
 
-    branch = subprocess.run(["git", "branch", "--contains", sha], cwd=repository,
+    branch = subprocess.run(["git", "branch", "--contains", sha], cwd=workspace,
                             capture_output=True, text=True, check=True).stdout
     assert f"mission/{mission_id}" in branch
+
+    # And the origin knows nothing about any of it.
+    absent = subprocess.run(["git", "branch", "--contains", sha], cwd=repository,
+                            capture_output=True, text=True, check=False)
+    assert absent.returncode != 0 or f"mission/{mission_id}" not in absent.stdout, (
+        "the mission's branch reached the origin repository")
+    assert mission["origin_kind"] == "external"
 
 
 @pytest.mark.integration

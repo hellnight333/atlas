@@ -56,7 +56,7 @@ from atlas_kernel.fabric.budgets import (  # noqa: E402
     reserve,
 )
 from atlas_kernel.fabric.scheduler import demands_from  # noqa: E402
-from atlas_kernel.mission import recurrence, reports, service  # noqa: E402
+from atlas_kernel.mission import policy, recurrence, reports, scratch, service  # noqa: E402
 from atlas_kernel.mission.agents import (  # noqa: E402
     Behaviour,
     CodingAgent,
@@ -312,16 +312,33 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
 
 
 def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
-                 repository: Path, roles: Roles) -> tuple[Worker, dict]:
+                 repository: Path | None, roles: Roles,
+                 scratch_root: Path) -> tuple[Worker, dict]:
     """A worker with an isolated workspace per mission.
 
     `held` carries the workspace out so the caller can commit and clean up; the
     worker itself is not given a repository, only a directory it may write in.
+
+    `repository` is the **origin**, and it is only ever read. Each mission gets
+    its own clone under `scratch_root`, and the worktree is added inside that
+    clone. Before this, `git worktree add` ran in the origin and wrote a ref, a
+    worktree entry and every committed object into it — so a mission modified
+    the production checkout simply by running, and a failed one left its branch
+    behind there.
+
+    `repository=None` gives an empty scratch repository instead. Work that has
+    no source to start from still needs somewhere to write, and handing it a
+    clone of Qevik because that is what was lying around is how unrelated work
+    gets classified as self-modification.
     """
     held: dict = {}
+    spaces: dict = {}
 
     def workspace_for(mission: Mission) -> Path:
-        space = GitWorkspace.create(repository, branch=f"mission/{mission.id}",
+        area = scratch.prepare(repository, mission_id=mission.id,
+                               root=scratch_root)
+        spaces[mission.id] = area
+        space = GitWorkspace.create(area.path, branch=f"mission/{mission.id}",
                                     worktrees=worktrees)
         held[mission.id] = space
         # A path, never the GitWorkspace itself. Handing back the object made an
@@ -350,7 +367,9 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                     acceptance=Acceptance(check=accepted, name="wrote something"),
                     workspace_factory=workspace_for, committer=commit,
                     sink=timeline.append)
-    return worker, held
+    # Both maps: the caller needs the workspace to commit, and the scratch to
+    # record what the mission actually operated on.
+    return worker, {"worktrees": held, "scratch": spaces}
 
 
 def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
@@ -401,8 +420,9 @@ def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
 
 
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
-              repository: Path, roles: Roles, claims: object, ledger: object,
-              report_root: Path | None = None) -> int:
+              repository: Path | None, roles: Roles, claims: object,
+              ledger: object, scratch_root: Path,
+              report_root: Path) -> int:
     """Recover, then take at most one mission. Returns how many ran."""
     freed = release_stale(timeline, tenant=tenant)
     if freed:
@@ -419,8 +439,10 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     if not waiting:
         return 0
 
-    worker, held = build_worker(name, timeline, worktrees=worktrees,
-                                repository=repository, roles=roles)
+    worker, workspaces = build_worker(name, timeline, worktrees=worktrees,
+                                      repository=repository, roles=roles,
+                                      scratch_root=scratch_root)
+    held, scratches = workspaces["worktrees"], workspaces["scratch"]
     mission = waiting[0]
 
     # The atomic claim, before anything else touches the mission. The scheduler
@@ -430,6 +452,22 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     claims.register(mission.id) if hasattr(claims, "register") else None
     if not claims.acquire(mission.id, worker=name):
         log.info("%s went to another worker", mission.id)
+        return 0
+
+    # The origin is a fact; what the plan declared about it is a field. They can
+    # disagree, and this is where that is caught — after the claim, so the
+    # refusal is recorded against a mission somebody can find, and before any
+    # agent runs.
+    refusal = policy.refuse_unapproved_self_modification(
+        service.history(timeline.read(), mission.id, tenant=tenant),
+        origin_is_qevik=scratch.classify(repository) is scratch.Origin.QEVIK)
+    if refusal:
+        log.error("refusing %s: %s", mission.id, refusal)
+        blocked, event = service.transition(
+            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
+            claimed_by="", note=refusal)
+        timeline.append(event)
+        claims.release(mission.id, worker=name)
         return 0
 
     log.info("claiming %s — %s", mission.id, mission.title)
@@ -443,6 +481,19 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     log.info("%s finished as %s (attempts %d, commit %s)", mission.id,
              result.mission.status.value, result.attempts,
              result.committed or "none")
+
+    # Where the work actually happened, recorded on the mission itself. Without
+    # it a report says "committed abc1234" and nothing anywhere says which
+    # repository that sha exists in — which, now that it is never the production
+    # one, is the difference between a commit somebody can find and a rumour.
+    area = scratches.get(mission.id)
+    if area is not None:
+        result.mission = result.mission.model_copy(update={
+            "workspace": str(area.path),
+            "origin": str(area.origin) if area.origin else "",
+            "origin_kind": area.kind.value})
+        timeline.append(service._event(result.mission, actor=name,
+                                       note=f"worked in {area.kind.value} scratch"))
 
     # What it cost, charged against every enclosing allowance.
     #
@@ -458,7 +509,7 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # console then correctly reports as "no report", because there is none.
     try:
         written = reports.write(
-            result.mission, root=report_root or repository,
+            result.mission, root=report_root,
             attempts=result.attempts, committed=result.committed,
             detail=result.detail,
             tests=result.detail or "acceptance check",
@@ -469,7 +520,7 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
         # Recorded on the mission itself, so `/api/missions/{id}/report` can
         # find it. A report nothing points at is a file in a directory.
         result.mission = result.mission.model_copy(update={
-            "report_path": str(written.relative_to(report_root or repository))})
+            "report_path": str(written.relative_to(report_root))})
         timeline.append(service._event(result.mission, actor=name,
                                        note="report written"))
     except Exception:                            # noqa: BLE001 - logged, not fatal
@@ -480,6 +531,21 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
         # A failed mission's worktree is kept, so somebody can look at what the
         # agent actually wrote. A successful one has been committed already.
         space.discard()
+
+    # The scratch clone is **never** discarded here, and the first version of
+    # this code discarded it on success — which destroyed the commit. That is
+    # the difference the clone makes: the branch used to live in the origin
+    # repository and survived cleanup on its own, and now it exists only here.
+    # Deleting it after a successful mission throws away the exact artefact the
+    # promotion boundary exists to hand to a person.
+    #
+    # So clones accumulate, at roughly the size of the origin each. Pruning them
+    # needs a record of what has been promoted, which does not exist yet;
+    # keeping a deliverable is the right way to be wrong in the meantime.
+    area = scratches.get(mission.id)
+    if area is not None:
+        log.info("%s: commits are in %s (branch mission/%s) — not promoted",
+                 mission.id, area.path, mission.id)
     return 1
 
 
@@ -490,6 +556,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tenant", default="tenant-qevik")
     parser.add_argument("--name", default="worker-1")
     parser.add_argument("--repository", default=str(ROOT))
+    parser.add_argument("--scratch", default="",
+                        help="where each mission's clone of the origin goes "
+                             "(default: a temp dir). The origin itself is only "
+                             "ever read")
     parser.add_argument("--worktrees", default="",
                         help="where isolated worktrees go (default: a temp dir)")
     parser.add_argument("--interval", type=float, default=5.0)
@@ -541,7 +611,21 @@ def main(argv: list[str] | None = None) -> int:
     quota_events = Timeline(quota_path)
     ledger = QuotaLedger(events=quota_events.read(), sink=quota_events.append)
     worktrees = Path(args.worktrees or tempfile.mkdtemp(prefix="qevik-missions-"))
-    repository = Path(args.repository)
+    scratch_root = Path(args.scratch or tempfile.mkdtemp(prefix="qevik-scratch-"))
+    # `--repository none` means "give missions an empty repository". Spelled
+    # rather than left as an empty string, so it reads as a decision in the unit
+    # file instead of looking like a missing argument.
+    repository = (None if args.repository.strip().lower() in {"none", ""}
+                  else Path(args.repository))
+    # Resolved once. `report_root or repository` was the old fallback, and it
+    # stops being safe the moment the repository may legitimately be absent.
+    report_root = Path(args.reports) if args.reports else Path(
+        tempfile.mkdtemp(prefix="qevik-reports-"))
+    if repository is None:
+        log.info("missions get an empty scratch repository (--repository none)")
+    else:
+        log.info("origin %s — read only; each mission works in a clone under %s",
+                 repository, scratch_root)
 
     credentials_at = paths_for(args.state or None)
     try:
@@ -563,8 +647,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         pass_once(timeline, tenant=args.tenant, name=args.name,
                   worktrees=worktrees, repository=repository, roles=roles,
-                  claims=claims, ledger=ledger,
-                  report_root=Path(args.reports) if args.reports else None)
+                  claims=claims, ledger=ledger, scratch_root=scratch_root,
+                  report_root=report_root)
         return 0
 
     log.info("watching %s for %s", timeline.path, args.tenant)
@@ -572,8 +656,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             pass_once(timeline, tenant=args.tenant, name=args.name,
                       worktrees=worktrees, repository=repository, roles=roles,
-                      claims=claims, ledger=ledger,
-                      report_root=Path(args.reports) if args.reports else None)
+                      claims=claims, ledger=ledger, scratch_root=scratch_root,
+                      report_root=report_root)
         except KeyboardInterrupt:
             log.info("stopping")
             return 0
