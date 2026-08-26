@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.api import current_user, requires
 from ..auth.models import Scope, User
+from ..mission.api import origin_registry
 from ..opportunity.tenancy import TenantId
 from . import planner, service
 from .models import Conversation, Role
@@ -241,6 +242,16 @@ def build_router() -> APIRouter:
         # no mission timeline would mark the conversation approved and queue
         # nothing, which is the one outcome worse than refusing.
         sink = _mission_sink(request)
+        # The origin is validated before anything is appended. Approving into a
+        # name nobody registered would mark the conversation approved and queue
+        # a mission that cannot run — the same shape as the missing-timeline
+        # case above, and worse, because it looks like it worked.
+        registry = origin_registry(request)
+        if body.origin and not registry.known(body.origin):
+            raise HTTPException(
+                status_code=400,
+                detail=f"no origin named {body.origin!r}. Known: "
+                       f"{', '.join(registry.names())}")
         try:
             updated, mission, events = service.approve(
                 conversation, tenant=tenant, approved_by=user.username,

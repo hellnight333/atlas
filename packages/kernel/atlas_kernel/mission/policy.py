@@ -215,6 +215,40 @@ def refuse_unapproved_self_modification(
             "which means something declared it was not a change to Qevik")
 
 
+def refuse_agent_substitution(named: str, available: str) -> str:
+    """Why this worker must not run this mission, or "".
+
+    A mission records the agent its plan was approved with — the same value
+    `decide()` was given, and therefore the blast radius a person actually
+    agreed to. A worker runs whatever its own `--agent` says.
+
+    Those can differ, and nothing was comparing them: a mission approved as
+    `self-check` work (deterministic, no network, no credentials) picked up by a
+    worker started with `--agent llm` was carried out by a model. The approval
+    was for one thing and the execution was another, which makes the approval
+    record wrong rather than merely stale.
+
+    Refusing is the only safe direction. Substituting "a more capable agent"
+    silently widens the blast radius; substituting a less capable one silently
+    produces work nobody can trust. Both are the model or the operator getting
+    authority that policy did not grant.
+
+    An unnamed agent is not a substitution — nothing was promised — so it is
+    allowed, and the worker records what it actually used.
+    """
+    if not named:
+        return ""
+    if not available:
+        return (f"this mission was approved to run as {named!r}, and this "
+                "worker has no declared agent at all")
+    if named != available:
+        return (f"this mission was approved to run as {named!r} and this worker "
+                f"runs {available!r}. The blast radius a person agreed to is "
+                f"the one attached to {named!r}, so another agent may not stand "
+                "in for it — start a worker that serves it.")
+    return ""
+
+
 def describe() -> dict:
     """The rules, for a report or a review screen."""
     return {

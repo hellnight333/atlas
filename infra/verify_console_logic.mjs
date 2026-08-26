@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -89,10 +89,12 @@ function check(name, ok, detail = '') {
   (ok ? PASS : FAIL).push(name);
   console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 }
-const { stageOf, whyItEnded, cost, STAGE, originOf } = sandbox.__under_test || {};
+const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice } =
+  sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
-    || typeof cost !== 'function' || typeof originOf !== 'function' || !STAGE) {
+    || typeof cost !== 'function' || typeof originOf !== 'function'
+    || typeof originChoice !== 'function' || !STAGE) {
   console.error('the functions under test were not defined — the script did not '
                 + 'reach the end, or they were renamed');
   process.exit(1);
@@ -192,6 +194,41 @@ check('a customer origin is named and says Qevik is untouched',
       && /untouched/i.test(originOf('acme-web').says));
 check('a customer origin is never described as Qevik',
       !/qevik's own/i.test(originOf('acme-web').word));
+
+/* ---- originChoice: the control an operator approves through ------------ */
+
+const THREE = { origins: [
+  { name: 'qevik', kind: 'qevik', modifies_qevik_itself: true, may_run_unattended: false },
+  { name: 'none', kind: 'empty', modifies_qevik_itself: false, may_run_unattended: true },
+  { name: 'acme-web', kind: 'customer', modifies_qevik_itself: false, may_run_unattended: false },
+]};
+
+const offered = originChoice(THREE);
+check('every declared origin is offered',
+      ['qevik', 'none', 'acme-web'].every((n) => offered.includes(`value="${n}"`)));
+check('the choice is submitted as a key, never a path',
+      !/\/(opt|var|home|Users|tmp)\//.test(offered),
+      offered.match(/\/(opt|var|home|Users|tmp)\/[^"'<\s]*/)?.[0] || '');
+check('the first option is preselected, so approving is never a blank choice',
+      /value="qevik"[^>]*checked/.test(offered));
+check('the Qevik option is marked before it is chosen, not after',
+      /class="origin guarded"/.test(offered));
+check('a customer option is not marked as guarded',
+      !/acme-web[\s\S]{0,40}guarded/.test(offered));
+check('each option carries the sentence explaining it',
+      (offered.match(/class="note"/g) || []).length >= 3);
+
+const single = originChoice({ origins: [THREE.origins[0]] });
+check('a deployment with one origin states it rather than offering a choice',
+      !single.includes('<input') && /Qevik/i.test(single), single.slice(0, 60));
+
+const unreadable = originChoice({ origins: [] });
+check('an unreadable list says what will happen instead of offering nothing',
+      /could not be read/i.test(unreadable), unreadable.slice(0, 70));
+check('...and names the origin that would be used',
+      /Qevik/i.test(unreadable));
+check('a null response is handled without throwing',
+      typeof originChoice(null) === 'string');
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

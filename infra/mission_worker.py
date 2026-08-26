@@ -443,6 +443,50 @@ def tenant_headroom(ledger: object, tenant: str) -> float | None:
         return None
 
 
+def refuse_over_budget(ledger: object, mission: Mission, *,
+                       tenant: str) -> str:
+    """Why this mission cannot be afforded, or "".
+
+    A gate, not advice. `budgets.assess` asks **every** scope the work sits
+    inside — tenant, mission, agent — and spends nothing doing it, which is
+    precisely why it exists: "the scheduler can decline to start work it cannot
+    finish without that question itself costing an allowance."
+
+    The scheduler's own budget rule runs earlier, on the tenant's headroom from
+    a fold that may be seconds old. This is the last word, taken from the ledger
+    at the moment of dispatch.
+
+    An **unpriced** plan is not refused here. It is not free, and it is not
+    zero: `policy.decide` already required a person for it, and refusing it
+    again on a cost nobody stated would wall off every unestimated mission for
+    ever. What it must never do is charge a guessed number, and it does not —
+    `_charge` records UNKNOWN afterwards instead.
+
+    An unmetered tenant is not one with an infinite balance; it is one nobody
+    measured, and there is nothing to refuse it against.
+    """
+    estimate = mission.plan.estimated_cost if mission.plan else None
+    if estimate is None:
+        return ""
+    envelope = Envelope(tenant_id=str(tenant), mission_id=mission.id,
+                        agent_id=mission.agent_id)
+    try:
+        verdict = assess(ledger, envelope, float(estimate))
+    except Unmetered:
+        return ""
+    except Exception:                             # noqa: BLE001 - logged, not fatal
+        log.exception("could not assess the budget for %s; refusing rather than "
+                      "assuming it fits", mission.id)
+        return ("the allowance could not be read, and starting work that might "
+                "not be covered is worse than waiting for an answer")
+    if verdict.affordable:
+        return ""
+    scope = verdict.refused_by.value if verdict.refused_by else "an allowance"
+    return (f"this needs about {estimate:g} units and the {scope} allowance "
+            f"cannot carry it: {verdict.reason}. Stopping halfway spends the "
+            "money and produces nothing.")
+
+
 def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
                      claims: object, registry: origins.Registry,
                      at: datetime | None = None) -> int:
@@ -568,10 +612,26 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # disagree, and this is where that is caught — after the claim, so the
     # refusal is recorded against a mission somebody can find, and before any
     # agent runs.
-    refusal = policy.refuse_unapproved_self_modification(
-        service.history(timeline.read(), mission.id, tenant=tenant),
-        origin_is_qevik=origin.modifies_qevik_itself)
-    if refusal:
+    #
+    # Three of them, all in the same place and all before any agent runs. Each
+    # asks about a different thing that could have changed between the moment a
+    # person approved the plan and the moment this worker picked it up.
+    serves = REGISTERED_AS.get(agent_choice, "")
+    for refusal in (
+        # ...the repository it will actually touch
+        policy.refuse_unapproved_self_modification(
+            service.history(timeline.read(), mission.id, tenant=tenant),
+            origin_is_qevik=origin.modifies_qevik_itself),
+        # ...the agent that will actually carry it out
+        policy.refuse_agent_substitution(mission.agent_id, serves),
+        # ...and whether every allowance it sits inside can still carry it. The
+        # scheduler already checked the tenant's headroom, which is advice
+        # computed from a fold that may be seconds old; this asks the ledger
+        # itself, across tenant, mission and agent, with the actual estimate.
+        refuse_over_budget(ledger, mission, tenant=tenant),
+    ):
+        if not refusal:
+            continue
         log.error("refusing %s: %s", mission.id, refusal)
         blocked, event = service.transition(
             mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
@@ -740,8 +800,22 @@ def main(argv: list[str] | None = None) -> int:
     # The allow-list, built here so a bad entry fails at start-up in front of
     # whoever configured it. There is deliberately no global repository any
     # more: each mission names an origin and the registry resolves it.
+    #
+    # `QEVIK_ORIGINS` first, then `--origin`. The environment is what a
+    # deployment sets, and it is what the **control plane** reads — so a
+    # customer origin configured there is one the console can offer and the
+    # worker can serve, from a single declaration. `--origin` is for a harness
+    # or a one-off, and a name given both ways is refused rather than quietly
+    # taking one of them.
     try:
-        registry = origins.Registry.build(origins.parse_pairs(args.origin))
+        declared = origins.from_environment()
+        for name, path in origins.parse_pairs(args.origin).items():
+            if name in declared:
+                raise origins.OriginRefused(
+                    f"{name!r} is set in {origins.ENVIRONMENT} and given with "
+                    "--origin. Whichever won would be invisible; pick one.")
+            declared[name] = path
+        registry = origins.Registry.build(declared)
     except origins.OriginRefused as refusal:
         log.error("origins: %s", refusal)
         return 2

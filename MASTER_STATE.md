@@ -4,7 +4,7 @@ The single reconciliation point for Qevik. Read this before starting a
 workstream; update it when one lands. Everything here is meant to be checkable
 against the repository — if a line cannot be verified, it does not belong.
 
-**Last reconciled:** 2026-08-26 (origin model, unattended recurrence, cleanup)
+**Last reconciled:** 2026-08-26 (origin surface, no-fallback gates, recipes)
 
 ---
 
@@ -64,7 +64,8 @@ built and only partly connected, which is a different problem from missing.
 | Scheduler | `fabric/scheduler.py` | wired (worker + control plane) |
 | Budgets | `fabric/budgets.py` | **now checked before dispatch.** `assess()` exists so "the scheduler can decline to start work it cannot finish" and nothing called it — the budget was consulted only *after* the work, by `_charge` |
 | Message protocol | `fabric/protocol.py` | **built, imported by nothing.** Its consumer is agent-to-agent capability routing, which needs the CLI/tool agents. Not wired speculatively |
-| Tools | `fabric/tools.py` | wired via `mission/adapter.py` |
+| Tools | `fabric/tools.py` | wired, **and now enforced per step** |
+| Recipes | `fabric/recipes.py` | the unit of work; `execution-canary` declared |
 | Sandbox | `fabric/sandbox.py` | wired, `verify_sandbox` |
 
 ### What the two dispatch gaps cost
@@ -82,26 +83,75 @@ value `policy.decide` was given — so the blast radius a person approved and th
 one read at dispatch are the same value, and the control plane's schedule view
 stops showing a mission as dispatchable that the worker would hold.
 
+## Closed since
+
+**Origin surface.** `GET /api/missions/origins` lists what a mission may be
+pointed at — names and kinds, **no filesystem paths**. (Declared above
+`/{mission_id}`: it was first written below it, where every request for it was
+answered by the detail handler looking for a mission called "origins". Pinned by
+a test that reads the route table, because a 404 from either reads the same.) `QEVIK_ORIGINS` is the
+single declaration the control plane *and* the worker read, so a customer origin
+configured once is one the console can offer and the worker can serve; a name
+given both by env and `--origin` is refused rather than one silently winning.
+Both `POST /api/missions` and chat `/decide` validate the key server-side (400
+on unknown) and the worker re-checks at dispatch. The approval screen offers
+radio options — a name and a sentence each, Qevik preselected and marked before
+it is chosen. Verified at 390×844: `doc.scrollWidth 390`, no overflow.
+
+**No silent fallback.** Three refusals now sit together in the worker, all
+before any agent runs:
+
+| substitution | refusal |
+|---|---|
+| a worker running an agent the plan was not approved with | `policy.refuse_agent_substitution` |
+| a repository the mission did not name | `origins.UnknownOrigin` → BLOCKED |
+| work an allowance cannot carry | `refuse_over_budget`, via `budgets.assess` across every scope |
+
+`infra/verify_no_fallback.py` — 23 checks against **real worker processes**,
+each with a paired positive control.
+
 ## Known gap, found by looking
 
-**The console can only create Qevik-origin missions.** `/decide` sends an empty
-origin, which the registry reads as `qevik`. The approval screen now names the
-repository in words ("Qevik's own source" / "No repository" / the customer's
-name) because approving a change to Qevik and approving one to a customer are
-different decisions and the screen showed neither — but there is no way yet to
-*choose* a customer origin from the console. That needs an endpoint listing the
-registered origins (the control plane does not currently know them; they are
-worker configuration) and a control to pick one.
+*(The previous gap — the console could only create Qevik-origin missions — is
+closed above.)*
 
-Found by screenshotting a customer-plan fixture and reading it: the screen
-correctly said "Qevik's own source", which made the fixture the lie rather than
-the code.
+## Agents, tools, recipes — the 300-assistant infrastructure
+
+An agent is a **record**, not a process. There are no 300 daemons; there is a
+registry of declarations and a scheduler that dispatches against them.
+
+| | |
+|---|---|
+| `fabric/agents.py` | who does it, and the worst it can do |
+| `fabric/tools.py` | what it may reach — **now enforced per step** |
+| `fabric/recipes.py` | how one job is done, versioned, in git |
+| `fabric/sandbox.py` | the containment those steps run inside |
+
+**The tool contract was consulted only in aggregate** — to decide network and
+sandbox needs — and never per step, so an agent declaring `("filesystem",)`
+could run any command including one reaching the network, under isolation
+derived from a declaration that no longer described the work. `Step.tool` closes
+it, and the *whole sequence* is refused before the first step runs.
+
+**Recipes** are the primitive `CLAUDE.md` names: a model's only job is choosing
+one by name. Not a plan (cannot authorise itself), not a workflow engine (no
+conditionals, loops or variables), not runtime-configurable (the agent is
+declared, because a runtime agent choice is a runtime blast radius). Validated
+at **import**, so a bad declaration is a failing build rather than a blocked
+mission at 3am.
+
+`SELF_CHECK_STEPS` is now derived from the `execution-canary` recipe rather than
+being a second copy of the same three commands.
 
 ## Next
 
-CLI/tool agents (which is also what would give `fabric/protocol.py` a real
-consumer) → business discovery / opportunity engine → mobile control surface →
-flagship `qevik.ai`.
+**Business discovery / opportunity engine** — the first recipe-driven assistant
+that is not about code, and the thing that proves the abstraction is generic.
+Then the mobile control surface and flagship `qevik.ai`.
+
+`fabric/protocol.py` remains built and unconsumed. Its consumer is agent-to-agent
+capability routing; a single recipe execution does not need it, and wiring it
+speculatively would be architecture for its own sake.
 
 ## Completed and in progress
 
@@ -145,6 +195,43 @@ The first four exist as modules (`fabric/agents.py`, `fabric/scheduler.py`,
 missing.**
 
 ---
+
+## A regression this session introduced and caught
+
+Removing the `report_root or repository` fallback (which used to write reports
+*into* the origin repository) left `run_console_acceptance` with no `--reports`
+at all, so the worker wrote to a temp directory the API could not look in and
+the console correctly said "no report". Both sides now name the same directory
+explicitly, rather than agreeing by both defaulting to the repository.
+
+**Production was never affected** — its worker unit passes
+`--reports /var/lib/qevik/control/reports` and `QEVIK_STATE` gives the control
+plane the same path. Checked rather than assumed.
+
+Found by running the acceptance harness, not by any unit test. It is the
+standing reason for constraint 14.
+
+## Deployment state
+
+`qevik-core-01` runs the **previously deployed** code and is healthy —
+`qevik-api`, `qevik-control`, `qevik-worker` all active, worker logging normally.
+
+The origin model, the no-fallback gates, the origin surface and recipes are
+**committed locally and not deployed**, on instruction. Deploying them requires,
+in this order:
+
+1. `rsync` the kernel and `infra/mission_worker.py`
+2. install `infra/qevik-worker.service` — the unit still passes `--repository`,
+   which the new worker **refuses to start on**. The unit in the repo is already
+   correct; it has to land in the same step as the code.
+3. set `QEVIK_ORIGINS` in `/opt/qevik/worker.env` and the control plane's env if
+   any customer origin is wanted; the built-ins need no configuration
+4. `systemctl daemon-reload && restart` worker and control
+5. re-run `infra/verify_no_fallback.py` and `infra/verify_recurrence.py` on the
+   host
+
+Until then the nightly canary does not run in production: `RECURRENCES` lives in
+the undeployed code.
 
 ## Externally blocked
 

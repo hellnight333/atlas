@@ -61,15 +61,29 @@ class NotRunnable(RuntimeError):
 
 @dataclass
 class Step:
-    """One command, and what it is meant to establish.
+    """One tool invocation, and what it is meant to establish.
 
     `proves` is not decoration. A step whose output nobody can interpret is a
     step that produces noise in the evidence, and evidence nobody reads is the
     same as none.
+
+    `tool` names an entry in `fabric.tools`, and the adapter refuses a step
+    whose tool the agent does not declare. Before this, the tool contract was
+    consulted only in aggregate — to decide whether the agent needed the
+    network or a sandbox — and never per step. An agent declared with
+    `tools=("filesystem",)` could therefore run any command at all, including
+    one that reaches the network, and the isolation derived from its
+    *declaration* would be wrong about the work it was actually doing.
+
+    That is the same shape as an agent substitution: the blast radius somebody
+    approved and the one that runs diverge, quietly.
+
+    Defaults to `shell`, which every step here has always been in practice.
     """
 
     command: list[str]
     proves: str
+    tool: str = "shell"
 
 
 @dataclass
@@ -168,6 +182,20 @@ class Adapter:
         if refused:
             raise NotRunnable(refused)
 
+        # Every step, before the first one runs. A sequence half-executed and
+        # then refused has already changed the workspace, and the refusal
+        # arrives too late to mean anything.
+        undeclared = self.undeclared_tools(steps)
+        if undeclared:
+            declared = ", ".join(sorted(t.id for t in
+                                        for_agent(self.agent))) or "no tools"
+            raise NotRunnable(
+                f"{self.agent.id} declares {declared} and these steps use "
+                f"{', '.join(undeclared)}. An agent may only use what its "
+                "registry entry says it uses — the isolation it runs under is "
+                "derived from that declaration, so a step outside it runs with "
+                "the wrong containment.")
+
         isolation = self.isolation_for(workspace)
         collected: list[Evidence] = []
         for step in steps:
@@ -182,6 +210,16 @@ class Adapter:
             if not passed:
                 break
         return collected
+
+    def undeclared_tools(self, steps: list[Step]) -> tuple[str, ...]:
+        """Tools these steps use that the agent does not declare.
+
+        A tool nobody has ever declared is reported too, rather than skipped:
+        a typo in a step is not permission.
+        """
+        declared = {tool.id for tool in for_agent(self.agent)}
+        wanted = {step.tool for step in steps}
+        return tuple(sorted(wanted - declared))
 
     def _run_one(self, step: Step, isolation: Isolation) -> SandboxOutcome:
         """Inside the sandbox when the agent needs one, refusing when it cannot.
@@ -330,15 +368,19 @@ class DeterministicAgent:
 #: Every effect is inside a discardable checkout, nothing is generated, no
 #: provider is called and the third step *asserts* the confinement rather than
 #: assuming it.
-SELF_CHECK_STEPS: list[Step] = [
-    Step(command=["sh", "-c", "printf 'checked by qevik\n' > qevik-self-check.txt"],
-         proves="the workspace is writable"),
-    Step(command=["sh", "-c", "test -s qevik-self-check.txt"],
-         proves="what was written can be read back"),
-    Step(command=["sh", "-c",
-                  "cat /etc/shadow > stolen.txt 2>/dev/null && exit 1 || exit 0"],
-         proves="nothing outside the workspace is reachable"),
-]
+#: The canary's steps, **derived from the recipe** rather than written again.
+#: They were a hardcoded list here; a recipe declaring the same three commands
+#: would have been a second copy that drifts — the exact failure the recipe
+#: primitive exists to prevent, introduced by the thing preventing it.
+#:
+#: The import is inside the function to keep the graph one-way: `fabric.recipes`
+#: converts to this module's `Step`, so a module-level import back would cycle.
+def self_check_steps() -> list[Step]:
+    from ..fabric.recipes import get as recipe_for
+    return recipe_for("execution-canary").for_adapter()
+
+
+SELF_CHECK_STEPS: list[Step] = self_check_steps()
 
 
 def build(agent_id: str, steps: list[Step], *, registry: Registry | None = None,
@@ -353,4 +395,5 @@ def build(agent_id: str, steps: list[Step], *, registry: Registry | None = None,
 
 
 __all__ = ["SELF_CHECK_STEPS", "Adapter", "DeterministicAgent", "Evidence",
-           "NoSandbox", "NotIsolated", "NotRunnable", "Step", "build"]
+           "NoSandbox", "NotIsolated", "NotRunnable", "Step", "build",
+           "self_check_steps"]

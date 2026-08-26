@@ -22,8 +22,16 @@
     "a plan is proposed",
     "with no model, the plan is a blocker rather than an invention",
     "a blocked plan cannot be approved into a mission",
+    "the console can read which repositories exist",
+    "both built-in origins are offered",
+    "NO FILESYSTEM PATH REACHES THE BROWSER",
+    "Qevik's own source is marked as needing a person",
+    "...and the empty origin is not",
+    "approving into an origin nobody registered is REFUSED",
+    "...and the refusal says which names exist",
     "approving queues a mission",
     "the mission is queued, not running",
+    "the mission carries the origin that was chosen, as a key",
     "the scheduler puts the queued mission somewhere runnable",
     "nothing is stuck without a reason",
     "reading the schedule starts nothing",
@@ -38,6 +46,6 @@
     "what the person typed is unchanged"
   ],
   "failed": [],
-  "mission_id": "mission-767e4b875d7b",
-  "conversation_id": "chat-4ff859028bd4"
+  "mission_id": "mission-79795ad2d314",
+  "conversation_id": "chat-28bf0a96c0ef"
 }

@@ -232,13 +232,57 @@ def main() -> int:
         (workspace / "chat.json").write_text(json.dumps(events, default=str),
                                              encoding="utf-8")
 
+        # ------------------------------- 5a. the repository choice, over HTTP
+        #
+        # The console reads this before offering the approve button, so a
+        # failure here is the difference between an operator choosing a
+        # repository and one being chosen for them.
+        status, listed = call("/api/missions/origins", token=token)
+        offered = listed.get("origins", []) if isinstance(listed, dict) else []
+        check("the console can read which repositories exist",
+              status == 200 and bool(offered), f"status {status}")
+        check("both built-in origins are offered",
+              {o.get("name") for o in offered} >= {"qevik", "none"},
+              str([o.get("name") for o in offered]))
+        check("NO FILESYSTEM PATH REACHES THE BROWSER",
+              not any("path" in o for o in offered)
+              and "/opt/" not in json.dumps(offered)
+              and "/var/" not in json.dumps(offered),
+              json.dumps(offered)[:120])
+        check("Qevik's own source is marked as needing a person",
+              any(o.get("name") == "qevik" and o.get("modifies_qevik_itself")
+                  for o in offered))
+        check("...and the empty origin is not",
+              any(o.get("name") == "none" and not o.get("modifies_qevik_itself")
+                  and o.get("may_run_unattended") for o in offered))
+
+        status, rejected = call(f"/api/chat/{conversation}/decide", token=token,
+                                method="POST",
+                                body={"approved": True, "origin": "acme-web"})
+        check("approving into an origin nobody registered is REFUSED",
+              status == 400, f"status {status}")
+        check("...and the refusal says which names exist",
+              "no origin named" in json.dumps(rejected),
+              json.dumps(rejected)[:100])
+
         status, approved = call(f"/api/chat/{conversation}/decide", token=token,
-                                method="POST", body={"approved": True})
+                                method="POST",
+                                body={"approved": True, "origin": "none"})
         mission = approved.get("mission_id", "") if isinstance(approved, dict) else ""
         check("approving queues a mission", status == 200 and bool(mission),
               f"status {status}")
         check("the mission is queued, not running",
               isinstance(approved, dict) and approved.get("mission_status") == "queued")
+        # Asked of the **mission**, not of the decide response. The first
+        # version read `origin_name` off the conversation summary, which does
+        # not carry one — so it passed on an absent field, which is a test that
+        # cannot fail.
+        status, created = call(f"/api/missions/{mission}", token=token)
+        check("the mission carries the origin that was chosen, as a key",
+              status == 200 and isinstance(created, dict)
+              and created.get("origin_name") == "none",
+              f"status {status} origin_name="
+              f"{created.get('origin_name') if isinstance(created, dict) else '?'!r}")
 
         # ------------------------------------- 5b. the scheduler sees the work
         status, plan = call("/api/missions/schedule", token=token)
@@ -275,6 +319,13 @@ def main() -> int:
              "--tenant", TENANT, "--name", "worker-acceptance",
              "--origin", f"acme={repository}",
              "--worktrees", str(workspace / "worktrees"),
+             "--scratch", str(workspace / "scratch"),
+             # The same directory `acceptance_app` gives the API as
+             # `reports_root`. Omitting it used to be harmless, because the
+             # worker fell back to the repository and so did the API; that
+             # fallback is gone, and a report written somewhere the console
+             # cannot look is a report the console correctly reports as absent.
+             "--reports", str(workspace / "reports"),
              # The state directory, not a credential file. `--vault` named one
              # file, which left the records file to be resolved elsewhere — the
              # mismatch that let the Centre show a credential the worker could

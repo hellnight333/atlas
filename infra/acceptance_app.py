@@ -100,4 +100,10 @@ def build():
         chat_events=FileBackedList(workspace / "chat.json"),
         vault_path=workspace / "vault.json",
         repository_root=workspace / "repo",
+        # Stated, not inherited from `repository_root`. The worker is started
+        # with `--reports <workspace>/reports` and records paths relative to
+        # that; these two defaulting to the same thing is what used to make
+        # them agree by accident, and they stopped agreeing the moment reports
+        # were no longer written into the repository.
+        reports_root=workspace / "reports",
     ))

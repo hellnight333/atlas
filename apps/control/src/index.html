@@ -230,6 +230,24 @@ header.page p { margin: 0; color: var(--muted); }
 .blocker .what { margin-top: .25rem; }
 .blocker .do { margin-top: .25rem; color: var(--muted); font-size: 13px; }
 .card.why { border-left: 3px solid var(--bad); }
+.origins { border: 0; padding: 0; margin: .9rem 0 0; }
+.origins legend { padding: 0; font-size: 12px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); }
+.origin { display: grid; grid-template-columns: auto 1fr; gap: .1rem .6rem;
+  align-items: start; padding: .55rem .7rem; margin-top: .45rem;
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.origin input { grid-row: span 2; margin-top: .2rem; accent-color: var(--accent); }
+.origin .what { font-weight: 600; }
+.origin .note { grid-column: 2; font-size: 13px; }
+.origin:has(input:checked) { border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent); }
+/* The one that changes Qevik itself is marked before it is chosen, not after. */
+.origin.guarded:has(input:checked) { border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.origin:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Clear of the last option. Flush against it, the buttons read as part of that
+ * choice rather than as the decision about all of them. */
+.decide .actions { margin-top: 1.1rem; }
 .card.why p { margin: 0; overflow-wrap: anywhere; }
 
 .decide { border-color: var(--signal); }
@@ -456,7 +474,8 @@ function fail(message) {
 const empty = (m) => `<div class="empty">${esc(m)}</div>`;
 
 /* --------------------------------------------------------------- state */
-const state = { page: 'dashboard', arg: null, me: null, counts: {} };
+const state = { page: 'dashboard', arg: null, me: null, counts: {},
+                origins: null };
 
 const PAGES = [
   ['dashboard', 'Dashboard'], ['roadmap', 'Roadmap'], ['missions', 'Mission Control'],
@@ -925,6 +944,43 @@ function originOf(name) {
            says: 'A customer repository. Qevik\'s own source is untouched.' };
 }
 
+/* Which repository the approved mission will work on.
+ *
+ * Radio inputs rather than a <select>: there are three or four of these, each
+ * needs a sentence explaining what it means, and a native select on a phone
+ * hides all of that behind a wheel showing one line at a time. The whole point
+ * is that somebody reads the difference before approving.
+ *
+ * The value is a **key**. No path is sent, and none is received — `/api/origins`
+ * deliberately does not return them.
+ */
+function originChoice(available) {
+  const list = (available && available.origins) || [];
+  if (!list.length) {
+    /* Not "there are none": the list could not be read. Saying nothing here
+     * would leave the approve button meaning something unstated. */
+    return `<p class="note">The list of repositories could not be read, so this
+      will run against ${esc(originOf('').word)}.</p>`;
+  }
+  if (list.length === 1) {
+    const only = originOf(list[0].name);
+    return `<dl class="facts"><dt>Repository</dt>
+      <dd>${pill(only.word, only.tone)} <span class="note">${esc(only.says)}</span></dd></dl>`;
+  }
+  return `<fieldset class="origins">
+    <legend>Which repository?</legend>
+    ${list.map((o, i) => {
+      const shown = originOf(o.name);
+      return `<label class="origin${o.modifies_qevik_itself ? ' guarded' : ''}">
+        <input type="radio" name="origin" value="${esc(o.name)}"
+          ${i === 0 ? 'checked' : ''}>
+        <span class="what">${esc(shown.word)}</span>
+        <span class="note">${esc(shown.says)}</span>
+      </label>`;
+    }).join('')}
+  </fieldset>`;
+}
+
 function planPreview(plan, originName) {
   if (!plan) return '';
   const steps = plan.steps || [];
@@ -963,6 +1019,12 @@ async function conversation(id) {
   const c = await API.get('/api/chat/' + encodeURIComponent(id));
   let mission = null;
   let report = null;
+  /* Fetched here rather than at start-up: it is only needed on the screen that
+   * offers a choice, and a failure must not stop the conversation rendering —
+   * `originChoice` says so rather than silently offering nothing. */
+  if (state.origins === null) {
+    state.origins = await API.get('/api/missions/origins').catch(() => ({ origins: [] }));
+  }
   if (c.mission_id) {
     mission = await API.get('/api/missions/' + encodeURIComponent(c.mission_id)).catch(() => null);
     if (mission && (mission.status === 'complete' || mission.status === 'failed')) {
@@ -988,8 +1050,8 @@ async function conversation(id) {
     ${awaiting ? `<div class="card decide">
         <h3>Your decision</h3>
         <p class="note">Approving queues a mission. A worker in another process
-        runs it, so you can close this page. This changes Qevik's own source, so
-        it cannot run without you.</p>
+        runs it, so you can close this page.</p>
+        ${originChoice(state.origins)}
         <div class="actions"><button class="primary" data-yes>Approve and queue</button>
           <button class="danger" data-no>Decline</button></div></div>` : ''}
 
@@ -1047,7 +1109,12 @@ async function conversation(id) {
     const yes = document.querySelector('[data-yes]');
     if (yes) yes.addEventListener('click', async () => {
       yes.disabled = true; yes.textContent = 'Queueing…';
-      try { await API.post('/api/chat/' + encodeURIComponent(id) + '/decide', { approved: true }); render(); }
+      const picked = document.querySelector('input[name=origin]:checked');
+      try {
+        await API.post('/api/chat/' + encodeURIComponent(id) + '/decide',
+                       { approved: true, origin: picked ? picked.value : '' });
+        render();
+      }
       catch (e) { yes.disabled = false; yes.textContent = 'Approve and queue'; alert(e.message); }
     });
     const no = document.querySelector('[data-no]');

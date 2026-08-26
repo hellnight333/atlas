@@ -24,6 +24,7 @@ both, since 403-versus-404 tells a caller which mission ids exist.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -37,8 +38,10 @@ from ..auth.models import Scope, User
 from ..fabric import scheduler
 from ..fabric.scheduler import demands_from
 from ..opportunity.tenancy import TenantId
-from . import service
+from . import origins, service
 from .models import Mission, MissionStatus
+
+log = logging.getLogger(__name__)
 
 #: The single message for every miss, whether the mission does not exist or
 #: belongs to somebody else.
@@ -55,6 +58,32 @@ MISSION_ID = re.compile(r"^mission-[0-9a-f]{12}$")
 #: data, so treating it as a filesystem instruction is how a read model becomes
 #: an arbitrary-file-read.
 REPORTS = Path("docs/qevik-docs/autonomous/reports")
+
+
+def origin_registry(request: Request) -> origins.Registry:
+    """The origins this deployment declares.
+
+    Built from `QEVIK_ORIGINS` — the **same** input the worker reads, rather
+    than a second list kept here. Two registries built from different sources
+    are two answers to "which origins exist", and they disagree on the day
+    somebody adds one to a single process.
+
+    A malformed entry yields the built-ins alone rather than an error page: the
+    console must still work, and `qevik` and `none` are derived rather than
+    configured. The mistake is logged, and the worker refuses to start on it,
+    which is where an operator will see it.
+    """
+    cached = getattr(request.app.state, "origins", None)
+    if cached is not None:
+        return cached
+    try:
+        built = origins.Registry.build(origins.from_environment())
+    except origins.OriginRefused as refusal:
+        log.error("QEVIK_ORIGINS is not usable, falling back to the built-in "
+                  "origins only: %s", refusal)
+        built = origins.Registry.build()
+    request.app.state.origins = built
+    return built
 
 
 def usable_credentials(request: Request, tenant: TenantId) -> frozenset[str]:
@@ -358,6 +387,25 @@ def build_router() -> APIRouter:
 
     # -------------------------------------------------- one mission
 
+    @router.get("/origins")
+    def origin_list(request: Request,
+                    _: User = Depends(requires(Scope.READ))) -> dict:
+        """Which repositories a mission may be pointed at.
+
+        Names and kinds only — **no filesystem paths**. A path is not something
+        an operator picks from, and putting one in an HTTP response makes it
+        something anybody reaching the console can read.
+
+        Declared above `/{mission_id}` so `origins` is never read as a mission
+        id. FastAPI matches in declaration order, and this route was first
+        written *below* it — where every request for it was answered by the
+        detail handler looking for a mission called "origins". The comment
+        claiming otherwise was written at the same time as the bug, which is
+        the useful lesson: a note about ordering is not ordering.
+        """
+        registry = origin_registry(request)
+        return {"origins": registry.public(), "default": origins.DEFAULT_NAME}
+
     @router.get("/{mission_id}")
     def detail(mission_id: str, request: Request,
                tenant: TenantId = Depends(current_tenant),
@@ -428,6 +476,16 @@ def build_router() -> APIRouter:
         would let anyone holding EXECUTE start unreviewed work by choosing a
         title carefully.
         """
+        # Validated here as well as in the worker. The worker's check is the
+        # one that protects execution; this one means a typo is answered
+        # immediately, by the surface that made it, instead of becoming a
+        # mission that sits blocked until somebody reads its note.
+        registry = origin_registry(request)
+        if body.origin and not registry.known(body.origin):
+            raise HTTPException(
+                status_code=400,
+                detail=f"no origin named {body.origin!r}. Known: "
+                       f"{', '.join(registry.names())}")
         try:
             mission, event = service.create(
                 tenant=tenant, title=body.title, description=body.description,

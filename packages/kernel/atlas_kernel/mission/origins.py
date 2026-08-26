@@ -116,7 +116,22 @@ class Origin(BaseModel):
         return Path(self.path) if self.path else None
 
     def summary(self) -> dict:
+        """Everything, including the path. For logs and the worker."""
         return {"name": self.name, "kind": self.kind.value, "path": self.path,
+                "modifies_qevik_itself": self.modifies_qevik_itself,
+                "may_run_unattended": self.may_run_unattended,
+                "notes": self.notes}
+
+    def public(self) -> dict:
+        """What a browser may see. **No path.**
+
+        A filesystem location is not something an operator picks from or needs
+        to read, and putting it in an HTTP response makes it something an
+        attacker can read too — a free map of the deployment from any session
+        that reaches the console. The name is the whole interface; the path is
+        an implementation detail of the worker that resolves it.
+        """
+        return {"name": self.name, "kind": self.kind.value,
                 "modifies_qevik_itself": self.modifies_qevik_itself,
                 "may_run_unattended": self.may_run_unattended,
                 "notes": self.notes}
@@ -202,7 +217,45 @@ class Registry(BaseModel):
         return tuple(sorted(o.name for o in self.origins))
 
     def describe(self) -> list[dict]:
+        """Everything, paths included. Not for a browser — see `public()`."""
         return [o.summary() for o in self.origins]
+
+    def public(self) -> list[dict]:
+        """The list a console may render. Qevik first, then empty, then
+        customers alphabetically — the order somebody scanning it expects,
+        rather than the order a dict happened to be built in."""
+        rank = {Kind.QEVIK: 0, Kind.EMPTY: 1, Kind.CUSTOMER: 2}
+        return [o.public() for o in
+                sorted(self.origins, key=lambda o: (rank[o.kind], o.name))]
+
+    def known(self, name: str) -> bool:
+        """Whether a name resolves, without raising. For validating input."""
+        try:
+            self.resolve(name)
+        except UnknownOrigin:
+            return False
+        return True
+
+
+#: Where a deployment declares its customer repositories, so the control plane
+#: and the worker read the **same** input. `name=/path,other=/path`.
+#:
+#: Not published by the worker and not duplicated in the control plane: two
+#: registries built from different sources are two answers to "which origins
+#: exist", and they disagree on the day somebody adds one to a single process.
+ENVIRONMENT = "QEVIK_ORIGINS"
+
+
+def from_environment(value: str | None = None) -> dict[str, str]:
+    """Customer origins from `QEVIK_ORIGINS`, or none.
+
+    Refuses malformed input rather than skipping it. An entry silently dropped
+    for a missing `=` is an origin the operator believes exists, and the first
+    they hear of it is a blocked mission.
+    """
+    import os
+    raw = value if value is not None else os.environ.get(ENVIRONMENT, "")
+    return parse_pairs([part for part in raw.split(",") if part.strip()])
 
 
 def parse_pairs(pairs: list[str] | None) -> dict[str, str]:

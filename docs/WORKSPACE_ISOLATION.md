@@ -261,6 +261,29 @@ The boundary does not rest on the code being right:
 3. **Filesystem** — `/opt/qevik/atlas` is mode 755 owned by uid 501, and a
    write probe as `qevik` returns `Permission denied`.
 
+## The console surface
+
+`GET /api/missions/origins` lists what a mission may be pointed at — **names and
+kinds, no filesystem paths**. A path is not something an operator picks from,
+and putting one in an HTTP response makes it a free map of the deployment for
+anybody who reaches the console.
+
+`QEVIK_ORIGINS` (`name=/path,other=/path`) is read by the control plane **and**
+the worker, so one declaration serves both. A name given in both the environment
+and `--origin` is refused rather than one silently winning.
+
+Validated in three places, deliberately: the API refuses an unknown key with 400
+so a typo is answered by the surface that made it; the worker refuses it again at
+dispatch, because that is the check that protects execution; and the registry
+refuses a customer entry pointing at Qevik at start-up.
+
+The approval screen offers radio options rather than a `<select>` — each needs a
+sentence explaining what it means, and a native select on a phone hides all of
+that behind a wheel showing one line at a time, when the whole point is that
+somebody reads the difference before approving. Qevik is preselected and marked
+amber before it is chosen. Verified at 390×844: `doc.scrollWidth 390`, no
+horizontal overflow.
+
 ## What the origin model uncovered in dispatch
 
 Two things next to it turned out to be built and not connected — a different
@@ -293,6 +316,35 @@ unmetered tenant is not one with an infinite balance — it is one nobody measur
 `usable_for()` moved into `credentials/service.py` so the worker and the API ask
 one implementation. Two definitions of "usable" would disagree on the day one of
 them mattered.
+
+## Three refusals, together, before any agent runs
+
+Each asks about something that could have changed between the moment a person
+approved the plan and the moment a worker picked it up.
+
+| what changed | refusal |
+|---|---|
+| the repository it will actually touch | `policy.refuse_unapproved_self_modification` |
+| the agent that will actually carry it out | `policy.refuse_agent_substitution` |
+| whether every allowance can still carry it | `refuse_over_budget`, via `budgets.assess` |
+
+The agent one was a real hole: a mission approved as `self-check` work
+(deterministic, no network, no credentials) picked up by a worker started with
+`--agent llm` was carried out by a model. The approval was for one thing and the
+execution was another, which makes the approval record *wrong* rather than
+merely stale. Substituting a more capable agent silently widens the blast
+radius; a less capable one silently produces work nobody can trust.
+
+The budget one is the last word: the scheduler's rule runs earlier on tenant
+headroom from a fold that may be seconds old, and this asks the ledger itself,
+across tenant, mission and agent, with the actual estimate. An **unpriced** plan
+is not refused here — `policy.decide` already required a person for it, and
+refusing again on a cost nobody stated would wall off every unestimated mission
+for ever. Nothing turns the absence into a number.
+
+`infra/verify_no_fallback.py` attempts each substitution against **real worker
+processes**, each with a paired positive control so a refusal that fires for an
+unrelated reason shows up as both halves failing rather than as a pass.
 
 ## Files
 

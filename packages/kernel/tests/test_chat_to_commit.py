@@ -33,6 +33,7 @@ from atlas_kernel.auth import Scope, User
 from atlas_kernel.auth.models import hash_password
 from atlas_kernel.auth.store import AuthStore
 from atlas_kernel.chat import service as chat_service
+from atlas_kernel.mission import origins
 from atlas_kernel.mission import service as mission_service
 from atlas_kernel.mission.models import Plan, PlanStep
 from atlas_kernel.mission.timeline import Timeline
@@ -81,6 +82,18 @@ def _app(files: dict, repository: Path, chat_events: list):
         mission_timeline=files["missions"],
         vault_path=files["vault"],
         repository_root=repository))
+
+
+def _with_customer_origin(monkeypatch, repository: Path) -> None:
+    """Declare a customer origin the way a deployment does.
+
+    `QEVIK_ORIGINS` is read by the control plane *and* by the worker, so one
+    declaration serves both. Setting it here rather than only passing --origin
+    to the worker is what makes this test cover the real configuration path:
+    the API validates the name against the same list the worker will resolve
+    it from.
+    """
+    monkeypatch.setenv(origins.ENVIRONMENT, f"acme={repository}")
 
 
 def _client(app, monkeypatch) -> TestClient:
@@ -180,6 +193,7 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
                                                   monkeypatch) -> None:
     """Never on main. A mission commits to its own branch; promoting it is a
     human decision made with a diff in view."""
+    _with_customer_origin(monkeypatch, repository)
     conversations: list = []
     app = _app(files, repository, conversations)
     with _client(app, monkeypatch) as client:
@@ -195,15 +209,18 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
         # Names the origin. The worker below registers it as `acme=<repo>`; the
         # mission carries the *key*, and the registry is the only thing that
         # turns a key into a location.
-        mission_id = client.post(f"/api/chat/{conversation_id}/decide",
-                                 json={"approved": True,
-                                       "origin": "acme"}).json()["mission_id"]
+        decided = client.post(f"/api/chat/{conversation_id}/decide",
+                              json={"approved": True, "origin": "acme"})
+        assert decided.status_code == 200, decided.text
+        mission_id = decided.json()["mission_id"]
     del app, client
 
     subprocess.run(
         [sys.executable, str(WORKER), "--timeline", str(files["missions"]),
          "--tenant", TENANT, "--name", "worker-branch",
-         "--origin", f"acme={repository}",
+         # No --origin: `acme` is already in QEVIK_ORIGINS, which this worker
+         # reads too. Passing it both ways is refused, because whichever won
+         # would be invisible.
          "--worktrees", str(tmp_path / "worktrees"),
          # The state directory. `--vault` named one credential file and left the
          # records file to be resolved elsewhere, which is how the Centre and

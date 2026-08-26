@@ -62,6 +62,19 @@ FIXTURES: dict[str, object] = {
          "claimed_by": "worker-1"},
     ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
     "/api/missions/blockers": {"by_kind": {}},
+    # Three origins, so the approval screen has a real choice on it. Names and
+    # kinds only — the real endpoint returns no paths, and a fixture that
+    # carried one would be a screenshot of a leak that does not exist.
+    "/api/missions/origins": {"default": "qevik", "origins": [
+        {"name": "qevik", "kind": "qevik", "modifies_qevik_itself": True,
+         "may_run_unattended": False,
+         "notes": "Qevik's own source; self-modification"},
+        {"name": "none", "kind": "empty", "modifies_qevik_itself": False,
+         "may_run_unattended": True,
+         "notes": "no source repository; nothing at risk"},
+        {"name": "acme-web", "kind": "customer", "modifies_qevik_itself": False,
+         "may_run_unattended": False,
+         "notes": "deployment-configured customer repository"}]},
     # The real shape `/api/missions/costs` returns. The first version of this
     # fixture invented `{"total": None}`, the card read `costs.known_total` and
     # rendered the string `undefined` — a fixture that does not match the API
@@ -181,6 +194,17 @@ FIXTURES: dict[str, object] = {
                          "vault": {"sealed": False, "locked": False}, "note": "sample"},
     "/api/status": {"version": "sample", "changed": False},
 }
+
+
+def safe_slug(page: str) -> str:
+    """A page name as one filename component.
+
+    `--page chat/conv-1` used to become a *directory* in the output path, so
+    the file was written somewhere nobody looked and the run appeared to
+    succeed. Fixed once for the screenshot filename and not for `--measure`,
+    which is why it is a function now rather than an expression in two places.
+    """
+    return page.strip("/").replace("/", "-") or "root"
 
 
 def _no_duplicate_keys() -> None:
@@ -360,6 +384,13 @@ def main() -> int:
     parser.add_argument("--out", default="")
     parser.add_argument("--measure", action="store_true",
                         help="name the elements wider than the viewport")
+    parser.add_argument("--tall", type=int, default=0, metavar="PX",
+                        help="override the viewport height, to see a page whose "
+                             "content runs past 844px. Chrome captures the "
+                             "viewport rather than the document, so a control "
+                             "below the fold is otherwise invisible here — "
+                             "which is a limitation of the camera, not a "
+                             "defect in the page")
     args = parser.parse_args()
 
     out = Path(args.out) if args.out else ROOT / ".screenshots"
@@ -371,7 +402,7 @@ def main() -> int:
     time.sleep(0.4)
 
     if args.measure:
-        target = out / f"measure-{args.page}.png"
+        target = out / f"measure-{safe_slug(args.page)}.png"
         target.unlink(missing_ok=True)
         shoot(f"http://127.0.0.1:{args.port}/__measure?page={args.page}",
               target, 900, 700)
@@ -382,10 +413,11 @@ def main() -> int:
     written = []
     try:
         for name, (width, height) in VIEWPORTS.items():
+            height = args.tall or height
             # A page like `chat/conv-1` would otherwise become a directory in
             # the filename, and Chrome writes nothing to a path that does not
             # exist — reported as "nothing was captured" with no reason.
-            slug = args.page.replace("/", "-") or "root"
+            slug = safe_slug(args.page)
             target = out / f"console-{slug}-{name}.png"
             target.unlink(missing_ok=True)
             # The iframe fixes the layout width; the window only has to be big

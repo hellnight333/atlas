@@ -11,6 +11,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 from atlas_kernel.fabric.agents import Registry
 from atlas_kernel.fabric.scheduler import demands_from, plan
 
@@ -192,3 +194,161 @@ def test_a_mission_with_no_recorded_agent_falls_back_to_the_workers(tmp_path):
     assert [m.id for m in worker.queued(timeline, tenant=TENANT,
                                         connected=frozenset({"qwen"}),
                                         agent_id="implementer")] == ["m-2"]
+
+
+# ============================================================ no silent fallback
+#
+# One test per substitution that would otherwise happen quietly. Each asserts a
+# *refusal*, because in every one of these cases carrying on is the bug.
+
+# ---------------------------------------------------------------- agent
+
+def test_a_worker_may_not_stand_in_for_the_agent_a_plan_was_approved_with():
+    """A mission approved as deterministic `self-check` work must not be
+    carried out by a model because that is what this worker happens to run."""
+    from atlas_kernel.mission import policy
+    refusal = policy.refuse_agent_substitution("self-check", "implementer")
+    assert refusal
+    assert "self-check" in refusal and "implementer" in refusal
+
+
+def test_substituting_a_more_capable_agent_is_refused_too():
+    """Widening the blast radius is not a favour."""
+    from atlas_kernel.mission import policy
+    assert policy.refuse_agent_substitution("self-check", "cli-implementer")
+
+
+def test_the_matching_agent_is_allowed():
+    from atlas_kernel.mission import policy
+    assert policy.refuse_agent_substitution("self-check", "self-check") == ""
+
+
+def test_a_worker_with_no_declared_agent_may_not_run_a_named_mission():
+    """`--agent fake` is not in the registry. It must not silently serve a
+    mission that named a real agent."""
+    from atlas_kernel.mission import policy
+    assert policy.refuse_agent_substitution("implementer", "")
+
+
+def test_an_unnamed_mission_is_not_a_substitution():
+    """Nothing was promised, so nothing is being swapped."""
+    from atlas_kernel.mission import policy
+    assert policy.refuse_agent_substitution("", "implementer") == ""
+
+
+# ----------------------------------------------------------- credentials
+
+def test_a_missing_credential_never_falls_back_to_another_provider():
+    """The agent declares qwen/anthropic/openai. With none of them usable the
+    mission is held — it does not quietly pick a fourth, or run without one."""
+    demands = demands_from([a_folded_mission()], agents=Registry(),
+                           agent_for={"m-1": "implementer"},
+                           connected=frozenset({"stripe", "cloudflare"}))
+    assert demands[0].missing_credentials
+    assert plan(demands, tenant=TENANT, done=frozenset(),
+                concurrency=1)["dispatchable"] == []
+
+
+def test_an_unverified_credential_does_not_count_as_available():
+    """`usable_for` applies `resolve()`'s own rule rather than "has a row".
+    A key somebody typed and nothing verified is exactly the case that would
+    dispatch work doomed to fail at the provider."""
+    from atlas_kernel.credentials.service import usable_for
+
+    class Sealed:
+        def status(self, *a, **k):
+            raise RuntimeError("the vault is sealed")
+
+    assert usable_for(Sealed(), tenant=TENANT) == frozenset()
+    assert usable_for(None, tenant=TENANT) == frozenset()
+
+
+# ---------------------------------------------------------------- origin
+
+def test_an_unregistered_origin_never_falls_back_to_the_default():
+    """The default is Qevik, so a typo must not become self-modification."""
+    from atlas_kernel.mission import origins
+    with pytest.raises(origins.UnknownOrigin):
+        origins.Registry.build().resolve("acme-web-typo")
+
+
+def test_a_customer_origin_may_not_be_pointed_at_qevik():
+    from atlas_kernel.mission import origins, scratch
+    with pytest.raises(origins.OriginRefused, match="Qevik's own repository"):
+        origins.Registry.build({"acme": str(scratch.running_from())})
+
+
+# ---------------------------------------------------------------- budget
+
+def _mission_costing(amount, agent="self-check"):
+    from atlas_kernel.mission.models import Mission, MissionStatus, Plan, PlanStep
+    return Mission(id="m-1", tenant_id=TENANT, title="costly",
+                   status=MissionStatus.QUEUED, agent_id=agent,
+                   plan=Plan(goal="g", steps=(PlanStep(order=1, title="s"),),
+                             estimated_cost=amount))
+
+
+def _ledger_with(limit: float):
+    """A ledger with an allowance on the **mission** scope.
+
+    Not the tenant scope: `budgets.policy()` refuses that outright, because a
+    tenant's allowance is their plan and a second place to set one would be a
+    second answer to what a customer may spend. The gate under test asks every
+    scope, so a mission limit exercises it exactly.
+    """
+    from atlas_kernel.fabric.budgets import Scope
+    from atlas_kernel.fabric.budgets import policy as budget_policy
+    from atlas_kernel.quota.ledger import QuotaLedger
+    events: list = []
+    ledger = QuotaLedger(events=events, sink=events.append)
+    ledger.register(budget_policy(Scope.MISSION, "m-1", tenant=TENANT,
+                                  limit=limit))
+    return ledger
+
+
+def test_a_mission_beyond_its_allowance_is_refused_before_it_runs():
+    ledger = _ledger_with(2.0)
+    refusal = worker.refuse_over_budget(ledger, _mission_costing(10.0),
+                                        tenant=TENANT)
+    assert refusal
+    assert "10 units" in refusal
+
+
+def test_a_mission_within_its_allowance_is_not_refused():
+    ledger = _ledger_with(50.0)
+    assert worker.refuse_over_budget(ledger, _mission_costing(10.0),
+                                     tenant=TENANT) == ""
+
+
+def test_an_unreadable_ledger_refuses_rather_than_assuming_it_fits():
+    """Not knowing whether the work is covered is not the same as knowing it
+    is. The optimistic reading spends money nobody approved."""
+    class Broken:
+        def status(self, *a, **k):
+            raise RuntimeError("unreadable")
+        def policy(self, *a, **k):
+            raise RuntimeError("unreadable")
+    refusal = worker.refuse_over_budget(Broken(), _mission_costing(10.0),
+                                        tenant=TENANT)
+    assert refusal
+    assert "could not be read" in refusal
+
+
+def test_an_unpriced_mission_is_not_refused_here_and_is_not_treated_as_free():
+    """`policy.decide` already required a person for it. Refusing again on a
+    cost nobody stated would wall off every unestimated mission for ever — and
+    nothing here turns the absence into a number."""
+    ledger = _ledger_with(0.5)
+    assert worker.refuse_over_budget(ledger, _mission_costing(None),
+                                     tenant=TENANT) == ""
+
+
+def test_an_unmetered_tenant_is_not_one_with_an_infinite_balance():
+    """There is simply nothing to refuse it against, and that is recorded
+    rather than rendered as headroom."""
+    from atlas_kernel.quota.ledger import QuotaLedger
+    events: list = []
+    ledger = QuotaLedger(events=events, sink=events.append)
+    assert worker.refuse_over_budget(ledger, _mission_costing(10.0),
+                                     tenant=TENANT) == ""
+    assert worker.tenant_headroom(ledger, TENANT) is None

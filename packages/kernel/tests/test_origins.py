@@ -212,3 +212,163 @@ def test_a_declared_name_and_a_recorded_path_are_different_fields():
                                 origin_name="acme")
     assert mission.origin_name == "acme"
     assert mission.origin == "" and mission.origin_kind == ""
+
+
+# ============================================ the surface a console talks to
+
+def test_the_public_view_never_carries_a_filesystem_path(tmp_path):
+    """A path is not something an operator picks from, and putting one in an
+    HTTP response makes it something anybody reaching the console can read."""
+    registry = origins.Registry.build({"acme": str(a_repo(tmp_path / "acme"))})
+    rendered = registry.public()
+    assert rendered
+    for entry in rendered:
+        assert "path" not in entry
+        assert not any(isinstance(v, str) and v.startswith("/")
+                       for v in entry.values()), entry
+
+
+def test_the_full_view_does_carry_paths_for_the_worker(tmp_path):
+    registry = origins.Registry.build({"acme": str(a_repo(tmp_path / "acme"))})
+    customer = next(o for o in registry.describe() if o["name"] == "acme")
+    assert customer["path"]
+
+
+def test_the_public_view_puts_qevik_first_then_empty_then_customers(tmp_path):
+    registry = origins.Registry.build({
+        "zeta": str(a_repo(tmp_path / "zeta")),
+        "acme": str(a_repo(tmp_path / "acme"))})
+    assert [o["name"] for o in registry.public()] == [
+        "qevik", "none", "acme", "zeta"]
+
+
+def test_known_answers_without_raising():
+    registry = origins.Registry.build()
+    assert registry.known("qevik")
+    assert registry.known("")            # empty means the default
+    assert not registry.known("acme-web")
+    assert not registry.known("../../etc")
+
+
+# ---------------------------------------------------- the environment source
+
+def test_the_environment_declares_customer_origins(tmp_path):
+    """One declaration read by the control plane *and* the worker. Two
+    registries built from different sources are two answers."""
+    repo = a_repo(tmp_path / "acme")
+    parsed = origins.from_environment(f"acme={repo}")
+    assert parsed == {"acme": str(repo)}
+    assert origins.Registry.build(parsed).resolve("acme").kind is origins.Kind.CUSTOMER
+
+
+def test_several_origins_in_one_variable(tmp_path):
+    a, b = a_repo(tmp_path / "a"), a_repo(tmp_path / "b")
+    assert set(origins.from_environment(f"a={a},b={b}")) == {"a", "b"}
+
+
+def test_an_empty_environment_yields_the_builtins_only():
+    assert origins.from_environment("") == {}
+    assert set(origins.Registry.build(origins.from_environment("")).names()) == {
+        "qevik", "none"}
+
+
+def test_a_malformed_entry_is_refused_rather_than_skipped(tmp_path):
+    """An entry silently dropped for a missing `=` is an origin the operator
+    believes exists, and the first they hear of it is a blocked mission."""
+    with pytest.raises(origins.OriginRefused, match="not name=path"):
+        origins.from_environment("acme")
+
+
+def test_the_environment_cannot_smuggle_qevik_in_as_a_customer():
+    with pytest.raises(origins.OriginRefused, match="Qevik's own repository"):
+        origins.Registry.build(
+            origins.from_environment(f"sneaky={scratch.running_from()}"))
+
+
+# ============================================== the endpoint, and its ordering
+
+def _routed_app(tmp_path):
+    """The mission API on a real app, authenticated the way the other API tests
+    authenticate: by replacing `AuthStore.authenticate`, not by overriding the
+    dependency — the scope checks are part of what is being exercised."""
+    from fastapi import FastAPI
+
+    from atlas_kernel.auth import api as auth_api
+    from atlas_kernel.auth.models import Scope, User, hash_password
+    from atlas_kernel.auth.store import AuthStore
+    from atlas_kernel.mission import api as mission_api
+
+    application = FastAPI()
+    auth_api.install(application, AuthStore())
+    mission_api.install(application)
+    application.state.mission_events = []
+    application.state.mission_sink = application.state.mission_events.append
+    application.state.repository_root = str(tmp_path)
+    who = User(username="tester",
+               password_hash=hash_password("test-only-password"),
+               tenant_id="tenant-origins", scopes=frozenset(Scope))
+    return application, who
+
+
+def test_the_origins_route_is_not_shadowed_by_the_mission_detail_route():
+    """It was. FastAPI matches in declaration order, and this route was first
+    written *below* `/{mission_id}` — so every request for it was answered by
+    the detail handler looking for a mission called "origins".
+
+    Asserted on the route table rather than on a response, because a 404 from
+    the detail handler and a 404 from a missing origin list read identically.
+    """
+    from atlas_kernel.mission.api import build_router
+
+    paths = [route.path for route in build_router().routes]
+    assert "/api/missions/origins" in paths
+    assert (paths.index("/api/missions/origins")
+            < paths.index("/api/missions/{mission_id}")), paths
+
+
+def test_the_endpoint_answers_with_names_and_never_paths(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from atlas_kernel.auth.store import AuthStore
+
+    monkeypatch.setenv(origins.ENVIRONMENT, f"acme={a_repo(tmp_path / 'acme')}")
+    application, who = _routed_app(tmp_path)
+    monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: who)
+    with TestClient(application) as client:
+        client.headers["Authorization"] = "Bearer t"
+        answered = client.get("/api/missions/origins")
+    assert answered.status_code == 200, answered.text
+    body = answered.json()
+    assert [o["name"] for o in body["origins"]] == ["qevik", "none", "acme"]
+    assert body["default"] == origins.DEFAULT_NAME
+    assert "/" not in answered.text.replace("\\/", ""), answered.text
+
+
+def test_submitting_an_unknown_origin_is_refused_by_the_api(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from atlas_kernel.auth.store import AuthStore
+
+    application, who = _routed_app(tmp_path)
+    monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: who)
+    with TestClient(application) as client:
+        client.headers["Authorization"] = "Bearer t"
+        refused = client.post("/api/missions",
+                              json={"title": "do a thing", "origin": "acme-web"})
+    assert refused.status_code == 400
+    assert "no origin named" in refused.text
+
+
+def test_submitting_a_known_origin_is_accepted(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from atlas_kernel.auth.store import AuthStore
+
+    application, who = _routed_app(tmp_path)
+    monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: who)
+    with TestClient(application) as client:
+        client.headers["Authorization"] = "Bearer t"
+        accepted = client.post("/api/missions",
+                               json={"title": "do a thing", "origin": "none"})
+    assert accepted.status_code in (200, 201), accepted.text
+    assert accepted.json()["origin_name"] == "none"
