@@ -197,11 +197,19 @@ class Worker:
                 self._emit(result, event)
                 return result
 
-            # An agent that reports success having touched nothing is the most
-            # dangerous mode, because it is confident and the repository is
-            # unchanged. Caught here rather than by the tests, which would pass.
-            if outcome.claims_done and not outcome.files:
-                detail = ("the agent reported success but changed no files")
+            # An agent that reports success having produced nothing is the
+            # most dangerous mode, because it is confident and there is no
+            # artefact to check. Caught here rather than by the tests, which
+            # would pass.
+            #
+            # **Produced**, not "changed files". A research role writes no files
+            # by design — an unchanged repository is its correct outcome — and
+            # judging it on files failed every successful run of it. The
+            # currency is declared by the outcome, so a coding agent is held to
+            # exactly the same standard as before.
+            if outcome.claims_done and outcome.produced_nothing:
+                detail = ("the agent reported success and produced nothing: no "
+                          "files changed and no evidence recorded")
                 log.info("worker %s attempt %d: %s", self.name, result.attempts,
                          detail)
                 continue

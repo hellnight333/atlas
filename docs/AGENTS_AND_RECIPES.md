@@ -75,6 +75,79 @@ commands in both places would have been a second copy that drifts: the exact
 failure the recipe primitive exists to prevent, introduced by the thing
 preventing it.
 
+## The tool-executing role
+
+`mission/toolrunner.py`. A worker role that carries out a **declared recipe**
+through the tools that recipe's agent is registered for, and satisfies the same
+`CodingAgent` protocol every other role does — the worker is not modified and
+does not know this is different. A non-coding agent is a **role**, not a second
+worker.
+
+It is not a model with tools. There is no prompt, no provider and no credential.
+A model may eventually say `recipe = "discover-uae-dental"` — a key, which
+resolves or is refused. It may not say:
+
+| | why not |
+|---|---|
+| a tool | the recipe declares those, and the agent's registry entry bounds which are permitted at all |
+| a URL | `permitted_urls()` is computed from the recipe; a fetch of anything else is refused before a socket opens |
+| a step | recipes have no variables and are not assembled at runtime |
+| an interpretation | the runner returns what the server said, and nothing about what it means |
+
+The refusals live in the runner rather than in its caller, because a caller can
+be replaced by a model and the runner cannot.
+
+### A dispatch table, not an engine
+
+Sixteen lines of "which adapter handles this tool". No conditionals, no retries,
+no branching, no ordering beyond the recipe's own. Anything more would be a
+workflow engine, and a workflow engine a model can aim is what the architecture
+refuses.
+
+### Two code-writing assumptions it exposed
+
+Both were in the worker, both were right for coding roles, and both failed every
+successful research run:
+
+**"The agent reported success but changed no files."** The reasoning — *it is
+confident and the repository is unchanged* — is about code. A research role
+leaves the repository exactly as it found it, and that is its correct outcome.
+`AgentOutcome.produced_nothing` now asks the outcome what its currency is;
+a coding agent leaves `evidence_count` at zero and is judged on files exactly as
+before.
+
+**Committing.** `GitWorkspace.commit` refuses an unchanged tree, rightly. A role
+that writes no files now returns no commit rather than failing — and this is not
+a way for a coding role to skip committing, because an agent that claimed success
+and produced nothing was already refused upstream.
+
+### Proven on the server
+
+Local runs cannot verify the guarded fetch: a controlled fixture is on loopback
+and the address guard refuses loopback — correctly, and that refusal is itself
+under test. The two requirements are mutually exclusive by design. This
+developer machine's resolver also answers every made-up name, so the harness
+reports **NOT VERIFIED** there rather than passing or failing.
+
+On `qevik-core-01`, with honest DNS: **35/35, nothing unverified**. The real
+production worker dispatched the role, fetched a real public URL through the
+guard, recorded evidence, and completed with a durable report naming the recipe,
+the agent, the tools invoked, and each evidence fingerprint.
+
+That includes the whole chain in one test rather than two overlapping halves:
+
+    rec-daily-business-discovery
+      -> the ordinary recurrence tick
+      -> a mission naming the recipe and the role
+      -> queued with nobody asked
+      -> the real worker, --agent research
+      -> discover-uae-dental
+      -> http-fetch through the address guard
+      -> structured evidence
+      -> a durable report
+
+with an assertion that the report **claims nothing about any business**.
+
 ## Why the CLI agent is not operational
 
 `cli-implementer` is declared, with `blocked_by=(Need.SANDBOX, Need.CREDENTIAL)`

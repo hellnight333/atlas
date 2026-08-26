@@ -90,7 +90,8 @@ def _event(mission: Mission, *, actor: str, note: str = "",
 
 def create(*, tenant: TenantId | None, title: str, description: str = "",
            requested_by: str = "", priority: int = 0, occurrence: str = "",
-           origin_name: str = "") -> tuple[Mission, BusinessEvent]:
+           origin_name: str = "", recipe: str = ""
+           ) -> tuple[Mission, BusinessEvent]:
     """A new request, in DRAFT. Nothing runs from this."""
     tenant = _require_tenant(tenant, method="mission.create")
     if not title.strip():
@@ -99,7 +100,8 @@ def create(*, tenant: TenantId | None, title: str, description: str = "",
     mission = Mission(id=f"mission-{uuid4().hex[:12]}", tenant_id=str(tenant),
                       title=title.strip(), description=description,
                       requested_by=requested_by, priority=priority,
-                      occurrence=occurrence, origin_name=origin_name)
+                      occurrence=occurrence, origin_name=origin_name,
+                      recipe=recipe)
     return mission, _event(mission, actor=requested_by or "operator",
                            note="created")
 

@@ -64,6 +64,24 @@ class AgentOutcome(BaseModel):
     blockers: tuple[Blocker, ...] = ()
     #: Free text the agent produced, kept for the report.
     notes: str = ""
+    #: How many pieces of evidence the agent recorded. The currency of a role
+    #: that writes no files: a research agent's successful run leaves the
+    #: repository exactly as it found it, which is the correct outcome and would
+    #: otherwise look identical to having done nothing.
+    #:
+    #: A coding agent leaves this at zero and is judged on `files`, as before.
+    evidence_count: int = 0
+
+    @property
+    def produced_nothing(self) -> bool:
+        """Whether this run has anything to show for itself.
+
+        An agent that reports success having produced nothing is the most
+        dangerous mode — it is confident, and there is no artefact to check.
+        What counts as an artefact depends on the role, which is why this asks
+        the outcome rather than assuming files.
+        """
+        return not self.files and not self.evidence_count
     invocation: AgentInvocation | None = None
 
 

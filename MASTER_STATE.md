@@ -4,7 +4,7 @@ The single reconciliation point for Qevik. Read this before starting a
 workstream; update it when one lands. Everything here is meant to be checkable
 against the repository — if a line cannot be verified, it does not belong.
 
-**Last reconciled:** 2026-08-26 (discovery, signals, sighting memory)
+**Last reconciled:** 2026-08-26 (tool-executing role, proven on the server)
 
 ---
 
@@ -67,6 +67,7 @@ built and only partly connected, which is a different problem from missing.
 | Tools | `fabric/tools.py` | wired, **and now enforced per step** |
 | Recipes | `fabric/recipes.py` | `execution-canary`, `discover-uae-dental` |
 | **Discovery states + signals** | `opportunity/discovery.py`, `signals.py` |
+| **Tool-executing worker role** | `mission/toolrunner.py`, `verify_tool_role` 35/35 on the server |
 | **Sighting memory** | `atlas_sightings`, `verify_discovery` 25/25 |
 | Sandbox | `fabric/sandbox.py` | wired, `verify_sandbox` |
 
@@ -175,16 +176,63 @@ are both true at once.
 `GET /api/discovery` only — the surface offers no way to execute anything, and a
 test asserts every route is GET.
 
-### The exact next dependency
+### Now executed — the tool-executing role
 
-The recipe's `http-fetch` steps are **declared and not executed by a worker**.
-`for_adapter()` refuses them by design — a URL is not a program — and the
-worker's roles are code-writing shaped (planner / implementer / reviewer). A
-non-code-writing worker role is a real architectural addition, not wiring.
+`mission/toolrunner.py` carries out a declared recipe through the tools its
+agent is registered for, satisfying the same `CodingAgent` protocol every other
+role does. The worker is unmodified and does not know it is different: a
+non-coding agent is a **role**, not a second worker. `--agent research`.
 
-Everything either side is proven: the guard fetches and refuses, evidence is
-recorded and survives a reconnection, sightings resolve and classify, and the
-recurrence creates its mission unattended.
+**Not a model with tools.** A model may propose `recipe = "..."` — a key that
+resolves or is refused. It may not propose a tool (the recipe declares them,
+the registry bounds them), a URL (`permitted_urls()` comes from the recipe; a
+fetch of anything else is refused before a socket opens), a step (recipes have
+no variables) or an interpretation (the runner returns what the server said).
+
+**Proven on `qevik-core-01`: 35/35, nothing unverified.** Including the whole
+chain in one test — `rec-daily-business-discovery` → tick → mission → research
+role → `discover-uae-dental` → `http-fetch` → evidence → durable report, with an
+assertion that the report claims nothing about any business. The real production worker dispatched the
+role, fetched a public URL through the address guard, recorded evidence and
+completed with a durable report naming the recipe, the agent, the tools actually
+invoked and each evidence fingerprint. Cost reported honestly absent.
+
+Local runs report the fetch step as **NOT VERIFIED**: a controlled fixture is on
+loopback and the guard refuses loopback — correctly, and that refusal is itself
+under test, so the two requirements are mutually exclusive. This machine's
+resolver also answers made-up names.
+
+`rec-daily-business-discovery` now names `discover-uae-dental`, so the recurring
+entry invokes the role through the ordinary scheduler path.
+
+### Two code-writing assumptions it exposed
+
+Both in the worker, both right for coding roles, both failing every successful
+research run:
+
+- *"reported success but changed no files"* — a research role leaves the
+  repository as it found it. `AgentOutcome.produced_nothing` asks the outcome
+  its currency; a coding agent is judged on files exactly as before.
+- *committing* — `GitWorkspace.commit` refuses an unchanged tree. A role writing
+  no files returns no commit. Not an escape for coding roles: one that claimed
+  success and produced nothing was already refused upstream.
+
+## The one link still missing in the discovery chain
+
+The seven steps the brief names are: fetch, extract declared fields, create
+evidence, create sighting, compare with memory, classify, produce an opportunity
+only when evidence supports it.
+
+**1–3 are the tool role** (proven on the server). **4–7 are
+`opportunity/scan.py`, `discovery.py` and `signals.py`** (proven in
+`verify_discovery`, 25/25). What does not exist is the join: turning a fetched
+page into a `Sighting` needs a **source-specific extractor** — which fields, in
+which markup, mean which business.
+
+That is deliberately not built. It is source-specific work, and the brief was
+explicit that the goal is not to make dental discovery work but to prove the
+generic primitive. Building an extractor now would be picking a source before
+reassessing the architecture, which is the step the brief asks for next.
 
 ## Next — chosen on dependency, not roadmap order
 

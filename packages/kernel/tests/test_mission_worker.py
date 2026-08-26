@@ -119,15 +119,32 @@ def test_an_agent_with_failing_tests_never_commits() -> None:
     assert "did not pass" in result.detail
 
 
-def test_an_agent_that_changed_nothing_is_not_believed() -> None:
-    """The most dangerous mode: confident, and the repository is unchanged."""
+def test_an_agent_that_produced_nothing_is_not_believed() -> None:
+    """The most dangerous mode: confident, and there is nothing to check.
+
+    A coding agent's currency is files, and this one changed none. The guard
+    was later generalised so a research role — whose successful run leaves the
+    repository untouched by design — is judged on evidence instead; a coding
+    agent is held to exactly the same standard it always was, which is what
+    this asserts.
+    """
     mission, _ = _queued()
     worker, _ = _worker(behaviour=Behaviour.PARTIAL)
     result = worker.run(mission, tenant=A)
 
     assert result.mission.status is MissionStatus.FAILED
     assert result.committed == ""
-    assert "changed no files" in result.detail
+    assert "produced nothing" in result.detail
+
+
+def test_the_guard_asks_the_outcome_what_its_currency_is() -> None:
+    """Files for a coding role, evidence for a research one. The property the
+    guard now tests, rather than the sentence it prints."""
+    from atlas_kernel.mission.agents import AgentOutcome
+
+    assert AgentOutcome(claims_done=True).produced_nothing
+    assert not AgentOutcome(claims_done=True, files=("a.py",)).produced_nothing
+    assert not AgentOutcome(claims_done=True, evidence_count=1).produced_nothing
 
 
 def test_a_rejected_review_never_commits() -> None:

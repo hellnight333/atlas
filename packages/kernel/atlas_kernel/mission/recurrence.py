@@ -133,6 +133,10 @@ class Recurrence(BaseModel):
     #: kind — and therefore whether a person is asked — comes from the resolved
     #: origin rather than from anything declared here.
     origin_name: str = origins.DEFAULT_NAME
+    #: The recipe the mission carries out, by name. Empty for a recurrence whose
+    #: agent needs none. Carried onto the mission so the worker dispatches the
+    #: declared work rather than choosing any.
+    recipe: str = ""
     requested_by: str = "recurrence"
     notes: str = ""
 
@@ -306,7 +310,8 @@ def enqueue(recurrence: Recurrence, firing: Firing, *,
     mission, created = service.create(
         tenant=tenant, title=recurrence.title,
         description=recurrence.description, requested_by=recurrence.requested_by,
-        occurrence=firing.key, origin_name=origin.name)
+        occurrence=firing.key, origin_name=origin.name,
+        recipe=recurrence.recipe)
     # DRAFT -> PLANNING -> (QUEUED | AWAITING_APPROVAL). The middle step is not
     # ceremony: `ALLOWED` refuses `draft -> queued` outright, which is the state
     # machine correctly rejecting a mission that reached a queue without ever
@@ -414,6 +419,7 @@ RECURRENCES: tuple[Recurrence, ...] = (
                      "whenever somebody last ran a script."),
         plan=_DISCOVERY_PLAN,
         agent_id="researcher",
+        recipe="discover-uae-dental",
         origin_name=origins.EMPTY_NAME,
         every=timedelta(days=1),
         # 04:15 UTC — inside the night window, clear of the 02:30 canary and the
@@ -433,6 +439,11 @@ RECURRENCES: tuple[Recurrence, ...] = (
                      "than by needing one."),
         plan=_CANARY_PLAN,
         agent_id="self-check",
+        # Recorded even though the self-check role takes its steps from the
+        # recipe at import rather than from the mission. Provenance: "which
+        # declared work did this mission carry out" should have one answer for
+        # every mission, not an answer for some roles.
+        recipe="execution-canary",
         origin_name=origins.EMPTY_NAME,
         every=timedelta(days=1),
         # 02:30 UTC — inside the scheduler's night window (01:00–06:00) and
@@ -459,7 +470,7 @@ def describe(at: datetime | None = None) -> list[dict]:
     return [{"id": r.id, "title": r.title, "tenant_id": r.tenant_id,
              "agent_id": r.agent_id, "enabled": r.enabled,
              "every_seconds": r.every.total_seconds(),
-             "origin_name": r.origin_name,
+             "origin_name": r.origin_name, "recipe": r.recipe,
              "next_at": next_after(r, at=moment).isoformat(),
              "notes": r.notes}
             for r in RECURRENCES]

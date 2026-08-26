@@ -49,7 +49,7 @@ from atlas_kernel.credentials.models import (  # noqa: E402
 )
 from atlas_kernel.credentials.service import CredentialService, usable_for  # noqa: E402
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
-from atlas_kernel.fabric import scheduler  # noqa: E402
+from atlas_kernel.fabric import recipes, scheduler  # noqa: E402
 from atlas_kernel.fabric.agents import Registry as AgentRegistry  # noqa: E402
 from atlas_kernel.fabric.budgets import (  # noqa: E402
     Envelope,
@@ -65,6 +65,7 @@ from atlas_kernel.mission import (  # noqa: E402
     reports,
     scratch,
     service,
+    toolrunner,
 )
 from atlas_kernel.mission.agents import (  # noqa: E402
     Behaviour,
@@ -117,6 +118,23 @@ def roles_for(kind: str, *, tenant: str,
         log.info("self-check agent: %s", checker._adapter.describe())
         return Roles.all(checker)
 
+    if kind == "research":
+        # A non-coding role. It plans nothing, writes nothing and calls no
+        # provider: it carries out a *declared recipe* through the tools that
+        # recipe's agent is registered for.
+        #
+        # The recipe is named by the **mission**, not by this worker, and is
+        # resolved in `build_worker` where the mission is in hand. A placeholder
+        # is built here only so the roles object exists; running a mission that
+        # names no recipe is refused rather than defaulted, because defaulting
+        # would pick one nobody asked for.
+        from atlas_kernel.mission.toolrunner import ToolAgent
+
+        researcher = ToolAgent(recipes.get(RESEARCH_PLACEHOLDER))
+        log.info("research role: recipes are named by the mission; this worker "
+                 "dispatches %s", ", ".join(sorted(t for t in toolrunner.DISPATCHABLE)))
+        return Roles.all(researcher)
+
     if kind == "fake":
         log.warning("running with the deterministic fake agent: no model will "
                     "be called and nothing it produces reflects real work")
@@ -162,7 +180,14 @@ def roles_for(kind: str, *, tenant: str,
 #: invocations a mission has already recorded and dispatch happens before there
 #: are any. `fake` is deliberately absent: it is not a declared agent, and the
 #: scheduler treating it as unknown is the correct answer.
-REGISTERED_AS = {"self-check": "self-check", "llm": "implementer"}
+REGISTERED_AS = {"self-check": "self-check", "llm": "implementer",
+                 "research": "researcher"}
+
+#: A recipe the research role can be constructed with before a mission names
+#: one. Never executed under this name: `build_worker` replaces the agent with
+#: one built from the mission's own `recipe`, and a mission naming none is
+#: refused. It exists because `Roles` must hold an agent to be constructed.
+RESEARCH_PLACEHOLDER = "discover-uae-dental"
 
 
 def queued(timeline: Timeline, *, tenant: str,
@@ -346,7 +371,8 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
 
 def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                  origin: origins.Origin, roles: Roles,
-                 scratch_root: Path) -> tuple[Worker, dict]:
+                 scratch_root: Path, agent_choice: str = "",
+                 mission: Mission | None = None) -> tuple[Worker, dict]:
     """A worker with an isolated workspace per mission.
 
     `held` carries the workspace out so the caller can commit and clean up; the
@@ -368,6 +394,17 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     held: dict = {}
     spaces: dict = {}
 
+    # A research role carries out the recipe the **mission** names. The roles
+    # object was built at start-up with a placeholder, because `Roles` must hold
+    # an agent to exist; this replaces it with one built from the mission in
+    # hand. A mission naming no recipe is refused in `pass_once` rather than
+    # defaulted — defaulting would run a recipe nobody asked for.
+    if agent_choice == "research" and mission is not None and mission.recipe:
+        from atlas_kernel.mission.toolrunner import ToolAgent
+
+        roles = Roles.all(ToolAgent(recipes.get(mission.recipe)))
+        log.info("%s: recipe %s", mission.id, mission.recipe)
+
     def workspace_for(mission: Mission) -> Path:
         area = scratch.prepare(origin.location(), mission_id=mission.id,
                                root=scratch_root)
@@ -385,10 +422,41 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
         space = held.get(mission.id)
         if space is None:
             return ""
+        # A role that writes no files has nothing to commit, and that is its
+        # correct outcome rather than a failure. `GitWorkspace.commit` refuses
+        # an unchanged tree — rightly, for a coding role — so this asks first.
+        #
+        # It is not a way for a coding role to skip committing: an agent that
+        # claimed success and produced nothing was already refused upstream by
+        # `outcome.produced_nothing`, before the tests ever ran.
+        if not outcome.files:
+            log.info("%s: nothing to commit — the role produced %d piece(s) of "
+                     "evidence and no files", mission.id,
+                     getattr(outcome, "evidence_count", 0))
+            return ""
         return space.commit(f"{mission.title}\n\n{outcome.summary}".strip()).sha
 
     def accepted(mission: Mission, outcome) -> tuple[bool, str]:
-        """The agent claims it is done; check that something was actually written."""
+        """The agent claims it is done; check that something actually happened.
+
+        Two questions, because there are two kinds of role and one question
+        does not fit both. A coding role is checked on files written. A
+        research role writes none by design — asking it for files would fail
+        every successful run — so it is checked on **evidence recorded**.
+
+        Which question is asked comes from the role this worker was started
+        with, not from what the outcome happens to contain: an outcome with no
+        files could be a research run or a coding run that did nothing, and
+        guessing from the shape would let the second pass as the first.
+        """
+        if agent_choice == "research":
+            recorded = getattr(roles.implementer, "result", None)
+            if recorded is None or not recorded.evidence:
+                return False, ("the mission claims completion and recorded no "
+                               "evidence, which is not a successful research run")
+            return True, (f"{len(recorded.evidence)} piece(s) of evidence via "
+                          f"{', '.join(recorded.tools_invoked)}")
+
         space = held.get(mission.id)
         if space is None:
             return False, "no workspace was created"
@@ -603,9 +671,35 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
         return 0
     log.info("%s: origin %s (%s)", mission.id, origin.name, origin.kind.value)
 
+    # A research mission must name the recipe it carries out. Refused rather
+    # than defaulted: a worker that picked one would be choosing the work.
+    if agent_choice == "research" and not mission.recipe:
+        refusal = ("this worker runs declared recipes and the mission names "
+                   f"none. Known: {', '.join(sorted(r.id for r in recipes.RECIPES))}")
+        log.error("refusing %s: %s", mission.id, refusal)
+        blocked, event = service.transition(
+            mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
+            claimed_by="", note=refusal)
+        timeline.append(event)
+        claims.release(mission.id, worker=name)
+        return 0
+    if agent_choice == "research" and mission.recipe:
+        try:
+            recipes.get(mission.recipe)
+        except recipes.UnknownRecipe as unknown:
+            log.error("refusing %s: %s", mission.id, unknown)
+            blocked, event = service.transition(
+                mission, MissionStatus.BLOCKED, tenant=tenant, actor=name,
+                claimed_by="", note=str(unknown)[:300])
+            timeline.append(event)
+            claims.release(mission.id, worker=name)
+            return 0
+
     worker, workspaces = build_worker(name, timeline, worktrees=worktrees,
                                       origin=origin, roles=roles,
-                                      scratch_root=scratch_root)
+                                      scratch_root=scratch_root,
+                                      agent_choice=agent_choice,
+                                      mission=mission)
     held, scratches = workspaces["worktrees"], workspaces["scratch"]
 
     # The origin is a fact; what the plan declared about it is a field. They can
@@ -766,10 +860,12 @@ def main(argv: list[str] | None = None) -> int:
                              "reachable. Use this in production: the default "
                              "logs the loss of safety, this one prevents it")
     parser.add_argument("--agent", default="llm",
-                        choices=("llm", "fake", "self-check"),
-                        help="'fake' runs a deterministic stub that calls no "
-                             "model. Never the default: everything it produces "
-                             "would claim work nothing did.")
+                        choices=("llm", "fake", "self-check", "research"),
+                        help="'research' carries out a declared recipe through "
+                             "registered tools and calls no model. 'fake' runs "
+                             "a deterministic stub. Never the default: "
+                             "everything it produces would claim work nothing "
+                             "did.")
     parser.add_argument("--reports", default="",
                         help="where mission reports are written "
                              "(default: alongside the repository)")
