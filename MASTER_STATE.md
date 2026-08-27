@@ -1187,6 +1187,78 @@ defect: the worker writes to a disk the control plane reads.
 
 **The Fabric is not ready.** One of six items is done.
 
+## Mission reports are network-reachable — 2026-08-28
+
+`QEVIK_REPORTS_STORE=postgres` on production. With the ledger, an off-host
+worker can now do all three things a remote node must: discover work, claim it,
+and report on it.
+
+### Why a second table, and not the ledger's pattern
+
+`Timeline._rows` selects `detail` for every mission event, and every worker
+folds the queue every ten seconds. One real report is **6,343,651 bytes** of
+verbatim evidence. Bodies in `atlas_business_events` would push megabytes across
+the wire repeatedly to answer *"what is queued"*.
+
+`atlas_mission_reports` — `id, mission_id, tenant_id, path, content, bytes,
+written_by, written_at`, insert-only, indexed on `(mission_id, written_at DESC)`.
+
+Measured on production after the switch: **160 mission events, widest detail
+2,660 chars.** No body is in the ledger.
+
+### It fixed a quiet loss on the way past
+
+Two attempts at one mission share a filename, and the file overwrote. Rows
+append and the reader takes the latest, so the earlier attempt survives.
+
+### Production evidence
+
+| | |
+|---|---|
+| migrated | 11 reports, **6,436,720 bytes** |
+| files | read-only; combined md5 `c8bf2b348ed5c7165305cf25f8a40e06` **identical before and after** |
+| equivalence | **11/11 byte-for-byte** by SHA-256, including the 6,343,651-byte report |
+| idempotent | re-check copies 0 |
+| harness | **26/26** on production |
+| API | `GET /{id}/report` → 200, 2,338 bytes, sha `86d62bfb…` — **identical to the file** |
+| two processes | a process with no filesystem access read the same bytes, same sha |
+| unauthenticated | 401 |
+
+### `report_path` is more clearly data than it was
+
+In this store it is a **name the store resolves**, not a location a filesystem
+resolves — nothing looks it up on a disk at all. Traversal containment is
+untouched on the file path, and both tests for it still pass.
+
+### Two defects found
+
+A local named `reports` in the report route shadowed the module import, so
+`reports.store()` read an unbound local. Two tests caught it, one of them the
+traversal test — the last place to find a shadowed name.
+
+The harness wrote its probe script into the repository and got `EACCES` on the
+server. That is the source checkout being read-only to the worker user, exactly
+as `verify_scratch_isolation` requires: the guard was right and the harness was
+wrong.
+
+### Rollback
+
+Unset `QEVIK_REPORTS_STORE`. The 11 original files are untouched and are served
+again. **Reports written while Postgres was the store exist only in the table** —
+after a rollback the API would return 404 for those missions, because no file
+was ever written for them. The rows are not lost; they are unreachable until the
+store is switched back.
+
+### Not built
+
+No node registration, no heartbeat, no capability advertisement, no capability
+matching, no per-node policy, no protocol wiring, no A2A, no n8n, no media, no
+voice, no outreach. No new agent, tool or recipe.
+
+**The Fabric is not ready.** Two of six items are done: a remote process can see
+the queue and file a report. It cannot be registered, cannot advertise what it
+has, and nothing would route work to it.
+
 ## Reserved milestone: Agent Compute Fabric
 
 Qevik must eventually register and dispatch to external machines — the HP and

@@ -53,8 +53,17 @@ mission = Mission(id="mission-reportproof01", tenant_id=TENANT,
                   title="report proof")
 
 print("\n-- the store is chosen, never guessed ---------------------------------")
-check("the default is the file", reports.store() == "file",
-      "a deployment moves deliberately")
+# With the variable *absent*, not merely as the environment happens to be. On
+# production the variable is deliberately set, and a check that read the ambient
+# value would report the deployment's choice as a broken default.
+_ambient = os.environ.pop(reports.ENVIRONMENT, None)
+check("the default, with nothing configured, is the file",
+      reports.store() == "file", "a deployment moves deliberately")
+if _ambient is not None:
+    os.environ[reports.ENVIRONMENT] = _ambient
+check("...and this deployment has chosen",
+      _ambient in (None, "file", "postgres"),
+      f"{reports.ENVIRONMENT}={_ambient or '(unset, so file)'}")
 os.environ[reports.ENVIRONMENT] = "sqlite-maybe"
 try:
     reports.store()
@@ -153,7 +162,11 @@ try:
         db.SessionLocal = working
 
     print("\n-- two processes, sharing no filesystem --------------------------------")
-    probe = ROOT / ".report-reader.py"
+    # In a temp dir, not the repository. Writing it into ROOT failed on the
+    # server with EACCES — which is the source checkout being read-only to the
+    # worker user, exactly as `verify_scratch_isolation` requires. The guard was
+    # right and the harness was wrong.
+    probe = work / "report-reader.py"
     probe.write_text(
         "import hashlib, json, os, sys\n"
         f"sys.path.insert(0, {str(ROOT / 'packages' / 'kernel')!r})\n"
