@@ -629,6 +629,9 @@ class ToolAgent:
         self._signal_id = signal_id
         #: What the delivery step wrote, relative to the workspace.
         self.artefact: tuple[str, ...] = ()
+        #: What the publication step put on the site host. Not workspace files,
+        #: and deliberately not `artefact`: nothing here is committable.
+        self.published: tuple[str, ...] = ()
         #: The mission whose artefact this one publishes, when it publishes.
         self._publishes = publishes
         #: Where scratch clones live, so the reviewed commit can be read.
@@ -695,7 +698,16 @@ class ToolAgent:
                                          "registry entry; neither is a runtime "
                                          "decision"),))
         found = self.result
-        self.artefact = tuple(f for step in found.steps for f in step.files)
+        # Files written **into the workspace**, which is what a committer can
+        # commit. A publication writes to the site host and changes nothing
+        # here, so its names go to `published` instead — reported as
+        # `outcome.files` they made the committer try to commit an unchanged
+        # tree, and a publication that had genuinely gone live was recorded as
+        # a failed mission.
+        self.artefact = tuple(f for step in found.steps for f in step.files
+                              if step.tool not in PUBLISHERS)
+        self.published = tuple(f for step in found.steps for f in step.files
+                               if step.tool in PUBLISHERS)
         remembered = self._remember(found)
         judged = self._audit(found)
         return AgentOutcome(
@@ -707,7 +719,9 @@ class ToolAgent:
                      + (f"; {judged} site(s) with evidenced defects" if judged
                         else "")
                      + (f"; artefact: {len(self.artefact)} file(s)"
-                        if self.artefact else "")),
+                        if self.artefact else "")
+                     + (f"; published {len(self.published)} file(s)"
+                        if self.published else "")),
             # What this run produced. Empty for a research pass, which is why
             # `evidence_count` exists beside it; a delivery produces no evidence
             # and a file, and the acceptance check needs to see one or the
@@ -1181,8 +1195,9 @@ class ToolAgent:
         # artefact and no evidence at all — it observed nothing, it built. This
         # asked only for evidence, so a delivery that wrote a real site was
         # rejected for having recorded no observations.
-        if not found.evidence and not self.artefact:
+        if not found.evidence and not self.artefact and not self.published:
             produced = ("an artefact" if self._recipe.delivers
+                        else "a publication" if self._recipe.publishes
                         else "any evidence")
             return outcome.model_copy(update={
                 "claims_done": False,
