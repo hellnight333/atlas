@@ -283,6 +283,27 @@ check("duplicate approvals do not create duplicate authority",
       len({a["fingerprint"] for a in repo.outreach_approvals_for(MISSION)}) == 1,
       f"{len(repo.outreach_approvals_for(MISSION))} records, one set of words")
 
+print("\n-- one vocabulary for one act ----------------------------------------")
+# `infra/approve_send.py` has written this event since the manual-send
+# experiment. A second kind meaning the same thing would leave a reader asking
+# which of them counts.
+from atlas_kernel.opportunity.repository import OUTREACH_EVENT  # noqa: E402
+
+approve_send = (ROOT / "infra/approve_send.py").read_text()
+check("the approval reuses the name the existing tool writes",
+      f'"{OUTREACH_EVENT}"' in approve_send,
+      OUTREACH_EVENT)
+check("...and the fields it records, in the same words",
+      all(field in approve_send for field in
+          ("message_fingerprint", "delivery", "sent")),
+      "one reader can read both without a special case")
+check("the older rows stay out of a publication's history",
+      all(a["mission_id"] == MISSION
+          for a in repo.outreach_approvals_for(MISSION)),
+      "filtered on mission_id, which the experiment's rows do not carry")
+check("an approval says plainly that nothing was sent",
+      all(a["sent"] is False for a in repo.outreach_approvals_for(MISSION)))
+
 print("\n-- the words are what was approved -----------------------------------")
 edited = preparation.compose(business_name="Somebody Else", url=URL,
                              answers=ANSWERS, site_id=SITE)[1]

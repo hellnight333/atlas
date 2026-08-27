@@ -99,7 +99,18 @@ PUBLISHED_EVENT = "publication_completed"
 #: Bound to a fingerprint of the words, not to the message's id. A record saying
 #: "this message was approved" survives an edit of the message; one saying
 #: "these exact words were approved" does not, which is the point.
-OUTREACH_EVENT = "outreach_approved"
+#: **The name `infra/approve_send.py` already writes.** That script has held
+#: this exact idea since the manual-send experiment — a person authorised these
+#: exact words to this exact recipient, bound to a fingerprint, and nothing was
+#: sent. Writing `outreach_approved` beside it would have been two vocabularies
+#: for one act, which is how a reader ends up asking which of them counts.
+#:
+#: The detail differs and that is fine: the older rows carry a draft and a
+#: phone, these carry a mission and a commit. Both say the same thing about the
+#: same decision, and `outreach_approvals_for` filters on `mission_id`, so the
+#: experiment's rows stay out of a publication's history without either
+#: needing to know about the other.
+OUTREACH_EVENT = "outreach_approved_for_manual_send"
 
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
@@ -871,7 +882,12 @@ class OpportunityRepository:
                                        "commit": commit.strip(),
                                        "recipient": recipient.strip(),
                                        "channel": channel,
-                                       "fingerprint": fingerprint.strip(),
+                                       "message_fingerprint": fingerprint.strip(),
+                                       # The two fields the older rows carry, in
+                                       # the same words, so one reader can read
+                                       # both without a special case.
+                                       "delivery": "manual_by_operator",
+                                       "sent": False,
                                        "note": note.strip()[:2000]}),
                  "at": datetime.now(UTC)}
         with SessionLocal() as session:
@@ -888,6 +904,7 @@ class OpportunityRepository:
                 "signal_id": signal_id, "commit": commit.strip(),
                 "recipient": recipient.strip(), "channel": channel,
                 "fingerprint": fingerprint.strip(), "actor": entry["actor"],
+                "delivery": "manual_by_operator", "sent": False,
                 "note": note.strip()[:2000], "at": entry["at"].isoformat()}
 
     def outreach_approvals_for(self, mission_id: str, *,
@@ -913,7 +930,9 @@ class OpportunityRepository:
                           "commit": detail.get("commit", ""),
                           "recipient": detail.get("recipient", ""),
                           "channel": detail.get("channel", ""),
-                          "fingerprint": detail.get("fingerprint", ""),
+                          "fingerprint": detail.get("message_fingerprint", ""),
+                          "sent": bool(detail.get("sent", False)),
+                          "delivery": detail.get("delivery", ""),
                           "note": detail.get("note", ""),
                           "at": row["at"].isoformat() if row["at"] else ""})
         return found
