@@ -1,0 +1,114 @@
+# The delivery worker: a third worker, for the role that produces artefacts.
+#
+#   cp infra/qevik-worker-publish.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now qevik-worker-publish
+#
+# A third unit for the same reason there is a second: a worker serves exactly
+# one agent. `website-builder` carries out approved deliveries; `researcher`
+# fetches and audits. Neither can run the other's missions, and the queue filter
+# means they no longer block each other for trying.
+#
+# It is a third *worker*, not a third orchestration path. Same binary, same
+# timeline, same claims, same scheduler, same scratch mechanism, same policy.
+#
+# Why a second unit rather than a flag on the first.
+#
+# A worker serves exactly one agent, and `policy.refuse_agent_substitution`
+# refuses a mission whose plan named a different one — a mission approved as
+# `self-check` work must not be carried out by a model, and the reverse holds
+# too. So `rec-execution-canary` (self-check) and `rec-daily-business-discovery`
+# (researcher) cannot share a worker: whichever agent the worker served, it
+# would correctly refuse the other's missions.
+#
+# Two workers is the existing answer to that, not a new mechanism. Claims are
+# atomic across processes (`--require-atomic-claims` over Postgres, proven by
+# `infra/verify_two_workers.py`), so both may tick the recurrences and read the
+# same queue; exactly one wins each mission and each occurrence.
+#
+# `--require-atomic-claims` is the point of this unit. Without it a worker whose
+# claim database is unreachable quietly becomes a single-worker deployment — and
+# if a second worker is running, both take the same mission and produce two
+# commits of the same change with no error anywhere. With it, the worker refuses
+# to start, which is loud and recoverable.
+
+[Unit]
+Description=Qevik publication worker (authorised publications only)
+# Five failures in five minutes stops it. Without this the "refuses to start"
+# safety becomes a restart loop nobody reads. These belong in [Unit]; systemd
+# ignores them in [Service] with a warning that is easy to miss.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not `Requires=qevik-control.service`: the whole design is that this survives
+# the control plane restarting.
+
+[Service]
+Type=simple
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+EnvironmentFile=-/opt/qevik/control.env
+EnvironmentFile=-/opt/qevik/worker.env
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+Environment=QEVIK_STATE=/var/lib/qevik/control
+Environment=QEVIK_SITES_ROOT=/srv/sites
+
+ExecStart=/opt/qevik/atlas/.venv/bin/python \
+  /opt/qevik/atlas/infra/mission_worker.py \
+  --timeline /var/lib/qevik/control/missions.jsonl \
+  --reports /var/lib/qevik/control/reports \
+  --worktrees /var/lib/qevik/worktrees \
+  --scratch /var/lib/qevik/scratch \
+  --state /var/lib/qevik/control \
+  --tenant tenant-qevik \
+  --name worker-publish \
+  --agent publish \
+  --interval 10
+# No --repository, and no --origin: discovery recipes declare origin `none`,
+# which needs no configuration. A customer repository would be added with
+# --origin NAME=PATH, and an entry pointing at Qevik's own repository is refused
+# at start-up.
+#
+# This worker calls no model and needs no provider credential. It carries out
+# recipes declared in git through the tools their agent is registered for.
+#
+# `website-builder` declares exactly one tool, `website-generator`. It has no
+# network tool at all, so a delivery cannot publish the site it builds or
+# contact the business it built it for — not by policy but by declaration, which
+# `recipes.validate` enforces at import.
+# --claims-dsn and --require-atomic-claims come from /opt/qevik/worker.env.
+# The DSN carries a password, and a password on an argv line is readable by
+# every user on the host through `ps`.
+
+# on-failure, not always: a worker that refuses to start because its claim
+# database is unreachable should stay down and be noticed, not restart-loop
+# quietly. A crash mid-mission is different, and that is what this covers.
+Restart=on-failure
+RestartSec=15
+# The worker writes worktrees and reports and nothing else on this host.
+NoNewPrivileges=yes
+PrivateTmp=yes
+# strict, not full. `full` only makes /usr, /boot and /etc read-only — /opt is
+# left writable, so removing /opt/qevik/atlas from ReadWritePaths below did
+# nothing at all until this line changed. Measured, not assumed: under `full` a
+# write probe into /opt/qevik/atlas succeeded; under `strict` it returns
+# "Read-only file system".
+ProtectSystem=strict
+ProtectHome=yes
+# /opt/qevik/atlas is deliberately NOT here. The worker reads the production
+# checkout to clone it and never writes to it, so the kernel refuses the write
+# even if the code regresses. It used to be writable because `git worktree add`
+# ran inside it — which is precisely the thing that was wrong: a mission left a
+# ref, a worktree entry and its objects behind in production simply by running.
+#
+# If this unit ever fails with EACCES under /opt/qevik/atlas, that is the guard
+# working. Find what is writing there; do not add the path back.
+# The publication root, and the only place outside /var/lib/qevik this worker
+# may write. `/opt/qevik/atlas` stays absent for the reason it is absent
+# everywhere: the source checkout is not a publication target.
+ReadWritePaths=/var/lib/qevik /srv/sites
+
+[Install]
+WantedBy=multi-user.target
