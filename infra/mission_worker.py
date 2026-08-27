@@ -1092,7 +1092,11 @@ def main(argv: list[str] | None = None) -> int:
                   agent_choice=args.agent)
         return 0
 
-    log.info("watching %s for %s", timeline.path, args.tenant)
+    # The store, not the path. It said "watching …/missions.jsonl" while reading
+    # Postgres, which is the log telling an operator the wrong thing about where
+    # the state is — the sentence somebody reads first during an incident.
+    log.info("watching the %s ledger for %s%s", timeline.backend, args.tenant,
+             "" if timeline.networked else f" at {timeline.path}")
     while True:
         try:
             pass_once(timeline, tenant=args.tenant, name=args.name,

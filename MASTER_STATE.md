@@ -1111,6 +1111,82 @@ send control** — a button there would make an approval boundary look like a
 queue — and `test_the_console_carries_no_secret_and_no_business_logic` now fails
 if the console posts to any send-shaped path.
 
+## The mission ledger is network-reachable — 2026-08-27
+
+`QEVIK_LEDGER=postgres` on production. A process on another machine can now see
+the work Qevik has to do. **That is all this milestone does**, and it is the
+precondition for every other Fabric item.
+
+### Far smaller than recorded, for one reason
+
+`service._event` has always returned a `BusinessEvent`, and
+`atlas_business_events` already holds the review, publication and outreach
+decisions. This was not a new store: it is the events Qevik already writes going
+to the table Qevik already has.
+
+### The defect the byte-for-byte criterion caught
+
+Seven of thirteen real missions folded differently from Postgres, five losing
+`report_path`. **Fifty-five events across fourteen groups shared
+`(mission_id, updated_at)`**, and `fold` breaks a tie by whichever event it sees
+last — the last line in a file, and whatever the database returns in a table.
+
+`fold`'s docstring claims order-independence. That claim was false when
+timestamps tie, and the file's implicit total order was silently load-bearing.
+
+**Source, proven before anything was changed:** `mission_worker.py` calls
+`service._event` directly at six sites, and `_event` read `updated_at` off the
+mission — a field only `transition` maintains. Every worker note therefore
+inherited the timestamp of the transition before it.
+
+An event now stamps its own moment, strictly monotonic per process. Fifty events
+about an unchanged mission get fifty distinct moments.
+
+### No schema change, and none requested
+
+The file's line order is an **existing immutable ordering fact**. Migrated rows
+carry it in their `id` (`evt-m00000014-…`) and the reader orders by `(at, id)`.
+`at` stays truthful — the event's own recorded moment — and `detail` is copied
+verbatim. Nothing normalised, rewritten or renumbered, and `BIGSERIAL` was not
+required.
+
+### What the gate then caught
+
+`updated_at` had been carrying two facts: *when the mission last changed* and
+*when we last heard about it*. `stale()` reads the second. The abandonment test
+faked staleness by backdating the **mission**, which worked only through that
+conflation. `_event` takes an `at` for a caller that genuinely knows when an
+event happened, and the test now stamps the event six hours ago — what actually
+happens to an abandoned mission. It cannot be abused: an older stamp loses a
+fold.
+
+### Production evidence
+
+| | |
+|---|---|
+| migrated | 158 events, 0 unparseable, file md5 unchanged either side |
+| fold equivalence | **13/13 byte-for-byte**, every field |
+| ties covered | 55 events, 14 groups, 11 of 13 missions |
+| two processes | a process at a **nonexistent path** read 158 events, 13 missions, 11 with `report_path` |
+| live cross-process | control plane created a mission over HTTP; a separate process saw it as `draft`; cancelled afterwards |
+| now | 160 rows, 14 missions; file frozen at 158 |
+| other factories | untouched — opportunity 89, outreach 42, website 1098, unchanged |
+
+### Rollback
+
+`QEVIK_LEDGER` unset restores the file, which was read and never written. Events
+recorded since the switch live only in Postgres, so rollback loses them — two,
+both from the acceptance test.
+
+### Not built
+
+No node registry, no heartbeat, no capability matching, no protocol wiring, no
+A2A, no media, no voice, no n8n, no new agent, tool or recipe. **Mission reports
+are still local files**, which is the next Fabric blocker and the same class of
+defect: the worker writes to a disk the control plane reads.
+
+**The Fabric is not ready.** One of six items is done.
+
 ## Reserved milestone: Agent Compute Fabric
 
 Qevik must eventually register and dispatch to external machines — the HP and
