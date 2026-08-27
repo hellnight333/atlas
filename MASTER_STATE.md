@@ -364,10 +364,15 @@ agents, (C) the flagship site.
 *(Superseded — that shipped and was proven on a real production opportunity.
 See "Approved opportunity to delivered artefact".)*
 
-The next milestone is **operator review of a delivered artefact**: the artefact
-exists as a commit on a mission branch and the only way to see it is a `git
-show` in the report. Nothing renders it, and nothing records a decision about
-it. Until that exists, the last step of the workflow is a person with SSH.
+*(Superseded — that shipped and was proven against `mission-821a8e7d171d`. See
+"Artefact review".)*
+
+The next milestone is **publishing an accepted artefact**, which is the first
+genuinely outward act and needs its own approval boundary plus somewhere to
+publish to. It is externally blocked on hosting. The unblocked prerequisite is
+smaller: **an accepted artefact should be visible as work waiting to go out** —
+`reviews_for` exists and nothing lists what has been accepted and not yet acted
+on.
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -675,6 +680,96 @@ At a file and a report. `website-builder` declares one tool and it is not a
 network tool, so a delivery recipe naming an HTTP or shell step is refused by
 `recipes.validate` at import. Publishing and outreach are separate outward acts
 with no route from here, and both remain externally blocked.
+
+## Artefact review — built and proven on the real delivered mission
+
+The artefact was a commit on a mission branch and the only way to see it was a
+`git show` printed in the report. The workflow's last step was a person with
+SSH.
+
+**Smallest slice.** No new page, no nav entry, no parallel store. The card
+extends the mission detail page a reviewer already opens, and the decision lands
+on `atlas_business_events` beside `opportunity_approved`.
+
+`mission/artefact.py` reads and only reads — `ls-tree` and `show`, nothing else.
+`GitWorkspace` is deliberately not reused: a reader that can commit is one
+somebody eventually commits with.
+
+### Proven against `mission-821a8e7d171d`, 2026-08-27 — 31 checks, 0 failed
+
+Everything read over HTTP from the running control plane. No SSH and no git in
+the review path.
+
+| | |
+|---|---|
+| artefact | `index.html` (1,967 B), `provenance.json`, `robots.txt`, `sitemap.xml` |
+| commit | `2d77a5f27c684b39297a0ad9b359d38e621eb331` |
+| chain on screen | opportunity, scope, approver, evidence ×3, recipe, agent, tool, origin, workspace, branch, report |
+| decision | `accepted`, by `review-operator`, naming that commit |
+| durability | survived a `systemctl restart qevik-control` |
+
+### The three boundaries, each attempted
+
+| attempted | result |
+|---|---|
+| `../../../../etc/passwd` | 404 |
+| `artefact/../../../etc/passwd` | 404 |
+| `.qevik-scratch` — in the commit, not the delivery | 404 |
+| a file not in the commit | 404 |
+| a repository outside the scratch root | refused |
+| `git fetch` through the reader | refused |
+| an unauthenticated read | 401 |
+| a decision nobody declared | 422 |
+
+### Nothing left the building
+
+The artefact commit is unchanged by the review; the repository has no remote;
+the mission branch is merged into nothing; no branch was created or moved; the
+mission was not transitioned and recorded no new commit. Reading needs READ and
+deciding needs EXECUTE, because the next boundary reads the decision.
+
+### The commit is what was reviewed
+
+A mission branch can be rebuilt. If a review named only the branch, "accepted"
+would silently come to mean whatever is on it now — an acceptance inherited by
+an artefact nobody saw. The record stores the commit id, proved by moving the
+branch after a review and checking the record still names the old one.
+
+### Customer markup cannot execute in the operator's session
+
+Proved with a pane that records which DOM property is written, not by grepping
+for `textContent`: a grep passes when somebody leaves the word in a comment and
+assigns `innerHTML`. The body arrives via `textContent`, `innerHTML` is never
+touched, and the injected script does not run.
+
+### Found while building
+
+- The control unit did not declare `QEVIK_SCRATCH`; it worked only because the
+  reader's default and the workers' `--scratch` happened to be the same string.
+  Now declared, with a test that fails if they diverge — a disagreement there is
+  a review surface reporting every artefact as missing while every mission looks
+  fine.
+- The artefact card rendered **below** the plan, commits, model calls and
+  history. On a mission whose purpose is to be reviewed, a reviewer had to
+  scroll past four cards about how it ran to reach the thing they came to judge.
+  Found by screenshotting and looking, not by a test. It leads now.
+- Two of my own assertions were wrong: `esc` leaves `onerror=alert(1)` as
+  harmless literal text, so asserting its absence failed a correctly escaped
+  payload; and `API` is a top-level `const`, so stubbing it from outside the
+  sandbox never took and the handler had been falling back to an error message.
+
+### Operational finding
+
+`QEVIK_ADMIN_PASSWORD` in `/opt/qevik/atlas.env` **does not match** the stored
+hash for `admin`. Both production gates needed a purpose-made operator, created
+and removed each time, because resetting a live operator's password to run a
+test would lock out the person who uses it. **Nothing in the review surface is
+usable until `admin`'s password is re-established.** Not fixed here: it is a
+credential decision, not a defect in this milestone.
+
+Three identical `accepted` decisions are on the timeline, one per gate run. They
+are kept. Deleting rows from an append-only record to tidy a test would
+undermine the property this milestone exists to establish.
 
 ## Reserved milestone: Agent Compute Fabric
 

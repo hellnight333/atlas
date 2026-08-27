@@ -62,6 +62,61 @@ FIXTURES: dict[str, object] = {
          "claimed_by": "worker-1"},
     ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
     "/api/missions/blockers": {"by_kind": {}},
+    # A delivered mission, so the artefact review card can be looked at rather
+    # than asserted. Every field is the shape the real endpoints return.
+    "/api/missions/mission-000000000003": {
+        "mission_id": "mission-000000000003",
+        "title": "Deliver deliver-website for Julian\u2019s Barber Shop",
+        "status": "complete", "requested_by": "ayoub",
+        "created_at": "2026-08-27T05:47:27Z", "updated_at": "2026-08-27T05:47:30Z",
+        "origin_name": "none", "agent_id": "website-builder",
+        "recipe": "deliver-website", "signal_id": "sig-20260827054352236624",
+        "approved_scope": "offer-website: performance",
+        "evidence_fingerprints": ["031f00e817d53959", "e89c6afe5710ef4f",
+                                  "fd5e330a2d5db52b"],
+        "commits": ["2d77a5f27c684b39297a0ad9b359d38e621eb331"],
+        "invocations": [], "blockers": [], "total_cost": None,
+        "workspace": "/var/lib/qevik/scratch/mission-000000000003/repo",
+        "plan": {"goal": "Build the site an approved opportunity asked for",
+                 "steps": [{"order": 1, "title": "what was built, from which "
+                                                 "observed defects"}]},
+    },
+    "/api/missions/mission-000000000003/history": {"history": [
+        {"updated_at": "2026-08-27T05:47:30Z", "status": "complete",
+         "claimed_by": "worker-delivery", "note": "report written"}]},
+    "/api/missions/mission-000000000003/report": {
+        "report": "# Deliver deliver-website\n\n## Delivery\n\n"
+                  "**Source opportunity:** `sig-20260827054352236624`"},
+    "/api/missions/mission-000000000003/artefact": {
+        "mission_id": "mission-000000000003",
+        "signal_id": "sig-20260827054352236624",
+        "approved_scope": "offer-website: performance",
+        "approved_by": "ayoub",
+        "evidence_fingerprints": ["031f00e817d53959", "e89c6afe5710ef4f",
+                                  "fd5e330a2d5db52b"],
+        "origin_name": "none", "origin": "", "origin_kind": "empty",
+        "recipe": "deliver-website", "agent_id": "website-builder",
+        "tools": ["website-generator"],
+        "workspace": "/var/lib/qevik/scratch/mission-000000000003/repo",
+        "branch": "mission/mission-000000000003",
+        "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331",
+        "report_path": "docs/qevik-docs/autonomous/reports/deliver.md",
+        "status": "complete",
+        "files": [
+            {"path": "artefact/index.html", "name": "index.html",
+             "size": 1967, "blob": "a1b2c3d"},
+            {"path": "artefact/provenance.json", "name": "provenance.json",
+             "size": 412, "blob": "d4e5f6a"},
+            {"path": "artefact/robots.txt", "name": "robots.txt",
+             "size": 44, "blob": "b7c8d9e"},
+            {"path": "artefact/sitemap.xml", "name": "sitemap.xml",
+             "size": 201, "blob": "c1d2e3f"}],
+        "provenance": {"mode": "modify", "site_state": "weak",
+                       "addresses": ["a heading on every page",
+                                     "a page that loads quickly"],
+                       "not_published_for_want_of_a_source": ["email"]},
+        "reviews": [],
+    },
     # Two real shapes: one the source was silent about, one merely new. Both
     # with UNKNOWN worth, because nothing has measured one.
     "/api/discovery/opportunities": {

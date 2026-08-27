@@ -702,6 +702,7 @@ async function missionDetail(id) {
       ${pill(mission.status)} ${track(mission.status)}
       <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
     </div>
+    ${delivery ? deliveryCard(delivery) : ''}
     ${whyItEnded(mission) ? `<div class="card why" style="margin-bottom:1rem">
       <h3>Why it stopped</h3><p>${esc(whyItEnded(mission))}</p></div>` : ''}
     ${(mission.blockers || []).length ? `<div class="card" style="margin-bottom:1rem">
@@ -733,7 +734,6 @@ async function missionDetail(id) {
       ${(history.history || []).map((h) => `<tr><td>${when(h.updated_at)}</td><td>${pill(h.status)}</td>
         <td><code>${esc(h.claimed_by || '—')}</code></td><td>${esc(h.note || '')}</td></tr>`).join('')}
       </tbody></table></div></div>
-    ${delivery ? deliveryCard(delivery) : ''}
     ${report ? `<div class="card"><h3>Report</h3><pre>${esc(report.report)}</pre></div>`
       : '<div class="card"><h3>Report</h3><p class="note">No report yet. One is written when the mission finishes.</p></div>'}`;
 
