@@ -479,6 +479,10 @@ def _publish(step, *, publication: "Publication | None") -> Step:
     try:
         version = target.publish(publication.site_id, publication.files)
         url = target.promote(publication.site_id, version.id)
+        # Inside the `try`, because the client is closed in the `finally` and a
+        # verification that ran after it would be fetching through a shut
+        # connection pool.
+        served = target.verify(url)
     except DeploymentUnreachable as unreachable:
         # The files are in place and the address does not serve them. Reported
         # as the failure it is: retrying the upload achieves nothing, and
@@ -496,11 +500,33 @@ def _publish(step, *, publication: "Publication | None") -> Step:
         if callable(close):
             close()
 
+    # The verification fetch, recorded as the observation it is.
+    #
+    # Not decoration. A publication produces no workspace files and no diff, so
+    # without this the run has nothing to show for itself and the worker's
+    # acceptance check correctly reports that the agent claimed success and
+    # produced nothing — which is what happened to the first real publication,
+    # while the page was serving perfectly. What it produced is a page on the
+    # internet, and the proof of that is what came back when it was fetched.
+    evidence = [Evidence(
+        kind=EvidenceKind.HTTP_RESPONSE, source=url,
+        observed={"site_id": publication.site_id,
+                  "commit": publication.commit,
+                  "published_from": publication.source_mission,
+                  "files": sorted(publication.files),
+                  "status": served.get("status"),
+                  "reachable": served.get("reachable"),
+                  "error": served.get("error", "")},
+        summary=(f"{len(publication.files)} file(s) live at {url} from "
+                 f"{publication.commit[:12]}"),
+        detector="tool:site-publish")]
+
     return Step(tool=step.tool, invoked=publication.site_id, proves=step.proves,
                 passed=True, files=tuple(sorted(publication.files)),
+                evidence=evidence,
                 detail=(f"{len(publication.files)} file(s) at {url} from "
                         f"{publication.commit[:12]}; the address was fetched "
-                        "and served them"))
+                        f"and answered {served.get('status', '?')}"))
 
 
 def _resolve(step) -> Step:
