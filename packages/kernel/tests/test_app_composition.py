@@ -309,10 +309,22 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     # is raised when a genuine surface is added and never to make a failure go
     # away — the assertions below are the actual rule, and they got stricter at
     # the same time this number moved for the opportunities view.
-    # Raised for the artefact review card and the awaiting-publication queue —
-    # two genuine surfaces, not a failure being silenced. The rule below got
-    # stricter in the same change, which is the condition on moving this number.
-    assert Path(CONSOLE / "index.html").stat().st_size < 92_000
+    # Raised for the artefact review card, the awaiting-publication queue and
+    # the outreach card — genuine surfaces, not a failure being silenced. The
+    # rules below got stricter each time, which is the condition on moving this.
+    assert Path(CONSOLE / "index.html").stat().st_size < 96_000
+
+    # The console cannot be the thing that sends. Nothing in this codebase can
+    # today, and the console is where a send button would be most natural and
+    # most wrong: the outreach card shows a message that is deliberately
+    # unsendable, and a control there would make an approval boundary look like
+    # a queue. When sending exists it will be a mission with an agent and a
+    # tool, dispatched like every other outward act — never a POST from a page.
+    sends = re.findall(r"""['"][^'"]*/(?:send|deliver-message|outreach/send)[^'"]*['"]""",
+                       source, re.I)
+    assert sends == [], (
+        f"the console posts to {sends}. Sending is a mission with a bounded "
+        "agent, not a button on a page.")
 
     # Artefact bytes are a customer's generated markup, rendered in the page
     # that holds the operator's session. They reach the DOM as text or they do

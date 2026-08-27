@@ -680,10 +680,19 @@ async function missionDetail(id) {
      artefact, and a failed request on every mission page would make the common
      case look broken. */
   let delivery = null;
+  let outreach = null;
   if (mission.signal_id) {
     try {
       delivery = await API.get('/api/missions/' + encodeURIComponent(id) + '/artefact');
     } catch { delivery = null; }
+    /* Only once something is actually published. Before that the message has
+       nothing to be about, and asking would render a card explaining an absence
+       on every mission that has not got there yet. */
+    if (delivery && (delivery.published || []).length) {
+      try {
+        outreach = await API.get('/api/missions/' + encodeURIComponent(id) + '/outreach');
+      } catch { outreach = null; }
+    }
   }
 
   const approve = mission.status === 'awaiting_approval'
@@ -703,6 +712,7 @@ async function missionDetail(id) {
       <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
     </div>
     ${delivery ? deliveryCard(delivery) : ''}
+    ${outreach ? outreachCard(outreach) : ''}
     ${whyItEnded(mission) ? `<div class="card why" style="margin-bottom:1rem">
       <h3>Why it stopped</h3><p>${esc(whyItEnded(mission))}</p></div>` : ''}
     ${(mission.blockers || []).length ? `<div class="card" style="margin-bottom:1rem">
@@ -838,6 +848,57 @@ function deliveryCard(d) {
         <td>${pill(r.decision, r.decision === 'accepted' ? 'ok' : 'bad')}</td>
         <td>${esc(r.actor)}</td><td>${esc(r.note || '')}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
+  </div>`;
+}
+
+/* What Qevik would say, and what stops it saying it.
+ *
+ * The blockers are the point of the card, not a footnote on it. A surface that
+ * showed a finished message and mentioned underneath that it cannot be sent
+ * reads as ready-to-go, and the one thing this must not do is make an
+ * unsendable message look like a queued one. */
+function outreachCard(o) {
+  const p = o.prepared;
+  if (!p) {
+    return `<div class="card" style="margin-bottom:1rem"><h3>Outreach</h3>
+      <p class="note">${esc(o.detail || 'Nothing to say yet.')}</p></div>`;
+  }
+  const blocked = p.blocked_on || [];
+  const words = {
+    NO_VERIFIED_RECIPIENT: 'No verified way to reach this business. Qevik does '
+      + 'not derive an address from a domain, and a landline is not a WhatsApp '
+      + 'number.',
+    NO_SENDING_IDENTITY: 'No sending identity is configured. Nothing here can '
+      + 'send, and approving would record permission rather than create it.',
+  };
+  const approved = (o.approvals || []).length;
+  return `<div class="card" style="margin-bottom:1rem">
+    <h3>Outreach</h3>
+    <p>${approved ? pill('approved to send', 'warn') : pill('prepared', '')}
+      ${blocked.length ? pill('blocked', 'bad') : ''}
+      <span class="note">Preparing a message sends nothing.</span></p>
+    ${blocked.length ? `<div class="why">${blocked.map((b) =>
+      `<p>${pill(b.replace(/_/g, ' ').toLowerCase(), 'bad')}
+       ${esc(words[b] || '')}</p>`).join('')}</div>` : ''}
+    <dl class="facts">
+      <dt>Business</dt><dd>${esc(p.business_name || p.business_id)}</dd>
+      <dt>Published site</dt><dd><a href="${esc(p.url)}" rel="noopener"
+        target="_blank">${esc(p.url)}</a>
+        <span class="note">from <code>${esc((p.commit || '').slice(0, 12))}</code></span></dd>
+      <dt>Why we are writing</dt><dd>${esc(p.approved_scope || '—')}
+        <span class="note">opportunity <code>${esc(p.signal_id)}</code></span></dd>
+      <dt>Evidence</dt><dd>${(p.evidence_fingerprints || []).map((f) =>
+        '<code>' + esc(f.slice(0, 10)) + '</code>').join(' ') || '—'}</dd>
+      <dt>Recipient</dt><dd>${p.recipient
+        ? esc(p.recipient) + ' <span class="note">' + esc(p.channel) + '</span>'
+        : pill('none verified', 'bad')}</dd>
+      <dt>Sending identity</dt><dd>${pill('none configured', 'bad')}</dd>
+    </dl>
+    <p class="note">Every claim below, and the record it came from:</p>
+    <dl class="facts">${Object.entries(p.traces || {}).map(([claim, from]) =>
+      `<dt>${esc(claim)}</dt><dd><code>${esc(from)}</code></dd>`).join('')}</dl>
+    <p class="note">Proposed message &mdash; <strong>${esc(p.subject)}</strong></p>
+    <pre>${esc(p.body)}</pre>
   </div>`;
 }
 

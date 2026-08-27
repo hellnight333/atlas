@@ -87,6 +87,20 @@ PUBLICATION_EVENT = "publication_approved"
 #: timeline says what Qevik did.
 PUBLISHED_EVENT = "publication_completed"
 
+#: A person authorising one exact message to one exact recipient.
+#:
+#: A **fourth** decision, and the first with a person on the other end of it.
+#: Publishing put a page somewhere a stranger could find; this puts a message in
+#: front of somebody who did not ask for one. Publication approval does not
+#: imply it and cannot: they are different acts with different consequences, and
+#: a chain where the third yes produced the fourth would mean nobody ever
+#: decided to make contact.
+#:
+#: Bound to a fingerprint of the words, not to the message's id. A record saying
+#: "this message was approved" survives an edit of the message; one saying
+#: "these exact words were approved" does not, which is the point.
+OUTREACH_EVENT = "outreach_approved"
+
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
 #: marks it — a second spelling would silently stop the rotation, and the run
@@ -813,6 +827,96 @@ class OpportunityRepository:
                 "signal_id": signal_id, "commit": commit.strip(),
                 "site_id": site_id, "url": url, "files": sorted(files),
                 "actor": entry["actor"], "at": entry["at"].isoformat()}
+
+    def approve_outreach(self, *, mission_id: str, business_id: str,
+                         signal_id: str, commit: str, recipient: str,
+                         channel: str, fingerprint: str, actor: str,
+                         note: str = "",
+                         tenant: TenantId | None = None) -> dict:
+        """Record that a person authorised contacting this business.
+
+        Refuses without a recipient, because an authorisation to write to
+        nobody is not a decision anybody made — and the failure mode it guards
+        against is a message later acquiring an address that nobody approved
+        sending to.
+
+        Refuses without a published artefact at this commit, because the whole
+        message is about one, and approving outreach for something unpublished
+        would authorise a claim that is not true yet.
+
+        **This does not send.** Nothing in this codebase can: `outreach/channels`
+        holds the seam and no provider. What this records is permission, and
+        permission that cannot be exercised is still worth recording honestly.
+        """
+        if not recipient.strip():
+            raise NotApprovable(
+                "outreach needs a verified recipient. An authorisation to "
+                "contact nobody is not a decision, and a message that acquires "
+                "an address later would be sent to somebody nobody approved.")
+        if not fingerprint.strip():
+            raise NotApprovable(
+                "outreach is approved as exact words, not as a message id. "
+                "Without a fingerprint an edit would inherit the approval.")
+        published = [p for p in self.publications_for(mission_id, tenant=tenant)
+                     if p["commit"] == commit.strip()]
+        if not published:
+            raise NotApprovable(
+                f"nothing published at {commit.strip()[:12] or '(no commit)'} "
+                f"for {mission_id}. The message is about a published site.")
+
+        entry = {"id": f"evt-{uuid4().hex[:12]}", "business_id": business_id,
+                 "factory": "opportunity", "kind": OUTREACH_EVENT,
+                 "opportunity_id": signal_id, "actor": actor.strip() or "system",
+                 "detail": json.dumps({"mission_id": mission_id,
+                                       "commit": commit.strip(),
+                                       "recipient": recipient.strip(),
+                                       "channel": channel,
+                                       "fingerprint": fingerprint.strip(),
+                                       "note": note.strip()[:2000]}),
+                 "at": datetime.now(UTC)}
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """), entry)
+            session.commit()
+        return {"id": entry["id"], "mission_id": mission_id,
+                "signal_id": signal_id, "commit": commit.strip(),
+                "recipient": recipient.strip(), "channel": channel,
+                "fingerprint": fingerprint.strip(), "actor": entry["actor"],
+                "note": note.strip()[:2000], "at": entry["at"].isoformat()}
+
+    def outreach_approvals_for(self, mission_id: str, *,
+                               tenant: TenantId | None = None) -> list[dict]:
+        """Every message a person authorised for this mission, oldest first."""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, actor, opportunity_id, business_id, detail, at
+                FROM atlas_business_events
+                WHERE kind = :kind AND detail->>'mission_id' = :mission
+                ORDER BY at
+                """),
+                {"kind": OUTREACH_EVENT, "mission": mission_id},
+            ).mappings().all()
+        found = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            found.append({"id": row["id"], "actor": row["actor"],
+                          "signal_id": row["opportunity_id"],
+                          "business_id": row["business_id"],
+                          "mission_id": detail.get("mission_id", ""),
+                          "commit": detail.get("commit", ""),
+                          "recipient": detail.get("recipient", ""),
+                          "channel": detail.get("channel", ""),
+                          "fingerprint": detail.get("fingerprint", ""),
+                          "note": detail.get("note", ""),
+                          "at": row["at"].isoformat() if row["at"] else ""})
+        return found
 
     def publications_for(self, mission_id: str, *,
                          tenant: TenantId | None = None) -> list[dict]:

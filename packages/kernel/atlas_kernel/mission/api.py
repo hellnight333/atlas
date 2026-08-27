@@ -284,6 +284,18 @@ def blockers(missions: list[dict]) -> dict:
     }
 
 
+class OutreachApproval(BaseModel):
+    """Authorising one exact message to one exact recipient.
+
+    The recipient is **not** a field. It comes from the business record, and a
+    request that could name one could name any address — which is precisely how
+    a message reaches somebody nobody decided to contact.
+    """
+
+    fingerprint: str = Field(min_length=8, max_length=128)
+    note: str = Field(default="", max_length=2000)
+
+
 class PublishRequest(BaseModel):
     """Authorising one exact bundle to go to one exact address.
 
@@ -712,6 +724,121 @@ def build_router() -> APIRouter:
         except NotApprovable as refused:
             raise HTTPException(status_code=400, detail=str(refused)) from refused
         return recorded
+
+    @router.get("/{mission_id}/outreach")
+    def outreach(mission_id: str, request: Request,
+                 tenant: TenantId = Depends(current_tenant),
+                 _: User = Depends(requires(Scope.READ))) -> dict:
+        """What Qevik would say to this business, and what stops it saying it.
+
+        A read. Preparing a message reaches nothing, dispatches nothing and
+        sends nothing — there is no agent, tool or recipe on this path, so
+        there is no network capability to withhold.
+        """
+        from ..opportunity.tenancy import ALL_TENANTS
+        from ..outreach import preparation
+
+        summary = _one(request, mission_id, tenant)
+        memory = _opportunities(request)
+        signal_id = summary.get("signal_id") or ""
+        signal = memory.get_signal(signal_id, tenant=tenant) if signal_id else None
+        if signal is None:
+            raise HTTPException(status_code=422,
+                                detail="this mission has no opportunity to "
+                                       "write about")
+        business = memory.get_business(signal["business_id"], tenant=ALL_TENANTS)
+        if business is None:
+            raise HTTPException(status_code=422, detail="no business")
+
+        published = memory.publications_for(mission_id, tenant=tenant)
+        approvals = memory.outreach_approvals_for(mission_id, tenant=tenant)
+        if not published:
+            return {"mission_id": mission_id, "state": "NOT_PUBLISHED",
+                    "prepared": None, "approvals": approvals,
+                    "detail": ("nothing has been published for this business. "
+                               "The message is about a published site.")}
+
+        # What the build said it answered, read from the artefact it published.
+        from . import artefact as reader
+
+        scratch = getattr(request.app.state, "scratch_root", None)
+        answers: tuple[str, ...] = ()
+        try:
+            provenance = reader.provenance(
+                mission_id, summary.get("workspace") or "",
+                scratch=Path(str(scratch)) if scratch else None)
+            answers = tuple(provenance.get("addresses") or ())
+        except Exception:                          # noqa: BLE001 - reported
+            answers = ()
+
+        try:
+            prepared = preparation.prepare(
+                business=business, signal=signal, publication=published[-1],
+                approved_scope=summary.get("approved_scope") or "",
+                answers=answers)
+        except preparation.NotPreparable as refused:
+            return {"mission_id": mission_id, "state": "NOT_PREPARABLE",
+                    "prepared": None, "approvals": approvals,
+                    "detail": str(refused)}
+
+        return {"mission_id": mission_id,
+                "state": "APPROVED_TO_SEND" if approvals else prepared.state,
+                "prepared": prepared.summary(), "approvals": approvals}
+
+    @router.post("/{mission_id}/outreach/approve", status_code=201)
+    def approve_outreach(mission_id: str, body: OutreachApproval,
+                         request: Request,
+                         tenant: TenantId = Depends(current_tenant),
+                         user: User = Depends(requires(Scope.COMMUNICATE))
+                         ) -> dict:
+        """Authorise contacting this business. Sends nothing, because nothing can.
+
+        `Scope.COMMUNICATE`, and not PUBLISH. Putting a page on the internet and
+        writing to a person are different acts: the first is found by whoever
+        goes looking, the second arrives. An operator trusted with one is not
+        thereby trusted with the other, and reusing the scope would mean the
+        publication approval had quietly carried this one.
+        """
+        from ..opportunity.repository import NotApprovable
+        from ..opportunity.tenancy import ALL_TENANTS
+        from ..outreach import preparation
+
+        summary = _one(request, mission_id, tenant)
+        memory = _opportunities(request)
+        signal = memory.get_signal(summary.get("signal_id") or "", tenant=tenant)
+        if signal is None:
+            raise HTTPException(status_code=422, detail="no opportunity")
+        business = memory.get_business(signal["business_id"], tenant=ALL_TENANTS)
+        published = memory.publications_for(mission_id, tenant=tenant)
+        if business is None or not published:
+            raise HTTPException(
+                status_code=422,
+                detail="nothing published for this business to write about")
+
+        recipient, channel = preparation.verified_recipient(business)
+        if not recipient:
+            # The state the first real business is actually in. Reported as a
+            # refusal rather than filled in: an address derived from a website
+            # is a guess that lands in a stranger's inbox.
+            raise HTTPException(
+                status_code=409,
+                detail=("no verified way to reach this business. Qevik does not "
+                        "derive an address from a domain, and a landline is not "
+                        "a WhatsApp number."))
+        try:
+            recorded = memory.approve_outreach(
+                mission_id=mission_id, business_id=business.id,
+                signal_id=signal["id"], commit=published[-1]["commit"],
+                recipient=recipient, channel=channel,
+                fingerprint=body.fingerprint, actor=user.username,
+                note=body.note, tenant=tenant)
+        except NotApprovable as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        return {**recorded, "state": "APPROVED_TO_SEND",
+                "sent": False,
+                "why_not_sent": ("no channel has a provider configured. "
+                                 "Approval records permission; it does not "
+                                 "create the ability.")}
 
     @router.post("/{mission_id}/publish", status_code=201)
     def publish(mission_id: str, body: PublishRequest, request: Request,

@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard, deliveryCard, wireReview, API };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard, deliveryCard, wireReview, outreachCard, API };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -91,7 +91,7 @@ function check(name, ok, detail = '') {
 }
 const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice,
         discoveryLine, opportunityCard, deliveryCard,
-        wireReview } = sandbox.__under_test || {};
+        wireReview, outreachCard } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
     || typeof cost !== 'function' || typeof originOf !== 'function'
@@ -403,6 +403,52 @@ check('...so the script tag arrives as characters, not as a tag',
       `the pane received ${JSON.stringify(written.map(([, v]) => String(v).slice(0, 40)))}`);
 check('nothing executed in the operator session',
       context.window.__ran === undefined);
+
+/* ---- outreach: an unsendable message must not look like a queued one ---- */
+const OUTREACH = {
+  mission_id: 'mission-1', state: 'PREPARED', approvals: [],
+  prepared: {
+    business_id: 'b-1', business_name: 'Julian\u2019s Barber Shop',
+    signal_id: 'sig-1', mission_id: 'mission-1',
+    commit: '2d77a5f27c684b39297a0ad9b359d38e621eb331',
+    site_id: 'site-1', url: 'https://sites.qevik.ai/site-1/',
+    approved_scope: 'offer-website: performance',
+    evidence_fingerprints: ['031f00e817d5'], answers: ['a heading on every page'],
+    subject: 'A website for Julian\u2019s Barber Shop',
+    body: 'Hello,\n\nI built one and put it here.',
+    recipient: '', channel: '',
+    blocked_on: ['NO_VERIFIED_RECIPIENT', 'NO_SENDING_IDENTITY'],
+    traces: { 'business name': 'atlas_businesses.name of b-1' },
+    state: 'PREPARED', sendable: false,
+  },
+};
+
+const out = outreachCard(OUTREACH);
+check('the outreach card renders', typeof out === 'string' && out.length > 0);
+check('it says preparing sends nothing', /sends nothing/.test(out));
+check('the blockers are shown, not footnoted',
+      /blocked/.test(out) && /no verified recipient/i.test(out)
+      && /no sending identity/i.test(out));
+check('a missing recipient is drawn as an absence, not left empty',
+      /none verified/.test(out));
+check('the sending identity says none is configured',
+      /none configured/.test(out));
+check('the published site and commit are shown',
+      /sites\.qevik\.ai\/site-1/.test(out) && /2d77a5f27c68/.test(out));
+check('the evidence and opportunity are shown',
+      /031f00e817/.test(out) && /sig-1/.test(out));
+check('every claim names the record it came from',
+      /atlas_businesses\.name/.test(out));
+check('the proposed message is shown as text',
+      /I built one and put it here/.test(out));
+check('NO send control is offered while blocked',
+      !/data-send/.test(out) && !/>Send</.test(out),
+      'a button here would be the one thing this card must not have');
+
+const noneYet = outreachCard({ mission_id: 'm', prepared: null,
+                               detail: 'nothing has been published' });
+check('an unpublished mission explains itself rather than rendering a message',
+      /nothing has been published/.test(noneYet) && !/Proposed message/.test(noneYet));
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

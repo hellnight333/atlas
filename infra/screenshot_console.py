@@ -100,6 +100,36 @@ FIXTURES: dict[str, object] = {
                  "steps": [{"order": 1, "title": "what was built, from which "
                                                  "observed defects"}]},
     },
+    "/api/missions/mission-000000000003/outreach": {
+        "mission_id": "mission-000000000003", "state": "PREPARED",
+        "approvals": [],
+        "prepared": {
+            "business_id": "4acac344",
+            "business_name": "Julian\u2019s Barber Shop",
+            "signal_id": "sig-20260827054352236624",
+            "mission_id": "mission-000000000003",
+            "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331",
+            "site_id": "site-4acac34467c34f17",
+            "url": "https://sites.qevik.ai/site-4acac34467c34f17/",
+            "approved_scope": "offer-website: performance",
+            "evidence_fingerprints": ["031f00e817d53959", "e89c6afe5710ef4f",
+                                      "fd5e330a2d5db52b"],
+            "answers": ["a heading on every page", "a page that loads quickly"],
+            "subject": "A website for Julian\u2019s Barber Shop",
+            "body": ("Hello,\n\nI build websites for businesses in Dubai. "
+                     "Rather than describe what that would look like for "
+                     "Julian\u2019s Barber Shop, I built one and put it "
+                     "here:\n\n  https://sites.qevik.ai/site-4acac34467c34f17/"
+                     "\n\nIt is a working page, not a mock-up."),
+            "recipient": "", "channel": "",
+            "blocked_on": ["NO_VERIFIED_RECIPIENT", "NO_SENDING_IDENTITY"],
+            "traces": {"business name": "atlas_businesses.name of 4acac344",
+                       "the published address":
+                           "publication_completed of mission-000000000003",
+                       "why this business": "opportunity sig-2026082705435223"},
+            "state": "PREPARED", "sendable": False,
+        },
+    },
     "/api/missions/mission-000000000003/history": {"history": [
         {"updated_at": "2026-08-27T05:47:30Z", "status": "complete",
          "claimed_by": "worker-delivery", "note": "report written"}]},
