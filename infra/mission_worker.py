@@ -504,7 +504,8 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                                     signal_id=mission.signal_id,
                                     publishes=mission.publishes,
                                     scratch_root=str(scratch_root),
-                                    source_workspace=source_workspace))
+                                    source_workspace=source_workspace,
+                                    mission_id=mission.id))
         log.info("%s: recipe %s%s%s", mission.id, mission.recipe,
                  "" if memory is None else " (business memory available)",
                  f" delivering {mission.signal_id}" if mission.signal_id else "")

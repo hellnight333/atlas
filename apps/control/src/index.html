@@ -764,6 +764,11 @@ async function missionDetail(id) {
 function deliveryCard(d) {
   const files = d.files || [];
   const reviews = d.reviews || [];
+  /* The most recent publication, from the API's own record. Once something is
+     live the publish control goes away: publishing it again is a new decision
+     and should start from the queue, not from a button that is still sitting
+     there from the last time. */
+  const live = (d.published || [])[(d.published || []).length - 1] || null;
   const last = reviews.length ? reviews[reviews.length - 1] : null;
   const answers = (d.provenance || {}).addresses || [];
   const withheld = (d.provenance || {}).not_published_for_want_of_a_source || [];
@@ -807,7 +812,11 @@ function deliveryCard(d) {
         <td><button data-file="${esc(f.path)}">Read</button></td></tr>`).join('')}
       </tbody></table></div>
       <pre data-artefact hidden></pre>` : '<p class="note">No files in this commit.</p>'}
-    ${last && last.decision === 'accepted' ? `<div class="actions"
+    ${live ? `<p>${pill('published', 'ok')}
+      <span class="note">live at <code>${esc(live.url || live.site_id || '')}</code>
+      from <code>${esc((live.commit || '').slice(0, 12))}</code> ·
+      ${when(live.at)}</span></p>` : ''}
+    ${!live && last && last.decision === 'accepted' ? `<div class="actions"
       style="margin-top:.9rem">
       <label class="note" for="publish-note">Publishing puts this in front of
         anyone with the address. It is a separate decision from accepting it,

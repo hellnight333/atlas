@@ -73,6 +73,20 @@ REVIEW_DECISIONS: frozenset[str] = frozenset({"accepted", "rejected"})
 #: work is good; this says it may leave the building.
 PUBLICATION_EVENT = "publication_approved"
 
+#: The timeline entry that records a publication having actually happened.
+#:
+#: Distinct from `PUBLICATION_EVENT`, which is somebody *authorising* one. An
+#: authorisation that was never carried out and a publication that is live are
+#: different states, and a system that could not tell them apart would report
+#: work as done because permission for it had been given.
+#:
+#: This is the **only** thing that makes a site published. Not a directory on
+#: disk, not a symlink, not an HTTP 200, not the branch: every one of those is a
+#: fact about a machine at the moment somebody looked, and a queue derived from
+#: them changes when a disk is restored or a web server is misconfigured. The
+#: timeline says what Qevik did.
+PUBLISHED_EVENT = "publication_completed"
+
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
 #: marks it — a second spelling would silently stop the rotation, and the run
@@ -623,10 +637,18 @@ class OpportunityRepository:
         review whose opportunity belongs to another tenant is not this tenant's
         work to see.
 
-        Nothing here is "not yet acted on" in any enforced sense **yet**: no
-        outward act exists to record. When publishing lands it records its own
-        event, and the filter for it belongs in the `WHERE` below — one clause,
-        beside the one that is already here.
+        **"Not yet acted on" is now enforced**, and only from the timeline. A
+        mission with a `PUBLISHED_EVENT` leaves the queue; one without stays,
+        however complete it looks on disk. Nothing here consults a directory, a
+        symlink, an HTTP status or a branch — each of those is a fact about a
+        machine at the moment somebody looked, and a queue derived from them
+        would empty itself when a web server was misconfigured and refill when
+        a disk was restored.
+
+        The authorisation is deliberately *not* what removes it. Somebody saying
+        a publication may happen and a publication having happened are different
+        states, and treating the first as the second reports work as done
+        because permission for it was given.
         """
         with SessionLocal() as session:
             rows = session.execute(
@@ -651,10 +673,16 @@ class OpportunityRepository:
                     ORDER BY event.detail->>'mission_id', event.at DESC
                 ) AS latest
                 WHERE latest.decision = 'accepted'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM atlas_business_events AS gone
+                      WHERE gone.kind = :published
+                        AND gone.detail->>'mission_id' = latest.mission_id
+                  )
                 ORDER BY latest.decided_at DESC
                 LIMIT :limit
                 """),
-                {"kind": REVIEWED_EVENT, "tenant": str(tenant or ""),
+                {"kind": REVIEWED_EVENT, "published": PUBLISHED_EVENT,
+                 "tenant": str(tenant or ""),
                  "limit": max(1, min(int(limit), 200))},
             ).mappings().all()
 
@@ -740,6 +768,80 @@ class OpportunityRepository:
                 "site_id": site_id, "actor": entry["actor"],
                 "note": note.strip()[:2000],
                 "at": entry["at"].isoformat()}
+
+    def record_publication(self, *, mission_id: str, business_id: str,
+                           signal_id: str, commit: str, site_id: str,
+                           url: str, files: list[str], actor: str,
+                           publication_mission: str = "",
+                           tenant: TenantId | None = None) -> dict:
+        """Record that this exact bundle actually went to this exact address.
+
+        Written **after** the target reported success and the address was
+        fetched, never before. A record written on intent would say a business
+        has a website because Qevik meant to give them one.
+
+        `mission_id` is the mission whose artefact was published — the same key
+        the review and the authorisation use — so the three read as one story
+        about one artefact. `publication_mission` is the mission that did the
+        publishing, kept beside it because "which run put this live" is a
+        different question from "what was put live".
+        """
+        if not commit.strip():
+            raise NotApprovable(
+                "a publication record must name the commit that went out")
+        entry = {"id": f"evt-{uuid4().hex[:12]}", "business_id": business_id,
+                 "factory": "opportunity", "kind": PUBLISHED_EVENT,
+                 "opportunity_id": signal_id, "actor": actor.strip() or "system",
+                 "detail": json.dumps({"mission_id": mission_id,
+                                       "publication_mission": publication_mission,
+                                       "commit": commit.strip(),
+                                       "site_id": site_id, "url": url,
+                                       "files": sorted(files)}),
+                 "at": datetime.now(UTC)}
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """), entry)
+            session.commit()
+        return {"id": entry["id"], "mission_id": mission_id,
+                "publication_mission": publication_mission,
+                "signal_id": signal_id, "commit": commit.strip(),
+                "site_id": site_id, "url": url, "files": sorted(files),
+                "actor": entry["actor"], "at": entry["at"].isoformat()}
+
+    def publications_for(self, mission_id: str, *,
+                         tenant: TenantId | None = None) -> list[dict]:
+        """Every time this mission's artefact actually went out, oldest first."""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, actor, opportunity_id, business_id, detail, at
+                FROM atlas_business_events
+                WHERE kind = :kind AND detail->>'mission_id' = :mission
+                ORDER BY at
+                """),
+                {"kind": PUBLISHED_EVENT, "mission": mission_id},
+            ).mappings().all()
+        found = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            found.append({"id": row["id"], "actor": row["actor"],
+                          "signal_id": row["opportunity_id"],
+                          "business_id": row["business_id"],
+                          "mission_id": detail.get("mission_id", ""),
+                          "publication_mission":
+                              detail.get("publication_mission", ""),
+                          "commit": detail.get("commit", ""),
+                          "site_id": detail.get("site_id", ""),
+                          "url": detail.get("url", ""),
+                          "files": detail.get("files", []),
+                          "at": row["at"].isoformat() if row["at"] else ""})
+        return found
 
     def publication_approvals_for(self, mission_id: str, *,
                                   tenant: TenantId | None = None) -> list[dict]:

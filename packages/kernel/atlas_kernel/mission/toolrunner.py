@@ -626,7 +626,8 @@ class ToolAgent:
                  repository: object | None = None,
                  tenant: str | None = None,
                  signal_id: str = "", publishes: str = "",
-                 scratch_root: str = "", source_workspace: str = "") -> None:
+                 scratch_root: str = "", source_workspace: str = "",
+                 mission_id: str = "") -> None:
         self._recipe = recipe
         self._registry = registry
         self._client = client
@@ -665,6 +666,9 @@ class ToolAgent:
         #: The workspace of the mission being published. Resolved by the worker,
         #: which owns the ledger, and passed in — this must not guess a path.
         self._source_workspace = source_workspace
+        #: This mission's own id, recorded beside a publication so "which run
+        #: put this live" has an answer.
+        self._mission_id = mission_id
 
     @property
     def name(self) -> str:
@@ -736,6 +740,7 @@ class ToolAgent:
                                if step.tool in PUBLISHERS)
         remembered = self._remember(found)
         judged = self._audit(found)
+        self._record_publication(found)
         return AgentOutcome(
             summary=(f"{len(found.evidence)} piece(s) of evidence from "
                      f"{len(found.steps)} step(s) via "
@@ -892,6 +897,59 @@ class ToolAgent:
                  self._recipe.delivers, business.name, ", ".join(sorted(observed)))
         return Delivery(offer_id=self._recipe.delivers, business=business,
                         research=research)
+
+    def _record_publication(self, found: Result) -> None:
+        """Write the timeline entry that makes this artefact published.
+
+        **After the fact, and only on the fact.** The step it reads has already
+        put the files on the host and fetched the address; a record written on
+        intent would say a business has a website because Qevik meant to give
+        them one.
+
+        It carries the same `mission_id` the review and the authorisation carry
+        — the mission whose artefact went out — so the three read as one story
+        rather than three about different keys. Which run did the publishing is
+        a separate field, because "what is live" and "which attempt put it
+        there" are different questions.
+
+        A failure to record does not fail the run: the page is live either way,
+        and the honest response to a database that was briefly away is to say so
+        rather than to claim the publication did not happen.
+        """
+        if not self._recipe.publishes or self._repository is None:
+            return
+        published = [step for step in found.steps
+                     if step.tool in PUBLISHERS and step.passed]
+        if not published:
+            return
+
+        signal = self._repository.get_signal(self._signal_id,
+                                             tenant=self._tenant)
+        for step in published:
+            observed = (step.evidence[0].observed if step.evidence else {})
+            try:
+                self._repository.record_publication(
+                    mission_id=self._publishes,
+                    business_id=(signal or {}).get("business_id", ""),
+                    signal_id=self._signal_id,
+                    commit=observed.get("commit", ""),
+                    site_id=observed.get("site_id", step.invoked),
+                    url=(step.evidence[0].source if step.evidence else ""),
+                    files=list(step.files),
+                    actor=f"recipe:{self._recipe.id}",
+                    publication_mission=self._mission_id,
+                    tenant=self._tenant)
+            except Exception:                     # noqa: BLE001 - reported
+                log.exception(
+                    "published %s but could not record it; the page is live and "
+                    "the queue will still show it as waiting", step.invoked)
+                found.steps.append(Step(
+                    tool="record", invoked=step.invoked,
+                    proves="the publication was written to the timeline",
+                    passed=False,
+                    detail=("the page is live and the record was not written. "
+                            "The queue will still show this as awaiting "
+                            "publication, which is the safe direction.")))
 
     def _publication(self) -> "Publication | None":
         """The bundle a person authorised, read from the commit they named.

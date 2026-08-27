@@ -606,6 +606,11 @@ def build_router() -> APIRouter:
 
         memory = _opportunities(request)
         reviews = memory.reviews_for(mission_id, tenant=tenant)
+        # Where this artefact has actually got to, read from the timeline. A
+        # surface that worked it out from the presence of a directory would
+        # report a site as live because a disk had it.
+        published = memory.publications_for(mission_id, tenant=tenant)
+        authorised = memory.publication_approvals_for(mission_id, tenant=tenant)
         chain = {
             "signal_id": summary.get("signal_id") or "",
             "approved_scope": summary.get("approved_scope") or "",
@@ -621,6 +626,15 @@ def build_router() -> APIRouter:
             "branch": reader.branch_of(mission_id),
             "report_path": summary.get("report_path") or "",
             "status": summary.get("status") or "",
+            # Three states, told apart: reviewed and waiting, authorised and not
+            # yet out, or live. Never inferred from a machine.
+            "publication_state": ("PUBLISHED" if published
+                                  else "AUTHORISED" if authorised
+                                  else "ACCEPTED"
+                                  if reviews and reviews[-1]["decision"] == "accepted"
+                                  else "NOT_REVIEWED"),
+            "published": published,
+            "authorised": authorised,
         }
         try:
             found = reader.files(mission_id, workspace, scratch=scratch)

@@ -137,6 +137,15 @@ FIXTURES: dict[str, object] = {
         "reviews": [{"decision": "accepted", "actor": "ayoub",
                      "at": "2026-08-27T06:29:42Z", "note": "Reads well.",
                      "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331"}],
+        "publication_state": "PUBLISHED",
+        "authorised": [{"actor": "ayoub", "commit": "2d77a5f27c68",
+                        "site_id": "site-4acac34467c34f17"}],
+        "published": [{"url": "https://sites.qevik.ai/site-4acac34467c34f17/",
+                       "site_id": "site-4acac34467c34f17",
+                       "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331",
+                       "at": "2026-08-27T11:18:00Z",
+                       "files": ["index.html", "provenance.json",
+                                 "robots.txt", "sitemap.xml"]}],
     },
     # Two real shapes: one the source was silent about, one merely new. Both
     # with UNKNOWN worth, because nothing has measured one.

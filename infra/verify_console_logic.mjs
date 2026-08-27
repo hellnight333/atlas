@@ -348,6 +348,23 @@ check('an unreviewed artefact says nobody has decided',
 check('...and a reviewed one shows the decision and who made it',
       /accepted/.test(deliveryCard({ ...DELIVERY,
         reviews: [{ decision: 'accepted', actor: 'ayoub', at: '', note: '' }] })));
+const livePublished = deliveryCard({ ...DELIVERY,
+  reviews: [{ decision: 'accepted', actor: 'ayoub', at: '', note: '' }],
+  published: [{ url: 'https://sites.qevik.ai/site-1/', site_id: 'site-1',
+                commit: '0123456789abcdef', at: '2026-08-27T11:18:00Z' }] });
+check('a published artefact says so', /published/.test(livePublished));
+check('...showing the address and the commit that went out',
+      /sites\.qevik\.ai\/site-1/.test(livePublished)
+      && /0123456789ab/.test(livePublished));
+check('...and the publish control is gone',
+      !/data-publish/.test(livePublished),
+      'republishing is a new decision, not a button left over from the last one');
+check('NEGATIVE CONTROL: an accepted, unpublished one offers it',
+      /data-publish/.test(deliveryCard({ ...DELIVERY,
+        reviews: [{ decision: 'accepted', actor: 'a', at: '', note: '' }] })));
+check('...and an unreviewed one does not',
+      !/data-publish/.test(delivery));
+
 check('accepting is described as recording, not publishing',
       /does not publish/.test(delivery) && /does not contact anyone/.test(delivery));
 

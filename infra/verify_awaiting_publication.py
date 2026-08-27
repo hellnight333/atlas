@@ -25,6 +25,7 @@ from atlas_kernel.db import SessionLocal, init_db  # noqa: E402
 from atlas_kernel.mission import artefact  # noqa: E402
 from atlas_kernel.opportunity.models import Business  # noqa: E402
 from atlas_kernel.opportunity.repository import (  # noqa: E402
+    NotApprovable,
     OpportunityRepository,
 )
 
@@ -210,6 +211,126 @@ for forbidden, why in (("atlas_missions", "mission status"),
     check(f"the queue does not consult {why}", forbidden not in body)
 check("it reads the review events", "REVIEWED_EVENT" in body)
 check("...and takes the latest per mission", "DISTINCT ON" in body)
+
+print("\n-- ACCEPTED -> AWAITING_PUBLICATION -> PUBLISHED ----------------------")
+# The three states, told apart from the timeline alone. Nothing below inspects a
+# directory, a symlink, an HTTP status or a branch.
+PUBLISHED_M = "mission-awaitproof-p"
+biz_p, sig_p = a_signal("P", MINE)
+repo_p, commit_p = a_commit(PUBLISHED_M, "<html><body>published</body></html>")
+repo.record_review(mission_id=PUBLISHED_M, business_id=biz_p, signal_id=sig_p,
+                   decision="accepted", actor="ayoub", commit=commit_p)
+
+waiting = {r["mission_id"] for r in repo.awaiting_publication(tenant=MINE)}
+check("accepted but not published: it waits", PUBLISHED_M in waiting)
+check("...and says so", next(r["state"] for r in repo.awaiting_publication(
+    tenant=MINE) if r["mission_id"] == PUBLISHED_M) == "AWAITING_PUBLICATION")
+
+# An *authorisation* is not a publication. This is the distinction that decides
+# whether the queue reports work as done because permission for it was given.
+repo.approve_publication(mission_id=PUBLISHED_M, business_id=biz_p,
+                         signal_id=sig_p, commit=commit_p,
+                         site_id="site-probe", actor="ayoub", tenant=MINE)
+check("authorised but not yet published: it still waits",
+      PUBLISHED_M in {r["mission_id"]
+                      for r in repo.awaiting_publication(tenant=MINE)},
+      "permission to publish is not a publication")
+
+recorded = repo.record_publication(
+    mission_id=PUBLISHED_M, business_id=biz_p, signal_id=sig_p,
+    commit=commit_p, site_id="site-probe",
+    url="https://sites.qevik.ai/site-probe/", files=["index.html"],
+    actor="recipe:publish-website", publication_mission="mission-pub-run-1",
+    tenant=MINE)
+check("the record binds the mission, opportunity, commit and site",
+      recorded["mission_id"] == PUBLISHED_M
+      and recorded["signal_id"] == sig_p
+      and recorded["commit"] == commit_p
+      and recorded["site_id"] == "site-probe")
+check("...and which run put it there",
+      recorded["publication_mission"] == "mission-pub-run-1")
+
+after = {r["mission_id"] for r in repo.awaiting_publication(tenant=MINE)}
+check("PUBLISHED: it leaves the queue", PUBLISHED_M not in after, str(sorted(after)))
+check("NEGATIVE CONTROL: the accepted-only one is still there",
+      ACCEPTED in after,
+      "the filter removed the published one, not the queue")
+
+for _ in range(3):
+    repo.record_publication(
+        mission_id=PUBLISHED_M, business_id=biz_p, signal_id=sig_p,
+        commit=commit_p, site_id="site-probe",
+        url="https://sites.qevik.ai/site-probe/", files=["index.html"],
+        actor="recipe:publish-website", tenant=MINE)
+check("duplicate publication records still mean one state",
+      PUBLISHED_M not in {r["mission_id"]
+                          for r in repo.awaiting_publication(tenant=MINE)}
+      and len(repo.publications_for(PUBLISHED_M)) == 4,
+      f"{len(repo.publications_for(PUBLISHED_M))} records, still absent once")
+
+# A publication recorded against a *different* mission must not close this one.
+repo.record_publication(mission_id="mission-somebody-else", business_id=biz_a,
+                        signal_id=sig_a, commit=commit_a, site_id="site-other",
+                        url="https://sites.qevik.ai/site-other/",
+                        files=["index.html"], actor="probe", tenant=MINE)
+check("a publication of another mission does not close this one",
+      ACCEPTED in {r["mission_id"]
+                   for r in repo.awaiting_publication(tenant=MINE)},
+      "the queue is keyed on the mission whose artefact went out")
+
+try:
+    repo.record_publication(mission_id=PUBLISHED_M, business_id=biz_p,
+                            signal_id=sig_p, commit="", site_id="site-probe",
+                            url="u", files=[], actor="probe", tenant=MINE)
+    check("a publication record naming no commit is refused", False)
+except NotApprovable as refused:
+    check("a publication record naming no commit is refused", True,
+          str(refused)[:56])
+
+print("\n-- the branch moves; the state does not -------------------------------")
+subprocess.run(["git", "-C", str(repo_p), "checkout", "-q",
+                artefact.branch_of(PUBLISHED_M)], check=True)
+(repo_p / "artefact" / "index.html").write_text("<html>rebuilt</html>",
+                                                encoding="utf-8")
+subprocess.run(["git", "-C", str(repo_p), "add", "-A"], check=True)
+subprocess.run(["git", "-C", str(repo_p), "commit", "-q", "-m", "rebuilt"],
+               check=True)
+subprocess.run(["git", "-C", str(repo_p), "checkout", "-q", "base"], check=True)
+check("the branch moved after publication",
+      artefact.commit_of(PUBLISHED_M, str(repo_p), scratch=scratch) != commit_p)
+check("...and the mission is still published, not back in the queue",
+      PUBLISHED_M not in {r["mission_id"]
+                          for r in repo.awaiting_publication(tenant=MINE)})
+check("...still naming the commit that actually went out",
+      all(r["commit"] == commit_p for r in repo.publications_for(PUBLISHED_M)),
+      commit_p[:12])
+
+print("\n-- the state comes from the timeline, not from a machine --------------")
+# The **calls it makes**, not the words it contains. Scanning for vocabulary
+# flagged this function's own docstring — which says it consults no symlink —
+# and the `min(int(limit), 200)` row cap. A checker that fails on a caveat
+# explaining the property is a checker measuring prose.
+import ast  # noqa: E402
+
+tree = ast.parse(source)
+function = next(node for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "awaiting_publication")
+code = ast.unparse(function)
+if ast.get_docstring(function):
+    code = code.replace(ast.get_docstring(function), "")
+
+for forbidden, why in (("Path(", "the filesystem"), ("open(", "a file"),
+                       ("subprocess", "a subprocess"), ("httpx", "HTTP"),
+                       ("urllib", "HTTP"), ("os.", "the operating system"),
+                       ("exists(", "whether something is on disk"),
+                       ("readlink", "a symlink"), ("is_dir", "a directory")):
+    check(f"the queue does not reach for {why}", forbidden not in code,
+          "" if forbidden not in code else f"{forbidden!r} is called in it")
+check("it reads the publication event", "PUBLISHED_EVENT" in code)
+check("NEGATIVE CONTROL: the scan can see the calls it does make",
+      "SessionLocal" in code and "get_business" in code,
+      "so the absences above are absences and not a broken scan")
 
 print("\n-- nothing leaves the system -----------------------------------------")
 before_events = repo.reviews_for(ACCEPTED)
