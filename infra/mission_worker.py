@@ -561,6 +561,22 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
             return True, (f"{len(recorded.evidence)} piece(s) of evidence via "
                           f"{', '.join(recorded.tools_invoked)}")
 
+        if agent_choice == "publish":
+            # A publication writes to the site host and changes nothing in its
+            # workspace, so the file question is the wrong one — asked of it,
+            # every successful publication fails. It is checked on the
+            # verification fetch: the address was requested afterwards and
+            # answered, which is the only evidence that distinguishes a
+            # publication from a claim about one.
+            recorded = getattr(roles.implementer, "result", None)
+            published = getattr(roles.implementer, "published", ())
+            if recorded is None or not recorded.evidence:
+                return False, ("the mission claims a publication and recorded "
+                               "no fetch of the address, so nothing establishes "
+                               "that a visitor gets the page")
+            return True, (f"{len(published)} file(s) published, and the address "
+                          "was fetched and served them")
+
         space = held.get(mission.id)
         if space is None:
             return False, "no workspace was created"
