@@ -33,6 +33,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
+from uuid import uuid4
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -40,19 +42,69 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
-class Timeline:
-    """Append-only mission events in a file. Read by folding, never by seeking."""
+#: Which store holds the ledger. Read once, from the environment, and never
+#: guessed.
+#:
+#: `file` is still the default. A deployment moves deliberately, and a default
+#: that changed underneath one would be the migration happening by surprise.
+ENVIRONMENT = "QEVIK_LEDGER"
+FILE = "file"
+POSTGRES = "postgres"
+BACKENDS = frozenset({FILE, POSTGRES})
 
-    def __init__(self, path: Path | str) -> None:
+
+class LedgerUnavailable(RuntimeError):
+    """The configured store could not be reached.
+
+    Its own type because the one thing that must not happen here is a fallback.
+    A ledger that quietly reverted to the local file when the database was away
+    would give an off-host worker an empty queue and a local one a private
+    history, and neither would report anything wrong.
+    """
+
+
+class Timeline:
+    """Append-only mission events. Read by folding, never by seeking.
+
+    Two stores, one interface. The file came first and still works; Postgres
+    exists because **a file is only reachable from the machine it is on**, and a
+    worker on another machine cannot see a queue it cannot read.
+
+    The events are unchanged — `service._event` has always produced a
+    `BusinessEvent`, and `atlas_business_events` is the append-only table that
+    already holds the review, publication and outreach decisions. This is not a
+    new store; it is the events Qevik already writes going to the table Qevik
+    already has.
+
+    Ordering is not part of the contract and never was. `service.fold` takes the
+    latest event by its own `updated_at` precisely so that replay order cannot
+    matter, which is what makes reading these rows from a database — in whatever
+    order it returns them — equivalent to reading the file.
+    """
+
+    def __init__(self, path: Path | str, *, backend: str | None = None) -> None:
         self.path = Path(path)
         #: Lines that would not parse. Counted rather than raised, and exposed so
         #: a health check can notice a timeline quietly rotting.
         self.corrupt = 0
+        chosen = backend or os.environ.get(ENVIRONMENT, FILE)
+        if chosen not in BACKENDS:
+            raise ValueError(
+                f"{chosen!r} is not a ledger backend. Known: "
+                f"{', '.join(sorted(BACKENDS))}.")
+        self.backend = chosen
+
+    @property
+    def networked(self) -> bool:
+        """Whether a process on another machine could read this."""
+        return self.backend == POSTGRES
 
     def append(self, event: Any) -> None:
-        """One event, one line, one write call."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        """One event, one write. Never both stores."""
         record = _record(event)
+        if self.backend == POSTGRES:
+            return self._append_row(record)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str) + "\n")
             handle.flush()
@@ -60,12 +112,47 @@ class Timeline:
             # milliseconds. Buffered-but-unwritten is indistinguishable from
             # lost to that reader.
             os.fsync(handle.fileno())
+        return None
+
+    def _append_row(self, record: dict) -> None:
+        """One event, one row, into the table the decisions already live in."""
+        from sqlalchemy import text
+
+        from ..db import SessionLocal
+
+        try:
+            with SessionLocal() as session:
+                session.execute(
+                    text("""
+                    INSERT INTO atlas_business_events
+                        (id, business_id, factory, kind, actor, detail, at)
+                    VALUES (:id, :business_id, :factory, :kind, :actor,
+                            :detail, :at)
+                    """),
+                    {"id": f"evt-{uuid4().hex[:12]}",
+                     "business_id": record.get("business_id", ""),
+                     "factory": record.get("factory", ""),
+                     "kind": record.get("kind", ""),
+                     "actor": record.get("actor", ""),
+                     "detail": json.dumps(record.get("detail") or {},
+                                          default=str),
+                     "at": datetime.now(UTC)})
+                session.commit()
+        except Exception as unreachable:           # noqa: BLE001 - re-raised
+            # Raised, never swallowed. See `LedgerUnavailable`: a fallback here
+            # is a split-brain queue nobody is told about.
+            raise LedgerUnavailable(
+                f"could not append to the ledger: {unreachable}"[:300]
+            ) from unreachable
 
     def read(self) -> list[dict]:
         """Every event, oldest first, skipping anything that will not parse."""
         return list(self)
 
     def __iter__(self) -> Iterator[dict]:
+        if self.backend == POSTGRES:
+            yield from self._rows()
+            return
         if not self.path.exists():
             return
         self.corrupt = 0
@@ -79,6 +166,45 @@ class Timeline:
                     self.corrupt += 1
                     log.warning("timeline %s: line %d will not parse, skipped",
                                 self.path, number)
+
+    def _rows(self) -> Iterator[dict]:
+        """Every mission event, in the shape the file produces.
+
+        Filtered to this factory. `atlas_business_events` is shared — the
+        opportunity factory's reviews and publications live in it too — and a
+        reader that took every row would fold decisions about businesses into
+        the mission list.
+        """
+        from sqlalchemy import text
+
+        from ..db import SessionLocal
+        from .service import FACTORY
+
+        try:
+            with SessionLocal() as session:
+                rows = session.execute(
+                    text("""
+                    SELECT business_id, factory, kind, actor, detail
+                    FROM atlas_business_events
+                    WHERE factory = :factory
+                    ORDER BY at, id
+                    """), {"factory": FACTORY}).mappings().all()
+        except Exception as unreachable:           # noqa: BLE001 - re-raised
+            raise LedgerUnavailable(
+                f"could not read the ledger: {unreachable}"[:300]
+            ) from unreachable
+
+        for row in rows:
+            detail = row["detail"]
+            if isinstance(detail, str):
+                try:
+                    detail = json.loads(detail)
+                except json.JSONDecodeError:
+                    self.corrupt += 1
+                    continue
+            yield {"kind": row["kind"], "factory": row["factory"],
+                   "actor": row["actor"], "business_id": row["business_id"],
+                   "detail": detail or {}}
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
