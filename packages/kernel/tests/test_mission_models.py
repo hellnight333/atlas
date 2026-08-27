@@ -78,3 +78,26 @@ def test_a_reviewer_who_may_only_read_cannot_record_a_decision():
         assert Scope.EXECUTE not in _scopes_of(routes[readable]), (
             f"{readable} demands EXECUTE to *look*, which makes reviewing "
             "something only the person who can decide may do")
+
+
+def test_the_control_plane_and_the_workers_agree_on_the_scratch_root():
+    """The worker writes the artefact there and the control plane reads it. Two
+    defaults that happen to agree today is not agreement."""
+    import re
+    from pathlib import Path
+
+    from atlas_kernel.mission import artefact
+
+    infra = Path(__file__).resolve().parents[3] / "infra"
+    control = (infra / "qevik-control.service").read_text()
+    declared = re.search(r"Environment=QEVIK_SCRATCH=(\S+)", control)
+    assert declared, "the control unit does not declare QEVIK_SCRATCH"
+
+    for unit in infra.glob("qevik-worker*.service"):
+        used = re.search(r"--scratch\s+(\S+)", unit.read_text())
+        if used:
+            assert used.group(1) == declared.group(1), (
+                f"{unit.name} writes scratch to {used.group(1)} and the control "
+                f"plane reads {declared.group(1)}")
+    assert artefact.DEFAULT_ROOT == declared.group(1), (
+        "the reader's default disagrees with the deployment")

@@ -24,6 +24,12 @@ EnvironmentFile=/opt/qevik/atlas.env
 EnvironmentFile=-/opt/qevik/control.env
 Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
 Environment=QEVIK_STATE=/var/lib/qevik/control
+# Where the workers put mission scratch clones, and therefore where a delivered
+# artefact is. Must match `--scratch` in the worker units: the worker writes it
+# and this reads it, and a disagreement is a review surface that reports every
+# artefact as missing while every mission looks fine. Stated rather than left to
+# two defaults that happen to agree today.
+Environment=QEVIK_SCRATCH=/var/lib/qevik/scratch
 ExecStart=/opt/qevik/atlas/.venv/bin/python -m uvicorn \
   --factory atlas_kernel.qevik.app:from_environment \
   --host 127.0.0.1 --port 8081 --workers 1
