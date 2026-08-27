@@ -144,6 +144,13 @@ class Recipe(BaseModel):
     #: other half of that pair — so a mission whose recipe was swapped after
     #: approval names an offer the approval never mentioned, and says so.
     delivers: str = ""
+    #: Which offer's artefact this recipe **publishes**, by id. Empty for
+    #: everything that does not leave the building.
+    #:
+    #: Separate from `delivers` because building and publishing are separate
+    #: acts with separate approvals, and a single field covering both would let
+    #: a recipe that was approved to build become one that publishes.
+    publishes: str = ""
     #: An audit is not an extractor. An extractor turns a source's own
     #: statements into a sighting — what OpenStreetMap says a clinic is called.
     #: An audit turns a business's own server's reply into findings about that
@@ -193,7 +200,7 @@ class Recipe(BaseModel):
     #: Adding a field here is a one-line decision in the same file as the field.
     #: A test checks every name is real, so a rename cannot quietly empty it.
     MEMORY_FIELDS: ClassVar[tuple[str, ...]] = (
-        "extractor", "audit", "targets_from", "delivers")
+        "extractor", "audit", "targets_from", "delivers", "publishes")
 
     @property
     def needs_memory(self) -> bool:
@@ -232,7 +239,8 @@ class Recipe(BaseModel):
                 "tools": list(self.tools), "steps": len(self.steps),
                 "targets_from": self.targets_from,
                 "extractor": self.extractor, "audit": self.audit,
-                "delivers": self.delivers, "notes": self.notes}
+                "delivers": self.delivers, "publishes": self.publishes,
+                "notes": self.notes}
 
 
 def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
@@ -312,6 +320,23 @@ def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
                 "declared offer is what bounds the work; a recipe pointing "
                 "somewhere else would run one capability under another's "
                 "declared blast radius.")
+
+    if recipe.publishes:
+        from ..execution.capabilities import EXECUTORS
+        if recipe.publishes not in EXECUTORS:
+            raise RecipeRefused(
+                f"{recipe.id} publishes {recipe.publishes!r}, which nothing "
+                "produces. A publication recipe for an offer no executor can "
+                "build would be a way to publish something that never existed.")
+        if agent.offer_id != recipe.publishes:
+            raise RecipeRefused(
+                f"{recipe.id} publishes {recipe.publishes!r} and {agent.id} is "
+                f"registered for {agent.offer_id or 'no offer'}.")
+    if recipe.delivers and recipe.publishes:
+        raise RecipeRefused(
+            f"{recipe.id} both builds and publishes. They are separate acts "
+            "with separate approvals, and one recipe doing both would carry "
+            "the build's authorisation into the publication.")
 
     if agent.capability is not recipe.capability:
         raise RecipeRefused(
@@ -434,6 +459,29 @@ RECIPES: tuple[Recipe, ...] = (
                "a site; splitting that into recipe steps would move a decision "
                "out of reviewed code and into a declaration that only looks "
                "like one."),
+    ),
+    Recipe(
+        id="publish-website",
+        does=("Put an artefact a person accepted, and separately authorised, "
+              "on Qevik's public site host, and prove a visitor gets it."),
+        agent_id="site-publisher",
+        capability=Capability.PUBLISH,
+        publishes="offer-website",
+        steps=(
+            Step(tool="site-publish", command=("offer-website",),
+                 proves="which bytes went to which address, and that fetching "
+                        "that address afterwards returned them"),
+        ),
+        notes=("The only recipe that makes anything public, run by the only "
+               "agent that can.\n\n"
+               "It publishes **the commit an authorisation named**, read out of "
+               "that mission's own branch. Not the branch head: a branch can be "
+               "rebuilt, and publishing its head would put bytes nobody "
+               "reviewed in front of strangers under an approval given for "
+               "different ones.\n\n"
+               "The address is derived from the business and validated as a "
+               "bare key, so there is no request that can name a directory. "
+               "`site-publish` is not a shell and cannot reach one."),
     ),
     Recipe(
         id="discover-uae-dental",

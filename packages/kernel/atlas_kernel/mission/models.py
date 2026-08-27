@@ -227,6 +227,14 @@ class Mission(BaseModel):
     #: so a later edit to the opportunity cannot silently restate what was
     #: approved.
     evidence_fingerprints: tuple[str, ...] = ()
+    #: The mission whose artefact this one publishes. Empty for everything that
+    #: is not a publication.
+    #:
+    #: One field, not four. The commit and the address are re-read from the
+    #: authorisation at execution rather than carried here: a mission that held
+    #: them could have them edited between the approval and the run, and then
+    #: the record and the act would disagree with nothing to say which was right.
+    publishes: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -268,6 +276,7 @@ class Mission(BaseModel):
             "signal_id": self.signal_id,
             "approved_scope": self.approved_scope,
             "evidence_fingerprints": list(self.evidence_fingerprints),
+            "publishes": self.publishes,
             "total_cost": self.total_cost,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),

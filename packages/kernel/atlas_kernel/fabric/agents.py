@@ -59,6 +59,11 @@ class Capability(StrEnum):
     VERIFY = "verify"
     WRITE = "write"
     TRANSLATE_CHECK = "translate_check"
+    #: Put an approved artefact in front of the public. Its own capability
+    #: rather than a mode of IMPLEMENT: building a thing and publishing it are
+    #: answerable differently by the same person, which is exactly why the
+    #: second approval exists.
+    PUBLISH = "publish"
     # Everything below is designed and has no backend yet. Recorded so the gap
     # is visible in the registry rather than being an absence nobody can see.
     BROWSE = "browse"
@@ -253,6 +258,17 @@ AGENTS: tuple[Agent, ...] = (
           capability=Capability.IMPLEMENT, backend=Backend.EXECUTOR,
           offer_id="offer-website", tools=("website-generator",),
           notes="Evidence in, multi-page bundle out. Invents nothing."),
+    Agent(id="site-publisher", name="Site publisher",
+          capability=Capability.PUBLISH, backend=Backend.EXECUTOR,
+          offer_id="offer-website", tools=("site-publish",),
+          blast=Blast.IRREVERSIBLE,
+          notes="The only agent that can make anything public. It holds one "
+                "tool and that tool is not a shell: it publishes the bundle an "
+                "approval named, to the address that approval named, and has "
+                "no way to reach anything else.\n\n"
+                "Separate from `website-builder` so that building a site does "
+                "not carry the power to publish one. The builder's tool list "
+                "is unchanged by this agent existing."),
     Agent(id="portfolio-builder", name="Portfolio builder",
           capability=Capability.IMPLEMENT, backend=Backend.EXECUTOR,
           offer_id="offer-portfolio-system", tools=("website-generator",)),

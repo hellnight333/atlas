@@ -284,6 +284,19 @@ def blockers(missions: list[dict]) -> dict:
     }
 
 
+class PublishRequest(BaseModel):
+    """Authorising one exact bundle to go to one exact address.
+
+    `commit` is required and is what the operator was looking at. The address is
+    **not** a field: it is derived from the business, because a request that
+    could name a destination could name a directory.
+    """
+
+    commit: str = Field(min_length=7, max_length=64,
+                        pattern="^[0-9a-f]+$")
+    note: str = Field(default="", max_length=2000)
+
+
 class Review(BaseModel):
     """A person's decision about a delivered artefact.
 
@@ -685,6 +698,73 @@ def build_router() -> APIRouter:
         except NotApprovable as refused:
             raise HTTPException(status_code=400, detail=str(refused)) from refused
         return recorded
+
+    @router.post("/{mission_id}/publish", status_code=201)
+    def publish(mission_id: str, body: PublishRequest, request: Request,
+                tenant: TenantId = Depends(current_tenant),
+                user: User = Depends(requires(Scope.PUBLISH))) -> dict:
+        """Authorise publishing this artefact, and create the mission that does.
+
+        `Scope.PUBLISH`, not EXECUTE. Reviewing says the work is good; this puts
+        it in front of strangers, and the two are answerable differently by the
+        same person — which is the whole reason there are two decisions.
+
+        Nothing here publishes. It records an authorisation and creates a
+        mission, and the mission goes through `policy.decide` like every other:
+        the agent's blast radius is IRREVERSIBLE, so policy has the last word on
+        whether a person is asked again before it runs.
+        """
+        from ..opportunity.repository import NotApprovable
+        from . import publication as bridge
+
+        summary = _one(request, mission_id, tenant)
+        if not summary.get("signal_id"):
+            raise HTTPException(
+                status_code=422,
+                detail="this mission delivered nothing, so there is nothing "
+                       "to publish.")
+        memory = _opportunities(request)
+        signal = memory.get_signal(summary["signal_id"], tenant=tenant)
+        if signal is None:
+            raise HTTPException(status_code=404,
+                                detail="the opportunity is not there")
+
+        from ..opportunity.tenancy import ALL_TENANTS
+
+        business = memory.get_business(signal["business_id"],
+                                       tenant=ALL_TENANTS)
+        if business is None:
+            raise HTTPException(status_code=422,
+                                detail="no business to publish for")
+        try:
+            site_id = bridge.site_for(business.id)
+        except bridge.NotPublishable as refused:
+            raise HTTPException(status_code=422, detail=str(refused)) from refused
+
+        try:
+            approval = memory.approve_publication(
+                mission_id=mission_id, business_id=business.id,
+                signal_id=signal["id"], commit=body.commit, site_id=site_id,
+                actor=user.username, note=body.note, tenant=tenant)
+        except NotApprovable as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+        registry = origin_registry(request)
+        origin = registry.resolve(origins.EMPTY_NAME)
+        try:
+            mission, events = bridge.enqueue(
+                approval, signal, tenant=tenant, origin=origin,
+                actor=user.username, business_id=business.id)
+        except bridge.NotPublishable as refused:
+            raise HTTPException(status_code=422, detail=str(refused)) from refused
+
+        for event in events:
+            _append(request, event)
+        # The site id is an address, not a path. What is returned is the
+        # publication mission and what it was authorised to do — never where
+        # anything sits on a disk.
+        return {**mission.summary(), "publishes": mission_id,
+                "commit": approval["commit"], "site_id": site_id}
 
     @router.post("/deliver", status_code=201)
     def deliver(body: Delivery, request: Request,

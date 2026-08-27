@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,8 +77,17 @@ COMMANDS: frozenset[str] = frozenset({"shell", "filesystem", "git-worktree"})
 #: invoke `website-generator`" while `_generate` sat directly below, waiting.
 FETCHERS: frozenset[str] = frozenset({"http-fetch", "dns"})
 GENERATORS: frozenset[str] = frozenset({"website-generator"})
+#: The tools that make something public. One, and it is the only branch in
+#: `run` that reaches the outside world on purpose.
+PUBLISHERS: frozenset[str] = frozenset({"site-publish"})
 
-DISPATCHABLE: frozenset[str] = FETCHERS | GENERATORS | COMMANDS
+#: Where sites live and what address serves them. Read from the environment so
+#: the deployment configures them once, beside the worker's own paths.
+SITES_ROOT_ENV = "QEVIK_SITES_ROOT"
+SITES_BASE_URL_ENV = "QEVIK_SITES_BASE_URL"
+DEFAULT_SITES_ROOT = "/srv/sites"
+
+DISPATCHABLE: frozenset[str] = FETCHERS | GENERATORS | PUBLISHERS | COMMANDS
 
 
 log = logging.getLogger(__name__)
@@ -216,6 +226,7 @@ def refusals(recipe: Recipe, agent: Agent) -> list[str]:
 
 
 def run(recipe: Recipe, *, delivery: Delivery | None = None,
+        publication: "Publication | None" = None,
         registry: Registry | None = None,
         workspace: Path | None = None,
         client: object | None = None,
@@ -274,6 +285,8 @@ def run(recipe: Recipe, *, delivery: Delivery | None = None,
             done = _resolve(step)
         elif step.tool == "website-generator":
             done = _generate(step, delivery=delivery, workspace=workspace)
+        elif step.tool == "site-publish":
+            done = _publish(step, publication=publication)
         elif step.tool in COMMANDS:
             done = _command(step, agent=agent, workspace=workspace,
                             registry=registry)
@@ -327,6 +340,23 @@ def _fetch(step, *, allowed: frozenset[str], client: object | None,
     return Step(tool=step.tool, invoked=", ".join(step.command)[:200],
                 proves=step.proves, passed=passed, evidence=recorded,
                 detail=detail)
+
+
+@dataclass(frozen=True)
+class Publication:
+    """One authorised publication, assembled before the recipe runs.
+
+    The bytes are already here. They were read from the commit the
+    authorisation named, by the read-only artefact reader, before anything
+    outward could happen — so the tool that publishes has nothing to decide and
+    no way to reach a different version.
+    """
+
+    site_id: str
+    commit: str
+    source_mission: str
+    #: Relative path -> contents, exactly as the reviewed commit holds them.
+    files: dict
 
 
 @dataclass(frozen=True)
@@ -408,6 +438,69 @@ def _generate(step, *, delivery: Delivery | None, workspace: Path | None) -> Ste
                 files=tuple(written),
                 detail=(f"{len(written)} file(s): {', '.join(written[:6])}"
                         + ("…" if len(written) > 6 else "")))
+
+
+def _publish(step, *, publication: "Publication | None") -> Step:
+    """Put an authorised bundle on the public host and prove it serves.
+
+    The only outward act in this module. Everything it needs was decided
+    before it ran: which bytes, which address, on whose authority. It has no
+    parameters of its own and no way to reach a bundle, a version or a
+    destination that an approval did not name.
+
+    Publish and promote are separate calls because the target separates them,
+    and the verification after promotion is what makes the outcome honest — a
+    symlink swap is invisible from here and a 404 is what a visitor gets.
+    """
+    from ..website.targets.public_host import (
+        DeploymentUnreachable,
+        PublicHostTarget,
+    )
+
+    if publication is None:
+        return Step(tool=step.tool, invoked="", proves=step.proves, passed=False,
+                    detail=("nothing authorised a publication. An accepted "
+                            "artefact is not an instruction to publish it."))
+    if not publication.files:
+        return Step(tool=step.tool, invoked=publication.site_id,
+                    proves=step.proves, passed=False,
+                    detail="the authorised commit holds no publishable files")
+
+    base = os.environ.get(SITES_BASE_URL_ENV, "")
+    root = os.environ.get(SITES_ROOT_ENV, DEFAULT_SITES_ROOT)
+    if not base:
+        return Step(tool=step.tool, invoked=publication.site_id,
+                    proves=step.proves, passed=False,
+                    detail=(f"{SITES_BASE_URL_ENV} is not configured, so there "
+                            "is no address to publish to and no address to "
+                            "check afterwards."))
+
+    target = PublicHostTarget(root, base_url=base)
+    try:
+        version = target.publish(publication.site_id, publication.files)
+        url = target.promote(publication.site_id, version.id)
+    except DeploymentUnreachable as unreachable:
+        # The files are in place and the address does not serve them. Reported
+        # as the failure it is: retrying the upload achieves nothing, and
+        # claiming success here is the exact lie the target exists to prevent.
+        return Step(tool=step.tool, invoked=publication.site_id,
+                    proves=step.proves, passed=False,
+                    detail=str(unreachable)[:300])
+    except Exception as failure:              # noqa: BLE001 - recorded, not raised
+        log.exception("publication of %s failed", publication.site_id)
+        return Step(tool=step.tool, invoked=publication.site_id,
+                    proves=step.proves, passed=False,
+                    detail=f"{type(failure).__name__}: {failure}"[:300])
+    finally:
+        close = getattr(target, "close", None)
+        if callable(close):
+            close()
+
+    return Step(tool=step.tool, invoked=publication.site_id, proves=step.proves,
+                passed=True, files=tuple(sorted(publication.files)),
+                detail=(f"{len(publication.files)} file(s) at {url} from "
+                        f"{publication.commit[:12]}; the address was fetched "
+                        "and served them"))
 
 
 def _resolve(step) -> Step:
@@ -506,7 +599,8 @@ class ToolAgent:
                  check_addresses: bool = True,
                  repository: object | None = None,
                  tenant: str | None = None,
-                 signal_id: str = "") -> None:
+                 signal_id: str = "", publishes: str = "",
+                 scratch_root: str = "", source_workspace: str = "") -> None:
         self._recipe = recipe
         self._registry = registry
         self._client = client
@@ -535,6 +629,13 @@ class ToolAgent:
         self._signal_id = signal_id
         #: What the delivery step wrote, relative to the workspace.
         self.artefact: tuple[str, ...] = ()
+        #: The mission whose artefact this one publishes, when it publishes.
+        self._publishes = publishes
+        #: Where scratch clones live, so the reviewed commit can be read.
+        self._scratch_root = scratch_root
+        #: The workspace of the mission being published. Resolved by the worker,
+        #: which owns the ledger, and passed in — this must not guess a path.
+        self._source_workspace = source_workspace
 
     @property
     def name(self) -> str:
@@ -569,6 +670,7 @@ class ToolAgent:
                                         tenant=self._tenant)
         try:
             delivery = self._delivery()
+            publication = self._publication()
         except DeliveryRefused as refused:
             return AgentOutcome(
                 summary=str(refused)[:400], claims_done=False,
@@ -579,6 +681,7 @@ class ToolAgent:
                                          "decision"),))
         try:
             self.result = run(self._recipe, delivery=delivery,
+                              publication=publication,
                               registry=self._registry,
                               workspace=Path(workspace_root),
                               client=self._client,
@@ -736,6 +839,108 @@ class ToolAgent:
                  self._recipe.delivers, business.name, ", ".join(sorted(observed)))
         return Delivery(offer_id=self._recipe.delivers, business=business,
                         research=research)
+
+    def _publication(self) -> "Publication | None":
+        """The bundle a person authorised, read from the commit they named.
+
+        `None` for every recipe that publishes nothing. A refusal — never a
+        publication of something else — for one that does and cannot be
+        justified, because the failure mode here is a page in front of
+        strangers and there is no undoing that.
+
+        Six things are re-checked rather than trusted from the mission record.
+        The authorisation is read from the timeline by the mission it names; the
+        opportunity must match; the recipe must be the one that opportunity's
+        offer publishes; the artefact must still be accepted; the accepted
+        commit must be the authorised one; and the address must be the one
+        derived from the business. A mission can sit in a queue while any of
+        those changes.
+        """
+        if not self._recipe.publishes:
+            return None
+        from ..opportunity.tenancy import ALL_TENANTS, owns
+        from . import artefact as reader
+        from . import publication as bridge
+
+        if self._repository is None or not self._publishes:
+            raise DeliveryRefused(
+                f"{self._recipe.id} publishes {self._recipe.publishes} and this "
+                "mission names no authorised publication.")
+
+        approvals = self._repository.publication_approvals_for(
+            self._publishes, tenant=self._tenant)
+        if not approvals:
+            raise DeliveryRefused(
+                f"nothing authorised publishing {self._publishes}. An accepted "
+                "artefact is not an instruction to publish it.")
+        approval = approvals[-1]
+
+        signal = self._repository.get_signal(approval["signal_id"],
+                                             tenant=self._tenant)
+        if signal is None:
+            raise DeliveryRefused(
+                f"the authorisation names opportunity {approval['signal_id']}, "
+                "which is not there.")
+        if signal.get("id") != self._signal_id:
+            raise DeliveryRefused(
+                f"this mission names opportunity {self._signal_id} and the "
+                f"authorisation is for {signal.get('id')}.")
+
+        expected = bridge.recipe_for(signal)
+        if expected != self._recipe.id:
+            raise DeliveryRefused(
+                f"{approval['signal_id']} publishes through {expected!r} and "
+                f"this mission runs {self._recipe.id!r}.")
+
+        business = self._repository.get_business(signal["business_id"],
+                                                 tenant=ALL_TENANTS)
+        if business is None:
+            raise DeliveryRefused(
+                f"no business {signal['business_id']!r} to publish for.")
+        owner = getattr(business, "tenant_id", "") or ""
+        if owner and not owns(owner, self._tenant):
+            raise DeliveryRefused(
+                f"{signal['business_id']} belongs to another tenant.")
+
+        stop = bridge.refusals(approval, signal, business_id=business.id)
+        if stop:
+            raise DeliveryRefused(" ".join(stop))
+
+        # Still accepted, and still accepted *at this commit*. Both, because a
+        # review can be superseded and a branch can be rebuilt, and either one
+        # alone would let the wrong bytes out.
+        reviews = self._repository.reviews_for(self._publishes,
+                                               tenant=self._tenant)
+        if not reviews or reviews[-1]["decision"] != "accepted":
+            raise DeliveryRefused(
+                f"{self._publishes} is not accepted"
+                + (f" — the last decision was {reviews[-1]['decision']!r}"
+                   if reviews else "") + ".")
+        if reviews[-1]["commit"] != approval["commit"]:
+            raise DeliveryRefused(
+                f"the accepted artefact is {reviews[-1]['commit'][:12]} and the "
+                f"authorisation names {approval['commit'][:12]}.")
+
+        source = self._source_workspace
+        if not source:
+            raise DeliveryRefused(
+                f"the workspace of {self._publishes} is not known to this "
+                "mission, so the approved commit cannot be read.")
+        scratch = Path(self._scratch_root) if self._scratch_root else None
+        # **The authorised commit, not the branch.** This is the line that makes
+        # rebuilding a branch after approval change nothing about what is
+        # published.
+        names = reader.files_at(approval["commit"], source, scratch=scratch)
+        files = {name[len(reader.PREFIX):]:
+                 reader.read_at(approval["commit"], source, name,
+                                scratch=scratch)
+                 for name in names}
+        log.info("publishing %s of %s to %s (%d file(s))",
+                 approval["commit"][:12], self._publishes, approval["site_id"],
+                 len(files))
+        return Publication(site_id=approval["site_id"],
+                           commit=approval["commit"],
+                           source_mission=self._publishes, files=files)
 
     def _remember(self, found: Result) -> int:
         """Extract, identify, classify and persist. Returns how many were new.

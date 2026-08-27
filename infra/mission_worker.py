@@ -118,7 +118,7 @@ def roles_for(kind: str, *, tenant: str,
         log.info("self-check agent: %s", checker._adapter.describe())
         return Roles.all(checker)
 
-    if kind in {"research", "delivery"}:
+    if kind in {"research", "delivery", "publish"}:
         # Two non-coding roles, one construction. Both plan nothing, call no
         # provider, and carry out a *declared recipe* through the tools that
         # recipe's agent is registered for. What separates them is which agent
@@ -184,7 +184,8 @@ def roles_for(kind: str, *, tenant: str,
 #: are any. `fake` is deliberately absent: it is not a declared agent, and the
 #: scheduler treating it as unknown is the correct answer.
 REGISTERED_AS = {"self-check": "self-check", "llm": "implementer",
-                 "research": "researcher", "delivery": "website-builder"}
+                 "research": "researcher", "delivery": "website-builder",
+                 "publish": "site-publisher"}
 
 #: What `--agent` accepts. **Derived**, not written out again.
 #:
@@ -205,7 +206,8 @@ RESEARCH_PLACEHOLDER = "discover-uae-dental"
 #: agent with one built from the mission's own `recipe`, and a mission naming
 #: none is refused.
 PLACEHOLDERS = {"research": RESEARCH_PLACEHOLDER,
-                "delivery": "deliver-website"}
+                "delivery": "deliver-website",
+                "publish": "publish-website"}
 
 
 def queued(timeline: Timeline, *, tenant: str,
@@ -459,8 +461,8 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     # an agent to exist; this replaces it with one built from the mission in
     # hand. A mission naming no recipe is refused in `pass_once` rather than
     # defaulted — defaulting would run a recipe nobody asked for.
-    if agent_choice in {"research", "delivery"} and mission is not None \
-            and mission.recipe:
+    if agent_choice in {"research", "delivery", "publish"} \
+            and mission is not None and mission.recipe:
         from atlas_kernel.mission.toolrunner import ToolAgent
 
         # The repository is what turns evidence into memory, and for a
@@ -483,12 +485,26 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                 log.exception("%s needs business memory and it could not be "
                               "opened; the run will produce evidence and "
                               "remember nothing", mission.recipe)
+        # The workspace of the mission being published, resolved here because
+        # this owns the ledger. A publisher that guessed the path would be a
+        # publisher that can be pointed at a directory by naming a mission.
+        source_workspace = ""
+        if mission.publishes:
+            source = next(
+                (m for m in service.fold(Timeline(timeline.path).read(),
+                                         tenant=tenant)
+                 if m["mission_id"] == mission.publishes), {})
+            source_workspace = source.get("workspace") or ""
+
         roles = Roles.all(ToolAgent(recipes.get(mission.recipe),
                                     repository=memory, tenant=tenant,
                                     # The approval, by id. The agent reads the
                                     # opportunity itself and re-checks it; this
                                     # hands over a key, never a record.
-                                    signal_id=mission.signal_id))
+                                    signal_id=mission.signal_id,
+                                    publishes=mission.publishes,
+                                    scratch_root=str(scratch_root),
+                                    source_workspace=source_workspace))
         log.info("%s: recipe %s%s%s", mission.id, mission.recipe,
                  "" if memory is None else " (business memory available)",
                  f" delivering {mission.signal_id}" if mission.signal_id else "")

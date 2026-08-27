@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,6 +127,46 @@ def branch_of(mission_id: str) -> str:
     return f"mission/{mission_id}"
 
 
+#: A git object id, and nothing that could be a branch name or a path.
+#: Publishing reads by this and never by a ref, so rebuilding a branch after an
+#: approval changes nothing about what goes out.
+COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _ref(commit: str) -> str:
+    if not COMMIT.fullmatch((commit or "").strip()):
+        raise Unreadable(
+            f"{commit!r} is not a commit id. A publication reads the object a "
+            "person approved; a name can be moved and an id cannot.")
+    return commit.strip()
+
+
+def files_at(commit: str, workspace: str, *,
+             scratch: Path | None = None) -> list[str]:
+    """The delivered paths in one specific commit.
+
+    The same guards as `files`, addressed by object id rather than by branch —
+    which is the whole point: `mission/<id>` is a name somebody can move, and an
+    approval that named a name would authorise whatever it later points at.
+    """
+    repository = _repository(workspace, scratch=scratch)
+    raw = _git(repository, "ls-tree", "-r", "--name-only", _ref(commit))
+    return sorted(name for name in raw.split() if name.startswith(PREFIX))
+
+
+def read_at(commit: str, workspace: str, path: str, *,
+            scratch: Path | None = None) -> str:
+    """One file out of one specific commit, or a refusal."""
+    if not path.startswith(PREFIX) or ".." in path.split("/"):
+        raise Unreadable(
+            f"{path!r} is not part of this delivery. Only files under "
+            f"{PREFIX!r} are artefact.")
+    repository = _repository(workspace, scratch=scratch)
+    if path not in files_at(commit, workspace, scratch=scratch):
+        raise Unreadable(f"{path!r} is not in {commit[:12]}")
+    return _git(repository, "show", f"{_ref(commit)}:{path}")
+
+
 def files(mission_id: str, workspace: str, *,
           scratch: Path | None = None) -> list[Entry]:
     """Everything the delivery produced, from the commit."""
@@ -184,6 +225,7 @@ def commit_of(mission_id: str, workspace: str, *,
                 branch_of(mission_id)).strip()
 
 
-__all__ = ["DEFAULT_ROOT", "ENVIRONMENT", "MAX_BYTES", "PREFIX", "PROVENANCE",
-           "READABLE", "Entry", "Unreadable", "branch_of", "commit_of", "files",
-           "provenance", "read", "root"]
+__all__ = ["COMMIT", "DEFAULT_ROOT", "ENVIRONMENT", "MAX_BYTES", "PREFIX",
+           "PROVENANCE", "READABLE", "Entry", "Unreadable", "branch_of",
+           "commit_of", "files", "files_at", "provenance", "read", "read_at",
+           "root"]

@@ -60,6 +60,19 @@ REVIEWED_EVENT = "artefact_reviewed"
 #: it to decide whether anything may be published.
 REVIEW_DECISIONS: frozenset[str] = frozenset({"accepted", "rejected"})
 
+#: The timeline entry that records a person authorising a publication.
+#:
+#: A **third** decision, and deliberately not a reuse of either earlier one.
+#: `opportunity_approved` answered "should Qevik do this work?" before anything
+#: existed. `artefact_reviewed` answered "is what was built any good?" about a
+#: finished thing. This answers "may this exact bundle go in front of
+#: strangers?", which the same person can answer differently from both — and
+#: unlike either, it cannot be taken back once a visitor has read the page.
+#:
+#: Nothing is published because an artefact was accepted. Acceptance says the
+#: work is good; this says it may leave the building.
+PUBLICATION_EVENT = "publication_approved"
+
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
 #: marks it — a second spelling would silently stop the rotation, and the run
@@ -665,6 +678,93 @@ class OpportunityRepository:
                 # artefact has been accepted and nothing has taken it anywhere.
                 "state": "AWAITING_PUBLICATION",
             })
+        return found
+
+    def approve_publication(self, *, mission_id: str, business_id: str,
+                            signal_id: str, commit: str, site_id: str,
+                            actor: str, note: str = "",
+                            tenant: TenantId | None = None) -> dict:
+        """Record that a person authorised publishing one exact bundle.
+
+        Every field is part of the authorisation, not context around it. The
+        commit says *which bytes*; the site says *which address*; the mission
+        and opportunity say *whose work and why*. A publication that matched
+        four of them and not the fifth is a different act, and the executing
+        side re-checks all five rather than trusting that this wrote them.
+
+        Refuses an artefact nobody accepted. Acceptance is a precondition of
+        this decision and not a substitute for it: somebody must have looked at
+        the thing, and then somebody must say it may go out.
+        """
+        if not commit.strip():
+            raise NotApprovable(
+                "a publication must name the commit it publishes. Without one "
+                "this authorises whatever the branch holds when it runs.")
+        if not actor.strip():
+            raise NotApprovable("a publication must name who authorised it")
+
+        accepted = [r for r in self.reviews_for(mission_id, tenant=tenant)]
+        if not accepted or accepted[-1]["decision"] != "accepted":
+            raise NotApprovable(
+                f"{mission_id} has no accepted review"
+                + (f" — the last decision was {accepted[-1]['decision']!r}"
+                   if accepted else "")
+                + ". Nothing is published because it exists; a person looks at "
+                  "it first.")
+        if accepted[-1]["commit"] != commit.strip():
+            raise NotApprovable(
+                f"the accepted artefact is {accepted[-1]['commit'][:12]} and "
+                f"this would publish {commit.strip()[:12]}. A publication goes "
+                "out as the bytes somebody reviewed or it does not go out.")
+
+        entry = {"id": f"evt-{uuid4().hex[:12]}", "business_id": business_id,
+                 "factory": "opportunity", "kind": PUBLICATION_EVENT,
+                 "opportunity_id": signal_id, "actor": actor.strip(),
+                 "detail": json.dumps({"mission_id": mission_id,
+                                       "commit": commit.strip(),
+                                       "site_id": site_id,
+                                       "note": note.strip()[:2000]}),
+                 "at": datetime.now(UTC)}
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """), entry)
+            session.commit()
+        return {"id": entry["id"], "mission_id": mission_id,
+                "signal_id": signal_id, "commit": commit.strip(),
+                "site_id": site_id, "actor": entry["actor"],
+                "note": note.strip()[:2000],
+                "at": entry["at"].isoformat()}
+
+    def publication_approvals_for(self, mission_id: str, *,
+                                  tenant: TenantId | None = None) -> list[dict]:
+        """Every publication a person authorised for this mission, oldest first."""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, actor, opportunity_id, business_id, detail, at
+                FROM atlas_business_events
+                WHERE kind = :kind AND detail->>'mission_id' = :mission
+                ORDER BY at
+                """),
+                {"kind": PUBLICATION_EVENT, "mission": mission_id},
+            ).mappings().all()
+        found = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            found.append({"id": row["id"], "actor": row["actor"],
+                          "signal_id": row["opportunity_id"],
+                          "business_id": row["business_id"],
+                          "mission_id": detail.get("mission_id", ""),
+                          "commit": detail.get("commit", ""),
+                          "site_id": detail.get("site_id", ""),
+                          "note": detail.get("note", ""),
+                          "at": row["at"].isoformat() if row["at"] else ""})
         return found
 
     def reviews_for(self, mission_id: str, *,

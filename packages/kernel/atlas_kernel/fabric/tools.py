@@ -104,6 +104,30 @@ TOOLS: tuple[Tool, ...] = (
          notes="Produces a bundle. Publishing it is a separate, approved act "
                "with its own artefact approval over the published bytes."),
 
+    # -- leaves the building -----------------------------------------------
+    Tool(id="site-publish",
+         does="Put an already-approved website bundle on the public host and "
+              "point its address at it",
+         # Not REVERSIBLE. `rollback` exists and restores the previous version,
+         # but between publishing and rolling back the page was on the internet
+         # and somebody may have read it. What a stranger has already seen
+         # cannot be un-seen, and calling that reversible because a symlink can
+         # be moved back is the flattering answer.
+         blast=Blast.IRREVERSIBLE,
+         # It fetches the public URL afterwards to prove a visitor gets the
+         # page. That check is the reason this tool is honest about what it did,
+         # so the network is a requirement rather than a convenience.
+         network=True,
+         contained_by_sandbox=False,
+         notes="The only tool that can make anything public. Declared apart "
+               "from `website-generator` on purpose: building a bundle and "
+               "putting it in front of strangers are different acts with "
+               "different blast radii, and one tool covering both would give "
+               "every builder the second by accident.\n\n"
+               "It publishes a bundle it is handed. It does not choose the "
+               "bundle, the version or the address — all three come from an "
+               "approval a person gave, and it refuses anything else."),
+
     # -- reads the world ---------------------------------------------------
     Tool(id="http-fetch", does="Fetch a page", network=True,
          notes="Behind the SSRF guard: every resolved address, every redirect "

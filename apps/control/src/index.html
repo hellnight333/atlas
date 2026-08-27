@@ -807,6 +807,15 @@ function deliveryCard(d) {
         <td><button data-file="${esc(f.path)}">Read</button></td></tr>`).join('')}
       </tbody></table></div>
       <pre data-artefact hidden></pre>` : '<p class="note">No files in this commit.</p>'}
+    ${last && last.decision === 'accepted' ? `<div class="actions"
+      style="margin-top:.9rem">
+      <label class="note" for="publish-note">Publishing puts this in front of
+        anyone with the address. It is a separate decision from accepting it,
+        and it cannot be taken back once somebody has read the page.</label>
+      <textarea id="publish-note" rows="2" style="width:100%"></textarea>
+      <button class="danger" data-publish="${esc(d.commit || '')}">Publish
+        ${esc((d.commit || '').slice(0, 12))} &mdash; outward</button>
+      </div>` : ''}
     ${files.length ? `<div class="actions" style="margin-top:.9rem">
       <label class="note" for="review-note">What you decided, and why</label>
       <textarea id="review-note" rows="2" style="width:100%"></textarea>
@@ -838,6 +847,25 @@ function wireReview(id, delivery) {
            and the operator's session is in this page. */
         pane.textContent = got.text;
       } catch (e) { pane.textContent = e.message; }
+    });
+  });
+  document.querySelectorAll('[data-publish]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const commit = button.dataset.publish;
+      if (!window.confirm('Publish ' + commit.slice(0, 12)
+        + ' to the public site host?\n\nAnyone with the address will be able '
+        + 'to read it. This cannot be taken back.')) return;
+      button.disabled = true;
+      button.textContent = 'Authorising…';
+      try {
+        await API.post('/api/missions/' + encodeURIComponent(id) + '/publish',
+          { commit, note: (document.querySelector('#publish-note') || {}).value || '' });
+        render();
+      } catch (e) {
+        button.disabled = false;
+        button.textContent = 'Publish — outward';
+        alert(e.message);
+      }
     });
   });
   document.querySelectorAll('[data-review]').forEach((button) => {
