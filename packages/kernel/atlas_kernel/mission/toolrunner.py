@@ -730,6 +730,19 @@ class ToolAgent:
         one it had edited, and the approval would then say whatever the caller
         wanted it to.
         """
+        if self._recipe.publishes:
+            # A publication names the same opportunity a delivery did, and runs
+            # a different recipe on purpose. `_publication` owns every check for
+            # it — including its own recipe check against
+            # `publication.recipe_for` — so applying the delivery rule here
+            # would refuse the publication for not being a delivery.
+            #
+            # This does not open the delivery guard. A recipe substituted into a
+            # delivery mission still lands below unless it publishes, and one
+            # that publishes is refused by `_publication` for naming no
+            # authorisation: a delivery mission has no `publishes`.
+            return None
+
         if not self._signal_id:
             # No approval referenced. Only a *delivering* recipe is a problem
             # here: everything else is ordinary work nobody claimed an

@@ -126,3 +126,35 @@ def test_the_awaiting_queue_is_read_only_and_needs_only_read():
     assert queue.methods == {"GET"}, "the queue accepts a write method"
     assert Scope.READ in _scopes_of(queue)
     assert Scope.EXECUTE not in _scopes_of(queue)
+
+
+def test_a_publication_is_not_judged_by_the_delivery_rule():
+    """Both mission kinds name the same opportunity and run different recipes.
+
+    The delivery guard says "a mission naming an approval must run the recipe
+    that approval derived", which is right for a delivery and refuses every
+    publication — found by publishing for real, not by a test.
+    """
+    from atlas_kernel.fabric import recipes
+
+    delivery = recipes.get("deliver-website")
+    publish = recipes.get("publish-website")
+    assert delivery.delivers and not delivery.publishes
+    assert publish.publishes and not publish.delivers, (
+        "the two are told apart by these fields; a recipe with both would be "
+        "judged by whichever rule ran first")
+
+
+def test_a_publishing_recipe_cannot_smuggle_itself_into_a_delivery_mission():
+    """The delivery guard is skipped for publishing recipes, so the publication
+    guard has to be the thing that catches a substituted one."""
+    import inspect
+
+    from atlas_kernel.mission import toolrunner
+
+    source = inspect.getsource(toolrunner.ToolAgent._publication)
+    # It refuses a mission that names no publication to carry out. A delivery
+    # mission has an empty `publishes`, so a publishing recipe substituted into
+    # one is refused here rather than sliding past both guards.
+    assert "not self._publishes" in source
+    assert "names no authorised publication" in source
