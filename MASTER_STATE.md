@@ -383,10 +383,11 @@ identity, and it is a larger boundary than publishing: a page nobody visits
 harms nobody, and an email does. Do not start it without a sending identity and
 an explicit decision about approaching businesses who have not asked.
 
-The unblocked prerequisite is smaller: **a published site is not recorded as
-published anywhere a person can see.** `awaiting_publication` still lists it,
-because nothing writes the event that would take it off the queue — the seam
-left in that query. One clause and one event.
+*(That prerequisite shipped — see "Publication state, closed from the
+timeline".)*
+
+Nothing unblocked remains before outreach. The chain is complete and every state
+in it is derived from the timeline.
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -942,6 +943,70 @@ No customer domain, no DNS automation, no SSL beyond what Caddy already does for
 `sites.qevik.ai`, no multi-host publishing. The artefact ships `Disallow: /` from
 the generator, which is the right posture for a preview about a business that
 has not asked for one.
+
+## Publication state, closed from the timeline — 2026-08-27
+
+The queue query carried a documented seam: *"when publishing lands it records
+its own event, and the filter for it belongs in the `WHERE` below"*. Publishing
+landed and nothing wrote the event, so a live site stayed on the list of work
+waiting to go out.
+
+### What already existed
+
+The authorisation event (`publication_approved`), the whole approval chain, the
+publish path, and the queue query with its seam. Proven, not rebuilt.
+
+### What was missing
+
+`publication_completed`, nothing to write it, no clause to read it, and no
+published state on the API or console.
+
+| file | change |
+|---|---|
+| `opportunity/repository.py` | `PUBLISHED_EVENT`, `record_publication`, `publications_for`, the `NOT EXISTS` clause |
+| `mission/toolrunner.py` | `_record_publication`, written after the address answered |
+| `mission/api.py` | `publication_state`, `published`, `authorised` on the artefact endpoint |
+| `apps/control/src/index.html` | the `published` pill; the publish control disappears once live |
+| `infra/mission_worker.py` | passes the mission id so "which run put this live" has an answer |
+
+### Three states, from the timeline alone
+
+`ACCEPTED → AWAITING_PUBLICATION → PUBLISHED`. Nothing consults a directory, a
+symlink, an HTTP status or a branch — each is a fact about a machine at the
+moment somebody looked, and a queue derived from them empties itself when a web
+server is misconfigured and refills when a disk is restored.
+
+**An authorisation is not a publication.** Somebody saying it may happen and it
+having happened are different states, and treating the first as the second
+reports work as done because permission for it was given.
+
+### Production evidence — 27 checks, 0 failed
+
+`mission-821a8e7d171d` at `2d77a5f27c684b39297a0ad9b359d38e621eb331`,
+`site-4acac34467c34f17`. A genuine before and after: that page went live before
+the completion event existed, so it was **serving and still queued**.
+
+| | |
+|---|---|
+| before | on the queue, nothing recorded, 1,945 bytes already serving |
+| unauthenticated | 401 · read-only operator 403 · unaccepted commit 409 |
+| authorised | still queued — permission is not the act |
+| after | recorded with commit, site, opportunity and the run that did it; **0 waiting** |
+| console | reads `PUBLISHED` without inspecting a filesystem |
+| the page | HTTP/2 200, and the served bytes are byte-identical to the committed artefact — 1,945 vs 1,945 |
+| duplicates | two records, one state |
+| branch | still at the reviewed commit; no remote |
+
+Production timeline now: 3 `artefact_reviewed`, 2 `publication_approved`,
+2 `publication_completed`.
+
+### A test defect worth recording
+
+The "does not consult a machine" scan flagged this function's own docstring —
+which says it consults no symlink — and the `min(int(limit), 200)` row cap. The
+same trap as the keyword scan that flagged its own caveat two milestones ago. It
+parses the function and checks the **calls** it makes now, with a negative
+control proving the scan can still see the calls that are there.
 
 ## Reserved milestone: Agent Compute Fabric
 
