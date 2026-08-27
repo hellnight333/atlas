@@ -1583,7 +1583,7 @@ function awaitingPublication(rows) {
       <div class="meta">${pill('accepted', 'ok')}
         ${pill(WAITING[r.state] || r.state || 'state unknown',
                WAITING[r.state] ? 'warn' : '')}
-        ${esc(r.scope || '')}</div>
+        <span class="note">${esc(r.scope || '')}</span></div>
       <dl class="facts">
         <dt>Reviewed</dt><dd><code>${esc((r.commit || '').slice(0, 12))}</code></dd>
         <dt>Accepted</dt><dd>${when(r.accepted_at)} by

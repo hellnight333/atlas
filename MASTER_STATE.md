@@ -367,12 +367,18 @@ See "Approved opportunity to delivered artefact".)*
 *(Superseded — that shipped and was proven against `mission-821a8e7d171d`. See
 "Artefact review".)*
 
-The next milestone is **publishing an accepted artefact**, which is the first
-genuinely outward act and needs its own approval boundary plus somewhere to
-publish to. It is externally blocked on hosting. The unblocked prerequisite is
-smaller: **an accepted artefact should be visible as work waiting to go out** —
-`reviews_for` exists and nothing lists what has been accepted and not yet acted
-on.
+*(Superseded — the queue shipped and was proven on production. See "Accepted
+artefacts awaiting publication".)*
+
+The next milestone is **publishing an accepted artefact**. It is the first
+genuinely outward act, needs its own approval boundary, and is **externally
+blocked on hosting** — there is nowhere to publish to. Everything before it is
+now built: discovery, verification, evidenced audit, ranked opportunity,
+approval, delivery, artefact, review, and a queue of accepted work.
+
+**Do not start it without somewhere to publish.** Building a publisher against
+no host would produce an approval boundary nothing can cross, which is
+architecture rather than a business.
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -770,6 +776,72 @@ credential decision, not a defect in this milestone.
 Three identical `accepted` decisions are on the timeline, one per gate run. They
 are kept. Deleting rows from an append-only record to tidy a test would
 undermine the property this milestone exists to establish.
+
+## Accepted artefacts awaiting publication — built and proven on production
+
+An acceptance existed only as an entry on a timeline nothing queried. It is now
+work that is visibly waiting.
+
+**Derived, not stored.** No `awaiting_publication` table, and there must not be
+one: acceptance is a decision somebody made, the timeline holds it, and a second
+copy is a second thing that can disagree with the first.
+
+One query gives four properties rather than enforcing them separately.
+`DISTINCT ON (mission_id) ORDER BY at DESC` takes the latest decision and the
+`accepted` filter runs **after** that fold — so a withdrawn acceptance is absent
+rather than present, and several identical acceptances are one row. The commit
+comes from the decision's own record, never from `mission/<id>`. Tenancy runs
+through the opportunity the review names, because `atlas_business_events` has no
+tenant column: it is one shared timeline per business, by design.
+
+Nothing is inferred from mission status or branch state, and a test asserts
+`atlas_missions`, `ls-tree` and `rev-parse` appear nowhere in the query.
+
+### Production evidence — 2026-08-27, 23 checks, 0 failed
+
+Read over HTTP by a **READ-only** operator; looking is not deciding.
+
+| | |
+|---|---|
+| queue row | `mission-821a8e7d171d`, Julian's Barber Shop |
+| reviewed commit | `2d77a5f27c684b39297a0ad9b359d38e621eb331` |
+| opportunity | `sig-20260827054352236624` |
+| accepted | `2026-08-27T06:29:42Z` by `review-operator` |
+| state | `AWAITING_PUBLICATION` |
+| timeline | **3 identical acceptances → 1 queue entry** |
+
+Unauthenticated read → 401. `POST`, `PUT`, `DELETE`, `PATCH` → 405. Reading it
+twice recorded no decision, left the artefact commit unchanged, added no remote,
+merged the branch into nothing and did not transition the mission. No filesystem
+path appears anywhere in the response: where an artefact sits on a host is not a
+fact this queue is about.
+
+### The seam left for publishing
+
+Nothing is "not yet acted on" in an *enforced* sense, because no outward act
+exists to record. When publishing lands it records its own event and the filter
+for it is one clause in the `WHERE` beside the one already there. Written down
+rather than built: a `NOT EXISTS` against an event kind nothing writes is dead
+code with a fixture-only test.
+
+### Found by looking, not by testing
+
+- A five-column table at 390px wrapped the commit id **one character per line**
+  and repeated a caveat in every row — a table squeezed onto a phone rather than
+  a design for one. It is a card list now.
+- The card claimed *"waiting for publication"* unconditionally instead of
+  rendering the state the API returned. That is the console answering a question
+  the kernel already answers, which is what `test_the_console_carries_no_secret_and_no_business_logic`
+  exists to prevent. It renders `r.state` now, and an unrecognised state shows as
+  itself rather than as a guess.
+- The screenshot fixture showed `scope` as `offer-website: performance`. The
+  real field is the business's **website**; the approved scope lives on the
+  mission and is not in this response. A picture of data that cannot occur.
+
+The console size cap moved 88k → 92k for two genuine surfaces — the review card
+and this queue — with the stricter rule its own comment requires: the
+`[data-artefact]` pane must be written with `textContent`, asserted directly and
+not only behaviourally.
 
 ## Reserved milestone: Agent Compute Fabric
 
