@@ -38,7 +38,7 @@ from ..auth.models import Scope, User
 from ..fabric import scheduler
 from ..fabric.scheduler import demands_from
 from ..opportunity.tenancy import TenantId
-from . import origins, service
+from . import origins, reports, service
 from .models import Mission, MissionStatus
 
 log = logging.getLogger(__name__)
@@ -547,6 +547,19 @@ def build_router() -> APIRouter:
                 status_code=404,
                 detail="this mission has not produced a report")
 
+        if reports.store() == reports.POSTGRES:
+            # The store resolves the report, not a filesystem. `report_path` is
+            # still data off an event and is still never used as an
+            # instruction — here it is not used to locate anything at all,
+            # which is the strongest form of that guarantee.
+            found = reports.latest(mission_id, tenant=tenant)
+            if found is None:
+                raise HTTPException(status_code=404, detail=NOT_FOUND)
+            # The same two fields the file path returns, so a client cannot
+            # tell which store answered.
+            return {"mission_id": mission_id, "path": found["path"],
+                    "report": found["report"]}
+
         # The root the *worker* wrote under, not the repository root.
         #
         # These were the same expression and are not the same thing: a worker
@@ -558,9 +571,13 @@ def build_router() -> APIRouter:
                       or getattr(request.app.state, "repository_root", None)
                       or ".")
         root = Path(str(configured)).resolve()
-        reports = (root / REPORTS).resolve()
+        # `directory`, not `reports`: the module of that name is imported at the
+        # top of this file and a local binding shadowed it, so `reports.store()`
+        # above read an unbound local. Two tests caught it — the traversal one
+        # among them, which is the last place to discover a shadowed name.
+        directory = (root / REPORTS).resolve()
         candidate = (root / raw).resolve()
-        if not candidate.is_relative_to(reports) or not candidate.is_file():
+        if not candidate.is_relative_to(directory) or not candidate.is_file():
             raise HTTPException(status_code=404, detail=NOT_FOUND)
         return {"mission_id": mission_id, "path": raw,
                 "report": candidate.read_text(encoding="utf-8")}

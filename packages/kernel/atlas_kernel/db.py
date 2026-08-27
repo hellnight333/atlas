@@ -1126,6 +1126,41 @@ def init_db() -> None:
         # time somebody opens the list, and would silently change history when a
         # detector is improved. What was detected on the day is what was
         # detected, and the fingerprints say what it rested on.
+        # Mission reports, kept apart from the event ledger on purpose.
+        #
+        # A report is an event about a mission and would sit naturally in
+        # `atlas_business_events` — except that `Timeline._rows` selects
+        # `detail` for every mission event and every worker folds the queue
+        # every ten seconds. One real report is 6.3 MB of verbatim evidence, so
+        # putting bodies in the ledger would push megabytes across the wire
+        # repeatedly to answer "what is queued".
+        #
+        # Insert-only, like everything else that records what happened. Two
+        # attempts at one mission share a filename and the file overwrote; rows
+        # append and the reader takes the latest, so the earlier attempt
+        # survives instead of being lost.
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS atlas_mission_reports (
+            id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            -- The name the file had. Kept so `report_path` keeps meaning what
+            -- it meant, and so a migrated report can be matched to its file.
+            path TEXT NOT NULL,
+            content TEXT NOT NULL,
+            bytes INTEGER NOT NULL DEFAULT 0,
+            written_by TEXT NOT NULL DEFAULT '',
+            written_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """)
+        )
+        conn.execute(
+            text("""
+        CREATE INDEX IF NOT EXISTS atlas_mission_reports_latest
+            ON atlas_mission_reports (mission_id, written_at DESC)
+        """)
+        )
         conn.execute(
             text("""
         CREATE TABLE IF NOT EXISTS atlas_signals (
