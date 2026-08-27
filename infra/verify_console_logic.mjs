@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard, deliveryCard, wireReview, API };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -90,7 +90,8 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 }
 const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice,
-        discoveryLine, opportunityCard } = sandbox.__under_test || {};
+        discoveryLine, opportunityCard, deliveryCard,
+        wireReview } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
     || typeof cost !== 'function' || typeof originOf !== 'function'
@@ -295,6 +296,96 @@ check('...and one that does not, does not',
 const bare = opportunityCard({ id: 'x', kind: 'new_business', detail: {} });
 check('a row with no inference does not invent one',
       typeof bare === 'string' && !/Inference/.test(bare));
+
+/* ---- the artefact a reviewer is shown ------------------------------------
+ *
+ * Everything here is a customer's business name, a customer's generated markup
+ * or a reviewer's own note, rendered in the page that holds the operator's
+ * session token. The two properties worth proving are that data is escaped on
+ * the way into the card, and that the artefact body never reaches the DOM as
+ * HTML at all. */
+
+const HOSTILE = '<img src=x onerror=alert(1)>';
+const DELIVERY = {
+  mission_id: 'mission-1', signal_id: 'sig-1',
+  approved_scope: 'offer-website: performance',
+  approved_by: HOSTILE, evidence_fingerprints: ['abc1234567def'],
+  recipe: 'deliver-website', agent_id: 'website-builder',
+  tools: ['website-generator'], origin_name: 'none',
+  workspace: '/var/lib/qevik/scratch/mission-1/repo', branch: 'mission/mission-1',
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  files: [{ path: 'artefact/index.html', name: HOSTILE, size: 12, blob: 'b1' }],
+  provenance: { addresses: [HOSTILE], not_published_for_want_of_a_source: ['email'] },
+  reviews: [],
+};
+
+const delivery = deliveryCard(DELIVERY);
+check('the delivery card renders', typeof delivery === 'string' && delivery.length > 0);
+check('a hostile filename is escaped, not embedded',
+      !/<img /.test(delivery) && /&lt;img/.test(delivery),
+      'a raw <img tag reached the card');
+check('...the payload survives as characters, which is correct and harmless',
+      /onerror=alert\(1\)&gt;/.test(delivery),
+      'the text is shown; only the angle brackets are neutralised');
+check('a hostile approver name is escaped the same way',
+      (delivery.match(/<img /g) || []).length === 0);
+check('a hostile provenance string is escaped',
+      !/<img src=x/.test(delivery));
+check('the chain is on screen: opportunity, scope, recipe, agent, tool',
+      /sig-1/.test(delivery) && /offer-website: performance/.test(delivery)
+      && /deliver-website/.test(delivery) && /website-builder/.test(delivery)
+      && /website-generator/.test(delivery));
+check('...and the workspace, branch and commit a reviewer would otherwise ssh for',
+      /scratch\/mission-1\/repo/.test(delivery)
+      && /mission\/mission-1/.test(delivery) && /0123456789ab/.test(delivery));
+check('a role with no network tool says so',
+      /could not publish or contact anyone/.test(delivery));
+check('NEGATIVE CONTROL: a role with one does not claim that',
+      !/could not publish or contact anyone/.test(
+        deliveryCard({ ...DELIVERY, tools: ['http-fetch'] })));
+check('an unreviewed artefact says nobody has decided',
+      /not reviewed/.test(delivery));
+check('...and a reviewed one shows the decision and who made it',
+      /accepted/.test(deliveryCard({ ...DELIVERY,
+        reviews: [{ decision: 'accepted', actor: 'ayoub', at: '', note: '' }] })));
+check('accepting is described as recording, not publishing',
+      /does not publish/.test(delivery) && /does not contact anyone/.test(delivery));
+
+/* The one that matters: which DOM property the artefact body is written to.
+ * A recorder rather than a source grep — a test that greps for `textContent`
+ * passes when somebody leaves the word in a comment and assigns innerHTML. */
+const written = [];
+const pane = { set textContent(v) { written.push(['textContent', v]); },
+               get textContent() { return ''; },
+               set innerHTML(v) { written.push(['innerHTML', v]); },
+               hidden: true };
+let handler = null;
+const button = { dataset: { file: 'artefact/index.html' }, disabled: false,
+                 textContent: '',
+                 addEventListener: (_e, fn) => { handler = fn; } };
+context.document.querySelectorAll = (sel) =>
+  (sel === '[data-file]' ? [button] : []);
+context.document.querySelector = (sel) =>
+  (sel === '[data-artefact]' ? pane : null);
+const ARTEFACT_BODY = '<script>window.__ran = true</script>';
+sandbox.__under_test.API.get = async () => ({ text: ARTEFACT_BODY });
+sandbox.__under_test.API.post = async () => ({});
+
+wireReview('mission-1', DELIVERY);
+check('the file button is wired', typeof handler === 'function');
+await handler();
+check('the artefact body is written with textContent',
+      written.some(([property]) => property === 'textContent'),
+      JSON.stringify(written.map(([p]) => p)));
+check('...and innerHTML is never used for it',
+      !written.some(([property]) => property === 'innerHTML'),
+      'customer markup reached the DOM as HTML');
+check('...so the script tag arrives as characters, not as a tag',
+      written.some(([property, value]) => property === 'textContent'
+        && value === ARTEFACT_BODY),
+      `the pane received ${JSON.stringify(written.map(([, v]) => String(v).slice(0, 40)))}`);
+check('nothing executed in the operator session',
+      context.window.__ran === undefined);
 
 console.log(`\n${PASS.length} passed, ${FAIL.length} failed`);
 process.exit(FAIL.length ? 1 : 0);

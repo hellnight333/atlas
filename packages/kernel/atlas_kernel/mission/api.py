@@ -60,6 +60,22 @@ MISSION_ID = re.compile(r"^mission-[0-9a-f]{12}$")
 REPORTS = Path("docs/qevik-docs/autonomous/reports")
 
 
+def _tools_for(recipe_id: str) -> tuple[str, ...]:
+    """What the mission's declared recipe was permitted to use.
+
+    From the declaration, not from what ran: a reviewer asking "could this have
+    contacted anybody" is asking what it was allowed to do.
+    """
+    if not recipe_id:
+        return ()
+    from ..fabric import recipes
+
+    try:
+        return recipes.get(recipe_id).tools
+    except recipes.UnknownRecipe:
+        return ()
+
+
 def _opportunities(request: Request):
     """The business memory this control plane reads opportunities from.
 
@@ -266,6 +282,19 @@ def blockers(missions: list[dict]) -> dict:
              "blockers": m.get("blockers") or []} for m in stopped],
         "total": sum(len(f) for f in by_kind.values()),
     }
+
+
+class Review(BaseModel):
+    """A person's decision about a delivered artefact.
+
+    `commit` is what they were looking at. Sent by the client from the same
+    response that showed them the files, so a decision made about one artefact
+    cannot be recorded against a branch that has since been rebuilt.
+    """
+
+    decision: str = Field(pattern="^(accepted|rejected)$")
+    note: str = Field(default="", max_length=2000)
+    commit: str = Field(default="", max_length=64)
 
 
 class Delivery(BaseModel):
@@ -522,6 +551,119 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(error)) from error
         _append(request, event)
         return mission.summary()
+
+    @router.get("/{mission_id}/artefact")
+    def artefact_of(mission_id: str, request: Request,
+                    tenant: TenantId = Depends(current_tenant),
+                    _: User = Depends(requires(Scope.READ))) -> dict:
+        """What this mission delivered, read out of its commit.
+
+        The whole point of the surface: a reviewer needs the files, what they
+        answer, what authorised them and what has already been decided — and
+        needs them without a terminal. Everything here is read-only.
+        """
+        from ..opportunity.repository import NotApprovable  # noqa: F401
+        from . import artefact as reader
+
+        summary = _one(request, mission_id, tenant)
+        workspace = summary.get("workspace") or ""
+        scratch = getattr(request.app.state, "scratch_root", None)
+        scratch = Path(str(scratch)) if scratch else None
+
+        memory = _opportunities(request)
+        reviews = memory.reviews_for(mission_id, tenant=tenant)
+        chain = {
+            "signal_id": summary.get("signal_id") or "",
+            "approved_scope": summary.get("approved_scope") or "",
+            "approved_by": summary.get("requested_by") or "",
+            "evidence_fingerprints": summary.get("evidence_fingerprints") or [],
+            "origin_name": summary.get("origin_name") or "",
+            "origin": summary.get("origin") or "",
+            "origin_kind": summary.get("origin_kind") or "",
+            "recipe": summary.get("recipe") or "",
+            "agent_id": summary.get("agent_id") or "",
+            "tools": list(_tools_for(summary.get("recipe") or "")),
+            "workspace": workspace,
+            "branch": reader.branch_of(mission_id),
+            "report_path": summary.get("report_path") or "",
+            "status": summary.get("status") or "",
+        }
+        try:
+            found = reader.files(mission_id, workspace, scratch=scratch)
+        except reader.Unreadable as refused:
+            # Reported, not raised. A mission with no artefact is an ordinary
+            # state — most missions have none — and a 500 here would make the
+            # review page unusable for every one of them.
+            return {"mission_id": mission_id, **chain, "files": [],
+                    "provenance": {}, "commit": "", "reviews": reviews,
+                    "unreadable": str(refused)}
+        return {
+            "mission_id": mission_id, **chain,
+            "files": [entry.summary() for entry in found],
+            "provenance": reader.provenance(mission_id, workspace,
+                                            scratch=scratch),
+            "commit": reader.commit_of(mission_id, workspace, scratch=scratch),
+            "reviews": reviews,
+        }
+
+    @router.get("/{mission_id}/artefact/file")
+    def artefact_file(mission_id: str, path: str, request: Request,
+                      tenant: TenantId = Depends(current_tenant),
+                      _: User = Depends(requires(Scope.READ))) -> dict:
+        """One delivered file, in full or not at all.
+
+        As text, and never rendered by this API. The console shows it as source
+        with an opt-in preview, because a control plane that executed a
+        customer's generated HTML in the operator's session would be running
+        somebody else's markup with the operator's token in the page.
+        """
+        from . import artefact as reader
+
+        summary = _one(request, mission_id, tenant)
+        scratch = getattr(request.app.state, "scratch_root", None)
+        try:
+            body = reader.read(mission_id, summary.get("workspace") or "", path,
+                               scratch=Path(str(scratch)) if scratch else None)
+        except reader.Unreadable as refused:
+            raise HTTPException(status_code=404, detail=str(refused)) from refused
+        return {"mission_id": mission_id, "path": path, "text": body,
+                "bytes": len(body.encode("utf-8"))}
+
+    @router.post("/{mission_id}/review", status_code=201)
+    def review(mission_id: str, body: Review, request: Request,
+               tenant: TenantId = Depends(current_tenant),
+               user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Record what a person decided about the artefact. Publishes nothing.
+
+        Requires EXECUTE rather than READ: a review is a decision, and the next
+        milestone reads it to decide whether anything may leave the building.
+        Someone who may only read must not be able to leave one.
+
+        Accepting does **not** publish, send, promote or merge. It records that
+        a person looked and said yes, which is a different act from doing
+        anything about it — and keeping them different is what lets the
+        publishing boundary exist at all.
+        """
+        from ..opportunity.repository import NotApprovable
+
+        summary = _one(request, mission_id, tenant)
+        if not summary.get("signal_id"):
+            raise HTTPException(
+                status_code=422,
+                detail=("this mission delivered nothing an opportunity asked "
+                        "for, so there is no delivery to review."))
+        memory = _opportunities(request)
+        signal = memory.get_signal(summary["signal_id"], tenant=tenant)
+        try:
+            recorded = memory.record_review(
+                mission_id=mission_id,
+                business_id=(signal or {}).get("business_id", ""),
+                signal_id=summary["signal_id"], decision=body.decision,
+                actor=user.username, note=body.note, commit=body.commit,
+                tenant=tenant)
+        except NotApprovable as refused:
+            raise HTTPException(status_code=400, detail=str(refused)) from refused
+        return recorded
 
     @router.post("/deliver", status_code=201)
     def deliver(body: Delivery, request: Request,

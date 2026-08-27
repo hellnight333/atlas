@@ -42,6 +42,24 @@ class NotApprovable(Exception):
 #: `atlas_signals.state` is the index for finding them; this is the record.
 APPROVED_EVENT = "opportunity_approved"
 
+#: The timeline entry that records a person's decision about what was built.
+#:
+#: Beside `APPROVED_EVENT` on the same timeline, for the same reason: a review
+#: is a decision a person made about a specific thing at a specific time, and
+#: the only honest home for that is an append-only record naming all three. A
+#: mutable `reviewed` column would answer "was it accepted" and lose "by whom,
+#: when, and what did they say".
+#:
+#: Append-only also means a second look is a second entry rather than an
+#: overwrite. Somebody who accepts an artefact and changes their mind has done
+#: two things, and the record should say so.
+REVIEWED_EVENT = "artefact_reviewed"
+
+#: What a review may conclude. A closed set, because a free-text decision is one
+#: nothing downstream can act on — and the next milestone after this one reads
+#: it to decide whether anything may be published.
+REVIEW_DECISIONS: frozenset[str] = frozenset({"accepted", "rejected"})
+
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
 #: marks it — a second spelling would silently stop the rotation, and the run
@@ -519,6 +537,80 @@ class OpportunityRepository:
                  "at": datetime.now(UTC)})
             session.commit()
         return self.get_signal(signal_id, tenant=tenant)
+
+    def record_review(self, *, mission_id: str, business_id: str,
+                      signal_id: str, decision: str, actor: str,
+                      note: str = "", commit: str = "",
+                      tenant: TenantId | None = None) -> dict:
+        """Record what a person decided about a delivered artefact.
+
+        `commit` is the object id the reviewer was looking at, stored with the
+        decision. Without it the record says an artefact was accepted and not
+        *which* artefact — and a mission branch can be rebuilt, so "accepted"
+        with no commit would silently come to mean the newest one.
+
+        Nothing is published, sent or promoted by this. It records a decision;
+        acting on it is a separate act with its own boundary.
+        """
+        if decision not in REVIEW_DECISIONS:
+            raise NotApprovable(
+                f"{decision!r} is not a review decision. Known: "
+                f"{', '.join(sorted(REVIEW_DECISIONS))}.")
+        if not actor.strip():
+            raise NotApprovable(
+                "a review must name who made it; a decision nobody signed is "
+                "one nobody can be asked about")
+        entry = {"id": f"evt-{uuid4().hex[:12]}", "business_id": business_id,
+                 "factory": "opportunity", "kind": REVIEWED_EVENT,
+                 "opportunity_id": signal_id, "actor": actor.strip(),
+                 "detail": json.dumps({"decision": decision,
+                                       "mission_id": mission_id,
+                                       "commit": commit,
+                                       "note": note.strip()[:2000]}),
+                 "at": datetime.now(UTC)}
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """), entry)
+            session.commit()
+        return {"id": entry["id"], "decision": decision, "actor": entry["actor"],
+                "mission_id": mission_id, "signal_id": signal_id,
+                "commit": commit, "note": note.strip()[:2000],
+                "at": entry["at"].isoformat()}
+
+    def reviews_for(self, mission_id: str, *,
+                    tenant: TenantId | None = None) -> list[dict]:
+        """Every decision recorded about this mission's artefact, oldest first.
+
+        A list, not a latest: the point of an append-only record is that a
+        reviewer who changed their mind is visible as two decisions rather than
+        as one that was always what it now says.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, actor, opportunity_id, detail, at
+                FROM atlas_business_events
+                WHERE kind = :kind AND detail->>'mission_id' = :mission
+                ORDER BY at
+                """),
+                {"kind": REVIEWED_EVENT, "mission": mission_id},
+            ).mappings().all()
+        found = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            found.append({"id": row["id"], "actor": row["actor"],
+                          "signal_id": row["opportunity_id"],
+                          "decision": detail.get("decision", ""),
+                          "note": detail.get("note", ""),
+                          "commit": detail.get("commit", ""),
+                          "at": row["at"].isoformat() if row["at"] else ""})
+        return found
 
     def get_signal(self, signal_id: str, *,
                    tenant: TenantId | None = None) -> dict | None:

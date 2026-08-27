@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from ..approval.models import ApprovalRequest
+from ..mission import artefact
 from ..auth import api as auth_api
 from ..auth.api import current_user
 from ..auth.models import User
@@ -150,6 +151,12 @@ class Wiring:
     #: inside a checkout that a deploy replaces — and because the worker is
     #: started with its own `--reports`, which this must agree with.
     reports_root: Path | None = None
+    #: Where mission scratch clones live, and therefore where a delivered
+    #: artefact is. Must agree with the worker's `--scratch`, for the same
+    #: reason `reports_root` must agree with its `--reports`: the worker writes
+    #: it and the control plane reads it, and a disagreement is a review
+    #: surface that reports every artefact as missing.
+    scratch_root: Path | None = None
     vault_path: Path = DEFAULT_VAULT
     #: Where the control panel's files live. None uses the repository copy.
     console: Path | None = None
@@ -273,6 +280,7 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
         else AgentRegistry())
     app.state.repository_root = str(wiring.repository_root)
     app.state.reports_root = str(wiring.reports_root or wiring.repository_root)
+    app.state.scratch_root = str(wiring.scratch_root or artefact.root())
     app.state.wiring = wiring
 
     @app.get("/api/health")
@@ -556,6 +564,9 @@ def from_environment() -> FastAPI:
     # log that neither reader wants whole.
     # Reports live beside the rest of the durable state by default, so the
     # worker and this surface agree without either being configured.
+    # Same name the artefact reader defaults from, read here so the deployment
+    # configures it in one place rather than in two that can disagree.
+    scratch = os.environ.get(artefact.ENVIRONMENT, "")
     report_root = os.environ.get("QEVIK_REPORTS", "")
     if not report_root and state:
         report_root = str(Path(state) / "reports")
@@ -582,6 +593,7 @@ def from_environment() -> FastAPI:
         vault_path=credentials_at.vault,
         credential_timeline=credentials_at.records,
         reports_root=Path(report_root) if report_root else None,
+        scratch_root=Path(scratch) if scratch else None,
         quota_timeline=Path(quota) if quota else None,
         chat_events=turns,
         chat_timeline=Path(chat) if chat else None,

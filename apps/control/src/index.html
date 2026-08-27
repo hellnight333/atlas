@@ -676,6 +676,15 @@ async function missionDetail(id) {
   ]);
   let report = null;
   try { report = await API.get('/api/missions/' + encodeURIComponent(id) + '/report'); } catch { /* often absent */ }
+  /* Only asked for when the mission actually delivered something. Most have no
+     artefact, and a failed request on every mission page would make the common
+     case look broken. */
+  let delivery = null;
+  if (mission.signal_id) {
+    try {
+      delivery = await API.get('/api/missions/' + encodeURIComponent(id) + '/artefact');
+    } catch { delivery = null; }
+  }
 
   const approve = mission.status === 'awaiting_approval'
     ? '<button class="primary" data-approve>Approve — queue this mission</button>' : '';
@@ -724,6 +733,7 @@ async function missionDetail(id) {
       ${(history.history || []).map((h) => `<tr><td>${when(h.updated_at)}</td><td>${pill(h.status)}</td>
         <td><code>${esc(h.claimed_by || '—')}</code></td><td>${esc(h.note || '')}</td></tr>`).join('')}
       </tbody></table></div></div>
+    ${delivery ? deliveryCard(delivery) : ''}
     ${report ? `<div class="card"><h3>Report</h3><pre>${esc(report.report)}</pre></div>`
       : '<div class="card"><h3>Report</h3><p class="note">No report yet. One is written when the mission finishes.</p></div>'}`;
 
@@ -740,8 +750,113 @@ async function missionDetail(id) {
       try { await API.post('/api/missions/' + encodeURIComponent(id) + '/cancel'); render(); }
       catch (e) { c.disabled = false; alert(e.message); }
     });
+    if (delivery) wireReview(id, delivery);
   });
   return html;
+}
+
+/* What a reviewer needs in front of them, without a terminal.
+ *
+ * The order is the chain: what was approved, by whom, on what evidence; what
+ * was permitted to carry it out; what came back. A reviewer who cannot see the
+ * authorisation beside the artefact is being asked to judge the artefact alone,
+ * which is how work nobody approved gets accepted because it looked fine. */
+function deliveryCard(d) {
+  const files = d.files || [];
+  const reviews = d.reviews || [];
+  const last = reviews.length ? reviews[reviews.length - 1] : null;
+  const answers = (d.provenance || {}).addresses || [];
+  const withheld = (d.provenance || {}).not_published_for_want_of_a_source || [];
+  return `<div class="card" style="margin-bottom:1rem">
+    <h3>Delivered artefact</h3>
+    ${last ? `<p>${pill(last.decision, last.decision === 'accepted' ? 'ok' : 'bad')}
+      <span class="note">by ${esc(last.actor)} · ${when(last.at)}${last.note
+        ? ' · ' + esc(last.note) : ''}</span></p>` : `<p>${pill('not reviewed', 'warn')}
+      <span class="note">Nobody has decided about this yet.</span></p>`}
+    <dl class="facts">
+      <dt>Approved</dt><dd>${d.signal_id
+        ? `<a href="#/opportunities">${esc(d.approved_scope || d.signal_id)}</a>
+           <span class="note">from <code>${esc(d.signal_id)}</code>
+           by ${esc(d.approved_by || 'unknown')}</span>` : pill('UNKNOWN')}</dd>
+      <dt>Evidence</dt><dd>${(d.evidence_fingerprints || []).length
+        ? (d.evidence_fingerprints || []).map((f) =>
+            '<code>' + esc(f.slice(0, 10)) + '</code>').join(' ')
+        : '<span class="note">none recorded</span>'}</dd>
+      <dt>Carried out by</dt><dd><code>${esc(d.recipe || '—')}</code> ·
+        <code>${esc(d.agent_id || '—')}</code> ·
+        tools ${(d.tools || []).map((t) => '<code>' + esc(t) + '</code>').join(' ') || 'none'}
+        <span class="note">${(d.tools || []).some((t) =>
+          ['http-fetch', 'dns', 'shell'].includes(t))
+          ? 'This role has a network tool.'
+          : 'No network tool: this could not publish or contact anyone.'}</span></dd>
+      <dt>Origin</dt><dd>${pill(originOf(d.origin_name).word, originOf(d.origin_name).tone)}
+        <span class="note"><code>${esc(d.workspace || '—')}</code> ·
+        branch <code>${esc(d.branch || '—')}</code>${d.commit
+          ? ' · <code>' + esc(d.commit.slice(0, 12)) + '</code>' : ''}</span></dd>
+      ${answers.length ? `<dt>Answers</dt><dd>${answers.map((a) =>
+        esc(a)).join('; ')}</dd>` : ''}
+      ${withheld.length ? `<dt>Left out</dt><dd>${withheld.map((w) =>
+        esc(w)).join(', ')} <span class="note">— no source recorded, so nothing
+        was invented.</span></dd>` : ''}
+    </dl>
+    ${d.unreadable ? `<p class="note">${esc(d.unreadable)}</p>` : ''}
+    ${files.length ? `<div class="wrap-scroll"><table>
+      <thead><tr><th>File</th><th>Size</th><th></th></tr></thead><tbody>
+      ${files.map((f) => `<tr><td><code>${esc(f.name)}</code></td>
+        <td>${esc(String(f.size))} B</td>
+        <td><button data-file="${esc(f.path)}">Read</button></td></tr>`).join('')}
+      </tbody></table></div>
+      <pre data-artefact hidden></pre>` : '<p class="note">No files in this commit.</p>'}
+    ${files.length ? `<div class="actions" style="margin-top:.9rem">
+      <label class="note" for="review-note">What you decided, and why</label>
+      <textarea id="review-note" rows="2" style="width:100%"></textarea>
+      <button class="primary" data-review="accepted">Accept this artefact</button>
+      <button class="danger" data-review="rejected">Reject</button>
+      <p class="note">Recording a decision. Accepting does not publish it and
+        does not contact anyone — both are separate acts.</p></div>` : ''}
+    ${reviews.length > 1 ? `<div class="wrap-scroll" style="margin-top:.9rem">
+      <table><thead><tr><th>When</th><th>Decision</th><th>By</th><th>Note</th></tr></thead>
+      <tbody>${reviews.map((r) => `<tr><td>${when(r.at)}</td>
+        <td>${pill(r.decision, r.decision === 'accepted' ? 'ok' : 'bad')}</td>
+        <td>${esc(r.actor)}</td><td>${esc(r.note || '')}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+  </div>`;
+}
+
+function wireReview(id, delivery) {
+  document.querySelectorAll('[data-file]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const pane = document.querySelector('[data-artefact]');
+      /* Visible before the await. A file that takes a moment to arrive
+         otherwise looks like a button that did nothing. */
+      pane.hidden = false;
+      pane.textContent = 'Reading ' + button.dataset.file + '…';
+      try {
+        const got = await API.get('/api/missions/' + encodeURIComponent(id)
+          + '/artefact/file?path=' + encodeURIComponent(button.dataset.file));
+        /* textContent, never innerHTML. This is a customer's generated markup
+           and the operator's session is in this page. */
+        pane.textContent = got.text;
+      } catch (e) { pane.textContent = e.message; }
+    });
+  });
+  document.querySelectorAll('[data-review]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const decision = button.dataset.review;
+      const note = (document.querySelector('#review-note') || {}).value || '';
+      button.disabled = true;
+      button.textContent = decision === 'accepted' ? 'Recording…' : 'Recording…';
+      try {
+        await API.post('/api/missions/' + encodeURIComponent(id) + '/review',
+          { decision, note, commit: delivery.commit || '' });
+        render();
+      } catch (e) {
+        button.disabled = false;
+        button.textContent = decision === 'accepted' ? 'Accept this artefact' : 'Reject';
+        alert(e.message);
+      }
+    });
+  });
 }
 
 /* The five queues. WAITING and BLOCKED are drawn apart on purpose: one
