@@ -347,6 +347,46 @@ if memory.saved:
               for o in stored.observations for p in o.evidence))
 server.shutdown()
 
+# ====================================== 6b. the two faults the deploy found
+print("\n-- an empty backlog, and who knows a recipe needs memory --------------")
+
+class _Nothing:
+    """Memory that holds no websites. A normal night once the backlog is done."""
+
+    def businesses_by_website(self, *, limit, tenant=None):
+        return {}
+
+    def save_signal(self, *a, **k):               # pragma: no cover - must not run
+        raise AssertionError("a run with no targets stored a signal")
+
+
+empty = toolrunner.ToolAgent(recipe, repository=_Nothing(),
+                             check_addresses=False)
+nothing = empty.implement(empty.plan("verify"), workspace_root=str(ROOT))
+# The refused step keeps `tool="http-fetch"` — it *is* that step, declined —
+# so the property to assert is that nothing was retrieved, not that no step
+# was recorded. A refusal nobody can see in the report is worse than none.
+check("a targets recipe with no targets retrieves nothing at all",
+      not empty.result.evidence and not empty.audited,
+      f"{len(empty.result.evidence)} evidence, {len(empty.audited)} audited")
+check("...and says so, rather than resolving the word TARGETS as a host",
+      any("yielded no addresses" in (st.detail or "")
+          for st in empty.result.steps),
+      next((st.detail for st in empty.result.steps if st.detail), "")[:70])
+check("NEGATIVE CONTROL: the literal placeholder never reached the fetcher",
+      not any("TARGETS" in (st.invoked or "") for st in empty.result.steps),
+      "this is the production failure, reproduced and refused")
+
+check("a recipe that reads or writes memory says it needs memory",
+      recipe.needs_memory and recipes.get("discover-dubai-dental-osm").needs_memory)
+check("NEGATIVE CONTROL: one that does neither does not",
+      not recipes.get("execution-canary").needs_memory,
+      "so the worker opens a database only when a recipe actually needs one")
+check("the old condition would have missed this recipe",
+      not recipe.extractor and recipe.needs_memory,
+      "`if recipe.extractor` was the production bug, in one line")
+
+
 # ================================================ 7. the backlog actually moves
 print("\n-- the rotation, against real SQL -------------------------------------")
 

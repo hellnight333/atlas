@@ -229,8 +229,27 @@ def run(recipe: Recipe, *, registry: Registry | None = None,
             # A targets step fetches what memory holds; a declared step fetches
             # what it names. Either way the allow-list decides, and it was
             # computed before the first request.
+            placeholder = "TARGETS" in step.command
+            if recipe.targets_from and placeholder and not targets:
+                # Found in production the first night this ran. With no targets
+                # the old expression fell through to `step.command` and the
+                # fetcher was handed the literal word `TARGETS`, which it dutifully
+                # tried to resolve as a hostname — a silent fallback from "what
+                # memory holds" to "whatever the placeholder happens to say".
+                #
+                # A recipe whose targets come from memory and whose memory is
+                # empty has nothing to do, and saying so is the only honest
+                # answer. Not an error: an empty backlog is a normal night.
+                outcome.steps.append(Step(
+                    tool=step.tool, invoked=recipe.targets_from,
+                    proves=step.proves, passed=False,
+                    detail=(f"nothing to fetch: {recipe.targets_from} yielded no "
+                            "addresses. A recipe that takes its targets from "
+                            "memory does not fall back to the ones written in "
+                            "its steps.")))
+                continue
             wanted = (list(targets) if recipe.targets_from and targets
-                      and "TARGETS" in step.command else list(step.command))
+                      and placeholder else list(step.command))
             done = _fetch(step.model_copy(update={"command": tuple(wanted)}),
                           allowed=allowed, client=client,
                           check_addresses=check_addresses)

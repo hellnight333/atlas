@@ -173,6 +173,22 @@ class Recipe(BaseModel):
     def tools(self) -> tuple[str, ...]:
         return tuple(sorted({step.tool for step in self.steps}))
 
+    @property
+    def needs_memory(self) -> bool:
+        """Whether this recipe cannot do its job without business memory.
+
+        Derived from the recipe's own fields rather than restated by whoever
+        builds the agent. The worker used to ask `if recipe.extractor`, which
+        was right until `audit` and `targets_from` arrived — and then a
+        verification mission ran with no repository, fetched nothing, and tried
+        to resolve the literal word `TARGETS` as a hostname. It reported failure
+        for a reason that read like a DNS problem.
+
+        One property, three reasons, so the next field that needs memory is
+        added here and every caller gets it.
+        """
+        return bool(self.extractor or self.audit or self.targets_from)
+
     #: Tools whose steps are argv and may be executed as commands. Anything
     #: else is invoked by something that understands it — `http-fetch` by the
     #: guarded fetcher, for instance — and must never reach a process launcher.

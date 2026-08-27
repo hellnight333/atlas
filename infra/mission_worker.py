@@ -418,12 +418,16 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     if agent_choice == "research" and mission is not None and mission.recipe:
         from atlas_kernel.mission.toolrunner import ToolAgent
 
-        # The repository is what turns evidence into memory. Without it the
-        # role fetches, records evidence and a report, and remembers nothing —
-        # which is a legitimate mode for a recipe with no extractor and is
-        # silently wrong for one that has a extractor.
+        # The repository is what turns evidence into memory, and for a
+        # verification recipe it is also where the targets come from. Without
+        # it such a run fetches nothing and remembers nothing.
+        #
+        # `needs_memory` rather than `.extractor`, which is what this asked
+        # before: the condition lived here while the fields that decide it live
+        # on the recipe, and the two drifted the moment `audit` and
+        # `targets_from` were added.
         memory = None
-        if recipes.get(mission.recipe).extractor:
+        if recipes.get(mission.recipe).needs_memory:
             try:
                 from atlas_kernel.opportunity.repository import (
                     OpportunityRepository,
@@ -431,10 +435,9 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
 
                 memory = OpportunityRepository()
             except Exception:                     # noqa: BLE001 - reported
-                log.exception("%s declares an extractor and the business "
-                              "memory could not be opened; the run will "
-                              "produce evidence and remember nothing",
-                              mission.recipe)
+                log.exception("%s needs business memory and it could not be "
+                              "opened; the run will produce evidence and "
+                              "remember nothing", mission.recipe)
         roles = Roles.all(ToolAgent(recipes.get(mission.recipe),
                                     repository=memory, tenant=tenant))
         log.info("%s: recipe %s%s", mission.id, mission.recipe,

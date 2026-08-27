@@ -352,6 +352,24 @@ def the_whole_chain(tmp: Path, *, honest_dns: bool) -> None:
     folded = service.fold(Timeline(timeline.path).read(), tenant=rule.tenant_id)
     discovery = next((m for m in folded
                       if (m.get("occurrence") or "").startswith(rule.id)), None)
+
+    # Every recurrence due at this moment created a mission, and `--once` runs
+    # one of them — which stopped being the discovery mission as soon as a third
+    # recurrence was declared. The others are cancelled so this section still
+    # proves what it says it proves, rather than whichever mission the worker
+    # happened to reach first.
+    #
+    # Cancelled rather than drained: letting the verification mission run here
+    # would fetch forty real third-party websites out of the developer
+    # database, which is not this harness's business.
+    for other in folded:
+        if other["mission_id"] == (discovery or {}).get("mission_id"):
+            continue
+        _, event = service.transition(
+            service.rehydrate(other, tenant=rule.tenant_id),
+            MissionStatus.CANCELLED, tenant=rule.tenant_id,
+            note="not this section's subject")
+        timeline.append(event)
     # The recurrence's own recipe, not a name pinned here. Pinning one is how
     # the recurrence went on naming a recipe with no extractor while the suite
     # stayed green.
