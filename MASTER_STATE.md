@@ -361,8 +361,13 @@ agents, (C) the flagship site.
 *(Superseded — the evidenced `WEAK_WEB_PRESENCE` detector shipped. See
 "Evidenced weak web presence" below.)*
 
-The next milestone is **an approved opportunity becoming a mission**. See
-"Next — the first customer-deliverable workflow".
+*(Superseded — that shipped and was proven on a real production opportunity.
+See "Approved opportunity to delivered artefact".)*
+
+The next milestone is **operator review of a delivered artefact**: the artefact
+exists as a commit on a mission branch and the only way to see it is a `git
+show` in the report. Nothing renders it, and nothing records a decision about
+it. Until that exists, the last step of the workflow is a person with SSH.
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -591,6 +596,85 @@ Scope, deliberately ending inside the building:
 are separate OUTWARD acts, each gated, and both currently blocked externally.
 The first customer-deliverable workflow ends at *a reviewed draft exists*, which
 is a real deliverable and an honest one.
+
+## Approved opportunity to delivered artefact — built and proven on production
+
+The edge that did not exist. `atlas_signals` was read by the console and nobody
+else, so approving an opportunity changed nothing.
+
+A signal still never becomes a mission. `mission/delivery.py` creates one that
+**references** it, through the three calls `recurrence.enqueue` already used —
+`service.create`, a transition to PLANNING, then `attach_plan`, which runs
+`policy.decide`. No route reaches the queue that a person's own request could
+not.
+
+The approval decides *that* the work happens, not what it is: the recipe comes
+from `OFFER_RECIPES`, keyed by the capability the opportunity's own suggested
+action named. `enqueue` takes a signal **id** and reads the record itself,
+because a caller that could pass the record could pass one it had edited.
+
+### Proven on a real production opportunity, 2026-08-27
+
+| | |
+|---|---|
+| opportunity | `sig-20260827054352236624`, Julian's Barber Shop, score 0.802 |
+| findings | `missing_h1`, `slow_response` — both in `BUILDABLE` |
+| approval | `opportunity_approved` by an operator through `POST /api/missions/deliver` |
+| mission | `mission-821a8e7d171d` |
+| policy | queued without asking again: cheap, reversible, confined |
+| recipe / agent | `deliver-website` / `website-builder`, origin `none` |
+| artefact | `index.html`, `robots.txt`, `sitemap.xml`, `provenance.json` — committed to `mission/mission-821a8e7d171d` |
+| report | `2026-08-27_deliver-deliver-website-for-http-www-julianhaird_mission-821a8e7d171d.md` |
+| outward acts | none. Not published, nobody contacted |
+
+The provenance records `mode: modify`, `site_state: weak`, and the two defects
+it answers — and `not_published_for_want_of_a_source: [email]`, which is the
+build declining to invent a contact detail nobody recorded.
+
+### The approval is bound to the action
+
+Four corruptions of the mission record between approval and execution, each run
+through the real worker against the real approved opportunity, in an isolated
+timeline. All four refused, with a positive control proving the same path
+completes untampered — **11 checks, 0 failed**.
+
+| changed after approval | outcome |
+|---|---|
+| recipe → `discover-dubai-dental-osm` | BLOCKED: *approved for `deliver-website`* |
+| `signal_id` → a different, unapproved opportunity | BLOCKED: *that opportunity is `open`* |
+| agent → `researcher` | not run by this worker; nothing built |
+| origin → `qevik` | BLOCKED: *would run against Qevik's own repository* |
+
+### Faults the run found
+
+Five in the build, and two in the gate itself.
+
+- `--agent` choices were hand-written beside `REGISTERED_AS`; the worker knew
+  the role and its own command line rejected it.
+- `needs_memory` did not count `delivers`, so every delivery blocked itself for
+  having no approval it could read.
+- `DISPATCHABLE` did not include `website-generator`.
+- `get_business` is tenant-scoped and a discovered business belongs to nobody by
+  design — every production opportunity was unreadable. Read with `ALL_TENANTS`
+  as `scan.py` documents, with an explicit ownership check.
+- **The recipe guard keyed on the recipe declaring `delivers`**, so substituting
+  a *research* recipe bypassed it entirely and the mission ran whatever it had
+  been changed to. Found only by checking the tamper failed for the *right
+  reason*. The invariant is on the mission naming an approval now.
+
+In the gate: a check ran unconditionally and *performed* the approval it was
+meant to find already done, dirtying production — reverted, since no operator
+had decided anything. And the first tamper run reported four clean refusals
+while the worker had never started, because `--require-atomic-claims` correctly
+refused a blanked DSN. Only the positive control caught it. Silence is not
+success.
+
+### Where it stops
+
+At a file and a report. `website-builder` declares one tool and it is not a
+network tool, so a delivery recipe naming an HTTP or shell step is refused by
+`recipes.validate` at import. Publishing and outreach are separate outward acts
+with no route from here, and both remain externally blocked.
 
 ## Reserved milestone: Agent Compute Fabric
 
