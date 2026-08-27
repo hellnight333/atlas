@@ -152,19 +152,30 @@ def permitted_urls(recipe: Recipe, *, targets: list[str] | None = None
     return declared
 
 
-def targets_for(recipe: Recipe, *, repository: object,
-                tenant: str | None = None, limit: int = 40) -> list[str]:
-    """The addresses this recipe's targets source yields.
+def targets_map_for(recipe: Recipe, *, repository: object,
+                    tenant: str | None = None, limit: int = 40) -> dict:
+    """The addresses this recipe will fetch, and which business owns each.
+
+    One call, so the set that is fetched and the set that can be attributed are
+    the same set. Asking twice would be two bounded reads of a table that
+    changes, and an audit that could not say whose site it had just read.
 
     Bounded. A verification recipe over a market that grows to ten thousand
     businesses would otherwise fetch ten thousand sites in one mission, which is
     neither polite to them nor recoverable for us.
     """
     if recipe.targets_from != "business_websites" or repository is None:
-        return []
-    found = repository.recorded_websites(limit=limit, tenant=tenant)
+        return {}
+    found = repository.businesses_by_website(limit=limit, tenant=tenant)
     log.info("%s: %d recorded website(s) to verify", recipe.id, len(found))
     return found
+
+
+def targets_for(recipe: Recipe, *, repository: object,
+                tenant: str | None = None, limit: int = 40) -> list[str]:
+    """Just the addresses, for a caller that does not need the owners."""
+    return list(targets_map_for(recipe, repository=repository, tenant=tenant,
+                                limit=limit))
 
 
 def refusals(recipe: Recipe, agent: Agent) -> list[str]:
@@ -393,6 +404,11 @@ class ToolAgent:
         self.recorded: list = []
         #: Opportunities detected from this run, best first.
         self.signals: list = []
+        #: Which business owns each address this run fetched. Read once, before
+        #: the fetch, and reused by the audit — see `targets_map_for`.
+        self._targets: dict = {}
+        #: Findings the audit read out of what came back, by business id.
+        self.audited: dict = {}
 
     @property
     def name(self) -> str:
@@ -422,14 +438,15 @@ class ToolAgent:
 
     def implement(self, plan: Plan, *, workspace_root: str,
                   context: str = "") -> AgentOutcome:
+        self._targets = targets_map_for(self._recipe,
+                                        repository=self._repository,
+                                        tenant=self._tenant)
         try:
             self.result = run(self._recipe, registry=self._registry,
                               workspace=Path(workspace_root),
                               client=self._client,
                               check_addresses=self._check_addresses,
-                              targets=targets_for(
-                                  self._recipe, repository=self._repository,
-                                  tenant=self._tenant))
+                              targets=list(self._targets))
         except NotDispatchable as refused:
             return AgentOutcome(
                 summary=str(refused)[:400], claims_done=False,
@@ -439,11 +456,14 @@ class ToolAgent:
                                          "decision"),))
         found = self.result
         remembered = self._remember(found)
+        judged = self._audit(found)
         return AgentOutcome(
             summary=(f"{len(found.evidence)} piece(s) of evidence from "
                      f"{len(found.steps)} step(s) via "
                      f"{', '.join(found.tools_invoked) or 'nothing'}"
                      + (f"; {remembered} sighting(s) recorded" if remembered
+                        else "")
+                     + (f"; {judged} site(s) with evidenced defects" if judged
                         else "")),
             files=(),
             evidence_count=len(found.evidence),
@@ -519,6 +539,99 @@ class ToolAgent:
                     "source")))
         self._detect(found, extractions, source=extractor.source)
         return len(pass_.recorded)
+
+    def _audit(self, found: Result) -> int:
+        """Read this run's responses into findings, and findings into signals.
+
+        The other half of `_remember`, for the other kind of recipe. Discovery
+        reads what a *source* said about a business; verification reads what
+        the *business's own server* said, which is the first evidence here that
+        can support approaching somebody.
+
+        In the same mission, for the reason extraction is: a pass that fetched
+        forty homepages and concluded nothing because a second mission never
+        ran is exactly the state this milestone existed to leave.
+
+        Failing to store does not fail the run. The responses are real and
+        already in the report, and losing them because the database was
+        briefly away would be the worse outcome.
+        """
+        if not self._recipe.audit or self._repository is None:
+            return 0
+        if not self._targets:
+            return 0
+        from ..opportunity import detect, ranking, verification
+
+        audited = verification.audit_pass(self._targets, found.evidence)
+        self.audited = audited
+        # Which recorded response each business's findings came out of, so a
+        # signal cannot be built from derived evidence alone. Matched the same
+        # way the audit matched them, rather than by re-deriving it.
+        index = verification.owner_index(self._targets)
+        responses: dict = {}
+        for piece in found.evidence:
+            owner = verification.owner_of(piece, index)
+            if owner is not None and owner.id not in responses:
+                responses[owner.id] = piece
+
+        businesses = {b.id: b for b in self._targets.values()}
+        # Every site this pass reached for, marked before anything else can go
+        # wrong. The backlog is ordered by this event, so a business left
+        # unmarked is one the next run picks first and the run after that picks
+        # again — a queue that never advances past whatever fails.
+        self._mark_verified(businesses, audited, responses)
+        signals = detect.from_verification(audited, businesses, responses,
+                                           source=self._recipe.id)
+        found.steps.append(Step(
+            tool="audit", invoked=self._recipe.audit,
+            proves="what the returned pages support saying about these sites",
+            passed=True,
+            detail=(f"{len(found.evidence)} response(s) read, "
+                    f"{sum(len(f) for f in audited.values())} finding(s) on "
+                    f"{len(audited)} site(s), {len(signals)} opportunity(ies)")))
+        if not signals:
+            return len(audited)
+
+        ranked = ranking.order(signals)
+        self.signals = list(self.signals) + list(ranked)
+        by_id = {s.id: s for s in signals}
+        for scored in ranked:
+            try:
+                self._repository.save_signal(by_id[scored.signal_id], scored,
+                                             tenant=self._tenant)
+            except Exception:                     # noqa: BLE001 - reported
+                log.exception("could not store signal %s", scored.signal_id)
+        return len(audited)
+
+    def _mark_verified(self, businesses: dict, audited: dict,
+                       responses: dict) -> None:
+        """Record that each of these sites has had its turn.
+
+        For every business the pass *attempted*, not only for those that
+        answered. A site behind a robots exclusion has been looked at, and
+        recording only successes would let it sit at the head of the queue for
+        ever while three hundred others waited.
+
+        Best-effort by design: a timeline that could not be written is worth
+        reporting and is not worth losing an audit over. The cost of failing is
+        that the site is offered again tomorrow, which is the safe direction.
+        """
+        from ..opportunity.models import BusinessEvent
+        from ..opportunity.repository import VERIFIED_EVENT
+
+        record = getattr(self._repository, "record_event", None)
+        if not callable(record):
+            return
+        for business_id in businesses:
+            try:
+                record(BusinessEvent(
+                    business_id=business_id, kind=VERIFIED_EVENT,
+                    actor=f"recipe:{self._recipe.id}",
+                    detail={"findings": len(audited.get(business_id, [])),
+                            "answered": business_id in responses}))
+            except Exception:                     # noqa: BLE001 - reported
+                log.exception("could not mark %s verified; it will be offered "
+                              "again on the next pass", business_id)
 
     def _detect(self, found: Result, extractions: list, *, source: str) -> None:
         """Turn what memory now knows into ranked opportunities.

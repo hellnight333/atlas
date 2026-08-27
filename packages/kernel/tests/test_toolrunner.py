@@ -302,9 +302,13 @@ def test_targets_are_bounded():
     """A market that grows to ten thousand businesses must not become ten
     thousand fetches in one mission."""
     class Everything:
-        def recorded_websites(self, *, limit, tenant=None):
+        def businesses_by_website(self, *, limit, tenant=None):
             assert limit <= 200, "the repository was asked for an unbounded list"
-            return [f"https://s{n}.example/" for n in range(limit)]
+            from atlas_kernel.opportunity.models import Business
+            return {f"https://s{n}.example/":
+                    Business(id=f"b-{n}", name=f"S{n}",
+                             website=f"https://s{n}.example/")
+                    for n in range(limit)}
 
     found = toolrunner.targets_for(recipes.get("verify-recorded-websites"),
                                    repository=Everything(), limit=10)

@@ -23,6 +23,12 @@ from sqlalchemy import text
 
 from ..db import SessionLocal
 from .identity import place_id, strong_keys, with_identity
+
+#: The timeline entry a verification pass writes for every site it attempted.
+#: One name, used by the query that orders the backlog and by the pass that
+#: marks it — a second spelling would silently stop the rotation, and the run
+#: would still report success.
+VERIFIED_EVENT = "website_verified"
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -460,31 +466,86 @@ class OpportunityRepository:
             if row["detected_at"] else "",
         }
 
-    def recorded_websites(self, *, limit: int = 40,
-                          tenant: TenantId | None = None) -> list[str]:
-        """Websites Qevik has evidence for, oldest first.
+    def businesses_by_website(self, *, limit: int = 40,
+                              tenant: TenantId | None = None
+                              ) -> dict[str, Business]:
+        """The websites Qevik has evidence for, and whose they are.
 
-        The allow-list a verification recipe fetches. Every address here came
-        from an evidenced sighting, which is what makes "the targets come from
-        memory" a safety property rather than a convenience: nothing can put a
-        URL in this list except a source Qevik actually read.
+        Both halves of verification come from here. The fetch needs the
+        addresses; the audit needs to know which business each response belongs
+        to, and a finding attributed to the wrong company is worse than no
+        finding at all.
 
-        Oldest first so a bounded run works through the backlog rather than
-        re-checking the same recent few every night.
+        They are one query for that reason. Two — a list of URLs to fetch and a
+        separate lookup to attribute them — is the shape that drifts: they
+        would be taken at different moments, ordered differently, and bounded
+        differently, and the run would quietly audit forty sites and attribute
+        thirty-eight.
+
+        **Least recently verified first, never-verified before all of them.**
+        That ordering is the whole reason a nightly run works through a backlog
+        instead of re-reading the same sites for ever.
+
+        It was not the ordering. `DISTINCT ON (website)` requires the query to
+        sort by `website`, so a `LIMIT` on it took the alphabetically first
+        forty — every night, the same forty, while the docstring claimed oldest
+        first. With 359 recorded sites and 40 a night, 319 of them would never
+        have been fetched at all, and nothing would have reported a problem: the
+        run would have succeeded nightly and re-audited the letter A.
+
+        So the de-duplication and the ordering are now two steps, and the
+        ordering is over `VERIFIED_EVENT`, which `mission/toolrunner.py` records
+        for every site a verification pass **attempted** — not only for the ones
+        that answered. A site that refuses robots or times out has still had its
+        turn, and leaving it unmarked would let it hold up the queue for ever.
         """
         with SessionLocal() as session:
             rows = session.execute(
                 text("""
-                SELECT DISTINCT ON (website) website
-                FROM atlas_businesses
-                WHERE website IS NOT NULL AND website <> ''
-                ORDER BY website, first_seen_at
+                SELECT site.* FROM (
+                    SELECT DISTINCT ON (website) *
+                    FROM atlas_businesses
+                    WHERE website IS NOT NULL AND website <> ''
+                    ORDER BY website, first_seen_at
+                ) AS site
+                LEFT JOIN (
+                    SELECT business_id, max(at) AS last_at
+                    FROM atlas_business_events
+                    WHERE kind = :verified
+                    GROUP BY business_id
+                ) AS seen ON seen.business_id = site.id
+                ORDER BY seen.last_at ASC NULLS FIRST, site.first_seen_at
                 LIMIT :limit
                 """),
-                {"limit": max(1, min(int(limit), 200))},
-            ).scalars().all()
-        return [str(row) for row in rows if str(row).startswith(("http://",
-                                                                "https://"))]
+                {"limit": max(1, min(int(limit), 200)),
+                 "verified": VERIFIED_EVENT},
+            ).mappings().all()
+        found: dict[str, Business] = {}
+        for row in rows:
+            website = str(row["website"] or "")
+            # A scheme-less or `mailto:` value is something a source recorded,
+            # not something the fetcher may be handed. Dropped here rather than
+            # normalised: guessing `https://` in front of an address a directory
+            # typed by hand is how a fetch reaches a host nobody recorded.
+            if not website.startswith(("http://", "https://")):
+                continue
+            found[website] = self._business_from_row(row)
+        return found
+
+    def recorded_websites(self, *, limit: int = 40,
+                          tenant: TenantId | None = None) -> list[str]:
+        """The allow-list a verification recipe fetches.
+
+        Every address here came from an evidenced sighting, which is what makes
+        "the targets come from memory" a safety property rather than a
+        convenience: nothing can put a URL in this list except a source Qevik
+        actually read.
+
+        Derived from `businesses_by_website` rather than queried again, so the
+        set that is fetched and the set that can be attributed are the same set
+        by construction.
+        """
+        return list(self.businesses_by_website(limit=limit, tenant=tenant))
 
     def save_finding(self, finding: Finding) -> Finding:
         with SessionLocal() as session:

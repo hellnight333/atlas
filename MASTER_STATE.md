@@ -358,14 +358,11 @@ agents, (C) the flagship site.
 
 *(Superseded — that shipped. See "Deployed and running".)*
 
-The next milestone is **an evidenced `WEAK_WEB_PRESENCE` detector**: the
-verification recipe now records what each site returned, and nothing yet turns
-those responses into findings. `detectors/website.py` already audits a page;
-joining it to the verification evidence turns "the site answered 200 over
-plain HTTP in 3.4 seconds" into an opportunity `offer-website` can execute.
+*(Superseded — the evidenced `WEAK_WEB_PRESENCE` detector shipped. See
+"Evidenced weak web presence" below.)*
 
-That is a small, unblocked, deterministic piece, and it is the first opportunity
-Qevik could actually sell against.
+The next milestone is **an approved opportunity becoming a mission**. See
+"Next — the first customer-deliverable workflow".
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -424,6 +421,133 @@ worker has recorded missions.
 
 ---
 
+## Evidenced weak web presence — built
+
+The verification recipe had been fetching real homepages and recording what each
+server said, and **nothing read any of it**. Genuine evidence, with provenance,
+that produced no conclusion. That is now joined.
+
+### What the join actually is
+
+Not a second auditor. `detectors/website.py` already held the rules — what
+counts as slow, what counts as thin, what a missing viewport means — and the
+temptation was to write a second set that reads stored evidence. Two
+implementations agree on the day they are written and diverge the first time
+somebody moves `SLOW_RESPONSE_SECONDS`.
+
+So the rules were lifted onto a neutral `PageObservation`: the requested URL,
+the answering URL, status, content type, elapsed time, bytes, body, and whether
+the body is complete. A live inspection builds one from an httpx response; the
+verification join builds one from `Evidence.observed`. Both then call the same
+`findings_from`. An audit of stored evidence produces exactly what a live
+inspection would have produced from the same page, and that is proven rather
+than asserted.
+
+### What the evidence is not allowed to support
+
+Three refusals, each one a false finding that would otherwise have shipped, and
+each with a negative control proving the dangerous version fires:
+
+- **A refusal is not a response.** `fetch_steps` records a blocked address, a
+  robots exclusion and a dead host as evidence too — status 0 with an error.
+  Auditing those would report a business whose homepage Qevik's own guard
+  refused to fetch as a business with a broken homepage. They are `NOT_VERIFIED`
+  and produce nothing. The negative control: the same address answering does
+  produce findings, so the silence is the refusal and not a broken auditor.
+- **A truncated body is not a short page.** A body cut at 256 KB, or dropped for
+  being enormous, cannot support "this page has no h1" — the h1 may be in the
+  part that is missing. Head-derived findings survive truncation only when
+  `</head>` was actually reached inside the bytes that arrived; whole-document
+  findings are suppressed entirely. The negative control: the same bytes marked
+  complete support them.
+- **Evidence of the wrong kind is not weak evidence.** A DNS record carries no
+  status and no markup, and is refused rather than read with defaults. Defaults
+  are how a missing field becomes a confirmed absence.
+
+### The offer connection, and the gap it exposes
+
+`ANSWERED_BY` maps an audited defect to a declared opportunity key, and
+`answerable()` intersects that with what `offer-website` **declares** it
+answers. Three map: `site_unreachable → broken`, `slow_response → performance`,
+`thin_content → thin_content`.
+
+Six do not. A missing viewport, a missing title, a missing meta description, no
+structured data and plain HTTP are all real, observed, and answered by no offer
+in the catalogue. Those still become observations on the signal — they were seen
+— and the signal's action stays **inside Qevik** rather than becoming a sale.
+Widening `offer-website.answers` to cover them is a reviewed decision somebody
+should make deliberately; inferring it in the detector would make the promise
+without the review. **Recorded as an open product decision, not as a defect.**
+
+### Why a second recurrence
+
+`rec-nightly-website-verification` at 05:00 UTC, after the 04:15 discovery, so a
+business found tonight is audited tonight. It is a separate recurrence rather
+than a second half of discovery because the two are bounded by unrelated numbers
+— what a source returns, versus how many of somebody else's servers Qevik will
+touch in one night — and because they fail differently. Overpass being down must
+not stop Qevik auditing the sites it already knows.
+
+Without this the milestone would have been code that nothing runs. The last
+session found exactly that fault in the discovery recurrence, which had been
+pointed at a placeholder recipe with no extractor.
+
+### Drift closed while here
+
+`recorded_websites()` and the attribution lookup were about to become two
+bounded reads of a table that changes — one to decide what to fetch, one to
+decide whose site it was. They are one query now, `businesses_by_website()`,
+with the URL list derived from it. The two-query version would have audited
+forty sites and attributed thirty-eight, silently.
+
+### Acceptance
+
+`infra/verify_weak_web_presence.py` — **43 checks, 0 failed**, ending with the
+whole chain through the real production `ToolAgent` against a real local HTTP
+server: fetch, audit as a recorded step, findings attributed to the right
+business, one opportunity ranked and stored, carrying the fingerprint of the
+fetch that mission actually made.
+
+The harness itself found one wrong assertion of mine — I had claimed a truncated
+body supports *nothing*, when the URL's scheme is a fact that does not live in
+the body at all. The transport findings legitimately survive truncation.
+
+## Next — the first customer-deliverable workflow
+
+**An approved opportunity becomes a mission.**
+
+The chain now runs: recurrence → mission → tool agent → recipe → guarded fetch →
+evidence → audit → finding → ranked signal → console, with an OUTWARD action
+naming `offer-website` and marked `needs_approval`. A person can see it on a
+phone.
+
+And approving it does nothing. `atlas_signals` is read by the console and by
+nothing else; `policy.decide` gates *missions*, and a signal is not one. That is
+the whole remaining structural gap between "Qevik knows what to sell" and "Qevik
+does the work", and it is the correct next milestone for three reasons:
+
+1. **It is deterministic.** No provider credential. The blocked search provider
+   and the blocked model provider are both irrelevant to it.
+2. **It creates no second orchestration path.** An approved signal produces a
+   mission with a declared recipe, and the existing scheduler, policy layer,
+   claims, budgets, scratch isolation and worker run it unchanged.
+3. **Everything downstream of it is externally blocked.** Outreach needs a
+   sending identity; publishing needs hosting. Building either before this one
+   would stall on a dependency this one does not have.
+
+Scope, deliberately ending inside the building:
+
+- An operator approval on a signal, recorded against the signal, by a person.
+- A declared delivery recipe — `offer-website` has an executor; it needs a
+  recipe declaration so a mission can name it as a key like every other.
+- Dispatch through the existing scheduler into a scratch workspace.
+- An artefact and a mission report a person reviews.
+
+**It stops there on purpose.** Publishing the site and contacting the business
+are separate OUTWARD acts, each gated, and both currently blocked externally.
+The first customer-deliverable workflow ends at *a reviewed draft exists*, which
+is a real deliverable and an honest one.
+
 ## Reserved milestone: Agent Compute Fabric
 
 Qevik must eventually register and dispatch to external machines — the HP and
@@ -441,11 +565,26 @@ where each stands:
 | worker independence and disposability | **done** — two units, each refusing the other's work |
 | execution isolation per unit of work | **done** — scratch clone, origin allow-list, sandbox |
 | budgets bounding a unit of work | **done** — `budgets.assess` before dispatch |
+| dispatch through the scheduler and nothing else | **done** — and it stays that way; a node runs what it is given and never queues for itself |
 | **a network-reachable mission ledger** | **missing, and this is the blocker** |
 | node identity and registration | missing |
-| capability advertisement (CPU/GPU/RAM) | missing |
-| heartbeat / liveness distinct from claim staleness | missing |
+| capability advertisement — CPU, GPU, RAM **and which tools the node has** | missing |
+| heartbeat / liveness, distinct from mission-claim staleness | missing |
 | per-node execution policy | missing |
+
+The last five are the requirement, kept verbatim so a later session cannot
+quietly narrow it: **a network-reachable mission ledger, node identity and
+registration, capability advertisement (CPU/GPU/RAM/tools), a heartbeat that is
+separate from mission-claim staleness, per-node execution policy,
+scheduler-based dispatch, and no second orchestration system.** The physical
+machines this must eventually carry are the **HP** and the **Lenovo**, as Qevik
+execution nodes.
+
+A heartbeat is not a claim, and conflating them is the mistake to avoid at the
+start. A claim going stale means *this mission needs re-dispatching*; a node
+going quiet means *this machine is gone*. One node can hold a healthy claim on
+a mission that is making no progress, and a healthy node can hold no claims at
+all. Two signals, two timeouts, two responses.
 
 ### The one real blocker
 
@@ -505,7 +644,9 @@ addition and never the only form.
 ## Roadmap, in dependency order
 
 agent registry → scheduler → message protocol → budgets → CLI/tool agents →
-business discovery / opportunity engine → mobile control surface → flagship
+business discovery / opportunity engine → **evidenced audit → approved
+opportunity → delivery mission** → outreach *(blocked: sending identity)* →
+publishing *(blocked: hosting)* → Agent Compute Fabric → voice → flagship
 `qevik.ai`
 
 The first four exist as modules (`fabric/agents.py`, `fabric/scheduler.py`,
@@ -569,11 +710,35 @@ the undeployed code.
 - **`BLOCKED_EXTERNAL_PROVIDER`** — no provider accepts the configured model
   credential. Test credentials, deliberately in use for provider-boundary
   testing. **Not a project blocker. Do not raise rotation.**
+- **No search provider.** **53 of 412** known businesses have no website
+  recorded by any source *(measured on production, 2026-08-27)*. Proving a
+  business has *no* site — as opposed to one this source does not list — needs a
+  search provider, which is a real external dependency. Until then those stay
+  `MISSING_SERVICE` with a *verify* action, and the audit cannot reach them:
+  there is no address to fetch.
+
+  This shrank from "53 of 59" by the nightly discovery running, not by anything
+  being fixed: the same 53 businesses, against a memory that grew to 412. The
+  ratio moved and the blocker did not.
+- **No sending identity.** Outreach cannot start. This is what makes "approved
+  opportunity → delivery mission" the right next milestone and outreach the
+  wrong one.
+- **No hosting for delivered artefacts.** Publishing a built site is an OUTWARD
+  act with nowhere to publish to yet.
 
 ## Open findings
 
 - **F-001** — `/tmp/db.bak` on `qevik-core-01`. Not read, not deleted, `0600`.
   Awaiting an explicit operational decision. `docs/SECURITY_FINDINGS.md`.
+
+## Open product decisions
+
+- **Six audited defects no offer answers.** A missing viewport, title, meta
+  description, structured data, or plain HTTP are observed and real, and
+  `offer-website.answers` does not claim to fix them, so no sale is proposed
+  from them. Either widen the offer's declaration or accept that they are
+  context on a signal rather than a reason to approach anybody. A decision to
+  make on purpose; the detector will not make it quietly.
 
 ---
 

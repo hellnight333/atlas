@@ -12,11 +12,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from atlas_kernel.opportunity import detect, extractors, ranking
+from atlas_kernel.opportunity import detect, extractors, ranking, verification
 from atlas_kernel.opportunity.discovery import Classification, DiscoveryState
 from atlas_kernel.opportunity.models import Business, Evidence, EvidenceKind
 from atlas_kernel.opportunity.scan import Recorded
-from atlas_kernel.opportunity.signals import Inference, Observation, Signal, SignalKind
+from atlas_kernel.opportunity.signals import (
+    Inference,
+    Observation,
+    Reach,
+    Signal,
+    SignalKind,
+)
 
 
 def an_evidence() -> Evidence:
@@ -90,9 +96,56 @@ def test_the_web_inference_admits_the_source_may_simply_not_list_it():
     assert "does not list" in found.inferences[0].would_be_wrong_if
 
 
-def test_no_detector_claims_anything_about_the_world():
+#: The detectors allowed to say something about a business rather than about a
+#: source or about Qevik. Written here on purpose: a new one is a decision
+#: somebody should have to make in a review, and this test failing is what
+#: makes them. Everything else must still claim nothing.
+CLAIMS_ABOUT_THE_WORLD = {SignalKind.WEAK_WEB_PRESENCE}
+
+
+def test_only_the_reviewed_detectors_claim_anything_about_the_world():
     for entry in detect.describe():
-        assert entry["claims_about_the_world"] is False
+        expected = SignalKind(entry["kind"]) in CLAIMS_ABOUT_THE_WORLD
+        assert entry["claims_about_the_world"] is expected, entry["kind"]
+
+
+def test_a_world_claiming_detector_rests_on_a_response_not_an_assertion():
+    """The rule that earns the claim: it read what the business's own server
+    said. A detector claiming about the world from a source record would be
+    repeating a directory as though it had checked."""
+    business = Business(id="b-1", name="Al Manara Dental",
+                        website="https://almanara.example/")
+    response = Evidence(
+        kind=EvidenceKind.HTTP_RESPONSE, source="https://almanara.example/",
+        observed={"status": 200, "elapsed_ms": 9000, "content_type": "text/html",
+                  "body": "<html><head><title>x</title></head><body>y</body></html>",
+                  "bytes": 60, "body_truncated": False, "redirect_chain": []},
+        summary="HTTP 200", detector="recipe:http-fetch")
+    findings = verification.audit(business, response)
+    signal = detect.weak_web_presence(business, findings, response,
+                                      source="verify-recorded-websites")
+    assert signal is not None
+    assert signal.kind is SignalKind.WEAK_WEB_PRESENCE
+    # Every observation reaches back to the fetch itself.
+    assert all(response.fingerprint in o.fingerprints
+               for o in signal.observations)
+
+
+def test_an_outward_action_from_an_audit_still_needs_a_person():
+    business = Business(id="b-1", name="Al Manara Dental",
+                        website="https://almanara.example/")
+    response = Evidence(
+        kind=EvidenceKind.HTTP_RESPONSE, source="https://almanara.example/",
+        observed={"status": 200, "elapsed_ms": 9000, "content_type": "text/html",
+                  "body": "<html><head><title>x</title></head><body>y</body></html>",
+                  "bytes": 60, "body_truncated": False, "redirect_chain": []},
+        summary="HTTP 200", detector="recipe:http-fetch")
+    signal = detect.weak_web_presence(
+        business, verification.audit(business, response), response,
+        source="verify-recorded-websites")
+    outward = [a for a in signal.actions if a.reach is Reach.OUTWARD]
+    assert outward, "a slow site is a sale, and the sale must be visible"
+    assert all(a.needs_approval for a in outward)
 
 
 def test_extractions_are_matched_by_source_id_not_by_position():

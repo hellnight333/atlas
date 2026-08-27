@@ -127,6 +127,19 @@ class Recipe(BaseModel):
     #: sighting. A key like every other: the extractor decides which fields it
     #: can fill, and a recipe cannot widen that.
     extractor: str = ""
+    #: Which declared audit reads this recipe's evidence into findings, by
+    #: name. Empty means the recipe records responses and draws nothing from
+    #: them, which is the honest default: reading a response and concluding
+    #: something about a business is a decision, and it belongs in the
+    #: declaration rather than in whatever happens to be looking at the
+    #: evidence afterwards.
+    #:
+    #: An audit is not an extractor. An extractor turns a source's own
+    #: statements into a sighting — what OpenStreetMap says a clinic is called.
+    #: An audit turns a business's own server's reply into findings about that
+    #: business. The first records; the second concludes, and only the second
+    #: can produce something Qevik would approach somebody about.
+    audit: str = ""
     notes: str = ""
 
     @field_validator("steps")
@@ -151,6 +164,10 @@ class Recipe(BaseModel):
     #: The only sources of targets there are. A recipe naming anything else is
     #: refused at import, like every other key in this system.
     TARGET_SOURCES: ClassVar[frozenset[str]] = frozenset({"business_websites"})
+
+    #: The audits there are. A key, resolved from code, like everything else a
+    #: recipe names — so a recipe cannot bring its own way of concluding.
+    AUDITS: ClassVar[frozenset[str]] = frozenset({"website"})
 
     @property
     def tools(self) -> tuple[str, ...]:
@@ -187,7 +204,8 @@ class Recipe(BaseModel):
                 "agent_id": self.agent_id, "capability": self.capability.value,
                 "tools": list(self.tools), "steps": len(self.steps),
                 "targets_from": self.targets_from,
-                "extractor": self.extractor, "notes": self.notes}
+                "extractor": self.extractor, "audit": self.audit,
+                "notes": self.notes}
 
 
 def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
@@ -239,6 +257,18 @@ def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
             raise RecipeRefused(
                 f"{recipe.id} names extractor {recipe.extractor!r}, which is "
                 "not declared. A recipe cannot bring its own reader.") from unknown
+
+    if recipe.audit and recipe.audit not in Recipe.AUDITS:
+        raise RecipeRefused(
+            f"{recipe.id} names audit {recipe.audit!r}, which is not declared. "
+            f"Known: {', '.join(sorted(Recipe.AUDITS))}. An audit concludes "
+            "things about a business, so nothing may run one nobody wrote.")
+
+    if recipe.audit and not recipe.targets_from:
+        raise RecipeRefused(
+            f"{recipe.id} declares an audit and no target source. An audit "
+            "reads one business's own server's reply, and a recipe whose "
+            "targets are fixed URLs has no business to attribute findings to.")
 
     if agent.capability is not recipe.capability:
         raise RecipeRefused(
@@ -311,6 +341,7 @@ RECIPES: tuple[Recipe, ...] = (
         agent_id="researcher",
         capability=Capability.RESEARCH,
         targets_from="business_websites",
+        audit="website",
         steps=(
             Step(tool="http-fetch", command=("TARGETS",),
                  proves="whether each recorded website answers, with what "
@@ -323,7 +354,14 @@ RECIPES: tuple[Recipe, ...] = (
                "sighting.\n\n"
                "Verifying that a business has **no** website is a different "
                "problem and is not this recipe: it needs a search provider, "
-               "which is a real external dependency and is recorded as one."),
+               "which is a real external dependency and is recorded as one.\n\n"
+               "`audit=\"website\"` is what makes the fetching worth doing. "
+               "Without it this recipe recorded real responses that nothing "
+               "read — genuine evidence, and no conclusion drawn from any of "
+               "it. The audit applies `detectors/website.py`'s rules to what "
+               "was already retrieved rather than fetching again, so an "
+               "opportunity raised here rests on the same guarded fetch a "
+               "reviewer can see in the mission report."),
     ),
     Recipe(
         id="discover-uae-dental",

@@ -409,7 +409,74 @@ _DISCOVERY_PLAN = Plan(
     approval_required=False,
 )
 
+#: Verification is a second recurrence rather than a second half of discovery,
+#: for a reason worth stating: discovery is bounded by what a source returns and
+#: verification is bounded by how many of *somebody else's* servers Qevik is
+#: willing to touch in one night. Those two numbers have nothing to do with each
+#: other, and a single mission carrying both would have to pick one.
+#:
+#: It also fails differently. Overpass being down should not stop Qevik auditing
+#: the sites it already knows, and forty slow homepages should not cost it the
+#: night's discovery.
+_VERIFICATION_PLAN = Plan(
+    goal="Fetch the websites memory records and audit what came back",
+    why=("A website recorded by a directory is a claim, not a fact. Until a "
+         "server answers, Qevik knows only that somebody once wrote an address "
+         "down — and every opportunity resting on that address rests on the "
+         "directory rather than on the business.\n\n"
+         "This is also the only work here that produces something to sell. An "
+         "audited defect is the first evidence Qevik holds that would justify "
+         "approaching a business at all."),
+    steps=(
+        PlanStep(order=1, title="fetch each recorded website",
+                 why="through the guarded fetcher, one page each, from an "
+                     "allow-list computed from Qevik's own memory",
+                 files=("reports/verification.md",)),
+        PlanStep(order=2, title="audit what each server returned",
+                 why="the website detector's rules, applied to the response "
+                     "already recorded rather than to a second fetch"),
+        PlanStep(order=3, title="raise only what the responses support",
+                 why="a refused fetch and a truncated body are NOT_VERIFIED, "
+                     "and neither becomes a finding"),
+    ),
+    test_plan="the pass reports what answered, what it found, and on how many",
+    security_impact=("Outbound HTTP to public addresses only, refused on every "
+                     "private one. No credentials. Contacts nobody: an offer "
+                     "the audit suggests is a proposal that waits for a person."),
+    rollback="signals are additive and de-duplicated; nothing is overwritten",
+    estimated_cost=0.0,
+    cost_status="REPORTED",
+    approval_required=False,
+)
+
 RECURRENCES: tuple[Recurrence, ...] = (
+    Recurrence(
+        id="rec-nightly-website-verification",
+        tenant_id=QEVIK_TENANT,
+        title="Nightly website verification",
+        description=("Fetches the websites Qevik has recorded and audits what "
+                     "each server actually returned, turning an address a "
+                     "directory listed into evidence about the business."),
+        plan=_VERIFICATION_PLAN,
+        agent_id="researcher",
+        recipe="verify-recorded-websites",
+        origin_name=origins.EMPTY_NAME,
+        every=timedelta(days=1),
+        # 05:00 UTC — after the 04:15 discovery, so a business found tonight is
+        # audited tonight rather than tomorrow, and still inside the 01:00–06:00
+        # night window with room for forty polite fetches.
+        #
+        # Anchored to the 26th rather than the 27th so the first occurrence has
+        # already elapsed: the daily slot is identical either way, and this way
+        # the backlog starts moving when the code lands instead of after a
+        # four-hour wait nobody would be awake to watch. `latest_due` returns
+        # one occurrence however long has passed, so this cannot stack.
+        anchor=datetime(2026, 8, 26, 5, 0, tzinfo=UTC),
+        requested_by="recurrence",
+        notes=("Runs unattended and contacts nobody. What it finds can lead to "
+               "an approach, and that approach is an OUTWARD suggested action "
+               "which `policy.decide` gates like any other."),
+    ),
     Recurrence(
         id="rec-daily-business-discovery",
         tenant_id=QEVIK_TENANT,

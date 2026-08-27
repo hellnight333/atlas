@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ssl
 import time
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
@@ -76,12 +77,24 @@ class _PageFacts(HTMLParser):
         self.viewport: str | None = None
         self.first_h1: str | None = None
         self.has_structured_data = False
+        #: Whether ``</head>`` was reached. The difference between "this page
+        #: has no <title>" and "the part of the page we kept has none", which
+        #: matters the moment a body arrives truncated.
+        self.head_closed = False
         self._text: list[str] = []
         self._capture: str | None = None
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {key.lower(): (value or "") for key, value in attrs}
+        if tag == "body":
+            # A document that has opened <body> has finished its head, whether
+            # or not it bothered to close it — browsers read it that way. On
+            # the *start* tag rather than the end, because a body that was
+            # truncated never reaches `</body>`, and waiting for one would
+            # suppress the head findings of exactly the pages truncation
+            # affects.
+            self.head_closed = True
         if tag in {"script", "style"}:
             # Structured data lives in a script tag, so check before skipping.
             if attributes.get("type", "").lower() == "application/ld+json":
@@ -102,6 +115,8 @@ class _PageFacts(HTMLParser):
             self.has_structured_data = True
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "head":
+            self.head_closed = True
         if tag in {"script", "style"}:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
@@ -131,6 +146,44 @@ def _normalise(url: str) -> str:
     if not urlparse(url).scheme:
         return f"https://{url}"
     return url
+
+
+@dataclass(frozen=True)
+class PageObservation:
+    """One fetched page as facts, rather than as whichever object fetched it.
+
+    Both callers build one of these: `WebsiteDetector.inspect`, from a live
+    httpx response, and `opportunity/verification.py`, from evidence a
+    verification mission recorded hours earlier. That is the point — one
+    definition of *what was seen* is what makes one definition of *what counts
+    as a defect* possible. The alternative, a second set of rules reading
+    recorded evidence, drifts from this one the first time a threshold moves.
+
+    `body_complete` is the field that earns its place. A body that arrived
+    truncated, or was dropped for being enormous, cannot support a finding of
+    the form "this page has no X" — the X may be in the part that is missing.
+    That is `NOT_VERIFIED`, not `CONFIRMED_ABSENT`, and the distinction is the
+    same one the rest of this system spends its time protecting.
+    """
+
+    requested_url: str
+    final_url: str
+    status: int
+    content_type: str
+    elapsed_seconds: float
+    bytes: int
+    body: str
+    #: False when the body was truncated or never kept. Findings that reason
+    #: from absence are suppressed rather than guessed.
+    body_complete: bool = True
+
+    @property
+    def is_html(self) -> bool:
+        return "html" in self.content_type.lower()
+
+    @property
+    def scheme(self) -> str:
+        return urlparse(self.final_url).scheme
 
 
 class WebsiteDetector:
@@ -180,15 +233,38 @@ class WebsiteDetector:
             return [self._unreachable(business, url, error)]
         elapsed = time.monotonic() - started
 
-        findings: list[Finding] = []
-        if response.status_code >= 400:
-            findings.append(self._bad_status(business, url, response, elapsed))
+        page = PageObservation(
+            requested_url=url,
+            final_url=str(response.url),
+            status=response.status_code,
+            content_type=response.headers.get("content-type", ""),
+            elapsed_seconds=elapsed,
+            bytes=len(response.content),
+            body=response.text,
+            # A live response was read in full or it raised. Nothing here
+            # truncates, so nothing here has to suppress.
+            body_complete=True,
+        )
+        return self.findings_from(business, page)
+
+    # -- the shared rules ------------------------------------------------
+
+    def findings_from(self, business: Business,
+                      page: PageObservation) -> list[Finding]:
+        """Every defect one observed page supports. The single set of rules.
+
+        `inspect` reaches this with a response it just made; verification
+        reaches it with one recorded earlier. Neither can produce a finding the
+        other would not, which is the property that makes an audit of stored
+        evidence worth the same as an audit performed live.
+        """
+        if page.status >= 400:
             # A 500 tells us nothing about the page's SEO. Stop here rather than
             # generating findings about an error page's missing h1.
-            return findings
+            return [self._bad_status(business, page)]
 
-        findings.extend(self._transport_findings(business, url, response, elapsed))
-        findings.extend(self._content_findings(business, response))
+        findings = self._transport_findings(business, page)
+        findings.extend(self._content_findings(business, page))
         return findings
 
     # -- finding builders ------------------------------------------------
@@ -264,36 +340,35 @@ class WebsiteDetector:
             ],
         )
 
-    def _bad_status(
-        self, business: Business, url: str, response: httpx.Response, elapsed: float
-    ) -> Finding:
+    def _bad_status(self, business: Business, page: PageObservation) -> Finding:
         return Finding(
             business_id=business.id,
             kind=FindingKind.SITE_UNREACHABLE,
             severity=Severity.HIGH,
             confidence=OBSERVED_FAILURE_CONFIDENCE,
-            statement=f"The website returns an error ({response.status_code}) instead of a page.",
+            statement=f"The website returns an error ({page.status}) instead of a page.",
             evidence=[
                 self._evidence(
                     EvidenceKind.HTTP_RESPONSE,
-                    str(response.url),
+                    page.final_url,
                     {
-                        "status_code": response.status_code,
-                        "elapsed_seconds": round(elapsed, 3),
-                        "final_url": str(response.url),
+                        "status_code": page.status,
+                        "elapsed_seconds": round(page.elapsed_seconds, 3),
+                        "final_url": page.final_url,
                     },
-                    f"GET {url} returned {response.status_code}.",
+                    f"GET {page.requested_url} returned {page.status}.",
                 )
             ],
         )
 
     def _transport_findings(
-        self, business: Business, url: str, response: httpx.Response, elapsed: float
+        self, business: Business, page: PageObservation
     ) -> list[Finding]:
         findings: list[Finding] = []
-        final_url = str(response.url)
+        final_url = page.final_url
+        elapsed = page.elapsed_seconds
 
-        if urlparse(final_url).scheme != "https":
+        if page.scheme != "https":
             findings.append(
                 Finding(
                     business_id=business.id,
@@ -307,10 +382,10 @@ class WebsiteDetector:
                             EvidenceKind.HTTP_RESPONSE,
                             final_url,
                             {
-                                "scheme": urlparse(final_url).scheme,
-                                "status_code": response.status_code,
+                                "scheme": page.scheme,
+                                "status_code": page.status,
                             },
-                            f"{final_url} resolved over {urlparse(final_url).scheme}.",
+                            f"{final_url} resolved over {page.scheme}.",
                         )
                     ],
                 )
@@ -332,7 +407,7 @@ class WebsiteDetector:
                             {
                                 "elapsed_seconds": round(elapsed, 3),
                                 "threshold_seconds": SLOW_RESPONSE_SECONDS,
-                                "bytes": len(response.content),
+                                "bytes": page.bytes,
                             },
                             f"GET {final_url} took {elapsed:.2f}s "
                             f"(threshold {SLOW_RESPONSE_SECONDS}s).",
@@ -342,19 +417,34 @@ class WebsiteDetector:
             )
         return findings
 
-    def _content_findings(self, business: Business, response: httpx.Response) -> list[Finding]:
-        content_type = response.headers.get("content-type", "")
-        if "html" not in content_type.lower():
+    def _content_findings(self, business: Business,
+                          page: PageObservation) -> list[Finding]:
+        """Findings the returned markup supports. Nothing the markup omits.
+
+        Two gates before any of it. The document must be HTML — an absent
+        ``<title>`` in a PDF is not a defect — and enough of it must be present
+        to speak about. A truncated body supports the head findings once
+        ``</head>`` has actually been reached inside the part that arrived, and
+        supports none of the whole-document ones: an h1, a JSON-LD block or
+        four hundred more characters of text may all be sitting in the region
+        that was cut off. Reporting those as absent would be inventing a
+        finding out of a storage limit.
+        """
+        if not page.is_html:
             return []
 
         parser = _PageFacts()
         try:
-            parser.feed(response.text)
+            parser.feed(page.body)
         except Exception:  # noqa: BLE001 — malformed markup is common and not our problem
             pass
 
-        final_url = str(response.url)
-        excerpt = response.text[:EVIDENCE_EXCERPT_CHARS]
+        whole_document = page.body_complete
+        if not whole_document and not parser.head_closed:
+            return []
+
+        final_url = page.final_url
+        excerpt = page.body[:EVIDENCE_EXCERPT_CHARS]
         findings: list[Finding] = []
 
         def html_evidence(observed: dict[str, Any], summary: str) -> Evidence:
@@ -411,7 +501,7 @@ class WebsiteDetector:
                 )
             )
 
-        if not parser.first_h1:
+        if whole_document and not parser.first_h1:
             findings.append(
                 Finding(
                     business_id=business.id,
@@ -423,7 +513,7 @@ class WebsiteDetector:
                 )
             )
 
-        if not parser.has_structured_data:
+        if whole_document and not parser.has_structured_data:
             findings.append(
                 Finding(
                     business_id=business.id,
@@ -441,7 +531,7 @@ class WebsiteDetector:
                 )
             )
 
-        if parser.visible_text_length < THIN_CONTENT_CHARS:
+        if whole_document and parser.visible_text_length < THIN_CONTENT_CHARS:
             findings.append(
                 Finding(
                     business_id=business.id,

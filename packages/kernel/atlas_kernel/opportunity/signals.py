@@ -57,6 +57,10 @@ class SignalKind(StrEnum):
 
     NEW_BUSINESS = "new_business"
     MISSING_SERVICE = "missing_service"
+    #: The site was fetched and what came back is weak. Distinct from
+    #: MISSING_SERVICE, which is a fact about a *source* having no website
+    #: recorded: this one rests on a response Qevik retrieved and audited.
+    WEAK_WEB_PRESENCE = "weak_web_presence"
     MARKET_GAP = "market_gap"
     RISING_DEMAND = "rising_demand"
     TRAFFIC_ANOMALY = "traffic_anomaly"
