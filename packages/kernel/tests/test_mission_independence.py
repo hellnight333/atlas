@@ -218,11 +218,17 @@ def test_a_worker_that_dies_mid_mission_releases_its_claim(
     mission, event = service.create(tenant=TENANT, title="Abandoned",
                                     requested_by="ayoub")
     timeline.append(event)
+    # The event is stamped six hours ago, not just the mission. That is what
+    # actually happened to an abandoned mission: the last thing anybody heard
+    # about it is six hours old. Backdating only the mission worked while an
+    # event inherited that field, and stopped meaning anything once an event
+    # started recording its own moment — which is the fact `stale` reads.
+    died_at = datetime.now(UTC) - timedelta(hours=6)
     abandoned = mission.model_copy(update={
         "status": MissionStatus.PROCESSING, "claimed_by": "worker-that-died",
-        "updated_at": datetime.now(UTC) - timedelta(hours=6)})
+        "updated_at": died_at})
     timeline.append(service._event(abandoned, actor="worker-that-died",
-                                   note="claimed then died"))
+                                   note="claimed then died", at=died_at))
 
     finished = _run_worker(timeline, repository, tmp_path, name="worker-fresh")
     assert finished.returncode == 0, finished.stderr[-2000:]

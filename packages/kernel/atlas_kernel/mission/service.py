@@ -22,7 +22,7 @@ pretended away. Single-worker operation is safe today; multi-worker is not.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timedelta
 from uuid import uuid4
 
 from ..opportunity.models import BusinessEvent
@@ -81,9 +81,56 @@ ALLOWED: dict[MissionStatus, frozenset[MissionStatus]] = {
 }
 
 
+#: The last ordering stamp this process issued. See `_stamp`.
+_last_stamp = datetime.min.replace(tzinfo=UTC)
+
+
+def _stamp() -> datetime:
+    """A moment strictly later than the last one this process issued.
+
+    `datetime.now` alone is not enough. Two calls can land in the same
+    microsecond, and a tie in this field is not cosmetic: `fold` resolves ties
+    by iteration order, so two events claiming the same moment make the folded
+    mission depend on the order a store happens to return rows in.
+
+    Per-process, and honestly so. Events for one mission come from one process
+    at a time — a mission is claimed by a single worker — so a cross-process
+    collision would need two processes writing about the same mission in the
+    same microsecond, which the claim already prevents.
+    """
+    global _last_stamp
+    now = datetime.now(UTC)
+    if now <= _last_stamp:
+        now = _last_stamp + timedelta(microseconds=1)
+    _last_stamp = now
+    return now
+
+
 def _event(mission: Mission, *, actor: str, note: str = "",
-           extra: dict | None = None) -> BusinessEvent:
+           extra: dict | None = None,
+           at: datetime | None = None) -> BusinessEvent:
+    """One event about a mission, stamped with when **the event** happened.
+
+    It used to inherit `mission.updated_at`, which only `transition` maintains.
+    Anything that recorded an event without transitioning — the worker's cost,
+    scratch and report notes, six call sites — therefore reused the previous
+    transition's timestamp, and four events could claim one moment.
+
+    That was invisible while the ledger was a file, because a file has an
+    implicit total order and the last line won. Moving the ledger to a database
+    removed that accident and the missing `report_path` appeared.
+
+    So an event records its own moment. `mission.updated_at` still means what it
+    meant; this is the *event's* time, which is what an append-only log orders
+    by, and it makes a tie impossible rather than unlikely.
+
+    `at` overrides the stamp for a caller that genuinely knows when the event
+    happened — replaying, or reconstructing an abandoned mission whose last
+    event really is six hours old. It cannot be used to win a fold: an older
+    stamp loses, so backdating an event only makes it count for less.
+    """
     detail = {**mission.summary(), "note": note, **(extra or {})}
+    detail["updated_at"] = (at or _stamp()).isoformat()
     return BusinessEvent(business_id=mission.tenant_id, factory=FACTORY,
                          kind=KIND, actor=actor, detail=detail)
 

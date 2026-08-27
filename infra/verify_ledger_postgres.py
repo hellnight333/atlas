@@ -59,6 +59,8 @@ def wipe():
             {"f": FACTORY, "t": TENANT})
         session.execute(text(
             "DELETE FROM atlas_business_events WHERE id = 'evt-ledgerproof-x'"))
+        session.execute(text(
+            "DELETE FROM atlas_business_events WHERE id LIKE '%tieproof'"))
         session.commit()
 
 
@@ -196,6 +198,71 @@ check("another process sees the work", done.returncode == 0,
 check("...all of it", seen == sorted(m.id for m in made), str(seen))
 check("...with no file to read", not Path("/nonexistent/never/created.jsonl").exists(),
       "it came from the database or it did not come at all")
+
+print("\n-- the historical tie, reproduced ------------------------------------")
+# Synthetic events with distinct timestamps passed this harness while seven of
+# thirteen real missions folded differently. This is the real condition: four
+# events for one mission claiming one moment, which is what the worker's six
+# direct `_event` calls produced before an event stamped its own time.
+TIED = "mission-tieproof01"
+MOMENT = "2026-08-26T23:28:19.653423+00:00"
+tied_events = [
+    {"kind": KIND, "factory": FACTORY, "actor": "worker", "business_id": TENANT,
+     "detail": {"mission_id": TIED, "tenant_id": TENANT, "status": "complete",
+                "updated_at": MOMENT, "note": note, "report_path": path}}
+    for note, path in (("complete", ""), ("worked in empty scratch", ""),
+                       ("cost UNKNOWN: nothing was charged", ""),
+                       ("report written", "reports/tieproof.md"))]
+
+tie_file = Timeline(work / "tied.jsonl", backend="file")
+for event in tied_events:
+    tie_file.append(event)
+
+with SessionLocal() as session:
+    for line, event in enumerate(tied_events, start=1):
+        session.execute(text("""
+            INSERT INTO atlas_business_events
+                (id, business_id, factory, kind, actor, detail, at)
+            VALUES (:id, :b, :f, :k, :a, :d, :at)
+        """), {"id": f"evt-m{line:08d}-tieproof", "b": TENANT, "f": FACTORY,
+               "k": KIND, "a": "worker",
+               "d": json.dumps(event["detail"]), "at": MOMENT})
+    session.commit()
+
+tie_pg = Timeline(work / "unused2.jsonl", backend="postgres")
+folded_file = [m for m in service.fold(tie_file.read(), tenant=TENANT)
+               if m["mission_id"] == TIED]
+folded_pg = [m for m in service.fold(tie_pg.read(), tenant=TENANT)
+             if m["mission_id"] == TIED]
+check("four events claim one moment, as production's do",
+      len({e["detail"]["updated_at"] for e in tied_events}) == 1
+      and len(tied_events) == 4)
+check("the file keeps the last one written", folded_file[0]["note"] == "report written",
+      folded_file[0]["note"])
+check("REGRESSION: postgres keeps the same one",
+      folded_pg[0]["note"] == "report written", folded_pg[0]["note"])
+check("...including the report_path a random order would drop",
+      folded_pg[0]["report_path"] == "reports/tieproof.md",
+      folded_pg[0]["report_path"] or "(lost)")
+check("BYTE FOR BYTE through the tie",
+      json.dumps(folded_file, sort_keys=True, default=str)
+      == json.dumps(folded_pg, sort_keys=True, default=str))
+
+print("\n-- a tie cannot happen again -----------------------------------------")
+# The source fix: an event stamps its own moment, so two events for one mission
+# cannot claim the same one however they were produced.
+from atlas_kernel.mission.models import Mission  # noqa: E402
+
+probe = Mission(id="m-stamp", tenant_id=TENANT, title="stamp")
+stamps = [service._event(probe, actor="w", note=f"n{n}").detail["updated_at"]
+          for n in range(50)]
+check("fifty events about one unchanged mission get fifty moments",
+      len(set(stamps)) == 50, f"{len(set(stamps))} distinct")
+check("...strictly increasing, so the order is total",
+      all(a < b for a, b in zip(stamps, stamps[1:])))
+check("...and none of them is the mission's own updated_at",
+      probe.summary()["updated_at"] not in stamps,
+      "an event records when it happened, not when the mission last moved")
 
 print("\n-- the file is untouched ---------------------------------------------")
 before = (work / "both.jsonl").read_bytes()
