@@ -60,6 +60,21 @@ MISSION_ID = re.compile(r"^mission-[0-9a-f]{12}$")
 REPORTS = Path("docs/qevik-docs/autonomous/reports")
 
 
+def _opportunities(request: Request):
+    """The business memory this control plane reads opportunities from.
+
+    Cached on the app the same way the discovery surface caches it, so an
+    approval and the list it was made from are looking at one database.
+    """
+    from ..opportunity.repository import OpportunityRepository
+
+    found = getattr(request.app.state, "opportunity_repository", None)
+    if found is None:
+        found = OpportunityRepository()
+        request.app.state.opportunity_repository = found
+    return found
+
+
 def origin_registry(request: Request) -> origins.Registry:
     """The origins this deployment declares.
 
@@ -251,6 +266,18 @@ def blockers(missions: list[dict]) -> dict:
              "blockers": m.get("blockers") or []} for m in stopped],
         "total": sum(len(f) for f in by_kind.values()),
     }
+
+
+class Delivery(BaseModel):
+    """Which opportunity a person is approving. Nothing else.
+
+    One field on purpose. A body that also carried a recipe, an origin or a
+    scope would be a caller deciding what the approval means — and the whole
+    point of this path is that the opportunity's own evidence decided that
+    before anybody was asked.
+    """
+
+    signal_id: str = Field(min_length=1, max_length=120)
 
 
 class Submission(BaseModel):
@@ -495,6 +522,59 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(error)) from error
         _append(request, event)
         return mission.summary()
+
+    @router.post("/deliver", status_code=201)
+    def deliver(body: Delivery, request: Request,
+                tenant: TenantId = Depends(current_tenant),
+                user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Approve one opportunity, and create the mission that delivers it.
+
+        One action because it is one decision. The person is not approving "a
+        mission" — they are approving *this opportunity*, and the mission is
+        what carrying it out looks like. Splitting them would leave an approved
+        opportunity that does nothing, which is the state this milestone
+        existed to end.
+
+        The recipe is **not** a parameter. It comes from the capability the
+        opportunity's own suggested action named, through `OFFER_RECIPES`, so
+        there is no request that can ask for a different one.
+
+        The mission then goes through `service.attach_plan` like every other,
+        so `policy.decide` still gets the last word on whether a person is
+        needed again before it runs.
+        """
+        from ..opportunity.repository import NotApprovable, UnknownSignal
+        from . import delivery as bridge
+
+        memory = _opportunities(request)
+        registry = origin_registry(request)
+        # A delivery writes into its own scratch workspace and reads Qevik's
+        # memory. It does not have a repository, and naming one would give a
+        # customer's build a checkout it has no reason to touch.
+        origin = registry.resolve(origins.EMPTY_NAME)
+
+        try:
+            approved = memory.approve_signal(body.signal_id,
+                                             actor=user.username, tenant=tenant)
+        except UnknownSignal as unknown:
+            raise HTTPException(status_code=404, detail=str(unknown)) from unknown
+        except NotApprovable as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+        try:
+            mission, events = bridge.enqueue(approved, tenant=tenant,
+                                             origin=origin,
+                                             actor=user.username)
+        except bridge.NotDeliverable as refused:
+            # The approval stands and is recorded; what cannot be built is the
+            # mission. Reported as such rather than rolled back, because a
+            # person did decide, and erasing that would lose the decision.
+            raise HTTPException(status_code=422, detail=str(refused)) from refused
+
+        for event in events:
+            _append(request, event)
+        return {**mission.summary(), "signal_id": approved["id"],
+                "approved_scope": mission.approved_scope}
 
     @router.post("/{mission_id}/plan")
     def propose(mission_id: str, body: Proposal, request: Request,

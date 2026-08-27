@@ -134,6 +134,16 @@ class Recipe(BaseModel):
     #: declaration rather than in whatever happens to be looking at the
     #: evidence afterwards.
     #:
+    #: Which offer this recipe delivers, by id. Empty for a recipe that
+    #: produces evidence rather than an artefact.
+    #:
+    #: The third key of its kind, and the same discipline: a recipe cannot
+    #: bring its own way of building, and nothing at runtime chooses which offer
+    #: gets carried out. `mission/delivery.py` maps an approved opportunity's
+    #: own suggested capability to the recipe that delivers it, and this is the
+    #: other half of that pair — so a mission whose recipe was swapped after
+    #: approval names an offer the approval never mentioned, and says so.
+    delivers: str = ""
     #: An audit is not an extractor. An extractor turns a source's own
     #: statements into a sighting — what OpenStreetMap says a clinic is called.
     #: An audit turns a business's own server's reply into findings about that
@@ -173,21 +183,22 @@ class Recipe(BaseModel):
     def tools(self) -> tuple[str, ...]:
         return tuple(sorted({step.tool for step in self.steps}))
 
+    #: The fields whose presence means this recipe cannot work without business
+    #: memory. Named as a set rather than spelled out inside `needs_memory`,
+    #: because that is the line somebody forgets: the worker asked
+    #: `if recipe.extractor`, then `audit` and `targets_from` arrived and a
+    #: verification mission ran with no repository, and then `delivers` arrived
+    #: and a delivery blocked itself for having no approval it could read.
+    #:
+    #: Adding a field here is a one-line decision in the same file as the field.
+    #: A test checks every name is real, so a rename cannot quietly empty it.
+    MEMORY_FIELDS: ClassVar[tuple[str, ...]] = (
+        "extractor", "audit", "targets_from", "delivers")
+
     @property
     def needs_memory(self) -> bool:
-        """Whether this recipe cannot do its job without business memory.
-
-        Derived from the recipe's own fields rather than restated by whoever
-        builds the agent. The worker used to ask `if recipe.extractor`, which
-        was right until `audit` and `targets_from` arrived — and then a
-        verification mission ran with no repository, fetched nothing, and tried
-        to resolve the literal word `TARGETS` as a hostname. It reported failure
-        for a reason that read like a DNS problem.
-
-        One property, three reasons, so the next field that needs memory is
-        added here and every caller gets it.
-        """
-        return bool(self.extractor or self.audit or self.targets_from)
+        """Whether this recipe cannot do its job without business memory."""
+        return any(getattr(self, field) for field in self.MEMORY_FIELDS)
 
     #: Tools whose steps are argv and may be executed as commands. Anything
     #: else is invoked by something that understands it — `http-fetch` by the
@@ -221,7 +232,7 @@ class Recipe(BaseModel):
                 "tools": list(self.tools), "steps": len(self.steps),
                 "targets_from": self.targets_from,
                 "extractor": self.extractor, "audit": self.audit,
-                "notes": self.notes}
+                "delivers": self.delivers, "notes": self.notes}
 
 
 def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
@@ -285,6 +296,22 @@ def validate(recipe: Recipe, *, registry: Registry | None = None) -> None:
             f"{recipe.id} declares an audit and no target source. An audit "
             "reads one business's own server's reply, and a recipe whose "
             "targets are fixed URLs has no business to attribute findings to.")
+
+    if recipe.delivers:
+        from ..execution.capabilities import EXECUTORS
+        if recipe.delivers not in EXECUTORS:
+            raise RecipeRefused(
+                f"{recipe.id} delivers {recipe.delivers!r}, which nothing can "
+                f"execute. Known: {', '.join(sorted(EXECUTORS))}. A recipe "
+                "promising work with no executor is one the scheduler would "
+                "dispatch and the worker could not perform.")
+        if agent.offer_id != recipe.delivers:
+            raise RecipeRefused(
+                f"{recipe.id} delivers {recipe.delivers!r} and {agent.id} is "
+                f"registered for {agent.offer_id or 'no offer'}. The agent's "
+                "declared offer is what bounds the work; a recipe pointing "
+                "somewhere else would run one capability under another's "
+                "declared blast radius.")
 
     if agent.capability is not recipe.capability:
         raise RecipeRefused(
@@ -378,6 +405,35 @@ RECIPES: tuple[Recipe, ...] = (
                "was already retrieved rather than fetching again, so an "
                "opportunity raised here rests on the same guarded fetch a "
                "reviewer can see in the mission report."),
+    ),
+    Recipe(
+        id="deliver-website",
+        does=("Build the site an approved opportunity asked for, from the facts "
+              "Qevik has recorded about the business and the defects it "
+              "actually observed. Produces files in the mission's scratch "
+              "workspace. Publishes nothing."),
+        agent_id="website-builder",
+        capability=Capability.IMPLEMENT,
+        delivers="offer-website",
+        steps=(
+            Step(tool="website-generator", command=("offer-website",),
+                 proves="what was built, from which observed defects, and what "
+                        "was left out for want of a source"),
+        ),
+        notes=("The end of the chain that starts at a nightly fetch. A person "
+               "approved one opportunity; this carries out the offer that "
+               "opportunity's own action named, and no other.\n\n"
+               "**It stops at a file.** `website-builder` declares exactly one "
+               "tool, `website-generator`, so a step here that named "
+               "`http-fetch` or `shell` is refused by `validate` at import — "
+               "publishing and telling the business are separate outward acts "
+               "and there is no route to either from this recipe. That is a "
+               "property of the declaration rather than a rule somebody "
+               "remembered to follow.\n\n"
+               "One step, on purpose. The executor already knows how to build "
+               "a site; splitting that into recipe steps would move a decision "
+               "out of reviewed code and into a declaration that only looks "
+               "like one."),
     ),
     Recipe(
         id="discover-uae-dental",

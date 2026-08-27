@@ -118,10 +118,12 @@ def roles_for(kind: str, *, tenant: str,
         log.info("self-check agent: %s", checker._adapter.describe())
         return Roles.all(checker)
 
-    if kind == "research":
-        # A non-coding role. It plans nothing, writes nothing and calls no
-        # provider: it carries out a *declared recipe* through the tools that
-        # recipe's agent is registered for.
+    if kind in {"research", "delivery"}:
+        # Two non-coding roles, one construction. Both plan nothing, call no
+        # provider, and carry out a *declared recipe* through the tools that
+        # recipe's agent is registered for. What separates them is which agent
+        # the worker serves and therefore which missions it may take — research
+        # fetches and audits, delivery builds what an approval asked for.
         #
         # The recipe is named by the **mission**, not by this worker, and is
         # resolved in `build_worker` where the mission is in hand. A placeholder
@@ -130,10 +132,11 @@ def roles_for(kind: str, *, tenant: str,
         # would pick one nobody asked for.
         from atlas_kernel.mission.toolrunner import ToolAgent
 
-        researcher = ToolAgent(recipes.get(RESEARCH_PLACEHOLDER))
-        log.info("research role: recipes are named by the mission; this worker "
-                 "dispatches %s", ", ".join(sorted(t for t in toolrunner.DISPATCHABLE)))
-        return Roles.all(researcher)
+        placeholder = ToolAgent(recipes.get(PLACEHOLDERS[kind]))
+        log.info("%s role: recipes are named by the mission; this worker "
+                 "dispatches %s", kind,
+                 ", ".join(sorted(t for t in toolrunner.DISPATCHABLE)))
+        return Roles.all(placeholder)
 
     if kind == "fake":
         log.warning("running with the deterministic fake agent: no model will "
@@ -181,13 +184,28 @@ def roles_for(kind: str, *, tenant: str,
 #: are any. `fake` is deliberately absent: it is not a declared agent, and the
 #: scheduler treating it as unknown is the correct answer.
 REGISTERED_AS = {"self-check": "self-check", "llm": "implementer",
-                 "research": "researcher"}
+                 "research": "researcher", "delivery": "website-builder"}
+
+#: What `--agent` accepts. **Derived**, not written out again.
+#:
+#: It was written out again, and a role added to `REGISTERED_AS` was rejected by
+#: argparse as an invalid choice — the worker knew the role and its own command
+#: line did not. `fake` is the only entry that is not a registered agent, which
+#: is the whole point of it and why it is added rather than filtered out.
+AGENT_CHOICES: tuple[str, ...] = (*sorted(REGISTERED_AS), "fake")
 
 #: A recipe the research role can be constructed with before a mission names
 #: one. Never executed under this name: `build_worker` replaces the agent with
 #: one built from the mission's own `recipe`, and a mission naming none is
 #: refused. It exists because `Roles` must hold an agent to be constructed.
 RESEARCH_PLACEHOLDER = "discover-uae-dental"
+
+#: The recipe each recipe-driven role is constructed with before a mission
+#: names one. Never executed under these names — `build_worker` replaces the
+#: agent with one built from the mission's own `recipe`, and a mission naming
+#: none is refused.
+PLACEHOLDERS = {"research": RESEARCH_PLACEHOLDER,
+                "delivery": "deliver-website"}
 
 
 def queued(timeline: Timeline, *, tenant: str,
@@ -384,6 +402,32 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
     return len(released)
 
 
+def _tools_of(mission: Mission) -> tuple[str, ...]:
+    """The tools this mission's declared recipe may use.
+
+    Read from the declaration rather than from what happened to run, so a
+    report says what the mission was *permitted*, which is the question a
+    reviewer asking "could this have contacted anybody" is really asking.
+    """
+    if not mission.recipe:
+        return ()
+    try:
+        return recipes.get(mission.recipe).tools
+    except recipes.UnknownRecipe:
+        return ()
+
+
+def _artefact_of(worker: object) -> tuple[str, ...]:
+    """What the delivering agent wrote, if this mission delivered anything.
+
+    Dug out defensively: most roles have no artefact, and a report that failed
+    to be written because a role lacked an attribute would lose the account of
+    a mission that did run.
+    """
+    roles = getattr(worker, "_roles", None)
+    return tuple(getattr(getattr(roles, "implementer", None), "artefact", ()) or ())
+
+
 def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                  origin: origins.Origin, roles: Roles,
                  scratch_root: Path, agent_choice: str = "",
@@ -415,7 +459,8 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     # an agent to exist; this replaces it with one built from the mission in
     # hand. A mission naming no recipe is refused in `pass_once` rather than
     # defaulted — defaulting would run a recipe nobody asked for.
-    if agent_choice == "research" and mission is not None and mission.recipe:
+    if agent_choice in {"research", "delivery"} and mission is not None \
+            and mission.recipe:
         from atlas_kernel.mission.toolrunner import ToolAgent
 
         # The repository is what turns evidence into memory, and for a
@@ -439,9 +484,14 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                               "opened; the run will produce evidence and "
                               "remember nothing", mission.recipe)
         roles = Roles.all(ToolAgent(recipes.get(mission.recipe),
-                                    repository=memory, tenant=tenant))
-        log.info("%s: recipe %s%s", mission.id, mission.recipe,
-                 "" if memory is None else " (sightings will be remembered)")
+                                    repository=memory, tenant=tenant,
+                                    # The approval, by id. The agent reads the
+                                    # opportunity itself and re-checks it; this
+                                    # hands over a key, never a record.
+                                    signal_id=mission.signal_id))
+        log.info("%s: recipe %s%s%s", mission.id, mission.recipe,
+                 "" if memory is None else " (business memory available)",
+                 f" delivering {mission.signal_id}" if mission.signal_id else "")
 
     def workspace_for(mission: Mission) -> Path:
         area = scratch.prepare(origin.location(), mission_id=mission.id,
@@ -831,6 +881,8 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
             tests=result.detail or "acceptance check",
             branch=f"mission/{mission.id}",
             evidence=result.report,
+            tools=_tools_of(mission),
+            artefact=_artefact_of(worker),
             files=tuple(held[mission.id].changed()) if mission.id in held else ())
         log.info("report written to %s", written)
         # Recorded on the mission itself, so `/api/missions/{id}/report` can
@@ -911,13 +963,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="refuse to start unless the claim database is "
                              "reachable. Use this in production: the default "
                              "logs the loss of safety, this one prevents it")
-    parser.add_argument("--agent", default="llm",
-                        choices=("llm", "fake", "self-check", "research"),
+    parser.add_argument("--agent", default="llm", choices=AGENT_CHOICES,
                         help="'research' carries out a declared recipe through "
-                             "registered tools and calls no model. 'fake' runs "
-                             "a deterministic stub. Never the default: "
-                             "everything it produces would claim work nothing "
-                             "did.")
+                             "registered tools and calls no model; 'delivery' "
+                             "builds the artefact an approved opportunity asked "
+                             "for. 'fake' runs a deterministic stub. Never the "
+                             "default: everything it produces would claim work "
+                             "nothing did.")
     parser.add_argument("--reports", default="",
                         help="where mission reports are written "
                              "(default: alongside the repository)")

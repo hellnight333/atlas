@@ -90,7 +90,9 @@ def _event(mission: Mission, *, actor: str, note: str = "",
 
 def create(*, tenant: TenantId | None, title: str, description: str = "",
            requested_by: str = "", priority: int = 0, occurrence: str = "",
-           origin_name: str = "", recipe: str = ""
+           origin_name: str = "", recipe: str = "", signal_id: str = "",
+           approved_scope: str = "",
+           evidence_fingerprints: tuple[str, ...] = ()
            ) -> tuple[Mission, BusinessEvent]:
     """A new request, in DRAFT. Nothing runs from this."""
     tenant = _require_tenant(tenant, method="mission.create")
@@ -101,7 +103,9 @@ def create(*, tenant: TenantId | None, title: str, description: str = "",
                       title=title.strip(), description=description,
                       requested_by=requested_by, priority=priority,
                       occurrence=occurrence, origin_name=origin_name,
-                      recipe=recipe)
+                      recipe=recipe, signal_id=signal_id,
+                      approved_scope=approved_scope,
+                      evidence_fingerprints=tuple(evidence_fingerprints))
     return mission, _event(mission, actor=requested_by or "operator",
                            note="created")
 

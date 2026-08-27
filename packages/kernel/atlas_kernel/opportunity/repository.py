@@ -21,8 +21,26 @@ from datetime import UTC, datetime
 
 from sqlalchemy import text
 
+from uuid import uuid4
+
 from ..db import SessionLocal
 from .identity import place_id, strong_keys, with_identity
+
+
+class UnknownSignal(Exception):
+    """No opportunity by that id. Never resolved to a similar one."""
+
+
+class NotApprovable(Exception):
+    """This opportunity cannot be approved, and why."""
+
+#: The timeline entry that records a person approving one opportunity.
+#:
+#: On the shared business timeline rather than in a column of its own, because
+#: "who said yes to what, and when" is exactly the kind of fact a state column
+#: cannot hold: a column knows the answer is `approved` and not who decided it.
+#: `atlas_signals.state` is the index for finding them; this is the record.
+APPROVED_EVENT = "opportunity_approved"
 
 #: The timeline entry a verification pass writes for every site it attempted.
 #: One name, used by the query that orders the backlog and by the pass that
@@ -436,6 +454,71 @@ class OpportunityRepository:
                  "tenant": str(tenant or "")},
             ).mappings().all()
         return [self._signal_from_row(row) for row in rows]
+
+    def approve_signal(self, signal_id: str, *, actor: str,
+                       tenant: TenantId | None = None) -> dict:
+        """Record that a person approved this specific opportunity.
+
+        Refuses anything that is not an open opportunity awaiting a person. In
+        particular it refuses one already approved: approving twice would let
+        one decision produce two deliveries, and the second would be work
+        nobody asked for wearing the first one's authorisation.
+
+        The state change and the timeline entry are one transaction. Two writes
+        that can half-happen would leave either an approval nobody can attribute
+        or a decision that never took effect.
+        """
+        found = self.get_signal(signal_id, tenant=tenant)
+        if found is None:
+            raise UnknownSignal(
+                f"no opportunity {signal_id!r}. Approval names a specific "
+                "opportunity; there is no approving a kind of them.")
+        if found["state"] != "open":
+            raise NotApprovable(
+                f"{signal_id} is {found['state']}, not open. An opportunity is "
+                "approved once, and a second approval would authorise a second "
+                "delivery on the strength of one decision.")
+        if not found["needs_approval"]:
+            raise NotApprovable(
+                f"{signal_id} suggests nothing that needs a person — its "
+                "actions stay inside Qevik. There is nothing here to approve.")
+
+        with SessionLocal() as session:
+            moved = session.execute(
+                text("""
+                UPDATE atlas_signals SET state = 'approved'
+                WHERE id = :id AND state = 'open'
+                  AND (:tenant = '' OR tenant_id = :tenant)
+                """),
+                {"id": signal_id, "tenant": str(tenant or "")})
+            if not moved.rowcount:
+                # Somebody else approved it between the read and the write.
+                session.rollback()
+                raise NotApprovable(
+                    f"{signal_id} was approved by another request first")
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """),
+                {"id": f"evt-{uuid4().hex[:12]}",
+                 "business_id": found["business_id"],
+                 "factory": "opportunity", "kind": APPROVED_EVENT,
+                 "opportunity_id": signal_id, "actor": actor,
+                 "detail": json.dumps({
+                     "kind": found["kind"], "score": found["score"],
+                     "scope": found["scope"],
+                     "action": ((found["detail"].get("actions") or [{}])[0]
+                                .get("statement", "")),
+                     "capability": ((found["detail"].get("actions") or [{}])[0]
+                                    .get("capability", "")),
+                     "evidence_fingerprints": found["evidence_fingerprints"]}),
+                 "at": datetime.now(UTC)})
+            session.commit()
+        return self.get_signal(signal_id, tenant=tenant)
 
     def get_signal(self, signal_id: str, *,
                    tenant: TenantId | None = None) -> dict | None:

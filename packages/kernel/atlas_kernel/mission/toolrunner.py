@@ -41,6 +41,7 @@ memory — neither of which this file can see, deliberately.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,10 +70,21 @@ COMMANDS: frozenset[str] = frozenset({"shell", "filesystem", "git-worktree"})
 #:
 #: Deliberately short. A tool joins this when the adapter for it has been
 #: written — not because the contract mentions it.
-DISPATCHABLE: frozenset[str] = frozenset({"http-fetch", "dns"}) | COMMANDS
+#: Tools invoked by something that understands them rather than by a process
+#: launcher. Each name here has a branch in `run`, and adding a branch without
+#: adding the name is how a delivery blocked itself for "nothing knows how to
+#: invoke `website-generator`" while `_generate` sat directly below, waiting.
+FETCHERS: frozenset[str] = frozenset({"http-fetch", "dns"})
+GENERATORS: frozenset[str] = frozenset({"website-generator"})
+
+DISPATCHABLE: frozenset[str] = FETCHERS | GENERATORS | COMMANDS
 
 
 log = logging.getLogger(__name__)
+
+
+class DeliveryRefused(RuntimeError):
+    """This mission may not build what it says it will, and why."""
 
 
 class NotDispatchable(RuntimeError):
@@ -88,12 +100,16 @@ class Step:
     proves: str
     passed: bool
     evidence: list[Evidence] = field(default_factory=list)
+    #: Paths this step wrote, relative to the workspace. Empty for every step
+    #: that observes rather than produces, which is most of them.
+    files: tuple[str, ...] = ()
     detail: str = ""
 
     def summary(self) -> dict:
         return {"tool": self.tool, "invoked": self.invoked,
                 "proves": self.proves, "passed": self.passed,
                 "evidence": [e.fingerprint for e in self.evidence],
+                "files": list(self.files),
                 "detail": self.detail}
 
 
@@ -199,7 +215,8 @@ def refusals(recipe: Recipe, agent: Agent) -> list[str]:
     return found
 
 
-def run(recipe: Recipe, *, registry: Registry | None = None,
+def run(recipe: Recipe, *, delivery: Delivery | None = None,
+        registry: Registry | None = None,
         workspace: Path | None = None,
         client: object | None = None,
         check_addresses: bool = True,
@@ -255,6 +272,8 @@ def run(recipe: Recipe, *, registry: Registry | None = None,
                           check_addresses=check_addresses)
         elif step.tool == "dns":
             done = _resolve(step)
+        elif step.tool == "website-generator":
+            done = _generate(step, delivery=delivery, workspace=workspace)
         elif step.tool in COMMANDS:
             done = _command(step, agent=agent, workspace=workspace,
                             registry=registry)
@@ -308,6 +327,87 @@ def _fetch(step, *, allowed: frozenset[str], client: object | None,
     return Step(tool=step.tool, invoked=", ".join(step.command)[:200],
                 proves=step.proves, passed=passed, evidence=recorded,
                 detail=detail)
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """Everything a build needs, assembled before the recipe runs.
+
+    Assembled by `ToolAgent` from the approved opportunity and Qevik's own
+    memory, and handed in — rather than looked up inside the step — so a
+    delivery cannot reach for a business or a finding that the approval did not
+    rest on. The step gets facts; it does not get a database.
+    """
+
+    offer_id: str
+    business: object
+    #: Observations in `execution/capabilities/website.py`'s own vocabulary.
+    #: Only `not_found` for defects actually observed, and `present` for the
+    #: site itself — which was fetched, or there would be no opportunity.
+    research: dict
+
+
+def _generate(step, *, delivery: Delivery | None, workspace: Path | None) -> Step:
+    """Run the declared executor and write what it produced into the workspace.
+
+    Refuses rather than improvises. No delivery context, no workspace, an offer
+    the step names that the approval did not, or an executor nobody registered
+    — each is a refusal with the reason, because every one of them is a way for
+    a build to happen that nobody authorised in those terms.
+    """
+    from ..execution.capabilities import EXECUTORS, NothingToBuild
+
+    wanted = step.command[0] if step.command else ""
+    if delivery is None or workspace is None:
+        return Step(tool=step.tool, invoked=wanted, proves=step.proves,
+                    passed=False,
+                    detail=("no approved opportunity and no workspace. A build "
+                            "happens for somebody, on the strength of something "
+                            "a person agreed to."))
+    if wanted != delivery.offer_id:
+        # The mission was approved to deliver one offer and its recipe names
+        # another. Refused rather than reconciled: one of the two is wrong and
+        # picking either would be choosing what somebody approved.
+        return Step(tool=step.tool, invoked=wanted, proves=step.proves,
+                    passed=False,
+                    detail=(f"this step builds {wanted!r} and the approval was "
+                            f"for {delivery.offer_id!r}."))
+    executor = EXECUTORS.get(wanted)
+    if executor is None:
+        return Step(tool=step.tool, invoked=wanted, proves=step.proves,
+                    passed=False,
+                    detail=f"nothing is registered to execute {wanted!r}.")
+
+    business = delivery.business
+    try:
+        files, provenance = executor(
+            business_name=getattr(business, "name", ""),
+            research=delivery.research, strengths=(), business=business)
+    except NothingToBuild as nothing:
+        # A finding, not a failure — and specifically not an artefact. The
+        # executor refusing to build for a site that already does everything it
+        # could add is the behaviour that makes its output mean something.
+        return Step(tool=step.tool, invoked=wanted, proves=step.proves,
+                    passed=False, detail=f"nothing to build: {nothing}"[:400])
+
+    bundle = Path(workspace) / "artefact"
+    bundle.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for name, body in sorted((files if isinstance(files, dict)
+                              else {"index.html": files}).items()):
+        target = bundle / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+        written.append(str(target.relative_to(workspace)))
+
+    (bundle / "provenance.json").write_text(
+        json.dumps(provenance, indent=2, default=str), encoding="utf-8")
+    written.append(str((bundle / "provenance.json").relative_to(workspace)))
+
+    return Step(tool=step.tool, invoked=wanted, proves=step.proves, passed=True,
+                files=tuple(written),
+                detail=(f"{len(written)} file(s): {', '.join(written[:6])}"
+                        + ("…" if len(written) > 6 else "")))
 
 
 def _resolve(step) -> Step:
@@ -373,7 +473,8 @@ def _command(step, *, agent: Agent, workspace: Path | None,
         detail=(first.output[:300] if first else "nothing ran"))
 
 
-__all__ = ["COMMANDS", "DISPATCHABLE", "NotDispatchable", "Result", "Step",
+__all__ = ["COMMANDS", "DISPATCHABLE", "Delivery", "DeliveryRefused",
+           "NotDispatchable", "Result", "Step",
            "ToolAgent", "permitted_urls", "refusals", "run", "targets_for"]
 
 
@@ -404,7 +505,8 @@ class ToolAgent:
                  client: object | None = None,
                  check_addresses: bool = True,
                  repository: object | None = None,
-                 tenant: str | None = None) -> None:
+                 tenant: str | None = None,
+                 signal_id: str = "") -> None:
         self._recipe = recipe
         self._registry = registry
         self._client = client
@@ -428,6 +530,11 @@ class ToolAgent:
         self._targets: dict = {}
         #: Findings the audit read out of what came back, by business id.
         self.audited: dict = {}
+        #: The opportunity a person approved, when this is a delivery. A key,
+        #: read from Qevik's own memory — never a record a caller supplied.
+        self._signal_id = signal_id
+        #: What the delivery step wrote, relative to the workspace.
+        self.artefact: tuple[str, ...] = ()
 
     @property
     def name(self) -> str:
@@ -461,7 +568,18 @@ class ToolAgent:
                                         repository=self._repository,
                                         tenant=self._tenant)
         try:
-            self.result = run(self._recipe, registry=self._registry,
+            delivery = self._delivery()
+        except DeliveryRefused as refused:
+            return AgentOutcome(
+                summary=str(refused)[:400], claims_done=False,
+                blockers=(Blocker(kind="APPROVAL", detail=str(refused)[:400],
+                                  action="the mission names an approved "
+                                         "opportunity that does not authorise "
+                                         "this work; neither is a runtime "
+                                         "decision"),))
+        try:
+            self.result = run(self._recipe, delivery=delivery,
+                              registry=self._registry,
                               workspace=Path(workspace_root),
                               client=self._client,
                               check_addresses=self._check_addresses,
@@ -474,6 +592,7 @@ class ToolAgent:
                                          "registry entry; neither is a runtime "
                                          "decision"),))
         found = self.result
+        self.artefact = tuple(f for step in found.steps for f in step.files)
         remembered = self._remember(found)
         judged = self._audit(found)
         return AgentOutcome(
@@ -483,11 +602,140 @@ class ToolAgent:
                      + (f"; {remembered} sighting(s) recorded" if remembered
                         else "")
                      + (f"; {judged} site(s) with evidenced defects" if judged
-                        else "")),
-            files=(),
+                        else "")
+                     + (f"; artefact: {len(self.artefact)} file(s)"
+                        if self.artefact else "")),
+            # What this run produced. Empty for a research pass, which is why
+            # `evidence_count` exists beside it; a delivery produces no evidence
+            # and a file, and the acceptance check needs to see one or the
+            # other or it correctly reports that nothing happened.
+            files=self.artefact,
             evidence_count=len(found.evidence),
             claims_done=found.passed,
             notes=_readable(found, self.recorded, self.signals))
+
+    def _delivery(self) -> Delivery | None:
+        """The approved opportunity this delivery rests on, or nothing.
+
+        `None` for every recipe that does not deliver, which is most of them.
+        A refusal — never a build against a default — for one that does and
+        cannot be justified, because a delivery whose authorisation cannot be
+        found is a delivery nobody authorised.
+
+        The signal is read from memory by id. Nothing here accepts a
+        signal-shaped argument: a caller that could pass the record could pass
+        one it had edited, and the approval would then say whatever the caller
+        wanted it to.
+        """
+        if not self._signal_id:
+            # No approval referenced. Only a *delivering* recipe is a problem
+            # here: everything else is ordinary work nobody claimed an
+            # opportunity authorised.
+            if self._recipe.delivers:
+                raise DeliveryRefused(
+                    f"{self._recipe.id} delivers {self._recipe.delivers} and "
+                    "this mission names no approved opportunity. A delivery is "
+                    "carried out because somebody agreed to it.")
+            return None
+
+        # From here the mission *does* name an approval, and that is what makes
+        # the recipe check mandatory rather than delivery-specific.
+        #
+        # It was written the other way round — keyed on the recipe declaring
+        # `delivers` — and that left the hole this exists to close: editing an
+        # approved mission's recipe to a *research* recipe skipped the check
+        # entirely, because the substituted recipe delivers nothing. The mission
+        # then quietly ran whatever it had been changed to, on the strength of
+        # an approval given for something else.
+        if self._repository is None:
+            raise DeliveryRefused(
+                f"this mission names opportunity {self._signal_id} and has no "
+                "business memory to read it from. An approval that cannot be "
+                "checked is one that cannot be relied on.")
+
+        from ..opportunity.detectors.website import FindingKind
+        from . import delivery as bridge
+
+        signal = self._repository.get_signal(self._signal_id,
+                                             tenant=self._tenant)
+        if signal is None:
+            raise DeliveryRefused(
+                f"no opportunity {self._signal_id!r}. The mission references an "
+                "approval that is not there.")
+        # Re-checked here, not trusted from mission creation. This is what
+        # protects execution: creation's check answers the operator, and a
+        # mission that sat in a queue while its opportunity was withdrawn must
+        # not run on the strength of a state that has since changed.
+        stop = bridge.refusals(signal)
+        if stop:
+            raise DeliveryRefused(" ".join(stop))
+        # The recipe is derived from the opportunity a second time and compared.
+        # A mission whose recipe was edited after approval names work the
+        # approval never mentioned, and this is where that stops.
+        expected = bridge.recipe_for(signal)
+        if expected != self._recipe.id:
+            raise DeliveryRefused(
+                f"{self._signal_id} was approved for {expected!r} and this "
+                f"mission runs {self._recipe.id!r}. A recipe substituted after "
+                "approval is work nobody agreed to wearing an authorisation "
+                "that was given for something else.")
+        if not self._recipe.delivers:
+            # Reachable only if a delivery recipe stops delivering, which would
+            # be a declaration somebody changed under an approval that had
+            # already been given.
+            raise DeliveryRefused(
+                f"{self._recipe.id} was approved as a delivery and no longer "
+                "declares one.")
+
+        # `ALL_TENANTS`, and deliberately — see the note in `opportunity/scan.py`.
+        # A business Qevik discovered belongs to **nobody** until somebody
+        # qualifies it: `save_business` writes no tenant on purpose, because
+        # assigning a clinic to a customer at the moment a scanner noticed it
+        # would decide a commercial question with a scanner. Reading it with
+        # this mission's tenant returns `None` for every discovered business
+        # there is, which blocked every delivery in production.
+        #
+        # The tenant boundary is not weakened by this: the *signal* was read
+        # with this mission's tenant a few lines above, and it is the signal
+        # that carries the approval. The ownership check below is what keeps a
+        # delivery from reaching another tenant's qualified customer.
+        from ..opportunity.tenancy import ALL_TENANTS, owns
+
+        business = self._repository.get_business(signal["business_id"],
+                                                 tenant=ALL_TENANTS)
+        if business is None:
+            raise DeliveryRefused(
+                f"no business {signal['business_id']!r}; an artefact built for "
+                "nobody cannot be reviewed or sent.")
+        owner = getattr(business, "tenant_id", "") or ""
+        if owner and not owns(owner, self._tenant):
+            raise DeliveryRefused(
+                f"{signal['business_id']} belongs to another tenant. An "
+                "opportunity in one tenant does not authorise building for a "
+                "customer in another.")
+
+        findings = self._repository.list_findings(business.id)
+        observed = {bridge.BUILDABLE[f.kind] for f in findings
+                    if f.kind in bridge.BUILDABLE}
+        if not observed:
+            raise DeliveryRefused(
+                f"{business.name} has no defect this capability can build a "
+                "fix for. Observed: "
+                f"{', '.join(sorted({f.kind.value for f in findings})) or 'none'}"
+                ". Building anyway would be inventing the weakness.")
+
+        # `website` present because a response was fetched and audited — which
+        # is the only way this opportunity could exist. Every other entry is a
+        # defect actually observed, so `improvable()` sees confirmed absences
+        # and nothing that was merely not checked.
+        research = {"observations": (
+            [{"feature": "website", "status": "present"}]
+            + [{"feature": feature, "status": "not_found"}
+               for feature in sorted(observed)])}
+        log.info("%s: delivering %s for %s (%s)", self._signal_id,
+                 self._recipe.delivers, business.name, ", ".join(sorted(observed)))
+        return Delivery(offer_id=self._recipe.delivers, business=business,
+                        research=research)
 
     def _remember(self, found: Result) -> int:
         """Extract, identify, classify and persist. Returns how many were new.
@@ -583,6 +831,17 @@ class ToolAgent:
 
         audited = verification.audit_pass(self._targets, found.evidence)
         self.audited = audited
+        # Persisted, not only summarised into a signal. A `Finding` names the
+        # kind of defect; a signal's observations carry the sentence a person
+        # reads. Delivery needs the kind — "this is a `page_speed` problem" —
+        # and reading it back out of prose is how a build ends up guessing what
+        # it was asked to fix. The rows were being computed and thrown away.
+        for findings in audited.values():
+            for finding in findings:
+                try:
+                    self._repository.save_finding(finding)
+                except Exception:                 # noqa: BLE001 - reported
+                    log.exception("could not store finding %s", finding.id)
         # Which recorded response each business's findings came out of, so a
         # signal cannot be built from derived evidence alone. Matched the same
         # way the audit matched them, rather than by re-deriving it.
@@ -699,11 +958,18 @@ class ToolAgent:
         if found is None or not found.steps:
             return outcome.model_copy(update={
                 "claims_done": False, "summary": "nothing ran"})
-        if not found.evidence:
+        # A run has to leave something behind, and there are two shapes of
+        # something. A research pass leaves evidence; a delivery leaves an
+        # artefact and no evidence at all — it observed nothing, it built. This
+        # asked only for evidence, so a delivery that wrote a real site was
+        # rejected for having recorded no observations.
+        if not found.evidence and not self.artefact:
+            produced = ("an artefact" if self._recipe.delivers
+                        else "any evidence")
             return outcome.model_copy(update={
                 "claims_done": False,
-                "summary": "every step passed and nothing was recorded, which "
-                           "is not a successful research run"})
+                "summary": f"every step passed and nothing was recorded — no "
+                           f"{produced}, which is not a successful run"})
         return outcome.model_copy(update={"claims_done": found.passed})
 
     def summarize(self, plan: Plan, outcome: AgentOutcome) -> str:

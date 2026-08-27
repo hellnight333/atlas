@@ -35,7 +35,8 @@ def filename(mission: Mission, *, at: datetime | None = None) -> str:
 
 def render(mission: Mission, *, attempts: int = 0, committed: str = "",
            detail: str = "", tests: str = "", branch: str = "",
-           evidence: str = "",
+           evidence: str = "", tools: tuple[str, ...] = (),
+           artefact: tuple[str, ...] = (),
            files: tuple[str, ...] = ()) -> str:
     """The report body. States what did not happen as plainly as what did."""
     cost = mission.total_cost
@@ -77,6 +78,61 @@ def render(mission: Mission, *, attempts: int = 0, committed: str = "",
     lines += ["", "**Total cost:** "
               + ("not reported by any provider" if cost is None else f"{cost}"), ""]
 
+    if mission.signal_id:
+        # A delivery is reviewed by somebody deciding whether to send it, and
+        # that decision needs the chain: which opportunity, approved to what
+        # scope, carried out by which declared recipe and role, producing which
+        # files, on the strength of which evidence. Spread across the report it
+        # is technically present and practically unreadable.
+        lines += [
+            "## Delivery", "",
+            f"**Source opportunity:** `{mission.signal_id}`  ",
+            f"**Approved scope:** {mission.approved_scope or 'not recorded'}  ",
+            f"**Approved by:** {mission.requested_by or 'unknown'}  ",
+            f"**Origin:** {mission.origin_name or 'none'}"
+            + (f" → `{mission.origin}` ({mission.origin_kind})"
+               if mission.origin else "") + "  ",
+            f"**Recipe:** `{mission.recipe or 'none'}`  ",
+            f"**Agent / role:** `{mission.agent_id or 'none'}`  ",
+            f"**Tools used:** {', '.join(f'`{t}`' for t in tools) or 'none'}  ",
+            f"**Workspace:** `{mission.workspace or 'none'}`  ",
+            f"**Cost:** {'not reported by any provider' if cost is None else cost}"
+            f" ({'REPORTED' if cost is not None else 'UNKNOWN'})  ",
+            f"**Final status:** {mission.status.value}",
+            "",
+        ]
+        if artefact:
+            lines += ["**Artefact produced:**", ""]
+            lines += [f"- `{name}`" for name in artefact]
+            # Where to actually get it. The mission's worktree is torn down on
+            # success — the commit is what is durable — so a reviewer told only
+            # that four files exist finds an empty directory and concludes the
+            # delivery lied. This is the command that produces the artefact.
+            lines += [
+                "",
+                f"Committed to branch `mission/{mission.id}` in "
+                f"`{mission.workspace or 'the mission workspace'}`. The "
+                "worktree is removed once the commit is made, so read it with:",
+                "",
+                "```",
+                f"git -C {mission.workspace or '<workspace>'} show "
+                f"mission/{mission.id}:{artefact[0]}",
+                "```",
+                "",
+            ]
+        else:
+            lines += ["**Artefact produced:** none.", ""]
+        if mission.evidence_fingerprints:
+            lines += [
+                "**Evidence the approval rested on:**", "",
+                " ".join(f"`{f}`" for f in mission.evidence_fingerprints), "",
+            ]
+        lines += [
+            "**Not done, and out of scope for this mission:** the artefact was "
+            "not published and the business was not contacted. Both are "
+            "outward acts needing their own approval.", "",
+        ]
+
     lines += ["## Result", ""]
     if files:
         lines.append("Files changed:")
@@ -106,6 +162,7 @@ def render(mission: Mission, *, attempts: int = 0, committed: str = "",
 def write(mission: Mission, *, root: Path | str = ".", attempts: int = 0,
           committed: str = "", detail: str = "", tests: str = "",
           branch: str = "", files: tuple[str, ...] = (),
+          tools: tuple[str, ...] = (), artefact: tuple[str, ...] = (),
           evidence: str = "") -> Path:
     """Persist the report and return its path. Never overwrites another.
 
@@ -118,6 +175,7 @@ def write(mission: Mission, *, root: Path | str = ".", attempts: int = 0,
     path = directory / filename(mission)
     path.write_text(
         render(mission, attempts=attempts, committed=committed, detail=detail,
-               tests=tests, branch=branch, files=files, evidence=evidence),
+               tests=tests, branch=branch, files=files, evidence=evidence,
+               tools=tools, artefact=artefact),
         encoding="utf-8")
     return path

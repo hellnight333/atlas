@@ -208,6 +208,25 @@ class Mission(BaseModel):
     workspace: str = ""
     origin: str = ""
     origin_kind: str = ""
+    #: The opportunity a person approved to produce this mission, by id. Empty
+    #: for work that came from anywhere else.
+    #:
+    #: A signal is **not** a mission and never becomes one — this is a
+    #: reference, written once when the approval was given, so the delivery and
+    #: everything downstream of it can be traced to the specific opportunity a
+    #: person said yes to rather than to "an opportunity of this kind".
+    signal_id: str = ""
+    #: What was approved, as the offer keys the opportunity's evidence
+    #: supported. The mission may do this and nothing wider: a delivery that
+    #: grew a scope after approval would be work nobody agreed to.
+    approved_scope: str = ""
+    #: The fingerprints the opportunity rested on, copied at approval.
+    #:
+    #: Copied rather than looked up, so the report can say what justified the
+    #: work without depending on the signals table still holding the row — and
+    #: so a later edit to the opportunity cannot silently restate what was
+    #: approved.
+    evidence_fingerprints: tuple[str, ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -246,6 +265,9 @@ class Mission(BaseModel):
             "recipe": self.recipe,
             "workspace": self.workspace, "origin": self.origin,
             "origin_kind": self.origin_kind,
+            "signal_id": self.signal_id,
+            "approved_scope": self.approved_scope,
+            "evidence_fingerprints": list(self.evidence_fingerprints),
             "total_cost": self.total_cost,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
