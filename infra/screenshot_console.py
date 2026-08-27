@@ -134,7 +134,9 @@ FIXTURES: dict[str, object] = {
                        "addresses": ["a heading on every page",
                                      "a page that loads quickly"],
                        "not_published_for_want_of_a_source": ["email"]},
-        "reviews": [],
+        "reviews": [{"decision": "accepted", "actor": "ayoub",
+                     "at": "2026-08-27T06:29:42Z", "note": "Reads well.",
+                     "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331"}],
     },
     # Two real shapes: one the source was silent about, one merely new. Both
     # with UNKNOWN worth, because nothing has measured one.

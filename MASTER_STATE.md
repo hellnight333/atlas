@@ -370,15 +370,23 @@ See "Approved opportunity to delivered artefact".)*
 *(Superseded — the queue shipped and was proven on production. See "Accepted
 artefacts awaiting publication".)*
 
-The next milestone is **publishing an accepted artefact**. It is the first
-genuinely outward act, needs its own approval boundary, and is **externally
-blocked on hosting** — there is nowhere to publish to. Everything before it is
-now built: discovery, verification, evidenced audit, ranked opportunity,
-approval, delivery, artefact, review, and a queue of accepted work.
+*(Superseded — the first real publication is live. See "First real
+publication".)*
 
-**Do not start it without somewhere to publish.** Building a publisher against
-no host would produce an approval boundary nothing can cross, which is
-architecture rather than a business.
+The chain is complete end to end: discovery → verification → evidenced audit →
+ranked opportunity → approval → delivery → artefact → review → accepted queue →
+publication authorisation → policy → publication → a live page.
+
+**The next milestone is telling the business it exists** — the first act that
+reaches a person rather than a server. It is externally blocked on a sending
+identity, and it is a larger boundary than publishing: a page nobody visits
+harms nobody, and an email does. Do not start it without a sending identity and
+an explicit decision about approaching businesses who have not asked.
+
+The unblocked prerequisite is smaller: **a published site is not recorded as
+published anywhere a person can see.** `awaiting_publication` still lists it,
+because nothing writes the event that would take it off the queue — the seam
+left in that query. One clause and one event.
 
 **Previously: B, narrowed to a worker role that executes tool-step recipes.**
 
@@ -842,6 +850,98 @@ The console size cap moved 88k → 92k for two genuine surfaces — the review c
 and this queue — with the stricter rule its own comment requires: the
 `[data-artefact]` pane must be written with `textContent`, asserted directly and
 not only behaviourally.
+
+## First real publication — live, 2026-08-27
+
+**https://sites.qevik.ai/site-4acac34467c34f17/** serves the artefact a person
+reviewed and separately authorised. HTTP/2 200, `x-qevik-host: sites`, 1,945
+bytes, `robots.txt` disallowing indexing.
+
+### The architecture already existed
+
+`sites.qevik.ai` has served `/srv/sites/<slug>/current/` for 56 sites, and
+`website/targets/public_host.py` publishes, promotes by symlink, and **fetches
+the public URL and fails the deployment if a visitor would not get the page**.
+The publication root came from that, not from a new invention. No publisher was
+written; what was missing was the edge to it.
+
+| added | why |
+|---|---|
+| `publication_approved` | a **third** decision, binding opportunity + mission + commit + site + person |
+| `site-publish` tool | IRREVERSIBLE, network, the only capability that can make anything public |
+| `site-publisher` agent | holds that one tool; not a shell |
+| `publish-website` recipe | `publishes="offer-website"`; a recipe that both builds and publishes is refused |
+| `artefact.files_at` / `read_at` | commit-addressed; a branch name, a ref or a path is refused |
+| `mission.publishes` | one field; commit and address are re-read from the authorisation at execution |
+| `qevik-worker-publish` | `ReadWritePaths=/var/lib/qevik /srv/sites`; `/opt/qevik/atlas` absent |
+
+**The builder gained nothing.** `website-builder` still holds only
+`website-generator`. A publication recipe naming `shell`, `http-fetch` or
+`git-worktree` is refused at import.
+
+**The address is derived, never requested.** `site_for(business_id)` produces it
+and `known()` *is* that derivation, so "publishing to an unregistered target" is
+not expressible rather than merely refused — there is no list to add to.
+
+### Two approvals, because policy is above the planner
+
+The publication authorisation binds *what* may go out. `policy.decide` then
+independently held the mission at `AWAITING_APPROVAL` — *"site-publisher cannot
+be undone, so a person approves the exact output"* — and was **not** weakened to
+accommodate the first one. An irreversible act takes two operator decisions, and
+nothing was published between them.
+
+### Production evidence — 31 checks, 0 failed
+
+| | |
+|---|---|
+| source mission | `mission-821a8e7d171d` |
+| commit | `2d77a5f27c684b39297a0ad9b359d38e621eb331` |
+| published | `index.html`, `provenance.json`, `robots.txt`, `sitemap.xml` |
+| authorisation | `publish-operator`, that commit, that site |
+
+Refused: unauthenticated (401), a commit nobody accepted (409), a commit that is
+a path (422), a commit that is a branch name (422). Nothing existed on disk
+before either approval. Afterwards: the mission branch still at the reviewed
+commit, no remote, merged into nothing, source mission not transitioned, 57
+sites, nothing written outside the site's own directory.
+
+**The Qevik checkout is unchanged** at `ce4ffaa`, owned `501:staff`, while the
+site is owned `qevik:qevik` — independently permissioned, as required.
+
+### Five defects, all found by publishing for real
+
+The suite was green before each one.
+
+1. The **delivery** guard judged publication missions — *"approved for
+   `deliver-website` and this mission runs `publish-website`"*. Both kinds name
+   the same opportunity and deliberately run different recipes. Neither guard
+   was weakened; a publishing recipe meets its own six checks, and one smuggled
+   into a delivery mission is refused for naming no publication.
+2. Published filenames reported as `outcome.files` made the committer try to
+   commit an unchanged tree. A publication writes to the host, not its
+   workspace. `published` is now separate from `artefact`.
+3. With that fixed the run had nothing to show for itself. What a publication
+   produces is a page on the internet, and the proof is the verification fetch —
+   already happening and being discarded, now recorded as `Evidence`.
+4. The acceptance check asks *"did this write files"*, which the module already
+   knew is wrong for research and branched for. There was no branch for
+   publishing, so every successful publication failed.
+5. My own gate split headers from body on the first blank line, which with a
+   redirect is the boundary between two header blocks — the page read as empty
+   while the site served it.
+
+The common shape: the worker knew two kinds of work — writes-a-diff and
+records-evidence. Publishing is a third that produces neither and proves itself
+by fetching what it made, and every layer assuming the first two had to learn
+about it.
+
+### What is deliberately not built
+
+No customer domain, no DNS automation, no SSL beyond what Caddy already does for
+`sites.qevik.ai`, no multi-host publishing. The artefact ships `Disallow: /` from
+the generator, which is the right posture for a preview about a business that
+has not asked for one.
 
 ## Reserved milestone: Agent Compute Fabric
 
