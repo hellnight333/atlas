@@ -1,7 +1,7 @@
 # Evidenced weak web presence
 
-**Status:** built, tested, deployed.
-**Acceptance:** `infra/verify_weak_web_presence.py` — 43 checks.
+**Status:** built, tested, deployed, and producing real opportunities.
+**Acceptance:** `infra/verify_weak_web_presence.py` — 61 checks.
 
 Turns the responses a verification mission already recorded into findings, and
 findings into an opportunity `offer-website` can execute.
@@ -142,6 +142,19 @@ An audit is not an extractor. An extractor turns a **source's** statements into
 a sighting. An audit turns a **business's own server's** reply into findings
 about that business. Only the second can produce something Qevik would approach
 somebody about.
+
+## Being blocked is not a defect
+
+`REFUSED_US = {401, 403, 407, 429}` produce **no findings at all**.
+
+This was found by deploying. The first real pass filed three UAE clinics as
+having broken homepages, each with an outward action attached, on the strength
+of a `403`. A 403 to a crawler is a bot policy; the page a human visits is
+almost certainly fine. Two of the four opportunities that pass produced were
+false, in the only direction that reaches a stranger.
+
+`404` (a homepage that is not there) and `5xx` (a server failing for everybody)
+remain findings.
 
 ## Schedule
 

@@ -500,17 +500,61 @@ decide whose site it was. They are one query now, `businesses_by_website()`,
 with the URL list derived from it. The two-query version would have audited
 forty sites and attributed thirty-eight, silently.
 
+### Three faults the deploy found, and one of them mattered
+
+The suite was green and the harness passed 43 checks. Deploying found three
+things none of them could.
+
+**1. The worker opened business memory only for a recipe with an `extractor`.**
+This recipe declares `audit` and `targets_from` and no extractor, so it ran with
+no repository, computed no targets, and failed. The condition lived in the
+worker while the fields that decide it live on the recipe. `Recipe.needs_memory`
+derives it in one place now.
+
+**2. A targets recipe with no targets fell back to the URLs in its steps** —
+which is the literal word `TARGETS`. The fetcher tried to resolve it as a
+hostname, and the mission failed with what read like a DNS problem. This is the
+worse of the two, because it is what made the first invisible: a silent fallback
+from "what Qevik knows" to "whatever the placeholder happens to say". An empty
+backlog is a normal night and now says so.
+
+**3. Being blocked was recorded as a broken website. This is the one that
+mattered.** The first real pass fetched twelve UAE dental clinics and filed
+three as having broken homepages, each with an **outward action attached** —
+ready for somebody to approach a business and tell them their site returns an
+error. All three were `403`, which is a bot policy, not a defect: the page a
+human visits is almost certainly fine.
+
+Two of the four opportunities that first pass produced were false, and they were
+false in the only direction that reaches a stranger. `401/403/407/429` now
+establish nothing — NOT_VERIFIED, in the same sense as everywhere else. A `404`
+is a homepage that is not there and a `5xx` is a server failing for everybody;
+both stay findings. The two false signals were deleted from production.
+
+The evidence was never wrong. It still records exactly what each server replied.
+What changed is only what may be concluded from it.
+
 ### Acceptance
 
-`infra/verify_weak_web_presence.py` — **43 checks, 0 failed**, ending with the
-whole chain through the real production `ToolAgent` against a real local HTTP
-server: fetch, audit as a recorded step, findings attributed to the right
-business, one opportunity ranked and stored, carrying the fingerprint of the
-fetch that mission actually made.
+`infra/verify_weak_web_presence.py` — **61 checks, 0 failed**, ending with the
+whole chain through the real production `ToolAgent`, and six proving the backlog
+rotation against real Postgres with the pre-fix query as the negative control.
 
-The harness itself found one wrong assertion of mine — I had claimed a truncated
+Gate: **3470 passed, 33 skipped, 0 failed.**
+
+Measured on production, two real passes of twelve sites each:
+
+| | |
+|---|---|
+| sites fetched | 24 of 359 recorded |
+| opportunities raised | 5 |
+| **sellable** — `offer-website`, needs a person | **3** — one 404 homepage, two answering in 3.0s |
+| real but unsellable — no offer declares an answer | 2 — missing meta description |
+| businesses marked verified, rotating the backlog | 24 |
+
+The harness also found one wrong assertion of mine: I had claimed a truncated
 body supports *nothing*, when the URL's scheme is a fact that does not live in
-the body at all. The transport findings legitimately survive truncation.
+the body at all. Transport findings legitimately survive truncation.
 
 ## Next — the first customer-deliverable workflow
 
@@ -685,25 +729,29 @@ otherwise be not quite true.
 
 ## Deployment state
 
-`qevik-core-01` runs the **previously deployed** code and is healthy —
-`qevik-api`, `qevik-control`, `qevik-worker` all active, worker logging normally.
+`qevik-core-01` runs the current code as of **2026-08-27**, at commit
+`13de630`. `qevik-api`, `qevik-control`, `qevik-worker` and
+`qevik-worker-research` are all active and the control plane answers `200` on
+`/health`.
 
-The origin model, the no-fallback gates, the origin surface and recipes are
-**committed locally and not deployed**, on instruction. Deploying them requires,
-in this order:
+Deployed this session: the evidenced audit, the backlog rotation, the
+`needs_memory` derivation, the empty-targets refusal, and the refusal-status
+rule. `rec-nightly-website-verification` is live and fires daily at 05:00 UTC.
 
-1. `rsync` the kernel and `infra/mission_worker.py`
-2. install `infra/qevik-worker.service` — the unit still passes `--repository`,
-   which the new worker **refuses to start on**. The unit in the repo is already
-   correct; it has to land in the same step as the code.
-3. set `QEVIK_ORIGINS` in `/opt/qevik/worker.env` and the control plane's env if
-   any customer origin is wanted; the built-ins need no configuration
-4. `systemctl daemon-reload && restart` worker and control
-5. re-run `infra/verify_no_fallback.py` and `infra/verify_recurrence.py` on the
-   host
+Production memory: **412 businesses, 359 with a website recorded, 24 verified so
+far, 5 open `weak_web_presence` signals** alongside 53 `missing_service`.
 
-Until then the nightly canary does not run in production: `RECURRENCES` lives in
-the undeployed code.
+Deploying is what found all three faults above. The suite was green and the
+harness passed before every one of them.
+
+### Deploying the kernel
+
+1. `rsync packages/kernel/atlas_kernel/` to `/opt/qevik/atlas/packages/kernel/`
+2. `scp infra/mission_worker.py` if it changed
+3. `systemctl restart qevik-api qevik-control qevik-worker qevik-worker-research`
+   — **all four**. Each loads the kernel, and restarting only the one that
+   looks relevant leaves the others running last week's declarations.
+4. confirm all four `active` and `/health` is `200`
 
 ## Externally blocked
 
