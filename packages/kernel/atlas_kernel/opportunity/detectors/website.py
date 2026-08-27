@@ -37,6 +37,20 @@ REQUEST_TIMEOUT_SECONDS = 15.0
 #: Cap on stored body text, so evidence stays inspectable rather than enormous.
 EVIDENCE_EXCERPT_CHARS = 500
 
+#: Statuses that mean **we** were refused, not that the site is broken.
+#:
+#: Found on the first real production pass: three UAE clinics came back 403 and
+#: were filed as broken homepages with an outward action attached, ready for
+#: somebody to approach the business and tell them their website returns an
+#: error. It almost certainly does not. A 403 to a crawler is a bot policy —
+#: Cloudflare, a WAF, a user-agent rule — and the page a human visits is fine.
+#:
+#: So this is NOT_VERIFIED, in the exact sense the rest of the system uses:
+#: Qevik did not see the page, and did not learn that there is nothing to see.
+#: A 5xx is the server failing for everybody and stays a finding; a 404 is a
+#: homepage that genuinely is not there and stays one too.
+REFUSED_US = frozenset({401, 403, 407, 429})
+
 # -- Confidence -------------------------------------------------------------
 #
 # Every number below is justified by *how the observation was made*, not by how
@@ -258,6 +272,12 @@ class WebsiteDetector:
         other would not, which is the property that makes an audit of stored
         evidence worth the same as an audit performed live.
         """
+        if page.status in REFUSED_US:
+            # Nothing at all. Not a finding, not a weaker finding — this fetch
+            # established nothing about the site, and the honest record of it is
+            # the evidence already stored, which says what the server replied.
+            return []
+
         if page.status >= 400:
             # A 500 tells us nothing about the page's SEO. Stop here rather than
             # generating findings about an error page's missing h1.

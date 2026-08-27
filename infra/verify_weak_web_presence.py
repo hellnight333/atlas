@@ -29,6 +29,7 @@ from atlas_kernel.mission import toolrunner  # noqa: E402
 from atlas_kernel.opportunity import detect, verification  # noqa: E402
 from atlas_kernel.opportunity.crawler import BODY_KEPT  # noqa: E402
 from atlas_kernel.opportunity.detectors.website import (  # noqa: E402
+    REFUSED_US,
     SLOW_RESPONSE_SECONDS,
     THIN_CONTENT_CHARS,
     PageObservation,
@@ -143,6 +144,26 @@ check("NEGATIVE CONTROL: the same address answering does produce findings",
 check("a 500 that really happened is a finding",
       "site_unreachable" in kinds(verification.audit(
           BUSINESS, http_evidence(status=500, body=""))))
+
+print("\n-- being blocked is not a broken website ------------------------------")
+
+for status in sorted(REFUSED_US):
+    check(f"HTTP {status} establishes nothing about the site",
+          verification.audit(BUSINESS,
+                             http_evidence(status=status, body="")) == [],
+          "a bot policy is not a defect the business can be sold a fix for")
+
+check("NEGATIVE CONTROL: 404 and 503 are still findings",
+      all("site_unreachable" in kinds(verification.audit(
+          BUSINESS, http_evidence(status=st, body=""))) for st in (404, 503)),
+      "a homepage that is not there, and a server failing for everybody")
+
+blocked = http_evidence(status=403, body="")
+check("...and a blocked fetch raises no opportunity either",
+      detect.weak_web_presence(
+          BUSINESS, verification.audit(BUSINESS, blocked), blocked,
+          source="verify-recorded-websites") is None,
+      "this shipped to production and put three clinics on a sell list")
 
 print("\n-- a truncated body is not a short page ------------------------------")
 
