@@ -101,3 +101,28 @@ def test_the_control_plane_and_the_workers_agree_on_the_scratch_root():
                 f"plane reads {declared.group(1)}")
     assert artefact.DEFAULT_ROOT == declared.group(1), (
         "the reader's default disagrees with the deployment")
+
+
+def test_the_awaiting_queue_is_not_swallowed_by_the_mission_route():
+    """A path parameter matches a literal segment happily. Registered after
+    `/{mission_id}` this route is served as a mission whose id is the string
+    `awaiting-publication` — a 404 that reads as an empty queue."""
+    from atlas_kernel.mission.api import build_router
+
+    paths = [r.path for r in build_router().routes if hasattr(r, "methods")]
+    assert "/api/missions/awaiting-publication" in paths
+    assert paths.index("/api/missions/awaiting-publication") < paths.index(
+        "/api/missions/{mission_id}")
+
+
+def test_the_awaiting_queue_is_read_only_and_needs_only_read():
+    """Seeing what is waiting is not deciding anything about it. Requiring
+    EXECUTE to look would make the queue invisible to the people it is for."""
+    from atlas_kernel.auth.models import Scope
+    from atlas_kernel.mission.api import build_router
+
+    routes = {r.path: r for r in build_router().routes if hasattr(r, "methods")}
+    queue = routes["/api/missions/awaiting-publication"]
+    assert queue.methods == {"GET"}, "the queue accepts a write method"
+    assert Scope.READ in _scopes_of(queue)
+    assert Scope.EXECUTE not in _scopes_of(queue)

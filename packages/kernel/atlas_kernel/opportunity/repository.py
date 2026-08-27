@@ -78,6 +78,7 @@ from .models import (
 )
 from .outreach import ContactHistory, SuppressionList
 from .tenancy import (
+    ALL_TENANTS,
     TenantId,
 )
 from .tenancy import (
@@ -582,6 +583,89 @@ class OpportunityRepository:
                 "mission_id": mission_id, "signal_id": signal_id,
                 "commit": commit, "note": note.strip()[:2000],
                 "at": entry["at"].isoformat()}
+
+    def awaiting_publication(self, *, limit: int = 50,
+                             tenant: TenantId | None = None) -> list[dict]:
+        """Artefacts a person accepted, that nothing has acted on yet.
+
+        Derived, not stored. There is no `awaiting_publication` table and there
+        must not be one: acceptance is a decision somebody made, the timeline
+        already holds it, and a second copy is a second thing that can disagree
+        with the first. This reads the decisions and folds them.
+
+        **Latest decision per mission wins.** The timeline is append-only, so a
+        mission can carry several — three identical ones from three runs of a
+        gate, or an acceptance somebody later withdrew. `DISTINCT ON` takes the
+        most recent and the filter is applied *after* it, so a mission accepted
+        and then rejected is absent rather than present twice.
+
+        **The commit comes from the decision, never from the branch.** A mission
+        branch can be rebuilt; reading `mission/<id>` here would present whatever
+        is on it now under an acceptance given for something else. The queue
+        shows what was actually reviewed or it shows nothing.
+
+        **Tenancy runs through the opportunity.** `atlas_business_events` has no
+        tenant column — it is one shared timeline per business, by design — so
+        the scope comes from the signal the review names, which does have one. A
+        review whose opportunity belongs to another tenant is not this tenant's
+        work to see.
+
+        Nothing here is "not yet acted on" in any enforced sense **yet**: no
+        outward act exists to record. When publishing lands it records its own
+        event, and the filter for it belongs in the `WHERE` below — one clause,
+        beside the one that is already here.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT * FROM (
+                    SELECT DISTINCT ON (event.detail->>'mission_id')
+                        event.detail->>'mission_id' AS mission_id,
+                        event.detail->>'commit'     AS commit,
+                        event.detail->>'decision'   AS decision,
+                        event.detail->>'note'       AS note,
+                        event.actor                 AS actor,
+                        event.at                    AS decided_at,
+                        event.opportunity_id        AS signal_id,
+                        event.business_id           AS business_id,
+                        signal.scope                AS scope,
+                        signal.kind                 AS signal_kind
+                    FROM atlas_business_events AS event
+                    JOIN atlas_signals AS signal
+                      ON signal.id = event.opportunity_id
+                    WHERE event.kind = :kind
+                      AND (:tenant = '' OR signal.tenant_id = :tenant)
+                    ORDER BY event.detail->>'mission_id', event.at DESC
+                ) AS latest
+                WHERE latest.decision = 'accepted'
+                ORDER BY latest.decided_at DESC
+                LIMIT :limit
+                """),
+                {"kind": REVIEWED_EVENT, "tenant": str(tenant or ""),
+                 "limit": max(1, min(int(limit), 200))},
+            ).mappings().all()
+
+        found = []
+        for row in rows:
+            business = self.get_business(row["business_id"],
+                                         tenant=ALL_TENANTS)
+            found.append({
+                "mission_id": row["mission_id"],
+                # What was reviewed. Not a path, not a branch, not a status.
+                "commit": row["commit"] or "",
+                "signal_id": row["signal_id"],
+                "business_id": row["business_id"],
+                "business_name": business.name if business else "",
+                "scope": row["scope"] or "",
+                "accepted_by": row["actor"],
+                "accepted_at": (row["decided_at"].isoformat()
+                                if row["decided_at"] else ""),
+                "note": row["note"] or "",
+                # Said out loud so a surface cannot render this as done. The
+                # artefact has been accepted and nothing has taken it anywhere.
+                "state": "AWAITING_PUBLICATION",
+            })
+        return found
 
     def reviews_for(self, mission_id: str, *,
                     tenant: TenantId | None = None) -> list[dict]:

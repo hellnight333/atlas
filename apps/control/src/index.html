@@ -1533,14 +1533,68 @@ async function businessDetail(id) {
     <pre>${esc(JSON.stringify(roadmap || research, null, 2).slice(0, 4000))}</pre></div>`;
 }
 
-views.publications = async () => `
+views.publications = async () => {
+  const found = await API.get('/api/missions/awaiting-publication')
+    .catch(() => null);
+  return `
   <header class="page"><h2>Publications</h2>
     <p>What has actually gone live, and what is ready but not authorised.</p></header>
+  ${found === null ? fail('the queue could not be read') + `<p class="note">This is
+    what the kernel said. An empty list is not shown here, because an empty list
+    reads as "nothing is waiting".</p>` : awaitingPublication(found.awaiting || [])}
   <div class="card"><p class="note">Publications are recorded per business. Open a
     business to see its previews and publications.</p>
     <p class="note"><strong>READY_TO_PUBLISH is not PUBLISHED.</strong> Approval
     permits a publication; it does not perform one.</p>
     <p><a href="#/businesses">Businesses</a></p></div>`;
+};
+
+/* Accepted work, and the fact that nothing has taken it anywhere.
+ *
+ * The two states are drawn apart on purpose. ACCEPTED is a thing that happened:
+ * a person looked at a specific commit and said yes. AWAITING PUBLICATION is a
+ * thing that has *not* happened, and drawing it in the same weight as the
+ * acceptance is how a queue starts reading as a record of work completed. */
+/* The words for a state the API reports, and only for states it reports.
+ *
+ * The card said "waiting for publication" unconditionally, which is the console
+ * answering a question the kernel already answers — a second answer, and the one
+ * on screen. A state nobody here knows renders as itself rather than as a guess. */
+const WAITING = { AWAITING_PUBLICATION: 'waiting for publication' };
+
+function awaitingPublication(rows) {
+  if (!rows.length) {
+    return `<div class="card"><h3>Awaiting publication</h3>
+      <p class="note">Nothing accepted is waiting. An artefact appears here once
+      somebody has reviewed it and said yes.</p></div>`;
+  }
+  /* A list, not a table. Five columns at 390px wrapped the commit id one
+     character per line and repeated a caveat in every row — a table squeezed
+     onto a phone rather than a design for one. The caveat is said once, above. */
+  return `<div class="card" style="margin-bottom:1rem">
+    <h3>Awaiting publication</h3>
+    <p class="note">${esc(String(rows.length))}
+      accepted artefact${rows.length === 1 ? '' : 's'}. Each shows the commit a
+      person actually reviewed, not whatever its branch holds now. Nothing here
+      has been published, sent or promoted — there is no capability that could
+      yet, and when there is it will need its own approval.</p>
+    ${rows.map((r) => `<div class="card" style="margin-top:.75rem">
+      <div class="title">${esc(r.business_name || r.business_id || '—')}</div>
+      <div class="meta">${pill('accepted', 'ok')}
+        ${pill(WAITING[r.state] || r.state || 'state unknown',
+               WAITING[r.state] ? 'warn' : '')}
+        ${esc(r.scope || '')}</div>
+      <dl class="facts">
+        <dt>Reviewed</dt><dd><code>${esc((r.commit || '').slice(0, 12))}</code></dd>
+        <dt>Accepted</dt><dd>${when(r.accepted_at)} by
+          ${esc(r.accepted_by || '—')}${r.note
+            ? ' <span class="note">' + esc(r.note) + '</span>' : ''}</dd>
+      </dl>
+      <p class="trail"><a href="#/missions/${encodeURIComponent(r.mission_id)}">Read
+        the artefact &rarr;</a></p>
+    </div>`).join('')}
+  </div>`;
+}
 
 views.measurements = async () => `
   <header class="page"><h2>Measurements</h2>

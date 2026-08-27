@@ -309,7 +309,21 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     # is raised when a genuine surface is added and never to make a failure go
     # away — the assertions below are the actual rule, and they got stricter at
     # the same time this number moved for the opportunities view.
-    assert Path(CONSOLE / "index.html").stat().st_size < 88_000
+    # Raised for the artefact review card and the awaiting-publication queue —
+    # two genuine surfaces, not a failure being silenced. The rule below got
+    # stricter in the same change, which is the condition on moving this number.
+    assert Path(CONSOLE / "index.html").stat().st_size < 92_000
+
+    # Artefact bytes are a customer's generated markup, rendered in the page
+    # that holds the operator's session. They reach the DOM as text or they do
+    # not reach it at all. `verify_console_logic.mjs` proves this by recording
+    # which property is written; this catches the edit that changes it.
+    pane = re.search(r"data-artefact\b[\s\S]{0,800}?\.(textContent|innerHTML)\s*=",
+                     source)
+    assert pane is not None, "the artefact pane is never written to"
+    assert pane.group(1) == "textContent", (
+        "the artefact pane is written with innerHTML; that executes a "
+        "customer's markup in the operator's session")
 
     # The real invariant: the console renders what the API returns and decides
     # nothing. A threshold here is a second answer to a question the kernel

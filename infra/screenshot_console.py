@@ -62,6 +62,23 @@ FIXTURES: dict[str, object] = {
          "claimed_by": "worker-1"},
     ], "counts": {"total": 2, "running": 1, "awaiting_approval": 1, "blocked": 0}},
     "/api/missions/blockers": {"by_kind": {}},
+    # Accepted work with nothing yet able to take it anywhere. Two rows so the
+    # table has a shape, and one of them is the real production mission.
+    "/api/missions/awaiting-publication": {"awaiting": [
+        {"mission_id": "mission-821a8e7d171d",
+         "commit": "2d77a5f27c684b39297a0ad9b359d38e621eb331",
+         "signal_id": "sig-20260827054352236624",
+         "business_id": "4acac344", "business_name": "Julian\u2019s Barber Shop",
+         "scope": "offer-website: performance", "accepted_by": "ayoub",
+         "accepted_at": "2026-08-27T06:29:42Z", "note": "Reads well.",
+         "state": "AWAITING_PUBLICATION"},
+        {"mission_id": "mission-000000000009",
+         "commit": "9f3a1c7e40b2d85610fe23aa7c4d90b1e5f6a7c8",
+         "signal_id": "sig-20260827054352217085",
+         "business_id": "7bd91f22", "business_name": "The Salon Dubai",
+         "scope": "offer-website: performance", "accepted_by": "ayoub",
+         "accepted_at": "2026-08-27T06:31:10Z", "note": "",
+         "state": "AWAITING_PUBLICATION"}]},
     # A delivered mission, so the artefact review card can be looked at rather
     # than asserted. Every field is the shape the real endpoints return.
     "/api/missions/mission-000000000003": {

@@ -462,6 +462,27 @@ def build_router() -> APIRouter:
         registry = origin_registry(request)
         return {"origins": registry.public(), "default": origins.DEFAULT_NAME}
 
+    @router.get("/awaiting-publication")
+    def awaiting_publication(request: Request, limit: int = 50,
+                             tenant: TenantId = Depends(current_tenant),
+                             _: User = Depends(requires(Scope.READ))) -> dict:
+        """Artefacts a person accepted, that nothing has taken anywhere.
+
+        **Declared here, above `/{mission_id}`.** A path parameter matches a
+        literal segment happily, so this route registered after it would be
+        served as a mission whose id is the string `awaiting-publication` — a
+        404 that looks like an empty queue. This repository has shipped that
+        bug once already.
+
+        Read-only, and deliberately carries **no filesystem path**. Where an
+        artefact happens to sit on a host is not a fact this queue is about, and
+        an operator who is deciding what should go out next does not need one.
+        The mission id is the handle; the mission's own artefact endpoint is
+        where the files are.
+        """
+        return {"awaiting": _opportunities(request).awaiting_publication(
+            limit=limit, tenant=tenant)}
+
     @router.get("/{mission_id}")
     def detail(mission_id: str, request: Request,
                tenant: TenantId = Depends(current_tenant),
