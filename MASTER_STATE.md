@@ -377,11 +377,25 @@ The chain is complete end to end: discovery → verification → evidenced audit
 ranked opportunity → approval → delivery → artefact → review → accepted queue →
 publication authorisation → policy → publication → a live page.
 
-**The next milestone is telling the business it exists** — the first act that
-reaches a person rather than a server. It is externally blocked on a sending
-identity, and it is a larger boundary than publishing: a page nobody visits
-harms nobody, and an email does. Do not start it without a sending identity and
-an explicit decision about approaching businesses who have not asked.
+*(Preparation shipped — see "Outreach preparation". Sending did not, and must
+not until the two things below exist.)*
+
+**The next milestone is a sending identity**, and it is not a coding task. It
+needs a mailbox or WhatsApp Business number Qevik is entitled to write from, and
+an explicit decision about approaching businesses who have not asked. Both are
+yours to make; neither can be built.
+
+Once they exist, sending is a small slice and a familiar shape: a mission with a
+declared recipe, an agent holding one tool, and a third refusal in
+`outreach/channels.py` replaced by a provider. Everything it would need is
+already there — the words, the approval bound to their fingerprint, the
+recipient check, and the refusal that says why it cannot happen yet.
+
+**Also blocked, and separate: the first published business cannot be contacted
+at all.** Julian's Barber Shop publishes a landline. A sending identity does not
+fix that, and Qevik will not guess an address. Reaching businesses that publish
+only a phone number is a different capability, and the honest options are a
+channel that can call one or a source that records emails.
 
 *(That prerequisite shipped — see "Publication state, closed from the
 timeline".)*
@@ -1007,6 +1021,95 @@ which says it consults no symlink — and the `min(int(limit), 200)` row cap. Th
 same trap as the keyword scan that flagged its own caveat two milestones ago. It
 parses the function and checks the **calls** it makes now, with a negative
 control proving the scan can still see the calls that are there.
+
+## Outreach preparation — built, and correctly blocked, 2026-08-27
+
+Qevik can say what it built for a business and why, traceably, and cannot
+contact anybody.
+
+### The architectural question, answered
+
+**No new agent, tool or recipe.** Preparation is deterministic composition from
+stored records plus a decision somebody records: it dispatches nothing and
+reaches nothing, so it needs no blast radius and no role. The precedent is
+exact — review and publication *state* were timeline events; only the outward
+*act* needed the mission → recipe → agent → tool chain.
+
+The consequence is stronger than a policy: **no network tool is available to the
+preparation path by construction**, because there is no role to attach one to. A
+test parses the module and confirms it imports no HTTP client, mail sender,
+socket or subprocess, with a negative control proving the scan sees what it does
+import.
+
+Sending is the act, and it is not built. There is no approved sending identity,
+and an approval boundary nothing can cross is architecture rather than a
+business.
+
+### What already existed
+
+| | |
+|---|---|
+| `outreach/channels.py` | the seam, defined in full and connected to nothing; refuses reachability *before* connection |
+| `outreach/identity.py` | one letterhead, with `FORBIDDEN_ENTITY_CLAIMS` already guarding "Qevik LLC" |
+| `atlas_outreach_messages` | draft/approved/sent with an approved fingerprint |
+| `infra/approve_send.py` | **the approval itself**, fingerprint-bound, `outreach_approved_for_manual_send` |
+
+### What was missing
+
+Nothing tied a message to a **published site**. The existing outreach was built
+for the older audit-then-pitch flow, and the message that matters now is *"I
+built this and it is here"*, which needs the publication, the commit and the
+artefact's own provenance.
+
+`outreach/preparation.py` composes it; the approval reuses the existing event.
+
+### Production evidence — 26 checks, 0 failed
+
+`mission-821a8e7d171d`, Julian's Barber Shop, live at
+`sites.qevik.ai/site-4acac34467c34f17/`.
+
+The message references the published address, the commit, the opportunity, the
+approved scope and three evidence fingerprints, and carries a trace naming the
+record behind every claim. It claims no licence Qevik does not hold and invents
+no contact person.
+
+**And it cannot be sent.** The business publishes a landline and no email;
+`WhatsAppChannel.can_reach` already refuses a landline, because a message to one
+is not an error anybody sees, it is silence. So an operator holding
+`COMMUNICATE` gets **409 — no verified way to reach this business**. Qevik does
+not derive an address from a domain.
+
+| refused | |
+|---|---|
+| unauthenticated read and approve | 401 |
+| read-only operator approving | 403 |
+| approving with no recipient | 409 |
+| approving with no fingerprint | refused |
+| approving about an unpublished artefact | refused |
+| approving for a different mission | refused |
+
+Publication approval did not carry outreach approval: the third yes does not
+produce the fourth.
+
+### A duplication I made and corrected
+
+I invented `outreach_approved` beside `outreach_approved_for_manual_send`, which
+`approve_send.py` has written since the manual-send experiment and which means
+exactly the same thing. Two vocabularies for one act is how a reader ends up
+asking which counts. The approval writes the existing name now and records
+`message_fingerprint`, `delivery` and `sent` in the same words; the experiment's
+rows stay out of a publication's history because they carry no `mission_id`.
+
+I also re-added a `--tall` flag the screenshot harness already had. Removed.
+
+### The console
+
+The outreach card draws the blockers as the point rather than a footnote, shows
+the recipient as *none verified* and the sending identity as *none configured*,
+lists the trace behind each claim, and renders the message as text. **It has no
+send control** — a button there would make an approval boundary look like a
+queue — and `test_the_console_carries_no_secret_and_no_business_logic` now fails
+if the console posts to any send-shaped path.
 
 ## Reserved milestone: Agent Compute Fabric
 
