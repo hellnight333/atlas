@@ -24,7 +24,47 @@ SERVICE="qevik-control.service"
 WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service"
 HEALTH="http://127.0.0.1:8081/api/health"
 
-ssh_() { ssh -o BatchMode=yes -o ConnectTimeout=15 -i "$KEY" "$TARGET" "$@"; }
+# Connections to this host drop intermittently — the loss is on the operator's
+# side, not the server's, and it shows up as "timed out during banner exchange"
+# on roughly one attempt in five. A deploy makes a dozen round trips, so a
+# single-attempt option set turns a working link into a failed deploy that has
+# already copied half the tree.
+#
+# `ConnectionAttempts` retries the handshake inside ssh itself; the keepalives
+# stop a long rsync being torn down by a stall rather than a disconnect. None of
+# this hides a real outage: the whole set still gives up, just not on the first
+# lost packet.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=4
+          -o ServerAliveInterval=10 -o ServerAliveCountMax=6)
+# `ConnectionAttempts` retries the TCP connect, which is not where this link
+# fails: it fails *after* connecting, during the banner exchange. So each call
+# is retried here instead. Every command this script sends is idempotent — copy
+# a rollback, apply the schema, chown, restart, read a status — so repeating one
+# that may have half-run costs nothing.
+ssh_() {
+  local try
+  for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if ssh "${SSH_OPTS[@]}" -i "$KEY" "$TARGET" "$@"; then return 0; fi
+    [ "$try" = 12 ] && return 1
+    echo "    (link dropped; retry $try)" >&2
+    sleep $(( try < 6 ? try * 3 : 20 ))
+  done
+}
+#: rsync resumes rather than restarting when a transfer is cut mid-file.
+RSYNC_SSH="ssh ${SSH_OPTS[*]} -i $KEY"
+
+# Same reason as `ssh_`, and safe for the same reason: rsync is idempotent by
+# construction, and `--partial` means a retry continues the file it was cut in
+# rather than starting the tree again.
+rsync_() {
+  local try
+  for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if rsync -a --partial --timeout=120 -e "$RSYNC_SSH" "$@"; then return 0; fi
+    [ "$try" = 12 ] && return 1
+    echo "    (transfer cut; retry $try)" >&2
+    sleep $(( try < 6 ? try * 3 : 20 ))
+  done
+}
 
 [ -f "$ROOT/packages/kernel/atlas_kernel/qevik/app.py" ] || {
   echo "REFUSED: no kernel at $ROOT"; exit 1; }
@@ -65,12 +105,12 @@ STAMP="$(date -u +%Y%m%d%H%M%S)"
 ssh_ "rm -rf /opt/qevik/rollback /opt/qevik/rollback-infra && cp -a $REMOTE_APP/packages/kernel/atlas_kernel /opt/qevik/rollback && cp -a $REMOTE_APP/infra /opt/qevik/rollback-infra 2>/dev/null; echo kept $STAMP"
 
 echo "==> copying the kernel"
-rsync -a --delete -e "ssh -o BatchMode=yes -i $KEY" \
+rsync_ --delete \
   --exclude '__pycache__' --exclude '*.pyc' \
   "$ROOT/packages/kernel/atlas_kernel/" "$TARGET:$REMOTE_APP/packages/kernel/atlas_kernel/"
 
 echo "==> copying the console"
-rsync -a -e "ssh -o BatchMode=yes -i $KEY" \
+rsync_ \
   "$ROOT/apps/control/src/" "$TARGET:/srv/qevik-control/"
 
 # The worker binary lives in infra/ and nothing has ever shipped it. A deploy
@@ -82,7 +122,7 @@ rsync -a -e "ssh -o BatchMode=yes -i $KEY" \
 # No --delete: infra/ on the host may hold operational files this repository
 # does not carry, and a deploy is not the place to discover that.
 echo "==> copying infra (the mission worker lives here)"
-rsync -a -e "ssh -o BatchMode=yes -i $KEY" \
+rsync_ \
   --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
   "$ROOT/infra/" "$TARGET:$REMOTE_APP/infra/"
 

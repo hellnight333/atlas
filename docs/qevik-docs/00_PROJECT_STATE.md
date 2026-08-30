@@ -92,6 +92,52 @@ Reported by Claude:
 - Suppressed addresses were blocked.
 - Secrets were kept outside the repository and logging was hardened.
 
+## GPU nodes (HP Z8, Lenovo) — the blocker is not the hardware (2026-08-30)
+
+Audited without physical access, and the finding changes what "blocked on
+hardware" means for this track.
+
+`infra/provision_node.sh` takes a bare Ubuntu 24.04 box to NVIDIA driver,
+Docker, container toolkit, Tailscale and a verified GPU passthrough. It stops
+there by design — its closing message says the worker agent, ComfyUI and
+weights are deployed afterwards. So provisioning does not join the fabric.
+
+**But joining it would not help yet.** A worker's advertised capabilities are
+derived, deliberately, from the tools its agent declares
+(`_capabilities_for` → `fabric.tools.for_agent`), so there is no hand-kept
+list to add a GPU to. All six agent choices resolve to CPU-only tool ids:
+
+| `--agent`  | serves           | capabilities             |
+|------------|------------------|--------------------------|
+| delivery   | website-builder  | website-generator        |
+| llm        | implementer      | git-worktree             |
+| publish    | site-publisher   | site-publish             |
+| research   | researcher       | dns, http-fetch          |
+| self-check | self-check       | filesystem, shell        |
+| fake       | fake             | —                        |
+
+`--placement` accepts only `either|local|cloud`. `WorkerCapability` does carry
+IMAGE/VIDEO/RENDER/TRAINING, and `WorkerResources` records gpu/vram — so a Z8
+would *report* its GPU — but no recipe requires one, and the dispatch
+vocabulary is tool ids, not that enum.
+
+Racked and provisioned today, a Z8 would advertise `filesystem, shell` exactly
+like a Hetzner CPU worker, take the same CPU missions, and leave the GPU idle.
+
+So the next step on this track is not hardware and not provisioning code. It is
+a product decision — which factory needs a GPU — and that decision is Ayoub's.
+Declaring a GPU agent and recipe now would be inventing product: Qevik's
+current output is websites and outreach, and neither needs one.
+
+## Desktop / web surfaces — still dormant, still an owner decision (2026-08-30)
+
+`apps/desktop` (Tauri, 1145 files), `apps/web` (154) and `apps/prototype` (28)
+were last touched four weeks ago and contain **zero** references to Qevik or to
+any control-plane endpoint — verified against a negative control that finds 47
+files mentioning React in the same tree. They are Atlas-era surfaces with no
+wiring to the running system. `apps/control` is the live operator console.
+Reviving any of them is a product decision, not a repair.
+
 ## Operator console — Fabric and outreach approval (2026-08-30)
 
 Two capabilities existed in the API and could not be reached from
