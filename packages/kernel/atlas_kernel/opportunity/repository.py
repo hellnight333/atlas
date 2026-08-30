@@ -636,6 +636,29 @@ class OpportunityRepository:
                 "commit": commit, "note": note.strip()[:2000],
                 "at": entry["at"].isoformat()}
 
+    def latest_audit(self, business_id: str) -> dict:
+        """What the last website audit actually observed about this business.
+
+        The audit's own observations, with the evidence string each one carries
+        — "no tel: link in the homepage HTML", not a feature name. Nothing here
+        derives or summarises: a capability that reports findings to the
+        business they are about needs what was seen, not a reconstruction.
+
+        Returns `{}` when there is no audit. That is a refusal upstream, not a
+        default: a health check built from nothing would tell a business their
+        site is fine because nobody looked.
+        """
+        with SessionLocal() as session:
+            found = session.execute(
+                text("""
+                SELECT detail FROM atlas_business_events
+                WHERE kind = 'website_audited' AND business_id = :business
+                ORDER BY at DESC LIMIT 1
+                """),
+                {"business": business_id},
+            ).scalar()
+        return _decoded(found) or {}
+
     def published_sites(self, *, limit: int = 200) -> list[dict]:
         """Every address Qevik has actually put on the internet.
 

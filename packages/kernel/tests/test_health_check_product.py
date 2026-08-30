@@ -388,3 +388,58 @@ class TestItCanActuallyBeDelivered:
                   / "infra" / "deploy_control.sh").read_text()
 
         assert "qevik-worker-healthcheck.service" in script
+
+
+class TestTheResearchAHealthCheckIsGiven:
+    """The toolrunner builds a synthetic research shape for the capability that
+    *fixes* defects: feature names and statuses, no evidence. A health check
+    built from that refused every real business — correctly — for asserting
+    findings with nothing behind them.
+
+    A capability that reports observations needs the observations.
+    """
+
+    def test_a_report_gets_the_audit_and_a_build_gets_the_summary(self) -> None:
+        """Structural, because the two shapes are indistinguishable at runtime
+        until the validator refuses one of them in production."""
+        import inspect
+
+        from atlas_kernel.mission import toolrunner
+
+        source = inspect.getsource(toolrunner)
+
+        assert 'self._recipe.delivers == "offer-health-check"' in source
+        assert "latest_audit(business.id)" in source
+
+    def test_an_audit_with_no_observations_refuses_rather_than_reports(
+            self) -> None:
+        """A health check built from nothing tells a business their site is
+        fine because nobody looked."""
+        from atlas_kernel.execution.capabilities.healthcheck import NothingObserved
+
+        try:
+            build_health_check(business_name="X", research={"observations": []})
+        except NothingObserved as refused:
+            assert "nothing to report" in str(refused)
+        else:
+            raise AssertionError("an empty audit produced a health check")
+
+    def test_the_synthetic_shape_would_still_be_refused(self) -> None:
+        """The exact research the fix-building path builds. Kept as a test so
+        that if the two paths are ever merged, this fails rather than a real
+        business receiving unevidenced claims."""
+        from atlas_kernel.execution.capabilities.healthcheck import Unevidenced
+
+        synthetic = {"observations": [
+            {"feature": "website", "status": "present"},
+            {"feature": "page_title", "status": "not_found"},
+            {"feature": "meta_description", "status": "not_found"},
+        ]}
+
+        try:
+            build_health_check(business_name="Real Business", research=synthetic)
+        except Unevidenced as refused:
+            assert "page_title" in str(refused)
+        else:
+            raise AssertionError(
+                "unevidenced claims about a real business were not refused")

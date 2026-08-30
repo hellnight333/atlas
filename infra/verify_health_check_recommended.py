@@ -47,7 +47,7 @@ def _findings(business_id: str, detail: dict) -> list[Finding]:
             severity=Severity.MEDIUM,
             statement=observation.get("note") or observation.get("feature", ""),
             confidence=0.9,
-            evidence=[Evidence(kind="html", source="audit",
+            evidence=[Evidence(kind="html_content", source="audit",
                                statement=observation.get("evidence", ""),
                                detail={})]))
     return found, response

@@ -876,6 +876,28 @@ class ToolAgent:
                 "customer in another.")
 
         findings = self._repository.list_findings(business.id)
+        # A capability that *reports* what was observed needs the observations,
+        # with the evidence each one carries. The synthetic shape below is
+        # built for a capability that *fixes* defects and needs only their
+        # names, and a health check built from it refused every real business —
+        # correctly — for asserting findings with no evidence behind them.
+        if self._recipe.delivers == "offer-health-check":
+            audit = self._repository.latest_audit(business.id) if self._repository else {}
+            if not (audit.get("observations") or []):
+                raise DeliveryRefused(
+                    f"{business.name} has no recorded website audit, so there "
+                    "is nothing to report. A health check built from nothing "
+                    "would tell a business their site is fine because nobody "
+                    "looked.")
+            log.info("%s: delivering %s for %s (%d observations)",
+                     self._signal_id, self._recipe.delivers, business.name,
+                     len(audit["observations"]))
+            return Delivery(offer_id=self._recipe.delivers, business=business,
+                            research=audit)
+
+        # Everything below is the fix-building path. `BUILDABLE` asks which
+        # observed defect a *build* can address, which is not a question a
+        # report has to answer.
         observed = {bridge.BUILDABLE[f.kind] for f in findings
                     if f.kind in bridge.BUILDABLE}
         if not observed:
