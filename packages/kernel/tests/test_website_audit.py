@@ -96,3 +96,43 @@ class TestTechnicalChecks:
     def test_only_a_confirmed_absence_counts_against_a_site(self) -> None:
         for finding in audit_html(MINIMAL, url="https://c.example", page_bytes=len(MINIMAL)):
             assert finding.counts_against is (finding.status is Status.NOT_FOUND)
+
+
+class TestStructuredDataAcrossVerticals:
+    """The check accepted five types, four of them dental or medical. A plumber
+    publishing valid `@type: Plumber` was recorded as having no local-search
+    signal — and the health check published that finding to them."""
+
+    def test_a_trade_business_schema_counts(self) -> None:
+        for kind in ("Plumber", "Electrician", "HomeAndConstructionBusiness"):
+            html = f'<script type="application/ld+json">{{"@type":"{kind}"}}</script>'
+            assert _status(html, "structured_data") is Status.PRESENT, kind
+
+    def test_a_restaurant_and_a_salon_count(self) -> None:
+        for kind in ("Restaurant", "BeautySalon", "Store"):
+            html = f'<script type="application/ld+json">{{"@type":"{kind}"}}</script>'
+            assert _status(html, "structured_data") is Status.PRESENT, kind
+
+    def test_an_unrecognised_type_is_unverified_not_a_finding(self) -> None:
+        """schema.org has roughly two hundred LocalBusiness subtypes and this
+        audit lists a sample. Its gaps are not the customer's."""
+        html = '<script type="application/ld+json">{"@type":"TattooParlor"}</script>'
+
+        assert _status(html, "structured_data") is Status.UNVERIFIED
+
+    def test_page_furniture_is_still_a_confirmed_absence(self) -> None:
+        """The distinction that keeps the check useful: a breadcrumb is
+        conclusively not a local-search signal, so it stays a finding."""
+        for kind in ("BreadcrumbList", "WebPage", "FAQPage"):
+            html = f'<script type="application/ld+json">{{"@type":"{kind}"}}</script>'
+            assert _status(html, "structured_data") is Status.NOT_FOUND, kind
+
+    def test_no_evidence_string_names_a_single_vertical(self) -> None:
+        """The evidence travels into a document sent to the business. One that
+        said "no Dentist/LocalBusiness type" was published to a plumber."""
+        for kind in ("Plumber", "BreadcrumbList", "TattooParlor"):
+            html = f'<script type="application/ld+json">{{"@type":"{kind}"}}</script>'
+            for finding in audit_html(html, url="https://x.test/",
+                                      page_bytes=len(html)):
+                if finding.feature == "structured_data":
+                    assert "Dentist" not in finding.evidence, kind

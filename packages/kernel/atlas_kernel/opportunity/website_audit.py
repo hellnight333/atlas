@@ -26,6 +26,52 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 
+#: schema.org types that mark a page as a local business.
+#:
+#: A sample, not the whole vocabulary — schema.org declares roughly two hundred
+#: `LocalBusiness` subtypes and this audit runs against whatever verticals Qevik
+#: is scanning. It began as five dental and medical types, which meant a plumber
+#: publishing valid `@type: Plumber` was recorded as having no local-search
+#: signal.
+#:
+#: Because it is a sample, a type absent from it produces `UNVERIFIED` rather
+#: than `NOT_FOUND`: this list not recognising something is a fact about the
+#: list.
+LOCAL_BUSINESS_TYPES: tuple[str, ...] = (
+    "localbusiness", "organization",
+    # health
+    "dentist", "medicalclinic", "medicalbusiness", "physician", "hospital",
+    "pharmacy", "veterinarycare", "optician",
+    # trades and home services
+    "plumber", "electrician", "roofingcontractor", "generalcontractor",
+    "homeandconstructionbusiness", "movingcompany", "housepainter",
+    "locksmith", "hvacbusiness",
+    # food and hospitality
+    "restaurant", "cafeorcoffeeshop", "bakery", "bar", "foodestablishment",
+    "lodgingbusiness", "hotel",
+    # retail and personal
+    "store", "healthandbeautybusiness", "beautysalon", "hairsalon", "daysspa",
+    "automotivebusiness", "autorepair", "sportsactivitylocation", "gym",
+    # professional
+    "professionalservice", "legalservice", "accountingservice",
+    "realestateagent", "travelagency", "childcare", "educationalorganization",
+)
+
+
+#: Types that are structural page furniture, never a local-business signal.
+#:
+#: Named so that "this is not a local business type" and "this audit does not
+#: recognise this type" stay different answers. A breadcrumb is conclusively not
+#: a local-search signal; `@type: Plumber` is one this list simply had not heard
+#: of, and reporting the second as the first put a false finding in front of the
+#: business it was about.
+NOT_LOCAL_TYPES: tuple[str, ...] = (
+    "breadcrumblist", "webpage", "website", "article", "blogposting",
+    "newsarticle", "faqpage", "itemlist", "searchaction", "videoobject",
+    "imageobject", "collectionpage", "sitenavigationelement",
+)
+
+
 class Status(StrEnum):
     """Whether a feature is there.
 
@@ -319,31 +365,44 @@ def audit_html(html: str, *, url: str, page_bytes: int) -> list[Finding]:
         )
     )
 
-    # Structured data: present is not enough — it has to describe a clinic.
+    # Structured data: present is not enough — it has to describe the business
+    # rather than the page.
     ld = re.findall(r"<script[^>]+application/ld\+json[^>]*>(.*?)</script>", html, re.I | re.S)
     blob = " ".join(ld).lower()
     if not ld:
         findings.append(_finding("structured_data", Status.NOT_FOUND, "no ld+json block"))
-    elif any(
-        t in blob
-        for t in ("dentist", "medicalbusiness", "medicalclinic", "localbusiness", "physician")
-    ):
-        kind = next(
-            t
-            for t in ("dentist", "medicalclinic", "medicalbusiness", "localbusiness", "physician")
-            if t in blob
-        )
+    elif any(t in blob for t in LOCAL_BUSINESS_TYPES):
+        kind = next(t for t in LOCAL_BUSINESS_TYPES if t in blob)
         findings.append(
             _finding("structured_data", Status.PRESENT, f"ld+json @type includes {kind}")
         )
     else:
-        findings.append(
-            _finding(
-                "structured_data",
-                Status.NOT_FOUND,
-                "ld+json present but no Dentist/LocalBusiness type — not a local-search signal",
+        # Two different answers, kept apart.
+        #
+        # A breadcrumb or a web page is conclusively not a local-search signal.
+        # A type this audit has never heard of is not a finding about the
+        # business — `LOCAL_BUSINESS_TYPES` is a sample of schema.org, and
+        # reporting its gaps as theirs told a plumber publishing valid
+        # `@type: Plumber` that they had no local-search signal.
+        if any(t in blob for t in NOT_LOCAL_TYPES):
+            findings.append(
+                _finding(
+                    "structured_data",
+                    Status.NOT_FOUND,
+                    "ld+json describes page structure rather than the business "
+                    "— not a local-search signal",
+                )
             )
-        )
+        else:
+            findings.append(
+                _finding(
+                    "structured_data",
+                    Status.UNVERIFIED,
+                    "ld+json is present and its @type is not one this audit "
+                    "recognises, so whether it is a local-business signal was "
+                    "not established",
+                )
+            )
 
     images = re.findall(r"<img\b[^>]*>", html, re.I)
     with_alt = [i for i in images if re.search(r'\balt=["\'][^"\']+', i)]
