@@ -494,7 +494,31 @@ def build_router() -> APIRouter:
         from ..publication import ConnectionStore
 
         store = getattr(request.app.state, "connections", None) or ConnectionStore()
-        return controlplane.centre(store=store, tenant=tenant)
+
+        # Which machines have actually joined, so an action asking somebody to
+        # provision one disappears when it appears in Fabric. `None` — the fleet
+        # could not be read — is passed through unchanged: it must not become
+        # "nothing has joined", which would ask for a running machine.
+        from .nodes import snapshots
+
+        known = snapshots()
+
+        # Whether the sending domain proves anything. A DNS read, so a slow
+        # resolver must not take out the page that says what to do about it: a
+        # failure measures as unreadable, which produces no action rather than a
+        # confident wrong one.
+        from ..outreach import deliverability
+
+        try:
+            sending = deliverability.measure()
+        except Exception:                          # noqa: BLE001 - reported
+            sending = None
+
+        return controlplane.centre(
+            store=store, tenant=tenant,
+            known_nodes=None if known is None
+            else tuple(node.node_id for node in known),
+            sending_identity=sending)
 
     def _worker_nodes(request: Request):
         """Mission workers as the scheduler is told about them, or `None`.

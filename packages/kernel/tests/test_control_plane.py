@@ -373,3 +373,72 @@ class TestMachinesThatHaveNotJoined:
         for action in node_actions((), tenant="t"):
             assert action.affects == ()
             assert "GPU work" not in action.instructions
+
+
+class TestWhatStopsTheDomainSending:
+    """The `smtp` credential and the DNS records are different blockers with
+    different fixes. Satisfying one does nothing for the other, and a channel
+    reporting itself configured while the domain proves nothing sends mail
+    straight to spam."""
+
+    class _Measured:
+        def __init__(self, *, missing=(), unreadable=False, domain="qevik.ai"):
+            from atlas_kernel.outreach.deliverability import Record, State
+
+            self.domain, self.unreadable, self.missing = domain, unreadable, missing
+            self.records = tuple(
+                Record(name=name, matters_because="a real consequence, at length",
+                       state=State.ABSENT) for name in missing)
+
+    def test_a_domain_missing_records_produces_a_blocking_action(self) -> None:
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        found = sending_identity_actions(
+            self._Measured(missing=("MX", "SPF")), tenant="t")
+
+        assert len(found) == 1
+        assert found[0].blocking is True
+        assert found[0].affects == ("outreach:send",)
+        assert "a DNS MX record on qevik.ai" in found[0].requires
+
+    def test_an_unreadable_resolver_produces_no_action(self) -> None:
+        """Telling somebody to create records that already exist is how a
+        working zone gets broken by a well-meant edit."""
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        assert sending_identity_actions(
+            self._Measured(missing=("MX",), unreadable=True), tenant="t") == ()
+        assert sending_identity_actions(None, tenant="t") == ()
+
+    def test_a_healthy_domain_produces_no_action(self) -> None:
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        assert sending_identity_actions(self._Measured(), tenant="t") == ()
+
+    def test_it_says_how_the_entry_closes_itself(self) -> None:
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        action = sending_identity_actions(
+            self._Measured(missing=("DMARC",)), tenant="t")[0]
+
+        assert "disappears by" in action.verification
+        assert "dig finds DMARC" in action.verification
+
+    def test_it_is_a_separate_action_from_the_smtp_credential(self) -> None:
+        """Same service would mean one satisfying the other."""
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        action = sending_identity_actions(
+            self._Measured(missing=("MX",)), tenant="t")[0]
+
+        assert action.service == "dns:qevik.ai"
+        assert "SMTP" not in action.requires[0]
+
+    def test_it_names_no_credential_value(self) -> None:
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+
+        rendered = repr(sending_identity_actions(
+            self._Measured(missing=("MX", "SPF", "DMARC")), tenant="t"))
+
+        assert "QEVIK_SMTP_PASSWORD" not in rendered
+        assert "sk-" not in rendered

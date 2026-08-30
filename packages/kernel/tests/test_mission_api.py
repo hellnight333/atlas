@@ -702,3 +702,84 @@ class TestTheFabricSurface:
         assert "from .nodes import snapshots" in route
         for forbidden in ("WorkerRegistry", "list_workers", "atlas_workers"):
             assert forbidden not in route, f"the route queries {forbidden} itself"
+
+
+class TestTheActionCentreRouteSurfacesEverything:
+    """Testing the producers directly proved nothing about the endpoint.
+
+    An earlier version of this wiring was lost before it was committed, and the
+    production check called `node_actions()` itself — so it verified the
+    function and not the route that was supposed to serve it. These go through
+    the API.
+    """
+
+    def test_the_route_asks_for_machines_that_have_not_joined(
+            self, client, app, monkeypatch) -> None:
+        from atlas_kernel.mission import nodes
+
+        monkeypatch.setattr(nodes, "snapshots", lambda: ())
+        body = client.get("/api/missions/actions").json()
+
+        services = {a["service"] for a in body["open"]}
+        assert "atlas-z8" in services and "atlas-lenovo" in services
+        assert body["counts"]["provisioning"] >= 2
+
+    def test_a_machine_in_the_fleet_is_not_asked_for_by_the_route(
+            self, client, app, monkeypatch) -> None:
+        from atlas_kernel.fabric.scheduler import NodeSnapshot
+        from atlas_kernel.mission import nodes
+
+        monkeypatch.setattr(nodes, "snapshots", lambda: (
+            NodeSnapshot(worker_name="w", serves="researcher",
+                         capabilities=frozenset(), placements=frozenset({"either"}),
+                         node_id="atlas-z8:w"),))
+        body = client.get("/api/missions/actions").json()
+
+        services = {a["service"] for a in body["open"]}
+        assert "atlas-z8" not in services
+        assert "atlas-lenovo" in services, (
+            "negative control: the other machine must still be asked for")
+
+    def test_the_route_reports_what_the_sending_domain_is_missing(
+            self, client, app, monkeypatch) -> None:
+        from atlas_kernel.outreach import deliverability
+
+        monkeypatch.setattr(deliverability, "_dig", lambda *a, **k: ())
+        body = client.get("/api/missions/actions").json()
+
+        dns = [a for a in body["open"] if a["service"].startswith("dns:")]
+        assert len(dns) == 1
+        assert dns[0]["blocking"] is True
+        assert "outreach:send" in dns[0]["affects"]
+
+    def test_an_unreadable_resolver_asks_for_no_dns_record(
+            self, client, app, monkeypatch) -> None:
+        """The negative control for the test above, and the one that matters:
+        silence must not become a demand to edit a working zone."""
+        from atlas_kernel.outreach import deliverability
+
+        monkeypatch.setattr(deliverability, "_dig", lambda *a, **k: None)
+        body = client.get("/api/missions/actions").json()
+
+        assert [a for a in body["open"] if a["service"].startswith("dns:")] == []
+
+    def test_a_failing_measurement_does_not_take_down_the_page(
+            self, client, app, monkeypatch) -> None:
+        """This runs inside the read. An exception here would remove the screen
+        that tells the operator what to do."""
+        from atlas_kernel.outreach import deliverability
+
+        def explode(*_a, **_k):
+            raise RuntimeError("resolver on fire")
+
+        monkeypatch.setattr(deliverability, "measure", explode)
+        response = client.get("/api/missions/actions")
+
+        assert response.status_code == 200
+        assert "open" in response.json()
+
+    def test_no_action_carries_a_secret(self, client, app) -> None:
+        body = client.get("/api/missions/actions").text
+
+        assert "sk-" not in body
+        assert "QEVIK_VAULT_MASTER_KEY=" not in body

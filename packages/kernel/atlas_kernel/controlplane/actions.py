@@ -282,10 +282,64 @@ def node_actions(known: tuple[str, ...] | None, *,
     )
 
 
+def sending_identity_actions(measured: object | None, *,
+                             tenant: TenantId | None = None
+                             ) -> tuple[HumanAction, ...]:
+    """What the sending domain still needs before mail is worth sending.
+
+    Separate from the `smtp` credential action, because they are different
+    blockers with different fixes and satisfying one does nothing for the other:
+    the credential is five settings in the environment, this is DNS records in
+    Cloudflare, and a channel that reports itself configured while the domain
+    proves nothing sends mail straight to spam.
+
+    Blocking, unlike the provisioning actions. Outreach is the current
+    commercial track and this genuinely stops it.
+
+    `measured is None`, or a measurement where nothing could be read, produces
+    **no action**. An unreachable resolver is not a missing DNS record, and
+    telling somebody to create records that already exist is how a working zone
+    gets broken by a well-meant edit.
+    """
+    if measured is None or getattr(measured, "unreadable", True):
+        return ()
+    missing = tuple(getattr(measured, "missing", ()))
+    if not missing:
+        return ()
+    domain = getattr(measured, "domain", "")
+    tenant_id = str(tenant or "")
+    return (HumanAction(
+        id=_identity(ActionKind.PROVISIONING, f"dns:{domain}", tenant_id),
+        kind=ActionKind.PROVISIONING,
+        title=f"{domain} cannot send mail anybody will accept",
+        service=f"dns:{domain}",
+        tenant_id=tenant_id,
+        blocking=True,
+        reason="; ".join(
+            f"{record.name}: {record.matters_because}"
+            for record in getattr(measured, "records", ())
+            if record.name in missing),
+        instructions=(
+            "Cloudflare holds this zone and Qevik has no token for it, so every "
+            "record is created by hand in the Cloudflare dashboard. The exact "
+            "values and the order to create them are in "
+            "docs/qevik-docs/70_EMAIL_INFRASTRUCTURE.md — the verification TXT "
+            "must exist before a DKIM key can be generated."),
+        requires=tuple(f"a DNS {name} record on {domain}" for name in missing),
+        setup_url="https://dash.cloudflare.com/",
+        affects=("outreach:send",),
+        verification=(
+            f"dig finds {', '.join(missing)} on {domain}. This check re-runs on "
+            "every read of the action centre, so the entry disappears by "
+            "itself once the records resolve."),
+    ),)
+
+
 def centre(*, store: ConnectionStore, tenant: TenantId | None,
            pending_approvals: list[ApprovalRequest] | None = None,
            outstanding_tasks: tuple[dict, ...] = (),
-           known_nodes: tuple[str, ...] | None = None) -> dict:
+           known_nodes: tuple[str, ...] | None = None,
+           sending_identity: object | None = None) -> dict:
     """Everything waiting on a person, ordered by what it holds up.
 
     Blocking first, then by how long it has been ignored. A list ordered by
@@ -297,6 +351,7 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
         + approval_actions(pending_approvals or [], tenant=tenant)
         + customer_task_actions(outstanding_tasks, tenant=tenant)
         + node_actions(known_nodes, tenant=tenant)
+        + sending_identity_actions(sending_identity, tenant=tenant)
     )
     ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))
     return {
