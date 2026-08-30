@@ -53,6 +53,11 @@ class NotPublishable(Exception):
 #: same shape as `delivery.OFFER_RECIPES` for the same reason.
 OFFER_RECIPES: dict[str, str] = {
     "offer-website": "publish-website",
+    # The same recipe, and deliberately so. Publishing is putting a directory
+    # of files at an address; what the files say is the artefact's business,
+    # not the publisher's. A second recipe here would be a second hosting path
+    # to keep in step, differing only in the name of the thing it carries.
+    "offer-health-check": "publish-website",
 }
 
 #: A site id is a bare key: lowercase, digits, hyphens. No slashes, no dots, no

@@ -443,3 +443,14 @@ class TestTheResearchAHealthCheckIsGiven:
         else:
             raise AssertionError(
                 "unevidenced claims about a real business were not refused")
+
+
+def test_it_publishes_through_the_existing_mechanism() -> None:
+    """Publishing is putting a directory of files at an address; what the files
+    say is the artefact's business, not the publisher's. A health-check-specific
+    hosting path would be a second thing to keep in step."""
+    from atlas_kernel.mission.publication import OFFER_RECIPES
+
+    assert OFFER_RECIPES["offer-health-check"] == "publish-website"
+    assert OFFER_RECIPES["offer-website"] == "publish-website", (
+        "the website offer must still use the recipe this one now shares")
