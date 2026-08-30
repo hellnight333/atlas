@@ -545,3 +545,75 @@ class TestTheCatalogueMatchesReality:
         for integration in INTEGRATIONS:
             if integration.adapter_ready:
                 assert integration.blocks, integration.id
+
+
+class TestOneDescriptionOfACredential:
+    """A stored credential and an unconnected one are the same row with
+    different contents. They were built by two hand-synced dicts, which had
+    already drifted — neither carried `verification`."""
+
+    def test_a_connected_and_an_unconnected_row_have_the_same_shape(self) -> None:
+        """Anything present on one and missing on the other is a field some
+        screen renders for half its rows and silently drops for the rest."""
+        from atlas_kernel.credentials.service import CredentialRecord, describe_credential
+        from atlas_kernel.integrations.registry import BY_ID
+
+        integration = BY_ID["smtp"]
+        unconnected = describe_credential(integration)
+        connected = describe_credential(
+            integration,
+            CredentialRecord(provider="smtp", tenant_id="t", reference="t/smtp",
+                             fingerprint="abc123",
+                   hint="…xyz"))
+
+        assert set(unconnected) == set(connected)
+
+    def test_every_field_an_operator_needs_to_act_is_present(self) -> None:
+        """Each of these answers a question a person asks before they can do
+        anything: what is it for, what breaks without it, what exactly do I set,
+        where do I get one, and how will I know I am finished."""
+        from atlas_kernel.credentials.service import describe_credential
+        from atlas_kernel.integrations.registry import BY_ID
+
+        row = describe_credential(BY_ID["smtp"])
+
+        for field in ("provider", "name", "purpose", "status", "blocks",
+                      "credential", "setup_url", "verification",
+                      "adapter_ready", "last_checked"):
+            assert field in row, field
+        assert row["credential"] == "QEVIK_SMTP_PASSWORD"
+        assert row["blocks"], "an integration that blocks nothing needs no row"
+        assert "_PASSWORD" in row["verification"] and "EmailChannel" in row["verification"]
+
+    def test_no_row_carries_a_secret_value(self) -> None:
+        """`credential` is the *name* of the setting. A row that carried the
+        value would put it in an API response, a report and a screenshot."""
+        from atlas_kernel.credentials.service import CredentialRecord, describe_credential
+        from atlas_kernel.integrations.registry import INTEGRATIONS
+
+        for integration in INTEGRATIONS:
+            row = describe_credential(
+                integration,
+                CredentialRecord(provider=integration.id, tenant_id="t",
+                                 reference="t/x",
+                       fingerprint="f" * 16, hint="…tail"))
+            rendered = repr(row)
+            assert "sk-" not in rendered
+            # The fingerprint and hint identify which key is stored. Neither is
+            # the key, and the hint must stay a tail rather than a prefix.
+            assert row["hint"].startswith("…") or row["hint"] == ""
+
+    def test_the_two_callers_cannot_drift_again(self) -> None:
+        """Structural: `centre()` must not rebuild the row itself. The bug was
+        not a missing field, it was a second place that owned the shape."""
+        import inspect
+
+        from atlas_kernel.credentials.service import CredentialService
+
+        source = inspect.getsource(CredentialService.centre)
+
+        assert "describe_credential" in source
+        for rebuilt in ('"setup_url":', '"blocks":', '"credential":'):
+            assert rebuilt not in source, (
+                f"centre() builds {rebuilt} itself; that is the second map "
+                "that drifted from Record.describe() in the first place")

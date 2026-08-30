@@ -341,7 +341,30 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "an approval that echoes nothing cannot be checked against what was read")
     assert "w.state" in source and "w.healthy" in source, (
         "the Fabric view must render the state the scheduler reported")
-    assert Path(CONSOLE / "index.html").stat().st_size < 100_000
+    # The console may not own a state vocabulary. `discoveryLine` used to
+    # collapse four kernel discovery states into a boolean and write its own
+    # prose for each half, so DISCOVERED_BY_QEVIK and NEW_TO_QEVIK — different
+    # claims — were drawn identically, and the wording could drift from the
+    # kernel's with nothing failing. /api/discovery/states exists so a surface
+    # cannot invent a friendlier meaning than the one the kernel gives.
+    assert "/api/discovery/states" in source, (
+        "the console renders discovery states without asking what they mean")
+    for invented in ("New to Qevik'", "new to the world'",
+                     "claims_about_the_world === true"):
+        assert invented not in source, (
+            f"the console writes its own meaning for a discovery state "
+            f"({invented!r}); it must render what /states returned")
+    # Publication state is derived from the timeline by the API. A console that
+    # worked it out from the presence of a URL would report a site as live
+    # because a disk had it.
+    assert "pill(d.publication_state" in source, (
+        "the console has the four-state publication chain and does not draw it. "
+        "Mentioning the field somewhere is not showing it — an earlier version "
+        "of this assertion passed while the state was rendered as a literal")
+    for derived in ("published.length ? 'PUBLISHED'", "? 'AUTHORISED' :"):
+        assert derived not in source, (
+            "the console derives publication state instead of reading it")
+    assert Path(CONSOLE / "index.html").stat().st_size < 112_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

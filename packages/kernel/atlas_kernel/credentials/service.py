@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -127,23 +128,51 @@ class CredentialRecord(BaseModel):
 
     def describe(self) -> dict:
         """Safe for an API response, a report, or a screen."""
-        integration = BY_ID.get(self.provider)
-        return {
-            "provider": self.provider,
-            "name": integration.name if integration else self.provider,
-            "purpose": integration.purpose if integration else "",
-            "status": self.status.value,
-            "enabled": self.enabled,
-            "configured": bool(self.fingerprint),
-            "hint": self.hint,
-            "fingerprint": self.fingerprint,
-            "credential": integration.credential if integration else self.reference,
-            "setup_url": integration.setup_url if integration else "",
-            "blocks": list(integration.blocks) if integration else [],
-            "last_checked": (self.last_verification.at.isoformat()
-                             if self.last_verification else None),
-            "detail": self.last_verification.detail if self.last_verification else "",
-        }
+        return describe_credential(BY_ID.get(self.provider), self)
+
+
+def describe_credential(integration: Any, record: Any = None) -> dict:
+    """The shape of a credential row, in one place.
+
+    `centre()` must list providers with nothing stored — "you have not
+    connected Stripe" is the row a person needs, and an empty list does not say
+    it. That branch used to hand-build this dict beside `Record.describe()`,
+    two maps of the same keys kept in step by hand. They had already drifted:
+    neither carried `verification`, and adding it to both would have been
+    repeating the mistake rather than fixing it.
+
+    Never contains a secret value. `fingerprint` and `hint` identify *which*
+    credential is stored without revealing it.
+    """
+    return {
+        "provider": integration.id if integration else getattr(record, "provider", ""),
+        "name": (integration.name if integration
+                 else getattr(record, "provider", "")),
+        "purpose": integration.purpose if integration else "",
+        "status": (record.status.value if record is not None
+                   else Status.NOT_CONFIGURED.value),
+        "enabled": record.enabled if record is not None else True,
+        "configured": bool(record.fingerprint) if record is not None else False,
+        "hint": record.hint if record is not None else "",
+        "fingerprint": record.fingerprint if record is not None else "",
+        # The *name* of the setting to add, never a value.
+        "credential": (integration.credential if integration
+                       else getattr(record, "reference", "")),
+        "setup_url": integration.setup_url if integration else "",
+        # What cannot run until this is connected, so the consequence of not
+        # connecting is visible beside the request.
+        "blocks": list(integration.blocks) if integration else [],
+        # How a person knows they are finished, in the terms of the real check.
+        "verification": integration.verifies_by() if integration else "",
+        # "we have not built this" and "you have not connected this" are
+        # different sentences, and only one of them is the operator's move.
+        "adapter_ready": integration.adapter_ready if integration else True,
+        "last_checked": (record.last_verification.at.isoformat()
+                         if record is not None and record.last_verification
+                         else None),
+        "detail": (record.last_verification.detail
+                   if record is not None and record.last_verification else ""),
+    }
 
 
 def reference_for(provider: str, tenant: str) -> str:
@@ -347,16 +376,7 @@ class CredentialService:
             if record is not None:
                 rows.append(record.describe())
                 continue
-            rows.append({
-                "provider": integration.id, "name": integration.name,
-                "purpose": integration.purpose,
-                "status": Status.NOT_CONFIGURED.value,
-                "enabled": True, "configured": False, "hint": "",
-                "fingerprint": "", "credential": integration.credential,
-                "setup_url": integration.setup_url,
-                "blocks": list(integration.blocks),
-                "last_checked": None, "detail": "",
-            })
+            rows.append(describe_credential(integration))
         return {
             "credentials": rows,
             "connected": [r for r in rows if r["status"] == Status.CONNECTED.value],

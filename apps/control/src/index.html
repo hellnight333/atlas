@@ -700,6 +700,21 @@ async function missionDetail(id) {
     ? '<button class="primary" data-approve>Approve — queue this mission</button>' : '';
   const cancel = ['draft', 'planning', 'awaiting_approval', 'queued', 'blocked'].includes(mission.status)
     ? '<button class="danger" data-cancel>Cancel</button>' : '';
+  /* Holding is not cancelling: the mission stays queued because it is still
+     work somebody wants done, and only the moment it may start changes.
+     `claim()` enforces that window, so this is a decision and not a note. */
+  const defer = ['draft', 'planning', 'awaiting_approval', 'queued', 'blocked'].includes(mission.status)
+    ? `<details class="hold"><summary>Hold until…</summary>
+         <div class="actions">
+           <label>Start no earlier than
+             <input id="defer-until" type="datetime-local"></label>
+           <label>Why <input id="defer-why" maxlength="500"
+             placeholder="waiting on the client's copy"></label>
+           <button data-defer>Hold until…</button>
+         </div>
+         <p class="note" data-defer-said></p>
+         <p class="note">It stays queued. Nothing is cancelled, and the reason
+           is recorded on the timeline.</p></details>` : '';
 
   const html = `
     <header class="page"><h2>${esc(mission.title)}</h2>
@@ -711,6 +726,9 @@ async function missionDetail(id) {
     <div class="card" style="margin-bottom:1rem">
       ${pill(mission.status)} ${track(mission.status)}
       <div class="actions" style="margin-top:.9rem">${approve}${cancel}</div>
+      ${mission.not_before ? `<p class="note">Held until ${when(mission.not_before)}
+        &mdash; it will not start before then.</p>` : ''}
+      ${defer}
     </div>
     ${delivery ? deliveryCard(delivery) : ''}
     ${outreach ? outreachCard(outreach) : ''}
@@ -754,6 +772,32 @@ async function missionDetail(id) {
       a.disabled = true; a.textContent = 'Queueing…';
       try { await API.post('/api/missions/' + encodeURIComponent(id) + '/approve'); render(); }
       catch (e) { a.disabled = false; a.textContent = 'Approve'; alert(e.message); }
+    });
+    const d = document.querySelector('[data-defer]');
+    if (d) d.addEventListener('click', async () => {
+      const until = document.getElementById('defer-until');
+      const why = document.getElementById('defer-why');
+      const said = document.querySelector('[data-defer-said]');
+      const tell = (t) => { if (said) said.textContent = t; };
+      /* Both required by the server. Saying so here beats a 422 the operator
+         has to decode: a deferral without a reason cannot be told from a queue
+         that is simply long, which is what SCHEDULED exists to distinguish. */
+      if (!until.value) return tell('Pick the moment it may start.');
+      if (why.value.trim().length < 3) {
+        return tell('Say why it is being held.');
+      }
+      d.disabled = true; d.textContent = 'Holding…'; tell('');
+      try {
+        await API.post('/api/missions/' + encodeURIComponent(id) + '/defer',
+                       { until: new Date(until.value).toISOString(),
+                         reason: why.value.trim() });
+        render();
+      } catch (e) {
+        d.disabled = false; d.textContent = 'Hold until…';
+        tell(e.message.includes('409')
+          ? 'This mission has finished; there is nothing left to hold.'
+          : e.message);
+      }
     });
     const c = document.querySelector('[data-cancel]');
     if (c) c.addEventListener('click', async () => {
@@ -804,6 +848,13 @@ function wireOutreach(id) {
  * was permitted to carry it out; what came back. A reviewer who cannot see the
  * authorisation beside the artefact is being asked to judge the artefact alone,
  * which is how work nobody approved gets accepted because it looked fine. */
+const PUBLICATION_MEANS = {
+  NOT_REVIEWED: 'Nobody has accepted this yet.',
+  ACCEPTED: 'Reviewed and accepted. Not authorised to publish.',
+  AUTHORISED: 'Authorised to publish. Not yet out.',
+  PUBLISHED: 'Live. Strangers can reach it.',
+};
+
 function deliveryCard(d) {
   const files = d.files || [];
   const reviews = d.reviews || [];
@@ -821,7 +872,18 @@ function deliveryCard(d) {
       <span class="note">by ${esc(last.actor)} · ${when(last.at)}${last.note
         ? ' · ' + esc(last.note) : ''}</span></p>` : `<p>${pill('not reviewed', 'warn')}
       <span class="note">Nobody has decided about this yet.</span></p>`}
+    <p class="stage">${pill(d.publication_state || 'NOT_REVIEWED',
+      { PUBLISHED: 'ok', AUTHORISED: 'warn', ACCEPTED: 'run' }[d.publication_state] || '')}
+      <span class="note">${esc(PUBLICATION_MEANS[d.publication_state]
+        || 'Derived from the timeline, not from a directory on disk.')}</span></p>
     <dl class="facts">
+      <dt>Authorised</dt><dd>${(d.authorised || []).length
+        ? (d.authorised || []).map((a) => esc(a.actor || 'unknown') + ' · '
+            + (a.at ? when(a.at) : '')
+            + (a.commit ? ' · <code>' + esc(a.commit.slice(0, 12)) + '</code>'
+              : '')).join('<br>')
+        : `<span class="note">Not authorised. Accepting the work and letting it
+           out are two decisions.</span>`}</dd>
       <dt>Approved</dt><dd>${d.signal_id
         ? `<a href="#/opportunities">${esc(d.approved_scope || d.signal_id)}</a>
            <span class="note">from <code>${esc(d.signal_id)}</code>
@@ -1256,13 +1318,32 @@ function originChoice(available) {
  * must not read as "a new business appeared". The API sends
  * `claims_about_the_world` on every row precisely so this cannot be guessed,
  * and the wording below changes with it rather than with the state name. */
-function discoveryLine(row) {
-  const claims = row.claims_about_the_world === true;
-  return claims
-    ? { word: 'New to ' + esc(row.source || 'the source'), tone: 'ok',
-        says: 'The source itself evidences this. New to that source — not to the world.' }
-    : { word: 'New to Qevik', tone: '',
-        says: 'Qevik had no record of this. That is a fact about Qevik, not about the world.' };
+/* What a discovery state means — asked, never decided here.
+ *
+ * This used to collapse four kernel states into a boolean and write its own
+ * prose for each half. That is a second state machine: `DISCOVERED_BY_QEVIK`
+ * and `NEW_TO_QEVIK` are different claims and were being drawn identically,
+ * and the wording here could drift from the kernel's with nothing failing.
+ * `/api/discovery/states` exists precisely so a surface cannot invent a
+ * friendlier meaning than the one the kernel gives. */
+const STATE_TONE = {
+  PROVEN_NEW_TO_SOURCE: 'ok', DISCOVERED_BY_QEVIK: 'run',
+  NEW_TO_QEVIK: '', KNOWN: 'wait',
+};
+
+function discoveryLine(row, states) {
+  const known = (states || []).find((s) => s.state === row.state);
+  if (!known) {
+    /* An unrecognised state is not a new one to guess at. Saying so beats
+       rendering it as the friendlier neighbour it happens to sort next to. */
+    return { word: row.state || 'unknown state', tone: 'warn',
+             says: 'This console has no description for that state. It came '
+                 + 'from the kernel; ask it what it means before acting.' };
+  }
+  return { word: known.state, tone: STATE_TONE[known.state] || '',
+           says: known.means + (known.claims_about_the_world
+             ? ' This one claims something about the world.'
+             : ' This claims nothing about the world.') };
 }
 
 /* One opportunity, in the four parts it was detected as.
@@ -1321,7 +1402,11 @@ async function opportunities() {
 }
 
 async function discoveries() {
-  const found = await API.get('/api/discovery?limit=25').catch(() => null);
+  const [found, vocabulary] = await Promise.all([
+    API.get('/api/discovery?limit=25').catch(() => null),
+    API.get('/api/discovery/states').catch(() => null),
+  ]);
+  const states = (vocabulary || {}).states || [];
   if (!found) {
     return `<header class="page"><h2>Discovery</h2></header>
       <div class="card"><p class="note">The discovery memory could not be read.
@@ -1336,7 +1421,7 @@ async function discoveries() {
           ' of them evidenced as new by their source.'
         : 'Nothing new since the last scan.'}</p></header>
     ${rows.length ? rows.map((r) => {
-      const how = discoveryLine(r);
+      const how = discoveryLine(r, states);
       return `<div class="card">
         <div class="title">${esc(r.name)}</div>
         <p class="stage">${pill(how.word, how.tone)} ${esc(how.says)}</p>
@@ -1351,6 +1436,12 @@ async function discoveries() {
     }).join('') : `<div class="card"><p class="note">Discovery runs nightly.
       An empty list means the scan ran and found nothing Qevik did not already
       have — not that it did not run.</p></div>`}
+    ${states.length ? `<div class="card"><h3>What these states mean</h3>
+      <dl class="facts">${states.map((st) => `<dt>${pill(st.state,
+        STATE_TONE[st.state] || '')}</dt><dd>${esc(st.means)}
+        ${st.claims_about_the_world
+          ? pill('claims about the world', 'warn') : ''}</dd>`).join('')}</dl>
+      <p class="note">Read from the kernel, not written here.</p></div>` : ''}
     <p class="note">${esc(found.note || '')}</p>`;
 }
 
@@ -1557,7 +1648,12 @@ views.fabric = async () => {
 
 views.credentials = async () => {
   const centre = await API.get('/api/credentials');
-  const rows = centre.credentials || [];
+  /* Ordered by whose move it is: things a person must act on, then everything
+     working, then adapters Qevik has not built — which are nobody's move. */
+  const rank = (r) => (r.adapter_ready === false ? 2
+    : r.status === 'CONNECTED' ? 1 : 0);
+  const rows = (centre.credentials || []).slice().sort(
+    (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   const html = `
     <header class="page"><h2>Credentials</h2>
       <p>The one place a key is entered. No value is ever shown again after saving.</p></header>
@@ -1565,19 +1661,37 @@ views.credentials = async () => {
       'The vault is sealed: QEVIK_VAULT_MASTER_KEY is not set on the server, so nothing can be stored. It refuses rather than falling back to plaintext.') : ''}
     <div class="rows">${rows.map((r) => `
       <div class="row"><div class="body">
-        <div class="title">${esc(r.name)} ${pill(r.status)}</div>
+        <div class="title">${esc(r.name)} ${pill(r.status)}
+          ${r.adapter_ready === false ? pill('not built', 'wait') : ''}
+          ${r.enabled === false ? pill('switched off', 'warn') : ''}</div>
         <div class="meta">${esc(r.purpose || '')}</div>
-        <div class="meta">Credential: <code>${esc(r.credential)}</code>
+        <div class="meta">Set <code>${esc(r.credential)}</code>
           ${r.hint ? '· ends <code>' + esc(r.hint) + '</code>' : ''}
           ${r.fingerprint ? '· fingerprint <code>' + esc(r.fingerprint) + '</code>' : ''}</div>
-        ${r.blocks && r.blocks.length ? `<div class="meta">Blocks: ${esc(r.blocks.join(', '))}</div>` : ''}
-        ${r.detail ? `<div class="meta">${esc(r.detail)}</div>` : ''}
+        ${r.blocks && r.blocks.length ? `<div class="meta">Without it:
+          ${esc(r.blocks.join(', '))}</div>` : ''}
+        ${r.verification ? `<div class="meta">Done when: ${esc(r.verification)}</div>` : ''}
+        <div class="meta">Last checked: ${r.last_checked
+          ? when(r.last_checked) + (r.detail ? ' — ' + esc(r.detail) : '')
+          : /* Never tested is not the same as tested and failing. Drawing them
+               the same way is how a key nobody has exercised reads as broken —
+               or worse, as fine. */
+            '<span class="pill warn">never tested</span>'}</div>
+        <div class="meta">${r.adapter_ready === false
+          ? 'Nothing to do: Qevik has not built this adapter yet.'
+          : r.configured
+            ? (r.status === 'CONNECTED' ? 'Nothing to do.'
+               : 'Your move: test it, or replace it if the test fails.')
+            : 'Your move: paste the credential below.'}</div>
         <form data-provider="${esc(r.provider)}" style="margin-top:.6rem;max-width:26rem">
           <div class="field"><input type="password" name="secret" autocomplete="off"
             placeholder="${r.configured ? 'Replace this credential' : 'Paste the credential'}"></div>
           <div class="actions">
             <button class="primary" type="submit">${r.configured ? 'Rotate' : 'Save'}</button>
             <button type="button" data-test>Test</button>
+            ${r.configured ? `<button type="button" data-enabled="${
+              r.enabled === false ? 'on' : 'off'}">${
+              r.enabled === false ? 'Switch on' : 'Switch off'}</button>` : ''}
             ${r.configured ? '<button type="button" class="danger" data-forget>Forget</button>' : ''}
             ${r.setup_url ? `<a href="${esc(r.setup_url)}" target="_blank" rel="noopener">Where to get one</a>` : ''}
           </div>
@@ -1613,6 +1727,20 @@ views.credentials = async () => {
           alert(r.works ? 'Connected.' : (r.status + ' — ' + (r.detail || '')));
         } catch (err) { alert(err.message); }
         finally { test.disabled = false; test.textContent = 'Test'; render(); }
+      });
+      const toggle = form.querySelector('[data-enabled]');
+      if (toggle) toggle.addEventListener('click', async () => {
+        const on = toggle.dataset.enabled === 'on';
+        toggle.disabled = true; toggle.textContent = on ? 'Switching on…' : 'Switching off…';
+        try {
+          await API.post('/api/credentials/' + encodeURIComponent(provider) + '/enabled',
+                         { enabled: on });
+          render();
+        } catch (err) {
+          toggle.disabled = false;
+          toggle.textContent = on ? 'Switch on' : 'Switch off';
+          alert(err.message);
+        }
       });
       const forget = form.querySelector('[data-forget]');
       if (forget) forget.addEventListener('click', async () => {
