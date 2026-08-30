@@ -1,0 +1,58 @@
+# QEVIK CAPABILITY LEDGER
+
+The unit of progress is a capability, not a file.
+
+Levels are never collapsed: CODE → TEST → INTEGRATION → DEPLOYMENT → PRODUCTION
+→ COMMERCIAL. A test cannot become production evidence and a live URL cannot
+become a customer.
+
+Reconciled against the repository at 1a46afa and against qevik-core-01 on
+2026-08-31. Where a cell says `—` the layer does not apply to that capability.
+
+| ID | Capability | Track | Code | Tests | Integration | UI | Deploy | Production | Commercial | Status | Evidence |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| C-01 | Business discovery | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 329 `business_discovered` |
+| C-02 | Website evidence audit | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 396 `website_audited`, 240 `website_verified`, 352 screenshots |
+| C-03 | Opportunity detection | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 45 `prospect_scored`; 108 open signals |
+| C-04 | Website generation | Website | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 20 `website_demo_published`, all live |
+| C-05 | Artefact review | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 6 `artefact_reviewed` |
+| C-06 | Publication | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 5 `publication_completed`, 5 approved |
+| C-07 | Publication liveness | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 21/21 addresses live when checked |
+| C-08 | Health-check generation | Digital Product | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 33 built from 40 real audits, 7 refused |
+| C-09 | Health-check publication | Digital Product | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 2 live: `site-98cf44bff7fa44dc`, `site-22fd58442af840e3` |
+| C-10 | Health-check recommendation | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 28 of 40 real audits recommend it; 10 stored signals |
+| C-11 | Outreach preparation | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Composed from a real published URL; state PREPARED |
+| C-12 | Outreach approval | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Fingerprint-bound; 409 on mismatch |
+| C-13 | **SMTP delivery** | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | **BLOCKED** | HA-001, HA-002. Zero messages sent, ever |
+| C-14 | Enquiry delivery evidence | Commercial | ✓ | ✓ | — | — | — | ✗ | ✗ | BLOCKED | Depends on C-13 |
+| C-15 | Worker registration | Fabric | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 5 workers, one agent each, fresh |
+| C-16 | Heartbeat / liveness | Fabric | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 90s heartbeat, distinct from 7200s claim staleness |
+| C-17 | Capability-matched dispatch | Fabric | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Health-check mission matched to `worker-healthcheck` and run |
+| C-18 | Multi-GPU resource probe | Fabric | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | — | DEPLOYMENT-VERIFIED | No GPU exists to probe. Deployed, unexercised |
+| C-19 | HP Z8 worker | Fabric | ✓ | ✓ | — | ✓ | ✓ | ✗ | — | BLOCKED | HA-003, HA-005 |
+| C-20 | Lenovo worker | Fabric | ✓ | ✓ | — | ✓ | ✓ | ✗ | — | BLOCKED | HA-004, HA-005 |
+| C-21 | Mission control UI | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Grouped by whose move it is |
+| C-22 | Human Action Centre | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 12 actions served, 9 blocking |
+| C-23 | Credential centre | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 17 providers, each with a verification method |
+| C-24 | Sending-identity check | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | MX/SPF/DMARC/DKIM all CONFIRMED_ABSENT |
+| C-25 | **CRM / lead capture** | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **DESIGNED** | Roadmap §CRM. Nothing implemented |
+| C-26 | CRM pipeline | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Depends on C-25 |
+| C-27 | Customer control plane | Productization | ~ | ✓ | ~ | ~ | ✓ | ✗ | ✗ | IMPLEMENTED | `/api/customer/*` exists; no operator or customer surface uses most of it |
+| C-28 | Usage / credits / quotas | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Roadmap P8 |
+| C-29 | Stripe payment handoff | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Payment Links sufficient; adapter deliberately unbuilt |
+| C-30 | Media generation | Creative | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Provider decision + credentials |
+| C-31 | App factory | App | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Apple / Google Play accounts |
+| C-32 | Game factory | Game | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Roadmap P7 |
+| C-33 | Commerce / marketplace | Commerce | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Amazon / Noon credentials |
+| C-34 | Computer use | Computer use | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DECISION | DQ-002 |
+| C-35 | Desktop surfaces | Desktop | ~ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | PARKED | `apps/STATUS.md`; DQ-003 |
+
+## Notes on the two that look complete and are not
+
+**C-13 SMTP delivery** carries every layer except the last two, and those two
+are the whole point. The transport exists, the approval binds to exact words,
+suppression and cooldown are loaded from the database, and zero messages have
+ever left. Do not read the ticks as readiness.
+
+**C-08/C-09 health check** is production-verified as a *capability*. No business
+has seen one. That is C-13's job and C-13 is blocked.

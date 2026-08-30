@@ -39,7 +39,23 @@ credentials/
 # vault module — five files, forty-one security tests' worth of subject —
 # was silently absent from the repository while every test passed locally.
 !packages/kernel/atlas_kernel/credentials/
-.qevik/
+# Its *contents*, not the directory: git cannot re-include a file whose parent
+# directory is excluded, and the ledgers below have to be tracked.
+.qevik/*
+# ...except the execution-memory ledgers, which are repository truth and must
+# survive a session ending. Named one by one rather than `!.qevik/*.md`: the
+# reason `.qevik/` is ignored at all is that credentials live under
+# `~/.qevik/credentials/`, and a pattern that admitted any markdown file would
+# admit a stray note somebody pasted a key into. Anything in `.qevik/` that is
+# not on this list stays ignored.
+!.qevik/EXECUTION_STATE.md
+!.qevik/CAPABILITY_LEDGER.md
+!.qevik/HUMAN_ACTIONS.md
+!.qevik/BLOCKERS.md
+!.qevik/DECISION_QUEUE.md
+!.qevik/PRODUCTION_EVIDENCE.md
+!.qevik/INTEGRATION_MATRIX.md
+!.qevik/SESSION_LOG.md
 
 # Google OAuth — the file Google Cloud issues, under every name it is given.
 # Google's own download is `client_secret_<numbers>.apps.googleusercontent.com.json`.

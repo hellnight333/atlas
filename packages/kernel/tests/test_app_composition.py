@@ -396,7 +396,15 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "the reviewer cannot see what a health check claims about a business")
     assert "NOT_VERIFIED: 'could not check'" in source, (
         "an unfinished check is drawn as a finding in the review")
-    assert Path(CONSOLE / "index.html").stat().st_size < 118_000
+    # Inbound is read separately from opportunities and rendered in both
+    # branches: one read failing says nothing about the other, and a business
+    # that came to us disappearing because the opportunity memory was briefly
+    # away is the strongest signal this system has, lost silently.
+    assert "/api/missions/inbound" in source, (
+        "the console does not show businesses that asked about themselves")
+    assert source.count("${inboundBlock}") == 2, (
+        "inbound is not rendered on both branches of the opportunities view")
+    assert Path(CONSOLE / "index.html").stat().st_size < 122_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

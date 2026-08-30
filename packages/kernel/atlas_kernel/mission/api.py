@@ -645,6 +645,41 @@ def build_router() -> APIRouter:
         return {"awaiting": _opportunities(request).awaiting_publication(
             limit=limit, tenant=tenant)}
 
+    @router.get("/inbound")
+    def inbound(request: Request, limit: int = 200,
+                _: User = Depends(requires(Scope.READ))) -> dict:
+        """Businesses that asked Qevik about themselves.
+
+        The only inbound signal this system has. Everything else on this router
+        is Qevik noticing a business; these are businesses that arrived under
+        their own steam, which is a far stronger signal and the one an operator
+        should see first.
+
+        **Declared above `/{mission_id}`**, like `published` and
+        `awaiting-publication`: a path parameter matches a literal segment
+        happily, and this route registered after it would be served as a
+        mission called "inbound" — a 404 that reads as nobody having asked.
+        """
+        from ..customer import inbound as reader
+
+        rows = list(reader.from_events(
+            _opportunities(request).leads(limit=limit)))
+        return {
+            "inbound": rows,
+            "counts": {
+                "total": len(rows),
+                # Somebody Qevik had never audited is a different conversation
+                # from somebody it has a file on, and the operator needs to know
+                # which before replying.
+                "already_known": sum(1 for r in rows if r["already_known"]),
+                "new_to_qevik": sum(1 for r in rows if not r["already_known"]),
+                "asked_more_than_once": sum(1 for r in rows if r["asked"] > 1),
+            },
+            "note": ("A business asking about itself is the only inbound signal "
+                     "Qevik has. No personal data is recorded — a company's "
+                     "public address is a fact about a company."),
+        }
+
     @router.get("/published")
     def published(request: Request, limit: int = 200,
                   check: bool = False,

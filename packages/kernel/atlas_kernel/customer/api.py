@@ -23,6 +23,7 @@ Qevik, not to read one customer's file.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -198,6 +199,40 @@ def _establish(body: TaskCompletion, request: Request,
         raise HTTPException(status_code=422, detail=str(rejected)) from rejected
 
 
+log = logging.getLogger(__name__)
+
+
+def _remember_lead(request: Request, *, website: str, found: dict | None) -> None:
+    """Record that a business asked about itself. Never raises.
+
+    On the ordinary timeline, through the ordinary sink. There is no lead table
+    and no second store: a lead is something that happened, and the timeline
+    already holds things that happened.
+    """
+    from . import inbound as leads
+
+    lead = leads.capture(
+        website=website,
+        observations=len((found or {}).get("observations") or []),
+        business_id=(found or {}).get("business_id", ""))
+    if lead is None:
+        return
+
+    memory = getattr(request.app.state, "opportunity_repository", None)
+    if memory is None:
+        from ..opportunity.repository import OpportunityRepository
+
+        memory = OpportunityRepository()
+        request.app.state.opportunity_repository = memory
+    try:
+        memory.record_lead(website=lead.website, host=lead.host,
+                           source=lead.source, observations=lead.observations,
+                           business_id=lead.business_id)
+    except Exception:                             # noqa: BLE001 - reported
+        log.exception("a business asked about %s and it was not recorded",
+                      lead.host)
+
+
 def build_public_router() -> APIRouter:
     """Unauthenticated. Separate router so the boundary is visible in the code.
 
@@ -228,6 +263,16 @@ def build_public_router() -> APIRouter:
             raise HTTPException(status_code=503,
                                 detail="no audit source is configured")
         found = reader(website=website.strip())
+
+        # They came to us. Recorded before the answer is composed, because the
+        # commercially interesting fact is that somebody asked — not what the
+        # answer happened to be, and not whether research already knew them.
+        #
+        # A failure to record must not fail the request: the visitor is owed
+        # their answer, and losing a lead is worse than losing it silently only
+        # if nobody is told, so it is logged.
+        _remember_lead(request, website=website.strip(), found=found)
+
         if found is None:
             # Not 404-as-absence here: there is no tenant boundary to protect,
             # and telling a visitor "we have not looked at this yet" is the

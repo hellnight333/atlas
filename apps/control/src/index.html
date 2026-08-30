@@ -1455,10 +1455,38 @@ function opportunityCard(row) {
 }
 
 async function opportunities() {
-  const found = await API.get('/api/discovery/opportunities?limit=25')
-    .catch(() => null);
+  /* Inbound first, and not for emphasis. Everything else on this page is Qevik
+     noticing a business; these are businesses that arrived under their own
+     steam, which is the stronger signal and the one to read first. */
+  const [found, inbound] = await Promise.all([
+    API.get('/api/discovery/opportunities?limit=25').catch(() => null),
+    API.get('/api/missions/inbound').catch(() => null),
+  ]);
   if (!found) {
-    return `<header class="page"><h2>Opportunities</h2></header>
+    const inboundBlock = !inbound ? '' : (inbound.inbound || []).length ? `
+    <h3 style="margin:0 0 .4rem">They came to us
+      <span class="note">${esc(String(inbound.counts.total))}</span></h3>
+    <p class="note" style="margin-bottom:.6rem">${esc(String(
+      inbound.counts.new_to_qevik))} Qevik has never audited${
+      inbound.counts.asked_more_than_once
+        ? ', ' + esc(String(inbound.counts.asked_more_than_once)) + ' asked more than once'
+        : ''}.</p>
+    <div class="rows" style="margin-bottom:1.5rem">${(inbound.inbound || []).map((r) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(r.host)}
+          ${r.already_known ? pill('we have a file', 'ok') : pill('never audited', 'warn')}
+          ${r.asked > 1 ? pill('asked ' + r.asked + '×', 'run') : ''}</div>
+        <div class="meta">${when(r.at)} · via ${esc(r.source || 'unknown')}${
+          r.observations ? ' · ' + esc(String(r.observations)) + ' checks on file' : ''}</div>
+      </div><div class="actions">${r.business_id
+        ? `<a href="#/discovery/${encodeURIComponent(r.business_id)}">evidence</a>` : ''}</div></div>`
+    ).join('')}</div>` : `<h3 style="margin:0 0 .4rem">They came to us</h3>
+      <p class="note" style="margin-bottom:1.5rem">Nobody has asked Qevik about
+        their own site yet. This fills from the public audit and from anyone
+        following the link in a health check.</p>`;
+
+  return `<header class="page"><h2>Opportunities</h2></header>
+      ${inboundBlock}
       <div class="card"><p class="note">The opportunity memory could not be
       read. That is not the same as there being none.</p></div>`;
   }
@@ -1469,6 +1497,7 @@ async function opportunities() {
         ? esc(String(rows.length)) + ' open, ' +
           esc(String(found.counts.needing_approval)) + ' needing you.'
         : 'Nothing open. Discovery runs nightly; an empty list means it ran and found nothing new.'}</p></header>
+    ${inboundBlock}
     ${rows.map(opportunityCard).join('')}
     ${rows.length ? `<p class="note">${esc(found.note || '')}</p>` : ''}`;
 }

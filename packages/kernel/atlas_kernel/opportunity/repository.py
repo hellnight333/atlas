@@ -659,6 +659,61 @@ class OpportunityRepository:
             ).scalar()
         return _decoded(found) or {}
 
+    def record_lead(self, *, website: str, host: str, source: str,
+                    observations: int = 0, business_id: str = "") -> dict:
+        """Record that a business asked Qevik about itself.
+
+        The one inbound signal this system has. Everything else is Qevik
+        noticing a business; this is a business noticing Qevik.
+
+        On `atlas_business_events` with every other event, and not in a leads
+        table: a lead is something that happened, and a second store is a
+        second thing that can disagree with the first about who asked and when.
+
+        Carries no personal data. A company's public address is a fact about a
+        company; there is no name, email, phone or address of a person here,
+        and nothing upstream collects one.
+        """
+        from ..customer.inbound import LEAD_EVENT
+
+        detail = {"website": website, "host": host, "source": source,
+                  "observations": max(0, int(observations)),
+                  "business_id": business_id,
+                  "at": _now().isoformat()}
+        entry = {"id": f"evt-{uuid4().hex[:12]}", "business_id": business_id,
+                 "factory": "opportunity", "kind": LEAD_EVENT,
+                 "opportunity_id": "", "actor": "public",
+                 "detail": json.dumps(detail), "at": _now()}
+        with SessionLocal() as session:
+            session.execute(
+                text("""
+                INSERT INTO atlas_business_events
+                    (id, business_id, factory, kind, opportunity_id, actor,
+                     detail, at)
+                VALUES (:id, :business_id, :factory, :kind, :opportunity_id,
+                        :actor, :detail, :at)
+                """), entry)
+            session.commit()
+        return detail
+
+    def leads(self, *, limit: int = 200) -> list[dict]:
+        """Every business that has asked about itself, newest first.
+
+        Not tenant-scoped: a stranger asking about their own website has no
+        tenant, and the operator asking who came in is asking about all of it.
+        """
+        from ..customer.inbound import LEAD_EVENT
+
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT kind, detail FROM atlas_business_events
+                WHERE kind = :kind ORDER BY at DESC LIMIT :limit
+                """),
+                {"kind": LEAD_EVENT, "limit": max(1, min(int(limit), 1000))},
+            ).mappings().all()
+        return [{"kind": row["kind"], "detail": row["detail"]} for row in rows]
+
     def published_sites(self, *, limit: int = 200) -> list[dict]:
         """Every address Qevik has actually put on the internet.
 
