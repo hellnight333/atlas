@@ -300,3 +300,91 @@ class TestItNeverSaysSomethingFalseAboutTheBusiness:
 
         for word in ("patient", "clinic", "dental", "dentist"):
             assert word not in page.lower(), word
+
+
+class TestItCanActuallyBeDelivered:
+    """An executor nothing routes to is a capability the fabric cannot reach.
+
+    Mission -> Recipe -> Agent -> Tool -> Worker, and every link checked
+    against the declarations rather than assumed.
+    """
+
+    def test_a_recipe_delivers_it(self) -> None:
+        from atlas_kernel.fabric import recipes
+
+        recipe = recipes.get("deliver-health-check")
+
+        assert recipe.delivers == "offer-health-check"
+        assert recipe.agent_id == "health-check"
+        assert recipe.tools == ("website-generator",)
+
+    def test_the_recipe_names_the_offer_the_executor_is_keyed_on(self) -> None:
+        """The step's command is how the tool runner finds the executor. A
+        mismatch here fails at execution, after an approval."""
+        from atlas_kernel.execution.capabilities import EXECUTORS
+        from atlas_kernel.fabric import recipes
+
+        step = recipes.get("deliver-health-check").steps[0]
+
+        assert step.command[0] in EXECUTORS
+
+    def test_an_approved_opportunity_maps_to_it(self) -> None:
+        from atlas_kernel.mission.delivery import OFFER_RECIPES
+
+        assert OFFER_RECIPES["offer-health-check"] == "deliver-health-check"
+
+    def test_it_cannot_publish_or_contact_anybody(self) -> None:
+        """The structural guarantee: the agent declares one tool and it is not
+        a network tool, so a step naming http-fetch or shell is refused at
+        import rather than discovered at three in the morning."""
+        from atlas_kernel.fabric.tools import for_agent
+        from atlas_kernel.fabric.agents import AGENTS
+
+        agent = next(a for a in AGENTS if a.id == "health-check")
+        tools = {t.id: t for t in for_agent(agent)}
+
+        assert set(tools) == {"website-generator"}
+        assert not tools["website-generator"].network
+
+    def test_a_worker_role_serves_it(self) -> None:
+        """A recipe whose agent no worker serves produces missions nothing can
+        claim — approved, queued, and never run."""
+        import sys
+        from pathlib import Path as _Path
+
+        root = str(_Path(__file__).resolve().parents[3] / "infra")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        import mission_worker
+
+        assert mission_worker._serves("healthcheck") == "health-check"
+        assert "healthcheck" in mission_worker.AGENT_CHOICES
+        assert mission_worker.PLACEHOLDERS["healthcheck"] == "deliver-health-check"
+
+    def test_the_unit_file_matches_the_role(self) -> None:
+        """A unit naming a role the worker does not accept fails at start-up,
+        on the host, after a deploy reported success."""
+        import sys
+        from pathlib import Path as _Path
+
+        infra = _Path(__file__).resolve().parents[3] / "infra"
+        unit = (infra / "qevik-worker-healthcheck.service").read_text()
+
+        if str(infra) not in sys.path:
+            sys.path.insert(0, str(infra))
+        import mission_worker
+
+        assert "--agent healthcheck" in unit
+        assert "--name worker-healthcheck" in unit
+        role = unit.split("--agent ")[1].split()[0]
+        assert role in mission_worker.AGENT_CHOICES
+
+    def test_the_deploy_restarts_it(self) -> None:
+        """A worker the deploy does not restart runs yesterday's code, which is
+        the failure the fingerprint check exists to catch."""
+        from pathlib import Path as _Path
+
+        script = (_Path(__file__).resolve().parents[3]
+                  / "infra" / "deploy_control.sh").read_text()
+
+        assert "qevik-worker-healthcheck.service" in script

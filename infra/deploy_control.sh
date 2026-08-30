@@ -21,7 +21,7 @@ KEY="$HOME/.ssh/naml_hetzner"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE_APP="/opt/qevik/atlas"
 SERVICE="qevik-control.service"
-WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service"
+WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service qevik-worker-healthcheck.service"
 HEALTH="http://127.0.0.1:8081/api/health"
 
 # Connections to this host drop intermittently — the loss is on the operator's

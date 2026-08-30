@@ -59,6 +59,7 @@ class NotDeliverable(Exception):
 #: passed to an endpoint.
 OFFER_RECIPES: dict[str, str] = {
     "offer-website": "deliver-website",
+    "offer-health-check": "deliver-health-check",
 }
 
 #: Audited defect -> the fix `execution/capabilities/website.py` declares.

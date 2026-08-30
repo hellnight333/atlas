@@ -432,6 +432,33 @@ RECIPES: tuple[Recipe, ...] = (
                "reviewer can see in the mission report."),
     ),
     Recipe(
+        id="deliver-health-check",
+        does=("Build the health check for a business Qevik has audited: what "
+              "was checked, what was found, and the evidence behind each "
+              "claim. Produces one file in the mission's scratch workspace. "
+              "Publishes nothing."),
+        agent_id="health-check",
+        capability=Capability.IMPLEMENT,
+        delivers="offer-health-check",
+        steps=(
+            Step(tool="website-generator", command=("offer-health-check",),
+                 proves="what was claimed about the business, and the evidence "
+                        "each claim rests on"),
+        ),
+        notes=("The only deliverable offer that needs nothing from the "
+               "customer. It reports the audit Qevik already holds, so it can "
+               "run the moment an opportunity is approved rather than waiting "
+               "for prices, a calendar or photographs.\n\n"
+               "**It stops at a file**, like `deliver-website` and for the "
+               "same structural reason: `health-check` declares one tool, "
+               "`website-generator`, so a step naming `http-fetch` or `shell` "
+               "is refused by `validate` at import. Publishing it is a "
+               "separate outward act with its own approval.\n\n"
+               "The executor refuses rather than fabricating: an audit with no "
+               "observations produces no artefact, and a claim with no "
+               "evidence is refused before the file exists."),
+    ),
+    Recipe(
         id="deliver-website",
         does=("Build the site an approved opportunity asked for, from the facts "
               "Qevik has recorded about the business and the defects it "

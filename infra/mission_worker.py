@@ -187,7 +187,11 @@ def roles_for(kind: str, *, tenant: str,
 #: scheduler treating it as unknown is the correct answer.
 REGISTERED_AS = {"self-check": "self-check", "llm": "implementer",
                  "research": "researcher", "delivery": "website-builder",
-                 "publish": "site-publisher"}
+                 "publish": "site-publisher",
+                 # One agent per process, like every other role. `health-check`
+                 # declares one tool and `deliver-health-check` names it, so a
+                 # process started here can run that recipe and nothing else.
+                 "healthcheck": "health-check"}
 
 #: What `--agent` accepts. **Derived**, not written out again.
 #:
@@ -209,7 +213,8 @@ RESEARCH_PLACEHOLDER = "discover-uae-dental"
 #: none is refused.
 PLACEHOLDERS = {"research": RESEARCH_PLACEHOLDER,
                 "delivery": "deliver-website",
-                "publish": "publish-website"}
+                "publish": "publish-website",
+                "healthcheck": "deliver-health-check"}
 
 
 def queued(timeline: Timeline, *, tenant: str,

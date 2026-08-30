@@ -1,0 +1,93 @@
+# The health-check worker: the fifth worker, for the role that reports an audit
+# back to the business it is about.
+#
+#   cp infra/qevik-worker-healthcheck.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now qevik-worker-healthcheck
+#
+# A fifth unit for the same reason there is a second, third and fourth: a worker
+# serves exactly one agent, and `policy.refuse_agent_substitution` refuses a
+# mission whose plan named a different one. `health-check` cannot share a
+# process with `website-builder` — whichever the worker served, it would
+# correctly refuse the other's missions.
+#
+# Same binary, same timeline, same claims, same scheduler, same scratch, same
+# policy. Not a fifth orchestration path.
+#
+# `health-check` declares exactly one tool, `website-generator`. It has no
+# network tool, so it cannot publish the page it builds or contact the business
+# the page is about — enforced by `recipes.validate` at import rather than by
+# anyone remembering.
+
+[Unit]
+Description=Qevik health-check worker (audit reports, no model)
+# Five failures in five minutes stops it. Without this the "refuses to start"
+# safety becomes a restart loop nobody reads. These belong in [Unit]; systemd
+# ignores them in [Service] with a warning that is easy to miss.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not `Requires=qevik-control.service`: the whole design is that this survives
+# the control plane restarting.
+
+[Service]
+Type=simple
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+EnvironmentFile=-/opt/qevik/control.env
+EnvironmentFile=-/opt/qevik/worker.env
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+Environment=QEVIK_STATE=/var/lib/qevik/control
+
+ExecStart=/opt/qevik/atlas/.venv/bin/python \
+  /opt/qevik/atlas/infra/mission_worker.py \
+  --timeline /var/lib/qevik/control/missions.jsonl \
+  --reports /var/lib/qevik/control/reports \
+  --worktrees /var/lib/qevik/worktrees \
+  --scratch /var/lib/qevik/scratch \
+  --state /var/lib/qevik/control \
+  --tenant tenant-qevik \
+  --name worker-healthcheck \
+  --agent healthcheck \
+  --interval 10
+# No --repository, and no --origin: discovery recipes declare origin `none`,
+# which needs no configuration. A customer repository would be added with
+# --origin NAME=PATH, and an entry pointing at Qevik's own repository is refused
+# at start-up.
+#
+# This worker calls no model and needs no provider credential. It carries out
+# recipes declared in git through the tools their agent is registered for.
+#
+# --claims-dsn and --require-atomic-claims come from /opt/qevik/worker.env.
+# The DSN carries a password, and a password on an argv line is readable by
+# every user on the host through `ps`.
+
+# on-failure, not always: a worker that refuses to start because its claim
+# database is unreachable should stay down and be noticed, not restart-loop
+# quietly. A crash mid-mission is different, and that is what this covers.
+Restart=on-failure
+RestartSec=15
+# The worker writes worktrees and reports and nothing else on this host.
+NoNewPrivileges=yes
+PrivateTmp=yes
+# strict, not full. `full` only makes /usr, /boot and /etc read-only — /opt is
+# left writable, so removing /opt/qevik/atlas from ReadWritePaths below did
+# nothing at all until this line changed. Measured, not assumed: under `full` a
+# write probe into /opt/qevik/atlas succeeded; under `strict` it returns
+# "Read-only file system".
+ProtectSystem=strict
+ProtectHome=yes
+# /opt/qevik/atlas is deliberately NOT here. The worker reads the production
+# checkout to clone it and never writes to it, so the kernel refuses the write
+# even if the code regresses. It used to be writable because `git worktree add`
+# ran inside it — which is precisely the thing that was wrong: a mission left a
+# ref, a worktree entry and its objects behind in production simply by running.
+#
+# If this unit ever fails with EACCES under /opt/qevik/atlas, that is the guard
+# working. Find what is writing there; do not add the path back.
+ReadWritePaths=/var/lib/qevik
+
+[Install]
+WantedBy=multi-user.target
