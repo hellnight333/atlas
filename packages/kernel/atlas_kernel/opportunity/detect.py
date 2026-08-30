@@ -214,8 +214,13 @@ def unverified_web_presence(recorded: Recorded, extraction: Extraction, *,
             # Verify, not sell. Fetching a page is internal; offering to build
             # one is not, and that action is only earned once the check has run.
             reach=Reach.INTERNAL, needs_approval=False,
-            capability="researcher" if not executable(WEBSITE_OFFER)
-            else "researcher")],
+            # `researcher` either way. This was written as a conditional whose
+            # two branches were the same string — the appearance of a decision
+            # with none behind it, which reads as a bug or as a stub depending
+            # on who finds it. The action is deliberate: this business has no
+            # website Qevik could read, so the next step is to look, not to
+            # offer to build one.
+            capability="researcher")],
     )
 
 

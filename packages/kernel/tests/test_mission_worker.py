@@ -491,18 +491,31 @@ class TestEveryRecipeDrivenRoleCanStart:
 
         return mission_worker
 
-    def test_every_role_with_a_placeholder_is_recipe_driven(self) -> None:
-        """The set that decides this used to be a literal. Deriving it is the
-        fix; this asserts it stays derived."""
+    def test_the_recipe_driven_roles_are_never_listed_as_a_literal(self) -> None:
+        """There were **two** copies of that set in this file — one deciding
+        whether the role needs a model, one deciding whether the agent is
+        rebuilt from the mission. Adding a role to the first left the second
+        behind, and the worker then claimed a delivery and refused it for
+        naming no approved opportunity that the mission plainly named.
+
+        An earlier version of this test looked for the derived form *somewhere*
+        in the module and passed while the second literal was still there. This
+        asserts the absence of the literal instead."""
+        import ast
         import inspect
 
         worker = self._worker()
-        source = inspect.getsource(worker.build_roles if hasattr(
-            worker, "build_roles") else worker)
+        tree = ast.parse(inspect.getsource(worker))
 
-        assert 'kind in PLACEHOLDERS' in source, (
-            "the recipe-driven roles are listed again instead of derived from "
-            "PLACEHOLDERS, which is how `healthcheck` was missed")
+        roles = set(worker.PLACEHOLDERS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Set):
+                continue
+            members = {e.value for e in node.elts
+                       if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+            assert not (members & roles) or members == {"fake"}, (
+                f"a literal role set {sorted(members)} duplicates PLACEHOLDERS; "
+                "that duplication has already shipped twice")
 
     def test_every_registered_role_resolves_to_an_agent(self) -> None:
         worker = self._worker()

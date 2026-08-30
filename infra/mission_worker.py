@@ -845,8 +845,14 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
     # an agent to exist; this replaces it with one built from the mission in
     # hand. A mission naming no recipe is refused in `pass_once` rather than
     # defaulted — defaulting would run a recipe nobody asked for.
-    if agent_choice in {"research", "delivery", "publish"} \
-            and mission is not None and mission.recipe:
+    # `PLACEHOLDERS`, not a literal. This was the *second* copy of that set in
+    # this file: the first decided whether the role needs a model, this one
+    # decides whether the agent is rebuilt from the mission in hand. Adding
+    # `healthcheck` to the first left this one behind, so the worker claimed the
+    # mission, ran the placeholder agent, and refused its own delivery for
+    # naming no approved opportunity — the mission had one; the placeholder was
+    # never told.
+    if agent_choice in PLACEHOLDERS and mission is not None and mission.recipe:
         from atlas_kernel.mission.toolrunner import ToolAgent
 
         # The repository is what turns evidence into memory, and for a
