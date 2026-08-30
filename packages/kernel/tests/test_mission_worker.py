@@ -473,3 +473,62 @@ class TestWhatThisMachineHas:
         self._smi(monkeypatch, "NVIDIA RTX A6000, 49140\nWeird Card, [N/A]\n")
 
         assert w.gpu_inventory() == [("NVIDIA RTX A6000", 47), ("Weird Card", 0)]
+
+
+class TestEveryRecipeDrivenRoleCanStart:
+    """A role registered in three places and forgotten in a fourth started, went
+    looking for a model, found none and exited 2 — on the host, after a deploy
+    that had reported success."""
+
+    def _worker(self):
+        import sys
+        from pathlib import Path as _Path
+
+        root = str(_Path(__file__).resolve().parents[3] / "infra")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        import mission_worker
+
+        return mission_worker
+
+    def test_every_role_with_a_placeholder_is_recipe_driven(self) -> None:
+        """The set that decides this used to be a literal. Deriving it is the
+        fix; this asserts it stays derived."""
+        import inspect
+
+        worker = self._worker()
+        source = inspect.getsource(worker.build_roles if hasattr(
+            worker, "build_roles") else worker)
+
+        assert 'kind in PLACEHOLDERS' in source, (
+            "the recipe-driven roles are listed again instead of derived from "
+            "PLACEHOLDERS, which is how `healthcheck` was missed")
+
+    def test_every_registered_role_resolves_to_an_agent(self) -> None:
+        worker = self._worker()
+
+        for choice in worker.AGENT_CHOICES:
+            if choice == "fake":
+                continue
+            assert worker._serves(choice), choice
+
+    def test_every_placeholder_names_a_real_recipe(self) -> None:
+        """A placeholder naming an unknown recipe fails at construction, which
+        is start-up, which is after the deploy."""
+        from atlas_kernel.fabric import recipes
+
+        worker = self._worker()
+
+        for role, recipe_id in worker.PLACEHOLDERS.items():
+            assert recipes.get(recipe_id) is not None, f"{role}: {recipe_id}"
+
+    def test_a_placeholder_recipe_is_runnable_by_the_role_that_serves_it(
+            self) -> None:
+        """The recipe's agent and the worker's agent must be the same, or the
+        worker claims missions it will then refuse."""
+        from atlas_kernel.fabric import recipes
+
+        worker = self._worker()
+
+        for role, recipe_id in worker.PLACEHOLDERS.items():
+            assert recipes.get(recipe_id).agent_id == worker._serves(role), role

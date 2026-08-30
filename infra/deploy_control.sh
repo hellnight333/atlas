@@ -172,7 +172,28 @@ done
 # succeeded and shipped nothing.
 FINGERPRINT="$(shasum -a 256 "$ROOT/infra/mission_worker.py" | cut -c1-12)"
 echo "==> restarting the mission workers (expecting fingerprint $FINGERPRINT)"
-ssh_ "chown qevik:qevik $REMOTE_APP/infra/mission_worker.py 2>/dev/null; systemctl restart $WORKERS"
+# Units this repository ships, installed before anything is restarted. A unit
+# named in $WORKERS but absent from /etc/systemd/system makes `systemctl
+# restart` return non-zero for the whole list -- and `ssh_` then retried it,
+# which stopped and started the four healthy workers twelve times and tripped
+# StartLimitBurst on all of them. Four dead workers from one missing file.
+for unit in "$ROOT"/infra/qevik-*.service; do
+  [ -f "$unit" ] || continue
+  rsync_ "$unit" "$TARGET:/etc/systemd/system/" >/dev/null
+done
+ssh_ "systemctl daemon-reload"
+
+# Not through `ssh_`. Restarting is not something to retry blindly: a failing
+# unit answers non-zero every time, and each attempt stops the healthy ones
+# again. One attempt per unit, `reset-failed` first so a unit already at its
+# start limit can come back, and the fingerprint check below is what decides
+# whether the deploy worked.
+ssh_ "chown qevik:qevik $REMOTE_APP/infra/mission_worker.py 2>/dev/null; true"
+for unit in $WORKERS; do
+  ssh "${SSH_OPTS[@]}" -i "$KEY" "$TARGET" \
+    "systemctl reset-failed $unit 2>/dev/null; systemctl restart $unit" \
+    || echo "    WARNING: $unit did not restart; the fingerprint check follows"
+done
 
 REPORTED=""
 for attempt in $(seq 1 40); do

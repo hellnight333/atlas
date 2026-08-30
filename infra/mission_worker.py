@@ -120,8 +120,14 @@ def roles_for(kind: str, *, tenant: str,
         log.info("self-check agent: %s", checker._adapter.describe())
         return Roles.all(checker)
 
-    if kind in {"research", "delivery", "publish"}:
-        # Two non-coding roles, one construction. Both plan nothing, call no
+    # Derived from `PLACEHOLDERS`, not written out again. It *was* written out
+    # again — as a literal set here — and adding `healthcheck` to
+    # `REGISTERED_AS`, `AGENT_CHOICES` and `PLACEHOLDERS` still left it out of
+    # this one. The worker went looking for a model, found none, and exited 2 on
+    # the host after a deploy that had reported success. A role is recipe-driven
+    # exactly when it has a placeholder recipe; there is no second answer.
+    if kind in PLACEHOLDERS:
+        # The non-coding roles, one construction. They plan nothing, call no
         # provider, and carry out a *declared recipe* through the tools that
         # recipe's agent is registered for. What separates them is which agent
         # the worker serves and therefore which missions it may take — research
