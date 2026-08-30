@@ -92,6 +92,35 @@ Reported by Claude:
 - Suppressed addresses were blocked.
 - Secrets were kept outside the repository and logging was hardened.
 
+## Operator console — Fabric and outreach approval (2026-08-30)
+
+Two capabilities existed in the API and could not be reached from
+`app.qevik.ai`. Found by auditing the console against the running service's
+own OpenAPI route table, not against what the console already called.
+
+- **Fabric.** `GET /api/missions/workers` reads `mission.nodes.snapshots` —
+  the same snapshot dispatch matches against, so the console cannot show a
+  fleet the dispatcher disagrees with. It keeps three distinctions the
+  operator acts on: busy is not stale; a stale worker still holds its
+  mission; an unreadable cluster is not an empty fleet. Production shows 4
+  workers (self-check, website-builder, site-publisher, researcher).
+- **Outreach approval was unreachable by any client.** `approve_outreach`
+  re-composes server-side and answers 409 on a fingerprint mismatch, but
+  `Prepared.summary()` returned no fingerprint, so nothing could echo one.
+  `summary()` now carries it and the console approves with it.
+
+Two console defects fixed with them: the outreach card hardcoded
+"Sending identity: none configured" (a fact the server already derives from
+the channel, which would have silently lied once SMTP was configured), and
+the Human Actions list did not say what each blocked item holds up.
+
+**Sending stays off the page.** A send button was written and then removed:
+`test_app_composition` refuses one, and it is right — sending is dispatched
+like every other outward act, never a POST from a page. The card now says
+delivery is dispatched and that no worker can send yet, rather than implying
+a queue. No worker advertises an SMTP capability; SMTP remains
+non-dispatchable and `EmailChannel.configured()` is still False in production.
+
 ## P1 execution & growth layer — P1.1 through P1.6 complete (2026-08-22)
 
 Five phases, each gated on review, all in `packages/kernel/atlas_kernel/`:
