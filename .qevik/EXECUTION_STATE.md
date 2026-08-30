@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 1a46afa (main)
-Gate result: 3744 passed, 33 skipped, 0 failed
+Repository revision: 5070e4a (main)
+Gate result: 3792 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -35,9 +35,9 @@ None in progress. The health-check slice closed at its external boundary.
 Ranked by the selection rules in the execution controller (§17 of the memory
 spec). See `CAPABILITY_LEDGER.md` for evidence behind each.
 
-1. **CRM / lead capture** — DESIGNED in the roadmap, nothing implemented. A
-   business that replies to a health check has nowhere to land. No external
-   credential required.
+1. **CRM pipeline (C-26)** — capture landed this session; qualification,
+   stages and follow-up have not. Only worth building once real rows exist or
+   outreach can send, so it is ready but not urgent.
 2. **Control plane (app.qevik.ai)** — several backend capabilities have no
    operator surface; see the ledger.
 3. **Productization** — accounts, projects, usage, credits, quotas. Roadmap P8.
@@ -76,8 +76,12 @@ fabric and nothing else.
 
 ## Next execution batch
 
-CRM / lead capture, as the smallest complete vertical slice that gives a
-replying business somewhere to land.
+**Productization foundations (C-27, C-28)** — `/api/customer/*` exists and
+almost nothing consumes it; accounts, projects, usage and quotas are roadmap P8
+and need no external credential. Chosen over the CRM pipeline because a pipeline
+with zero rows in it is a shape without content, and over Digital Product
+expansion because a second product type multiplies something that has not yet
+reached a single business.
 
 ## Stop condition
 

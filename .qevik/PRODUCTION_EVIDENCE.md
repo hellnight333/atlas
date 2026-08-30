@@ -20,6 +20,7 @@ All rows measured on qevik-core-01 unless stated.
 | E-10 | C-22 | The action centre serves what its producers make | 12 open actions, 9 blocking, including `dns:qevik.ai` and both machines | PRODUCTION-VERIFIED | 2026-08-30 | 34a9088 | `infra/verify_action_centre.py`, which calls the route handler rather than the producers |
 | E-11 | C-18 | Multi-GPU probing is deployed | Worker fingerprint changed to `9d2936ed0fe4` on deploy | DEPLOYMENT-VERIFIED | 2026-08-30 | — | **Not production-verified: there is no GPU on qevik-core-01 to probe.** Do not promote this row |
 | E-12 | C-13 | — | — | — | — | — | **No evidence exists.** Zero messages sent. Nothing to record |
+| E-13 | C-25 | A public audit records who asked, and the operator can see them | Wrote one row, read it back through `GET /api/missions/inbound`, counts correct, no personal data in the payload; synthetic row then removed | PRODUCTION-VERIFIED | 2026-08-31 | 5070e4a | The *mechanism* is verified. **Zero real inbound rows exist** — nobody has used the public audit. Do not read this as demand |
 
 ## What is deliberately absent
 

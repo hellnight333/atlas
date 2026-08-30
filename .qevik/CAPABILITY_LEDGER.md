@@ -35,8 +35,8 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-22 | Human Action Centre | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 12 actions served, 9 blocking |
 | C-23 | Credential centre | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 17 providers, each with a verification method |
 | C-24 | Sending-identity check | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | MX/SPF/DMARC/DKIM all CONFIRMED_ABSENT |
-| C-25 | **CRM / lead capture** | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **DESIGNED** | Roadmap §CRM. Nothing implemented |
-| C-26 | CRM pipeline | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Depends on C-25 |
+| C-25 | Inbound capture | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | A public audit records who asked; route and console verified on the host. **Zero real rows** — nobody has used the public audit yet |
+| C-26 | CRM pipeline | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Qualification, stages, follow-up. Nothing implemented; C-25 is the capture, not the pipeline |
 | C-27 | Customer control plane | Productization | ~ | ✓ | ~ | ~ | ✓ | ✗ | ✗ | IMPLEMENTED | `/api/customer/*` exists; no operator or customer surface uses most of it |
 | C-28 | Usage / credits / quotas | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Roadmap P8 |
 | C-29 | Stripe payment handoff | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Payment Links sufficient; adapter deliberately unbuilt |

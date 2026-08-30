@@ -39,6 +39,19 @@ three hold the fabric. None blocks CRM, control plane or productization.
 No new owner decisions required to continue. Four remain open (DQ-002 to
 DQ-005) and one unknown (DQ-001); none blocks the ready tracks.
 
+### Also completed
+- **Inbound capture (C-25).** `POST /api/public/audit` recorded nothing about
+  who asked. It now writes to the shared timeline, `GET /api/missions/inbound`
+  reads it, and the console shows who came to us at the top of Opportunities.
+  Production-verified end to end; the synthetic probe row was removed.
+- `test_one_customer_entity` refused the first version, named `Lead`. It was
+  right — that is the head noun of a second customer entity. What is modelled
+  is a request at a moment, and the company stays `atlas_businesses.id`.
+- The repository imported `.leads` from inside `opportunity/`, a module that
+  does not exist. Nothing exercised it, so the whole gate passed. There is now
+  a test that imports it.
+
 ### Next
-CRM / lead capture (C-25). Selected because a business replying to a published
-health check currently has nowhere to land, and it needs no external credential.
+Productization foundations (C-27, C-28). The CRM *pipeline* is ready but not
+urgent: zero real inbound rows exist, and a pipeline with nothing in it is a
+shape without content.
