@@ -63,9 +63,41 @@ class TestWhatTheOwnerActuallyGets:
         assert "no wa.me or api.whatsapp.com link" in page
 
     def test_it_says_what_each_finding_costs_them(self) -> None:
+        """From the current note table, not from the stored event — see
+        `test_a_stored_note_from_another_vertical_is_not_replayed`."""
         page = _build()[0]["index.html"]
 
-        assert "must copy" in page and "WhatsApp" in page
+        assert "copy the number by hand" in page
+        assert "WhatsApp" in page
+
+    def test_a_stored_note_from_another_vertical_is_not_replayed(self) -> None:
+        """396 stored audits carry notes written for dental clinics, 40 of them
+        about retail businesses. Correcting the table fixed future audits and
+        could not fix what was already recorded, so the consequence is looked
+        up now rather than read out of the event."""
+        page = build_health_check(business_name="Sony | Dubai Mall", research={
+            "observations": [{
+                "feature": "click_to_call", "status": "not_found",
+                "category": "conversion",
+                "evidence": "no tel: link in the homepage HTML",
+                "note": "A patient in pain phones. Without a tel: link they "
+                        "must copy a number by hand."}]})[0]["index.html"]
+
+        assert "patient" not in page.lower()
+        # The evidence is an observation about their site and is kept exactly.
+        assert "no tel: link in the homepage HTML" in page
+
+    def test_an_unrecognised_feature_gets_no_borrowed_consequence(self) -> None:
+        """Falling back to the stored note would reintroduce the whole problem
+        for exactly the features this build knows least about."""
+        page = build_health_check(business_name="X", research={
+            "observations": [{
+                "feature": "some_new_check", "status": "not_found",
+                "category": "seo", "evidence": "looked and did not find it",
+                "note": "A patient in pain phones."}]})[0]["index.html"]
+
+        assert "patient" not in page.lower()
+        assert "looked and did not find it" in page
 
     def test_it_reports_what_is_already_working(self) -> None:
         """A page listing only faults reads as a pitch. It is also less useful:

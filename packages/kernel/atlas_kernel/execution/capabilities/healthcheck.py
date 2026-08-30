@@ -44,6 +44,7 @@ from enum import StrEnum
 from typing import Any
 
 from ...opportunity.models import Business
+from ...opportunity.website_audit import FEATURE_NOTES
 
 #: Categories in the order a business owner cares about them, not the order the
 #: auditor happened to emit. Money first: a business nobody can phone loses the
@@ -140,12 +141,27 @@ def _checks(research: dict) -> tuple[Check, ...]:
         verdict = (Verdict.GOOD if status == "present"
                    else Verdict.MISSING if status == "not_found"
                    else Verdict.UNKNOWN)
+        # Evidence and consequence come from different places, on purpose.
+        #
+        # The evidence is an observation about *their* site and belongs to the
+        # audit that made it. The consequence is Qevik's explanation of why it
+        # matters — editorial, not observed — and is looked up fresh rather than
+        # read out of the stored event.
+        #
+        # This is not tidiness. The audit's notes were written for dental
+        # clinics and 396 stored audits carry them, including 40 retail ones:
+        # replayed verbatim, this page tells Sony at the Dubai Mall that "a
+        # patient in pain phones". Correcting the table fixed future audits and
+        # could not fix the ones already recorded. Looking the sentence up now
+        # fixes both, and a feature this build does not recognise gets no
+        # consequence at all rather than an inherited one.
+        known = FEATURE_NOTES.get(feature)
         found.append(Check(
             feature=feature,
             category=str(observation.get("category") or "technical"),
             verdict=verdict,
             evidence=str(observation.get("evidence") or "").strip(),
-            consequence=str(observation.get("note") or "").strip()))
+            consequence=known[1] if known else ""))
     return tuple(found)
 
 
