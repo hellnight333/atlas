@@ -305,3 +305,71 @@ def test_one_tenant_never_sees_anothers_usage(paid_client) -> None:
     assert body["plan"] == "LIST"
     assert body["used"] == 0.0, "A's spending must not appear on B's plan"
     assert body["history"] == []
+
+
+class TestMachinesThatHaveNotJoined:
+    """The HP Z8 and the Lenovo are in the documented topology and have never
+    registered. The only remaining step is somebody standing in front of them,
+    which is what a provisioning action is for."""
+
+    def _names(self, actions):
+        return {a.service for a in actions}
+
+    def test_a_machine_that_has_not_joined_is_asked_for(self) -> None:
+        from atlas_kernel.controlplane.actions import EXPECTED_NODES, node_actions
+
+        found = node_actions((), tenant="t")
+
+        assert self._names(found) == {n["name"] for n in EXPECTED_NODES}
+
+    def test_a_machine_that_joined_stops_being_asked_for(self) -> None:
+        """Worker ids are `machine:worker-name`, so the match is on the machine."""
+        from atlas_kernel.controlplane.actions import node_actions
+
+        found = node_actions(("atlas-z8:worker-research", "qevik-core-01:worker-1"),
+                             tenant="t")
+
+        assert "atlas-z8" not in self._names(found)
+        assert "atlas-lenovo" in self._names(found)
+
+    def test_an_unreadable_fleet_asks_for_nothing(self) -> None:
+        """`None` is "could not be read", not "nothing has joined". Telling
+        somebody to go and provision a machine that is already running because a
+        query failed is precisely the wrong instruction."""
+        from atlas_kernel.controlplane.actions import node_actions
+
+        assert node_actions(None, tenant="t") == ()
+
+    def test_they_do_not_claim_to_be_blocking(self) -> None:
+        """No agent declares a GPU tool, so nothing is waiting on these machines.
+        Two permanent emergencies at the top of the list would destroy the one
+        property that makes the list worth reading."""
+        from atlas_kernel.controlplane.actions import node_actions
+
+        assert all(not a.blocking for a in node_actions((), tenant="t"))
+
+    def test_each_one_says_how_it_will_be_known_to_be_done(self) -> None:
+        from atlas_kernel.controlplane.actions import node_actions
+
+        for action in node_actions((), tenant="t"):
+            assert "Fabric" in action.verification
+            assert "heartbeat" in action.verification
+            assert "physical access to the machine" in action.requires
+
+    def test_the_instructions_name_the_step_only_a_person_can_take(self) -> None:
+        """Tailscale opens a browser URL for approval. That is the whole reason
+        this cannot be automated, and the instructions say so."""
+        from atlas_kernel.controlplane.actions import node_actions
+
+        for action in node_actions((), tenant="t"):
+            assert "tailscale up" in action.instructions
+            assert action.service in action.instructions
+
+    def test_no_action_promises_gpu_work(self) -> None:
+        """Nothing dispatches to a GPU. An action implying otherwise would be
+        inventing a factory to justify hardware."""
+        from atlas_kernel.controlplane.actions import node_actions
+
+        for action in node_actions((), tenant="t"):
+            assert action.affects == ()
+            assert "GPU work" not in action.instructions

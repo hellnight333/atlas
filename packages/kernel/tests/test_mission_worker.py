@@ -377,3 +377,99 @@ def test_review_can_be_independent_of_implementation() -> None:
     roles = Roles(planner=implementer, implementer=implementer, reviewer=reviewer)
     assert roles.review_is_independent
     assert not Roles.all(implementer).review_is_independent
+
+
+def _worker_module():
+    """`infra/` is not a package on the path; the drafts tests reach it the
+    same way."""
+    import sys
+    from pathlib import Path as _Path
+
+    root = str(_Path(__file__).resolve().parents[3] / "infra")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import mission_worker
+
+    return mission_worker
+
+
+class TestWhatThisMachineHas:
+    """The HP Z8 is a multi-GPU box. Reading one line of nvidia-smi described it
+    as a single-card machine — wrong in the way that looks right, because the
+    field is populated."""
+
+    def _smi(self, monkeypatch, output, present=True):
+        import subprocess as sp
+
+        w = _worker_module()
+
+        monkeypatch.setattr(w.shutil if hasattr(w, "shutil") else __import__("shutil"),
+                            "which", lambda _: "/usr/bin/nvidia-smi" if present else None)
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: sp.CompletedProcess(a, 0, stdout=output, stderr=""))
+
+    def test_it_reports_every_card_not_the_first(self, monkeypatch) -> None:
+        w = _worker_module()
+
+        self._smi(monkeypatch,
+                  "NVIDIA RTX A6000, 49140\nNVIDIA RTX A6000, 49140\n"
+                  "NVIDIA RTX A4000, 16376\n")
+
+        assert w.gpu_inventory() == [
+            ("NVIDIA RTX A6000", 47), ("NVIDIA RTX A6000", 47),
+            ("NVIDIA RTX A4000", 15)]
+
+    def test_a_pinned_process_advertises_its_own_card(self, monkeypatch) -> None:
+        """One worker per GPU is the topology, and CUDA_VISIBLE_DEVICES is what
+        assigns them. A process pinned to card 2 that advertised card 0 would be
+        matched against a device it cannot touch."""
+        w = _worker_module()
+
+        cards = [("A6000", 47), ("A6000", 47), ("A4000", 15)]
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+
+        assert w._my_gpu(cards) == ("A4000", 15)
+
+    def test_it_never_sums_across_the_cards(self, monkeypatch) -> None:
+        """Adding four cards' VRAM together claims a memory figure no single
+        workload can use."""
+        w = _worker_module()
+
+        cards = [("A6000", 47)] * 4
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+
+        assert w._my_gpu(cards) == ("A6000", 47)
+
+    def test_a_pin_this_cannot_resolve_reports_no_card(self, monkeypatch) -> None:
+        """A UUID pin is valid and an index-based inventory cannot resolve it.
+        Reporting the first card would be a guess."""
+        w = _worker_module()
+
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-4f2e1c9a")
+
+        assert w._my_gpu([("A6000", 47), ("A4000", 15)]) is None
+
+    def test_an_out_of_range_pin_reports_no_card(self, monkeypatch) -> None:
+        w = _worker_module()
+
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
+
+        assert w._my_gpu([("A6000", 47)]) is None
+
+    def test_no_nvidia_smi_is_no_card_not_a_zero(self, monkeypatch) -> None:
+        w = _worker_module()
+
+        self._smi(monkeypatch, "", present=False)
+
+        assert w.gpu_inventory() == []
+        assert w._my_gpu([]) is None
+
+    def test_a_card_whose_memory_will_not_parse_is_still_a_card(
+            self, monkeypatch) -> None:
+        """Dropping it would report a 2-GPU box as a 1-GPU box."""
+        w = _worker_module()
+
+        self._smi(monkeypatch, "NVIDIA RTX A6000, 49140\nWeird Card, [N/A]\n")
+
+        assert w.gpu_inventory() == [("NVIDIA RTX A6000", 47), ("Weird Card", 0)]

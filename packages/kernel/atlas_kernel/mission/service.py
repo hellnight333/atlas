@@ -344,7 +344,26 @@ def fold(events: list, *, tenant: TenantId | None = None) -> list[dict]:
             continue
         seen = current.get(mission_id)
         if seen is None or detail.get("updated_at", "") >= seen.get("updated_at", ""):
-            current[mission_id] = dict(detail)
+            folded = dict(detail)
+            # `note` is the latest event's note. That is not why the mission is
+            # in this state, and reading it as one told an operator that six
+            # failed missions had ended because a "report written".
+            #
+            # A worker records several events after the transition that ended a
+            # mission -- the scratch it worked in, the cost, the report -- all
+            # carrying the terminal status and all stamped the same instant. The
+            # last one wins the fold and its note has nothing to do with the
+            # failure.
+            #
+            # So the note of the transition that *entered* this status is kept
+            # separately. It survives every later event that does not change the
+            # status, and a re-entry (failed, retried, failed again) replaces it,
+            # which is right: the reason is the most recent entry into the state.
+            if seen is not None and seen.get("status") == folded.get("status"):
+                folded["because"] = seen.get("because", "")
+            else:
+                folded["because"] = folded.get("note", "")
+            current[mission_id] = folded
     return sorted(current.values(), key=lambda d: d.get("updated_at", ""),
                   reverse=True)
 

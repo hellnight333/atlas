@@ -364,6 +364,20 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     for derived in ("published.length ? 'PUBLISHED'", "? 'AUTHORISED' :"):
         assert derived not in source, (
             "the console derives publication state instead of reading it")
+    # Mission Control groups missions by whose move it is. Grouping by
+    # predicate means a status no predicate matches vanishes from the page, and
+    # a mission an operator cannot see is worse than an ugly extra section — so
+    # there is a catch-all, and it is not decoration.
+    assert "const rest = all.filter" in source and "Other" in source, (
+        "the grouped mission list has no catch-all; a status no group matches "
+        "would disappear from the page entirely")
+    # The reason a mission is in its state comes from the kernel's fold, never
+    # from the latest event's note — which is how six failed missions each
+    # reported that they ended because a "report written".
+    assert "mission.because" in source, (
+        "the console reads a reason from somewhere other than `because`")
+    assert "mission.note ||" not in source, (
+        "the console is back to reading `note` as the reason a mission ended")
     assert Path(CONSOLE / "index.html").stat().st_size < 112_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
@@ -712,3 +726,60 @@ def test_the_live_view_never_makes_the_page_load_bearing() -> None:
     live = source[source.index("const live = {"):source.index("document.addEventListener('visibilitychange'")]
     for forbidden in ("/approve", "/decide", "/plan", "method: 'POST'"):
         assert forbidden not in live, forbidden
+
+
+class TestWhichAppsAreActuallyRunning:
+    """`apps/desktop` is the largest tree in `apps/` and nothing runs it.
+
+    Source-file count reads as product progress to anybody who has not checked,
+    and the check is not obvious: the code is intact and its tests pass. So the
+    status is written down, and these assertions stop the note going stale.
+    """
+
+    def _root(self):
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[3] / "apps"
+
+    def _status(self):
+        return (self._root() / "STATUS.md").read_text(encoding="utf-8")
+
+    def test_every_app_has_a_row(self) -> None:
+        """A new app with no row fails here. Without this the table is a README
+        that was true once."""
+        listed = self._status()
+        for app in sorted(p.name for p in self._root().iterdir() if p.is_dir()):
+            assert f"`{app}`" in listed, (
+                f"apps/{app} has no row in apps/STATUS.md — it cannot be told "
+                "apart from a running application")
+
+    def test_no_parked_app_is_shipped_by_a_deploy_script(self) -> None:
+        """The claim that makes 'parked' meaningful. If a deploy path started
+        shipping one, the word would be wrong and nothing else would notice."""
+        from pathlib import Path
+
+        infra = Path(__file__).resolve().parents[3] / "infra"
+        scripts = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in infra.glob("deploy_*.sh"))
+
+        for parked in ("desktop", "web", "prototype"):
+            assert f"apps/{parked}" not in scripts, (
+                f"apps/{parked} is marked parked and a deploy script ships it")
+
+    def test_the_live_console_is_not_marked_parked(self) -> None:
+        """Negative control for the assertion above: it must be able to tell a
+        running app from a parked one, not merely find the word absent."""
+        listed = self._status()
+        control = next(line for line in listed.splitlines()
+                       if line.startswith("| `control`"))
+
+        assert "**live**" in control and "parked" not in control
+
+    def test_it_does_not_claim_a_decision_nobody_recorded(self) -> None:
+        """Parked is not retired. Nothing in the repository records a decision
+        to end these surfaces, and writing one down would be inventing it."""
+        listed = self._status()
+
+        assert "Parked is **not** retired" in listed
+        assert "retired" not in listed.replace("Parked is **not** retired", "")

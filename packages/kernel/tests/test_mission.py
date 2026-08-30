@@ -310,3 +310,67 @@ def test_history_reads_forwards_whatever_order_it_arrived_in() -> None:
     assert [e["status"] for e in entries] == ["draft", "planning",
                                               "awaiting_approval", "queued",
                                               "processing"]
+
+
+# ============================================ why a mission is in this state
+
+def _same_instant(*steps) -> list[dict]:
+    """Transitions as a worker really writes them: several after the one that
+    ended the mission, all carrying the terminal status, all stamped the same
+    instant."""
+    from atlas_kernel.mission.service import KIND
+
+    return [{"kind": KIND, "detail": {
+        "mission_id": mission_id, "tenant_id": A, "status": status,
+        "note": note, "updated_at": "2026-08-27T11:08:49"}}
+        for mission_id, status, note in steps]
+
+
+def test_the_reason_survives_the_notes_written_after_it() -> None:
+    """`note` is the latest event's note, which is not why the mission is in
+    this state. In production all six failed missions folded to note "report
+    written" and the console showed that as the reason they failed."""
+    folded = fold(_same_instant(
+        ("m1", "processing", "claimed by worker-publish"),
+        ("m1", "failed", "did not pass after 3 attempts"),
+        ("m1", "failed", "worked in empty scratch"),
+        ("m1", "failed", "cost UNKNOWN: no invocation reported one"),
+        ("m1", "failed", "report written"),
+    ), tenant=A)[0]
+
+    assert folded["because"] == "did not pass after 3 attempts"
+    # `note` keeps meaning exactly what it meant.
+    assert folded["note"] == "report written"
+
+
+def test_re_entering_a_state_replaces_the_reason() -> None:
+    """Failed, retried, failed again. The reason is the most recent entry — an
+    operator acting on the older one debugs a problem already fixed."""
+    folded = fold(_same_instant(
+        ("m1", "failed", "network unreachable"),
+        ("m1", "queued", "retried by operator"),
+        ("m1", "failed", "review rejected the change"),
+        ("m1", "failed", "report written"),
+    ), tenant=A)[0]
+
+    assert folded["because"] == "review rejected the change"
+
+
+def test_a_mission_that_never_left_its_first_state_still_says_why() -> None:
+    folded = fold(_same_instant(("m1", "draft", "created")), tenant=A)[0]
+
+    assert folded["because"] == "created"
+
+
+def test_a_reason_is_not_borrowed_across_missions() -> None:
+    """Two missions folded in one pass. A reason leaking between them would
+    attribute one mission's failure to another."""
+    by_id = {m["mission_id"]: m for m in fold(_same_instant(
+        ("m-a", "failed", "disk full"),
+        ("m-b", "failed", "review rejected"),
+        ("m-a", "failed", "report written"),
+        ("m-b", "failed", "report written"),
+    ), tenant=A)}
+
+    assert by_id["m-a"]["because"] == "disk full"
+    assert by_id["m-b"]["because"] == "review rejected"

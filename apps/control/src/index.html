@@ -652,22 +652,67 @@ views.missions = async () => {
     API.get('/api/missions'), API.get('/api/missions/blockers').catch(() => ({ by_kind: {} })),
   ]);
   const kinds = Object.entries(blockers.by_kind || {});
-  return `
-    <header class="page"><h2>Mission Control</h2>
-      <p>Missions run in a worker process. Closing this page does not stop one.</p></header>
-    ${kinds.length ? `<div class="card" style="margin-bottom:1rem"><h3>Blocked by</h3>
-      ${kinds.map(([kind, rows]) => `<div class="meta">${pill(kind)} ${rows.length} — ${
-        esc(rows.map((r) => r.detail).join('; ').slice(0, 160))}</div>`).join('')}</div>` : ''}
-    <div class="rows">${(listing.missions || []).map((m) => `
+  const all = listing.missions || [];
+
+  /* Grouped by whose move it is, not by recency. The questions an operator
+     actually arrives with — what wants me, what is running, what broke — were
+     each answerable only by scanning one flat feed and opening rows. */
+  const GROUPS = [
+    { key: 'needs', title: 'Needs you', note: 'Nothing here moves on its own.',
+      has: (m) => ['awaiting_approval', 'blocked', 'plan_proposed'].includes(m.status) },
+    { key: 'running', title: 'Running now',
+      note: 'Held by a worker. Closing this page does not stop one.',
+      has: (m) => !!m.claimed_by && !['complete', 'failed', 'cancelled'].includes(m.status) },
+    { key: 'ended', title: 'Ended badly', note: 'Why each one stopped, from its timeline.',
+      has: (m) => ['failed', 'cancelled'].includes(m.status) },
+    { key: 'waiting', title: 'Queued', note: 'Waiting for a worker that can serve them.',
+      has: (m) => ['draft', 'planning', 'queued'].includes(m.status) && !m.claimed_by },
+    { key: 'done', title: 'Completed', note: '', has: (m) => m.status === 'complete' },
+  ];
+  const placed = new Set();
+  const groups = GROUPS.map((g) => {
+    const rows = all.filter((m) => !placed.has(m.mission_id) && g.has(m));
+    rows.forEach((m) => placed.add(m.mission_id));
+    return { ...g, rows };
+  });
+  /* Anything the groups above do not describe. A mission that silently
+     vanished from this page because a new status was added would be worse than
+     an ugly extra section. */
+  const rest = all.filter((m) => !placed.has(m.mission_id));
+
+  const row = (m) => `
       <div class="row">
         <div class="body">
           <div class="title"><a href="#/missions/${encodeURIComponent(m.mission_id)}">${esc(m.title)}</a></div>
           <div class="meta"><code>${esc(m.mission_id)}</code> · ${when(m.updated_at)}
             ${m.claimed_by ? '· held by <code>' + esc(m.claimed_by) + '</code>' : ''}</div>
+          ${m.because ? `<div class="meta">${esc(m.because)}</div>` : ''}
+          ${(m.blockers || []).length ? `<div class="meta">${m.blockers.map((b) =>
+            pill(b.kind) + ' ' + esc(b.detail || '')
+            + (b.action ? ' → <strong>' + esc(b.action) + '</strong>' : '')).join('<br>')}</div>` : ''}
           ${track(m.status)}
         </div>
         <div class="actions">${pill(m.status)}</div>
-      </div>`).join('') || empty('No missions yet. Start one from Chat.')}</div>`;
+      </div>`;
+
+  return `
+    <header class="page"><h2>Mission Control</h2>
+      <p>${all.length ? esc(String(all.length)) + ' missions, grouped by whose move it is.'
+        : 'Missions run in a worker process. Closing this page does not stop one.'}</p></header>
+    ${kinds.length ? `<div class="card" style="margin-bottom:1rem"><h3>Blocked by</h3>
+      ${kinds.map(([kind, rows]) => `<div class="meta">${pill(kind)} ${rows.length} — ${
+        esc(rows.map((r) => r.detail).join('; ').slice(0, 160))}</div>`).join('')}</div>` : ''}
+    ${all.length ? groups.filter((g) => g.rows.length).map((g) => `
+      <h3 style="margin:1.4rem 0 .4rem">${esc(g.title)}
+        <span class="note">${esc(String(g.rows.length))}</span></h3>
+      ${g.note ? `<p class="note" style="margin-bottom:.6rem">${esc(g.note)}</p>` : ''}
+      <div class="rows">${g.rows.map(row).join('')}</div>`).join('')
+      + (rest.length ? `<h3 style="margin:1.4rem 0 .4rem">Other
+          <span class="note">${esc(String(rest.length))}</span></h3>
+        <p class="note" style="margin-bottom:.6rem">Statuses this page has no
+          group for. Shown rather than hidden.</p>
+        <div class="rows">${rest.map(row).join('')}</div>` : '')
+      : empty('No missions yet. Start one from Chat.')}`;
 };
 
 async function missionDetail(id) {
@@ -1210,12 +1255,20 @@ const STAGE = {
  * Returns '' when there is nothing to say. A missing note is reported as a
  * missing note — inventing a plausible reason for a failure is worse than
  * admitting none was recorded. */
+/* Why a mission is in the state it is in.
+ *
+ * `note` is the *latest* event's note, and a worker writes several after the
+ * transition that ended a mission — the scratch, the cost, the report — all
+ * carrying the terminal status. Reading `note` as the reason told an operator
+ * that all six failed missions in production ended because a "report written".
+ * `because` is the note of the transition that entered the state, folded by the
+ * kernel, so every surface gets the same answer. */
 function whyItEnded(mission) {
   if (!mission) return '';
   if (mission.status !== 'failed' && mission.status !== 'cancelled') return '';
-  const note = (mission.note || '').trim();
-  if (!note) return 'No reason was recorded for this. The report below is the only account of what happened.';
-  return note;
+  const why = (mission.because || '').trim();
+  if (!why) return 'No reason was recorded for this. The report below is the only account of what happened.';
+  return why;
 }
 
 function stageOf(conversation, mission) {

@@ -472,25 +472,79 @@ def _probe_resources():
         except (OSError, subprocess.SubprocessError):
             ram_gb = 0
 
-    gpu = None
-    vram_gb = 0
-    if shutil.which("nvidia-smi"):
-        try:
-            out = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,memory.total",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=10, check=False).stdout
-            first = out.strip().splitlines()[0] if out.strip() else ""
-            if "," in first:
-                name, _, memory = first.partition(",")
-                gpu = name.strip() or None
-                vram_gb = int(int(memory.strip()) / 1024) if memory.strip().isdigit() else 0
-        except (OSError, subprocess.SubprocessError, ValueError):
-            # A card that would not answer is not a card we can describe.
-            gpu, vram_gb = None, 0
+    cards = gpu_inventory()
+    mine = _my_gpu(cards)
+    gpu = mine[0] if mine else None
+    vram_gb = mine[1] if mine else 0
 
     return WorkerResources(cpu_cores=cores, ram_gb=ram_gb, gpu=gpu,
                            vram_gb=vram_gb)
+
+
+def gpu_inventory() -> list[tuple[str, int]]:
+    """Every card this machine has, as `(name, vram_gb)`, in nvidia-smi order.
+
+    All of them, not the first. The HP Z8 is a multi-GPU box and reading one
+    line described it as a single-card machine — which is the kind of wrong that
+    looks right, because the field is populated.
+
+    An empty list means no card *or* no answer, and the two are told apart by
+    the caller: `WorkerResources.gpu` stays `None` either way, because a card
+    that will not answer is not a card we can describe.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return []
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found: list[tuple[str, int]] = []
+    for line in out.strip().splitlines():
+        name, _, memory = line.partition(",")
+        name, memory = name.strip(), memory.strip()
+        if not name:
+            continue
+        # Absent stays absent: a card whose memory did not parse is reported
+        # with 0 VRAM rather than dropped, because the card is real.
+        found.append((name, int(int(memory) / 1024) if memory.isdigit() else 0))
+    return found
+
+
+def _my_gpu(cards: list[tuple[str, int]]) -> tuple[str, int] | None:
+    """Which card *this process* owns.
+
+    One worker process per GPU is the documented topology, and the thing that
+    assigns them is `CUDA_VISIBLE_DEVICES`. A process pinned to card 2 must
+    advertise card 2 — advertising the first card would have the scheduler
+    match against a device this process cannot touch.
+
+    **Never sums.** Four processes on one box each report their own card; adding
+    their VRAM together would claim the machine has four times the memory any
+    single workload can use, which is the resource lie this whole path exists to
+    avoid.
+
+    With no pin, the first card is reported and the rest are recorded in the
+    registration metadata rather than being silently lost.
+    """
+    if not cards:
+        return None
+    pinned = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not pinned:
+        return cards[0]
+    first = pinned.split(",")[0].strip()
+    # A UUID pin (CUDA_VISIBLE_DEVICES=GPU-<uuid>) is a real and valid form that
+    # this index-based inventory cannot resolve. Reporting the first card would
+    # be a guess; reporting none is the truth.
+    if not first.isdigit():
+        return None
+    index = int(first)
+    return cards[index] if 0 <= index < len(cards) else None
 
 
 def _serves(agent_choice: str) -> str:
@@ -655,7 +709,15 @@ def _register_node(name: str, agent_choice: str, placement: str = "either") -> s
                   "qevik-mission-worker"],
             metadata={"machine": machine, "worker_name": name,
                       "agent": agent_choice, "serves": _serves(agent_choice),
-                      "placement": placement}))
+                      "placement": placement,
+                      # Every card on the box, so a multi-GPU host is not
+                      # described by whichever one this process happens to own.
+                      # `resources` stays this process's card alone and is never
+                      # a sum; this is the inventory beside it.
+                      "gpus": [{"name": n, "vram_gb": v}
+                               for n, v in gpu_inventory()],
+                      "cuda_visible_devices":
+                          os.environ.get("CUDA_VISIBLE_DEVICES", "")}))
         log.info("registered as %s on %s: %d core(s), %d GB RAM, gpu=%s, "
                  "capabilities %s", node.id, machine,
                  resources.cpu_cores, resources.ram_gb,

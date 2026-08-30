@@ -38,6 +38,10 @@ class ActionKind(StrEnum):
     CREDENTIAL = "credential"
     APPROVAL = "approval"
     CUSTOMER_TASK = "customer_task"
+    #: Something physical, or something needing an account only the owner can
+    #: sign into. Distinct from a credential because no key can be pasted to
+    #: satisfy it: somebody has to be in front of the machine.
+    PROVISIONING = "provisioning"
 
 
 class ActionStatus(StrEnum):
@@ -208,9 +212,80 @@ def customer_task_actions(outstanding: tuple[dict, ...], *, tenant: TenantId | N
         for entry in outstanding)
 
 
+#: Machines the documented compute topology expects, and what it takes to make
+#: one of them join the fleet.
+#:
+#: Declared as data because the steps are the same for both boxes and were
+#: otherwise only in a shell script's closing message, which nothing reads. It
+#: is **not** a claim that either machine exists, is powered on, or is owned —
+#: it is what would have to happen for one to appear in `atlas_workers`.
+#:
+#: Nothing here schedules GPU work. No agent declares a GPU tool, so a node
+#: joining today advertises the same CPU tools as any other worker; that is a
+#: product decision and not this list's business.
+EXPECTED_NODES: tuple[dict, ...] = (
+    {"name": "atlas-z8", "title": "HP Z8 — join the fleet",
+     "detail": "multi-GPU workstation"},
+    {"name": "atlas-lenovo", "title": "Lenovo i9 — join the fleet",
+     "detail": "single-GPU workstation"},
+)
+
+#: The same sequence for both machines. Ubuntu 24.04, one image, one playbook.
+_NODE_STEPS = (
+    "1. On the machine: sudo bash infra/provision_node.sh, reboot, run it "
+    "again. It installs the NVIDIA driver, Docker and the container toolkit, "
+    "and verifies a container can see the GPU.\n"
+    "2. sudo tailscale up --hostname={name} — this opens a URL you approve in "
+    "a browser, which is why nobody else can do it for you.\n"
+    "3. Set ATLAS_DATABASE_URL to reach Postgres over the tailnet, then start "
+    "the worker with --name {name} --agent <role> --placement cloud.\n"
+    "The worker registers itself, so nothing needs to be told it is coming."
+)
+
+
+def node_actions(known: tuple[str, ...] | None, *,
+                 tenant: TenantId | None = None) -> tuple[HumanAction, ...]:
+    """One action per expected machine that has not registered itself.
+
+    `known is None` means the fleet could not be read, and that is not the same
+    as no machine having joined. Asking somebody to go and provision a box that
+    is already running because a query failed is exactly the wrong instruction,
+    so an unreadable fleet produces no actions at all.
+
+    Not blocking. Nothing today needs these machines — no agent declares a GPU
+    tool — and marking them blocking would put two permanent emergencies at the
+    top of a list whose whole value is that its top is real.
+    """
+    if known is None:
+        return ()
+    tenant_id = str(tenant or "")
+    joined = {name.split(":", 1)[0] for name in known}
+    return tuple(
+        HumanAction(
+            id=_identity(ActionKind.PROVISIONING, node["name"], tenant_id),
+            kind=ActionKind.PROVISIONING,
+            title=node["title"],
+            service=node["name"],
+            tenant_id=tenant_id,
+            blocking=False,
+            reason=f"The {node['detail']} has never registered with the fleet. "
+                   "Nothing is waiting on it today.",
+            instructions=_NODE_STEPS.format(name=node["name"]),
+            requires=("physical access to the machine", "a Tailscale login"),
+            affects=(),
+            verification=f"a worker whose machine is {node['name']} appears in "
+                         "Fabric and reports a heartbeat",
+        )
+        for node in EXPECTED_NODES
+        if not any(name == node["name"] or name.startswith(node["name"])
+                   for name in joined)
+    )
+
+
 def centre(*, store: ConnectionStore, tenant: TenantId | None,
            pending_approvals: list[ApprovalRequest] | None = None,
-           outstanding_tasks: tuple[dict, ...] = ()) -> dict:
+           outstanding_tasks: tuple[dict, ...] = (),
+           known_nodes: tuple[str, ...] | None = None) -> dict:
     """Everything waiting on a person, ordered by what it holds up.
 
     Blocking first, then by how long it has been ignored. A list ordered by
@@ -221,6 +296,7 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
         credential_actions(store, tenant=tenant)
         + approval_actions(pending_approvals or [], tenant=tenant)
         + customer_task_actions(outstanding_tasks, tenant=tenant)
+        + node_actions(known_nodes, tenant=tenant)
     )
     ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))
     return {
