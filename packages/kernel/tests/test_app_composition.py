@@ -322,6 +322,23 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
             f"the console derives worker health itself via {deriving!r}; two "
             "answers to 'is this machine alive', and the one on screen is the "
             "untested one")
+    # Approving and sending are two acts. A console that sends straight from
+    # the review, or that posts message content back with the send, is how the
+    # words that go out stop being the words that were approved.
+    # Approving is a decision a person makes, and belongs on a page. Sending is
+    # not, and the assertion further down keeps it off one. The console may
+    # therefore approve, and must not carry the words back when it does: the
+    # server re-composes and compares, so a browser that posted a subject and
+    # body could approve something other than what was displayed.
+    assert "outreach/approve" in source, (
+        "the console reads outreach drafts it has no way to act on")
+    approving = source[source.index("outreach/approve"):][:260]
+    for content in ("subject", "body:", "recipient:"):
+        assert content not in approving, (
+            f"the approve call carries {content!r}; approval must echo only the "
+            "fingerprint of what the server composed")
+    assert "fingerprint" in approving, (
+        "an approval that echoes nothing cannot be checked against what was read")
     assert "w.state" in source and "w.healthy" in source, (
         "the Fabric view must render the state the scheduler reported")
     assert Path(CONSOLE / "index.html").stat().st_size < 100_000

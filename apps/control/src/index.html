@@ -762,8 +762,40 @@ async function missionDetail(id) {
       catch (e) { c.disabled = false; alert(e.message); }
     });
     if (delivery) wireReview(id, delivery);
+    wireOutreach(id);
   });
   return html;
+}
+
+/* Approving and sending, kept apart.
+ *
+ * The fingerprint travels back with the decision. The server re-composes the
+ * message and refuses a mismatch, so an operator who approved one set of words
+ * cannot have a different set go out because the site moved underneath them.
+ * That is why the button carries `data-fp` rather than the server trusting the
+ * mission id alone. */
+function wireOutreach(id) {
+  const said = document.querySelector('[data-outreach-said]');
+  const tell = (text) => { if (said) said.textContent = text; };
+
+  const a = document.querySelector('[data-approve-outreach]');
+  if (a) a.addEventListener('click', async () => {
+    /* Visible before the await, or a slow round trip looks like a dead button. */
+    a.disabled = true; a.textContent = 'Recording…'; tell('');
+    try {
+      await API.post('/api/missions/' + encodeURIComponent(id) + '/outreach/approve',
+                     { fingerprint: a.dataset.fp });
+      render();
+    } catch (e) {
+      a.disabled = false; a.textContent = 'Approve this message';
+      /* 409 means the message changed since it was read. Saying so beats
+         "request failed" — the operator needs to re-read, not retry. */
+      tell(e.message.includes('409')
+        ? 'The message changed since you read it. Reload and read it again '
+          + 'before approving.' : e.message);
+    }
+  });
+
 }
 
 /* What a reviewer needs in front of them, without a terminal.
@@ -893,13 +925,22 @@ function outreachCard(o) {
       <dt>Recipient</dt><dd>${p.recipient
         ? esc(p.recipient) + ' <span class="note">' + esc(p.channel) + '</span>'
         : pill('none verified', 'bad')}</dd>
-      <dt>Sending identity</dt><dd>${pill('none configured', 'bad')}</dd>
+      <dt>Sending identity</dt><dd>${blocked.includes('NO_SENDING_IDENTITY')
+        ? pill('none configured', 'bad') : pill('configured', 'ok')}</dd>
     </dl>
     <p class="note">Every claim below, and the record it came from:</p>
     <dl class="facts">${Object.entries(p.traces || {}).map(([claim, from]) =>
       `<dt>${esc(claim)}</dt><dd><code>${esc(from)}</code></dd>`).join('')}</dl>
     <p class="note">Proposed message &mdash; <strong>${esc(p.subject)}</strong></p>
     <pre>${esc(p.body)}</pre>
+    <div class="actions">${approved
+      ? `<span class="note">Approved. Nothing goes out from this page &mdash;
+           delivery is dispatched to a worker, and no worker can send yet.</span>`
+      : `<button data-approve-outreach data-fp="${esc(p.fingerprint)}"
+           >Approve this message</button>
+         <span class="note">Records permission to send these exact words to
+           this exact address. Sends nothing.</span>`}</div>
+    <p class="note" data-outreach-said></p>
   </div>`;
 }
 

@@ -152,7 +152,13 @@ class Prepared:
                 "recipient": self.recipient, "channel": self.channel,
                 "blocked_on": list(self.blocked_on),
                 "traces": dict(self.traces),
-                "state": self.state, "sendable": self.sendable}
+                "state": self.state, "sendable": self.sendable,
+                # What an approval must echo back. `approve_outreach` re-composes
+                # server-side and refuses (409) when the client's fingerprint
+                # differs, so a reader that never receives one cannot approve at
+                # all — which was true of every client until this line existed.
+                # Not a secret: a checksum of words the reader is already shown.
+                "fingerprint": self.fingerprint}
 
 
 def verified_recipient(business: Any) -> tuple[str, str]:

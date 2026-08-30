@@ -360,3 +360,35 @@ class TestNoWideningHappened:
         with pytest.raises(ChannelNotConnected):
             EmailChannel().send(recipient="a@b.co", subject="s", body="b",
                                 approval=Approved())
+
+
+class TestWhatAReaderIsGivenToApproveWith:
+    """`approve_outreach` re-composes the message server-side and refuses (409)
+    when the client's fingerprint differs. A read that returns no fingerprint
+    therefore cannot be approved by any client — the endpoint works and is
+    unreachable, which is how a shipped feature has no user."""
+
+    def test_the_summary_carries_the_fingerprint_an_approval_must_echo(self) -> None:
+        prepared = _prepared()
+
+        assert prepared.summary()["fingerprint"] == prepared.fingerprint
+        assert len(prepared.summary()["fingerprint"]) == 64
+
+    def test_it_covers_the_words_the_reader_actually_read(self) -> None:
+        """A fingerprint that ignored the body would approve a message the
+        operator never saw."""
+        import dataclasses
+
+        first = _prepared()
+        edited = dataclasses.replace(first, body=first.body + " and one more thing")
+
+        assert edited.summary()["fingerprint"] != first.summary()["fingerprint"]
+
+    def test_it_covers_the_recipient(self) -> None:
+        """The same words to a different stranger is a different act."""
+        import dataclasses
+
+        first = _prepared()
+        elsewhere = dataclasses.replace(first, recipient="someone-else@example.test")
+
+        assert elsewhere.summary()["fingerprint"] != first.summary()["fingerprint"]
