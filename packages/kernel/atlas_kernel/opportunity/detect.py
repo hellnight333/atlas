@@ -79,6 +79,25 @@ from .signals import (
 #: a promise the roadmap cannot keep.
 WEBSITE_OFFER = "offer-website"
 
+#: The diagnostic Qevik leads with. A product decision taken by the owner on
+#: 2026-08-30, recorded here rather than in a route.
+#:
+#: A rebuild asserts Qevik knows what a business needs. A health check asserts
+#: only what an audit observed, with the evidence attached — so it is the only
+#: thing that can honestly be offered to a stranger on the strength of a scan.
+#: It is a first action, not a replacement: `offer-website` remains what a
+#: rebuild is, and the conversation a health check starts is where it belongs.
+HEALTH_CHECK_OFFER = "offer-health-check"
+
+#: Defects that mean nothing was read. A health check reports what an audit
+#: found on a page; when the page never answered there is nothing to report,
+#: and a page telling a business that Qevik could not reach them is not a
+#: diagnostic — it is a bounce notice with a logo on it.
+#:
+#: Separate from `NOT_BUILDABLE` in `mission/delivery.py`, which asks whether a
+#: *fix* exists. This asks whether an *observation* exists. See
+#: `health_check_ready`.
+
 #: Which declared opportunity key each audited defect belongs to.
 #:
 #: The vocabulary is `outreach/opportunity.py`'s and the answering side is
@@ -229,6 +248,32 @@ def unverified_web_presence(recorded: Recorded, extraction: Extraction, *,
 WORTH_RAISING = 2
 
 
+def health_check_ready(findings: list[Finding]) -> bool:
+    """Whether a health check can honestly be offered for these findings.
+
+    Three conditions, and each one has a failure it prevents:
+
+    - **An executor exists.** Offering work nothing can carry out is the thing
+      `executable` was written for, and the arabic-experience offer is the
+      reason it exists.
+    - **The page was actually read.** A site that did not answer produces no
+      observations; a health check built from that says nothing, over Qevik's
+      name, to a business that will read it.
+    - **More than one defect was found.** `WORTH_RAISING` already separates an
+      opportunity from a lint result, and this is the same bar applied to the
+      artefact: a diagnostic reporting a single missing meta description is
+      not worth a stranger's attention and would make the next one easier to
+      ignore.
+
+    Deliberately not "every weak website". The evidence decides.
+    """
+    if not executable(HEALTH_CHECK_OFFER):
+        return False
+    if any(f.kind is FindingKind.SITE_UNREACHABLE for f in findings):
+        return False
+    return sum(SEVERITY_WEIGHT[f.severity] for f in findings) >= WORTH_RAISING
+
+
 def weak_web_presence(business: Business, findings: list[Finding],
                       response: Evidence, *, source: str) -> Signal | None:
     """The site was fetched, audited, and what came back is weak.
@@ -289,12 +334,30 @@ def weak_web_presence(business: Business, findings: list[Finding],
     # an inference resting on both is only as good as the timing sample.
     confidence = min(0.9, min(f.confidence for f in findings))
 
-    if keys and executable(WEBSITE_OFFER):
+    if health_check_ready(findings):
+        # The health check leads. It reports what this audit observed, with the
+        # evidence for each line, and asserts nothing about what the business
+        # should buy — which is why it can be offered on the strength of a scan
+        # when a rebuild cannot.
+        #
+        # `keys` still decides whether a rebuild is answerable at all, and the
+        # statement says so when it is: the operator reading this is deciding
+        # whether to approach the business, and what Qevik could go on to do
+        # for them is part of that decision.
+        follows = (f" A rebuild would answer {', '.join(keys)} if the "
+                   "conversation goes that way." if keys else "")
+        action = SuggestedAction(
+            statement=(f"Send {business.name} a health check of their site. "
+                       "It reports only what was observed, with the evidence "
+                       f"for each finding.{follows}"),
+            # Approaching a business is not undoable, and no audit result may
+            # make it automatic.
+            reach=Reach.OUTWARD, needs_approval=True,
+            capability=HEALTH_CHECK_OFFER)
+    elif keys and executable(WEBSITE_OFFER):
         action = SuggestedAction(
             statement=(f"Offer {business.name} a rebuilt website. Qevik's "
                        f"{WEBSITE_OFFER} answers {', '.join(keys)}."),
-            # Approaching a business is not undoable, and no audit result may
-            # make it automatic.
             reach=Reach.OUTWARD, needs_approval=True,
             capability=WEBSITE_OFFER)
     else:
