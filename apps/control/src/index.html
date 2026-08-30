@@ -1673,7 +1673,9 @@ views.actions = async () => {
       <div class="row"><div class="body">
         <div class="title">${esc(a.title)} ${a.blocking ? pill('BLOCKING') : ''}</div>
         <div class="meta">${esc(a.instructions || '')}</div>
-        ${a.requires ? `<div class="meta">Needs: <code>${esc(a.requires)}</code></div>` : ''}
+        ${(a.requires || []).length ? `<div class="meta">Needs: ${
+          (a.requires || []).map((r) => '<code>' + esc(r) + '</code>').join(' · ')
+          }</div>` : ''}
         ${(a.affects || []).length ? `<div class="meta">Holds up: ${esc((a.affects || []).join(', '))}</div>` : ''}
         ${a.setup_url ? `<div class="meta">Get one: <a href="${esc(a.setup_url)}" rel="noopener" target="_blank">${esc(a.setup_url)}</a></div>` : ''}
         ${a.verification ? `<div class="meta">Done when: ${esc(a.verification)}</div>` : ''}
