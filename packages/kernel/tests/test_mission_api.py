@@ -783,3 +783,118 @@ class TestTheActionCentreRouteSurfacesEverything:
 
         assert "sk-" not in body
         assert "QEVIK_VAULT_MASTER_KEY=" not in body
+
+
+class TestWhatIsOnTheInternet:
+    """`sites.qevik.ai` serves 57 directories and the Publications page showed
+    none of them — it promised "what has actually gone live" and rendered the
+    queue of things waiting for authorisation."""
+
+    def _memory(self, app, rows):
+        """The repository is created lazily on first use, so a test that reads
+        `app.state.opportunity_repository` before any route has run finds
+        nothing. Stated here instead."""
+        from types import SimpleNamespace
+
+        app.state.opportunity_repository = SimpleNamespace(
+            published_sites=lambda **_: rows)
+
+    def _rows(self):
+        return [
+            {"kind": "publication_completed",
+             "detail": {"url": "https://sites.qevik.ai/site-a/", "site_id": "site-a",
+                        "at": "2026-08-27", "mission_id": "m-1"}},
+            {"kind": "website_demo_published",
+             "detail": {"demo_url": "https://sites.qevik.ai/demo-b/", "slug": "demo-b",
+                        "published_at": "2026-08-19"}},
+        ]
+
+    def test_it_lists_both_kinds_without_touching_the_network(
+            self, client, app, monkeypatch) -> None:
+        """The default must be instant. Asking 57 URLs on a page load makes an
+        operator wait on the network to find out what exists."""
+        self._memory(app, self._rows())
+
+        def refuse(*_a, **_k):
+            raise AssertionError("the default listing fetched over the network")
+
+        from atlas_kernel.research import net
+        monkeypatch.setattr(net, "Fetcher", refuse)
+
+        body = client.get("/api/missions/published").json()
+
+        assert body["counts"] == {"total": 2, "demos": 1, "live": 0, "down": 0,
+                                  "unchecked": 2}
+        assert body["checked"] is False
+
+    def test_an_unchecked_row_does_not_read_as_working(
+            self, client, app, monkeypatch) -> None:
+        self._memory(app, self._rows())
+
+        body = client.get("/api/missions/published").json()
+
+        assert {r["liveness"] for r in body["published"]} == {"NOT_CHECKED"}
+
+    def test_checking_reports_live_and_down_apart_from_unreachable(
+            self, client, app, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from atlas_kernel.research import net
+
+        self._memory(app, self._rows())
+
+        answers = {
+            "https://sites.qevik.ai/site-a/": SimpleNamespace(
+                status=200, bytes=1967, error=""),
+            "https://sites.qevik.ai/demo-b/": SimpleNamespace(
+                status=404, bytes=90, error=""),
+        }
+
+        class _Fetcher:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, url, **_): return answers[url]
+
+        monkeypatch.setattr(net, "Fetcher", _Fetcher)
+        body = client.get("/api/missions/published?check=true").json()
+
+        assert body["counts"]["live"] == 1
+        assert body["counts"]["down"] == 1
+        assert body["checked"] is True
+
+    def test_a_url_that_could_not_be_reached_is_not_reported_as_down(
+            self, client, app, monkeypatch) -> None:
+        """A demo reported down gets rebuilt; a demo reported live goes into an
+        approved message. Neither is right when the request simply failed."""
+        from types import SimpleNamespace
+
+        from atlas_kernel.research import net
+
+        self._memory(app, self._rows()[:1])
+
+        class _Fetcher:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, url, **_):
+                return SimpleNamespace(status=0, bytes=0, error="timed out")
+
+        monkeypatch.setattr(net, "Fetcher", _Fetcher)
+        body = client.get("/api/missions/published?check=true").json()
+
+        assert body["counts"]["down"] == 0
+        assert body["counts"]["unchecked"] == 1
+        assert "timed out" in body["published"][0]["detail"]
+
+    def test_the_route_is_not_swallowed_by_the_mission_detail_handler(
+            self, client, app, monkeypatch) -> None:
+        """`/{mission_id}` matches a literal segment happily. Registered after
+        it, this would be served as a mission called "published" — a 404 that
+        reads as an empty list. This repository has shipped that bug once."""
+        self._memory(app, [])
+
+        response = client.get("/api/missions/published")
+
+        assert response.status_code == 200
+        assert "published" in response.json()

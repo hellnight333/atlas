@@ -378,7 +378,17 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "the console reads a reason from somewhere other than `because`")
     assert "mission.note ||" not in source, (
         "the console is back to reading `note` as the reason a mission ended")
-    assert Path(CONSOLE / "index.html").stat().st_size < 112_000
+    # Publications shows what is actually on the internet, read from the
+    # timeline. The page promised that in its header and rendered only the
+    # authorisation queue.
+    assert "/api/missions/published" in source, (
+        "the Publications page does not list what has been published")
+    # Liveness is a measurement with a time on it. Held across the render that
+    # displays it and dropped after, so a stale verdict is never shown as the
+    # current state — that is how a dead demo keeps looking fine.
+    assert "state.checkedPublications = null" in source, (
+        "a liveness result is kept beyond the render that shows it")
+    assert Path(CONSOLE / "index.html").stat().st_size < 118_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

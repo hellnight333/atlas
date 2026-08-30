@@ -212,3 +212,25 @@ def test_no_probe_puts_the_secret_in_its_own_url(provider: str) -> None:
     finally:
         module._ask = original                       # type: ignore[assignment]
     assert seen and SECRET not in seen[0]
+
+
+def test_places_is_untestable_on_purpose_and_says_so() -> None:
+    """A probe was written for Google Places and removed: it bills every
+    authenticated request and has no free listing endpoint, so a Test button
+    would charge for each press. The reason lives next to the probes so the
+    next person to notice the gap finds the answer rather than filling it."""
+    from pathlib import Path
+
+    import atlas_kernel.credentials.probes as module
+    from atlas_kernel.integrations import BY_ID
+
+    assert "google-places" not in PROBES
+    assert "google-places" in describe()["untestable"]
+
+    reason = Path(module.__file__).read_text(encoding="utf-8")
+    assert "Google Places has no probe, deliberately" in reason
+    assert "bills every authenticated" in reason
+
+    # And the operator is still told how they will know it works.
+    assert BY_ID["google-places"].verifies_by(), (
+        "an integration with no probe must at least say how it is verified")

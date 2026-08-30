@@ -28,6 +28,13 @@ Each probe lists models. It is the smallest authenticated request these
 providers offer, it costs nothing, and it changes nothing — a probe that
 generated a token would bill the customer for finding out whether they can be
 billed.
+
+**Google Places has no probe, deliberately.** It bills every authenticated
+request and offers no free listing endpoint, so a Test button would charge for
+each press — and a button is pressed more than once. It is verified instead by
+a discovery run returning businesses with a phone or a website, which its
+registry entry states. A probe was written for it and removed; if you are about
+to add one, this is the reason not to.
 """
 
 from __future__ import annotations

@@ -237,10 +237,67 @@ _NODE_STEPS = (
     "and verifies a container can see the GPU.\n"
     "2. sudo tailscale up --hostname={name} — this opens a URL you approve in "
     "a browser, which is why nobody else can do it for you.\n"
-    "3. Set ATLAS_DATABASE_URL to reach Postgres over the tailnet, then start "
+    "3. Set ATLAS_DATABASE_URL to reach the ledger over the tailnet, then start "
     "the worker with --name {name} --agent <role> --placement cloud.\n"
-    "The worker registers itself, so nothing needs to be told it is coming."
+    "The worker registers itself, so nothing needs to be told it is coming.\n"
+    "Step 3 cannot work until the control plane is reachable — see "
+    "'the fleet cannot reach the ledger'."
 )
+
+#: Whether a machine anywhere but the control-plane host could join at all.
+#:
+#: Measured rather than assumed. On 2026-08-30 Postgres on qevik-core-01
+#: listened on 127.0.0.1 only and Tailscale was not installed, so a fully
+#: provisioned Z8 with an approved Tailscale login still had nothing to connect
+#: to. The provisioning actions were written as though a tailnet existed.
+FLEET_REACHABILITY = "fleet:ledger-reachable"
+
+
+def fleet_reachability_actions(reachable: bool | None, *,
+                               tenant: TenantId | None = None
+                               ) -> tuple[HumanAction, ...]:
+    """What has to be true before *any* machine can join the fleet.
+
+    Separate from the per-machine actions because it is one prerequisite for
+    both, and doing it twice would be doing it once. Not blocking: nothing today
+    needs a second machine, and the reason to do this is to make the two
+    workstations usable rather than to unstick current work.
+
+    `None` — could not be determined — produces nothing. Asking somebody to open
+    a database to the network because a check failed is a worse outcome than
+    saying nothing.
+    """
+    if reachable is None or reachable:
+        return ()
+    tenant_id = str(tenant or "")
+    return (HumanAction(
+        id=_identity(ActionKind.PROVISIONING, FLEET_REACHABILITY, tenant_id),
+        kind=ActionKind.PROVISIONING,
+        title="The fleet cannot reach the ledger",
+        service=FLEET_REACHABILITY,
+        tenant_id=tenant_id,
+        blocking=False,
+        reason="A worker connects straight to Postgres. On the control plane it "
+               "listens on 127.0.0.1 only and there is no tailnet, so a fully "
+               "provisioned machine with an approved Tailscale login would "
+               "still have nothing to connect to.",
+        instructions=(
+            "On the control-plane host: install Tailscale and run "
+            "`tailscale up` — it opens a URL you approve in a browser, which is "
+            "why this cannot be automated. Then bind Postgres to the tailnet "
+            "address as well as loopback and allow the worker's user from that "
+            "network in pg_hba.conf.\n"
+            "**Do not expose 5432 to the public internet.** The tailnet is the "
+            "point: the database stays unreachable from anywhere else."),
+        requires=("a Tailscale login", "root on the control-plane host"),
+        setup_url="https://tailscale.com/download/linux",
+        affects=("fleet:remote-workers",),
+        verification=("a worker running on another machine appears in Fabric "
+                      "and reports a heartbeat"),
+    ),)
+
+
+
 
 
 def node_actions(known: tuple[str, ...] | None, *,
@@ -339,7 +396,8 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
            pending_approvals: list[ApprovalRequest] | None = None,
            outstanding_tasks: tuple[dict, ...] = (),
            known_nodes: tuple[str, ...] | None = None,
-           sending_identity: object | None = None) -> dict:
+           sending_identity: object | None = None,
+           ledger_reachable: bool | None = None) -> dict:
     """Everything waiting on a person, ordered by what it holds up.
 
     Blocking first, then by how long it has been ignored. A list ordered by
@@ -352,6 +410,7 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
         + customer_task_actions(outstanding_tasks, tenant=tenant)
         + node_actions(known_nodes, tenant=tenant)
         + sending_identity_actions(sending_identity, tenant=tenant)
+        + fleet_reachability_actions(ledger_reachable, tenant=tenant)
     )
     ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))
     return {

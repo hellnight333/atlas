@@ -192,6 +192,36 @@ def _append(request: Request, event: Any) -> None:
     sink(event)
 
 
+def _with_liveness(found: tuple) -> tuple:
+    """Ask each published address whether it is still served.
+
+    Reuses `research.net.Fetcher`, which never raises for a bad site and reports
+    the failure as data — exactly what a liveness check needs, and the reason
+    there is no HTTP written here.
+
+    Robots are not enforced: these are Qevik's own addresses, and a `robots.txt`
+    on our own demo host is not a permission question about ourselves.
+    """
+    import dataclasses
+
+    from ..publication import published as reader
+    from ..research import net
+
+    if not found:
+        return ()
+    # One fetcher for the whole batch: it holds a single connection and a
+    # per-host delay, so 57 addresses on one host are asked politely in
+    # sequence rather than opening 57 sockets against our own server.
+    checked = []
+    with net.Fetcher(net.host_of(found[0].url)) as fetcher:
+        for site in found:
+            page = fetcher.get(site.url, enforce_robots=False)
+            state, status, detail = reader.check(page)
+            checked.append(dataclasses.replace(
+                site, liveness=state, status=status, detail=detail))
+    return tuple(checked)
+
+
 def _folded(request: Request, tenant: TenantId) -> list[dict]:
     return service.fold(_events(request), tenant=tenant)
 
@@ -514,11 +544,17 @@ def build_router() -> APIRouter:
         except Exception:                          # noqa: BLE001 - reported
             sending = None
 
+        # Whether a machine anywhere else could join at all. Answered from the
+        # ledger's configured address, so it costs nothing and cannot report
+        # this host's own access as the fleet's.
+        from ..fabric import reachability
+
         return controlplane.centre(
             store=store, tenant=tenant,
             known_nodes=None if known is None
             else tuple(node.node_id for node in known),
-            sending_identity=sending)
+            sending_identity=sending,
+            ledger_reachable=reachability.measure().reachable)
 
     def _worker_nodes(request: Request):
         """Mission workers as the scheduler is told about them, or `None`.
@@ -608,6 +644,51 @@ def build_router() -> APIRouter:
         """
         return {"awaiting": _opportunities(request).awaiting_publication(
             limit=limit, tenant=tenant)}
+
+    @router.get("/published")
+    def published(request: Request, limit: int = 200,
+                  check: bool = False,
+                  _: User = Depends(requires(Scope.READ))) -> dict:
+        """Every address Qevik has put on the internet, and whether it is up.
+
+        **Declared above `/{mission_id}`**, like `awaiting-publication`: a path
+        parameter matches a literal segment happily, and this route registered
+        after it would be served as a mission whose id is "published" — a 404
+        that reads as an empty list. This repository has shipped that bug once.
+
+        `check=false` by default, and that is not laziness. The list comes from
+        the timeline and is instant; checking asks every URL over the network,
+        which on a page load would make an operator wait on 57 requests to find
+        out what exists. The state each row carries until somebody asks is
+        `NOT_CHECKED`, which is the truth.
+        """
+        from ..publication import published as reader
+
+        found = reader.from_events(_opportunities(request).published_sites(
+            limit=limit))
+        if check:
+            found = _with_liveness(found)
+        rows = [p.summary() for p in found]
+        return {
+            "published": rows,
+            "counts": {
+                "total": len(rows),
+                "demos": sum(1 for r in rows if r["is_demo"]),
+                "live": sum(1 for r in rows
+                            if r["liveness"] == reader.Liveness.LIVE.value),
+                "down": sum(1 for r in rows
+                            if r["liveness"] == reader.Liveness.DOWN.value),
+                "unchecked": sum(1 for r in rows
+                                 if r["liveness"] == reader.Liveness.UNKNOWN.value),
+            },
+            "checked": check,
+            "note": ("A demo address travels inside an approved outreach "
+                     "message. NOT_CHECKED is not a problem; it means nobody "
+                     "has asked yet." if not check else
+                     "Every row was asked just now. NOT_CHECKED means the "
+                     "request failed, which is not the same as the site "
+                     "being down."),
+        }
 
     @router.get("/{mission_id}")
     def detail(mission_id: str, request: Request,

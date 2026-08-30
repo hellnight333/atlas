@@ -636,6 +636,35 @@ class OpportunityRepository:
                 "commit": commit, "note": note.strip()[:2000],
                 "at": entry["at"].isoformat()}
 
+    def published_sites(self, *, limit: int = 200) -> list[dict]:
+        """Every address Qevik has actually put on the internet.
+
+        Derived from the timeline, never from a disk. `sites.qevik.ai` serves 57
+        directories and the timeline knows about a fraction of them; a listing
+        built from `ls /srv/sites` would report the portfolio, the scratch and
+        anything left behind as things Qevik published, which is precisely the
+        inference the publication card already refuses to make.
+
+        Both writers are read: the mission pipeline's `publication_completed`
+        and outreach's `website_demo_published`. **Not tenant-scoped**, and
+        deliberately: these are Qevik's own published addresses rather than a
+        customer's records, and the operator asking what is on the internet is
+        asking about all of it.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT kind, detail FROM atlas_business_events
+                WHERE kind IN (:published, :demo)
+                ORDER BY at DESC
+                LIMIT :limit
+                """),
+                {"published": "publication_completed",
+                 "demo": "website_demo_published",
+                 "limit": max(1, min(int(limit), 1000))},
+            ).mappings().all()
+        return [{"kind": row["kind"], "detail": row["detail"]} for row in rows]
+
     def awaiting_publication(self, *, limit: int = 50,
                              tenant: TenantId | None = None) -> list[dict]:
         """Artefacts a person accepted, that nothing has acted on yet.

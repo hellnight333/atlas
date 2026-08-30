@@ -1876,20 +1876,97 @@ async function businessDetail(id) {
     <pre>${esc(JSON.stringify(roadmap || research, null, 2).slice(0, 4000))}</pre></div>`;
 }
 
+const LIVENESS = {
+  CONFIRMED_LIVE: ['live', 'ok'],
+  CONFIRMED_DOWN: ['down', 'bad'],
+  NOT_CHECKED: ['not checked', ''],
+};
+
 views.publications = async () => {
-  const found = await API.get('/api/missions/awaiting-publication')
-    .catch(() => null);
-  return `
+  /* Both halves of the page, and they answer different questions: what is
+     waiting for a decision, and what is already out there. The page used to
+     promise the second in its own header and render only the first. */
+  /* A completed check survives the re-render that displays it. Without this
+     the button fetches results, re-renders, and the re-render throws them away
+     by asking again without `check` — a control that appears to do nothing. */
+  const [queue, fresh] = await Promise.all([
+    API.get('/api/missions/awaiting-publication').catch(() => null),
+    state.checkedPublications
+      ? Promise.resolve(state.checkedPublications)
+      : API.get('/api/missions/published').catch(() => null),
+  ]);
+  const live = fresh;
+  const c = (live && live.counts) || {};
+
+  const row = (p) => {
+    const [word, tone] = LIVENESS[p.liveness] || ['unknown', ''];
+    return `<div class="row"><div class="body">
+      <div class="title"><a href="${esc(p.url)}" rel="noopener"
+        target="_blank">${esc(p.identifier || p.url)}</a>
+        ${pill(word, tone)} ${p.is_demo ? pill('demo', 'warn') : ''}</div>
+      <div class="meta">${esc(p.url)}</div>
+      <div class="meta">${when(p.at)}${p.commit
+        ? ' · <code>' + esc(p.commit.slice(0, 12)) + '</code>' : ''}${
+        p.status ? ' · answered ' + esc(String(p.status)) : ''}</div>
+      ${p.detail ? `<div class="meta">${esc(p.detail)}</div>` : ''}
+    </div></div>`;
+  };
+
+  const html = `
   <header class="page"><h2>Publications</h2>
     <p>What has actually gone live, and what is ready but not authorised.</p></header>
-  ${found === null ? fail('the queue could not be read') + `<p class="note">This is
+  ${queue === null ? fail('the queue could not be read') + `<p class="note">This is
     what the kernel said. An empty list is not shown here, because an empty list
-    reads as "nothing is waiting".</p>` : awaitingPublication(found.awaiting || [])}
-  <div class="card"><p class="note">Publications are recorded per business. Open a
-    business to see its previews and publications.</p>
-    <p class="note"><strong>READY_TO_PUBLISH is not PUBLISHED.</strong> Approval
-    permits a publication; it does not perform one.</p>
+    reads as "nothing is waiting".</p>` : awaitingPublication(queue.awaiting || [])}
+
+  <h3 style="margin:1.5rem 0 .4rem">On the internet
+    <span class="note">${esc(String(c.total || 0))}</span></h3>
+  ${live === null ? fail('the published addresses could not be read') : `
+    <p class="note" style="margin-bottom:.6rem">${esc(String(c.demos || 0))} of
+      them are demo pages whose address travels inside an outreach message.
+      ${c.live || c.down ? esc(`${c.live || 0} live, ${c.down || 0} down`) + '. ' : ''}
+      ${c.unchecked ? esc(String(c.unchecked)) + ' not checked.' : ''}</p>
+    <div class="actions" style="margin-bottom:.7rem">
+      <button data-check-live>${live.checked ? 'Check again' : 'Check every address now'}</button>
+      <span class="note" data-check-said>Asks each one over the network. Nothing
+        is published or changed.</span></div>
+    <div class="rows">${(live.published || []).map(row).join('')
+      || empty('Nothing has been published yet.')}</div>
+    <p class="note">${esc(live.note || '')}</p>`}
+
+  <div class="card" style="margin-top:1rem"><p class="note"><strong>READY_TO_PUBLISH
+    is not PUBLISHED.</strong> Approval permits a publication; it does not
+    perform one.</p>
+    <p class="note">This list is read from the timeline, never from the disk. A
+    directory on a server is not something Qevik decided to publish.</p>
     <p><a href="#/businesses">Businesses</a></p></div>`;
+
+  queueMicrotask(() => {
+    const button = document.querySelector('[data-check-live]');
+    if (!button) return;
+    button.addEventListener('click', async () => {
+      const said = document.querySelector('[data-check-said]');
+      /* Visible before the await: this asks every address in sequence and can
+         take a while, and a button that looks inert gets pressed again. */
+      button.disabled = true;
+      button.textContent = 'Asking each address…';
+      if (said) said.textContent = '';
+      try {
+        state.checkedPublications = await API.get(
+          '/api/missions/published?check=true');
+        render();
+        /* Held only for the render that displays it. A liveness verdict is a
+           measurement with a time on it, and showing a five-minute-old one as
+           the current state is how a dead demo keeps looking fine. */
+        setTimeout(() => { state.checkedPublications = null; }, 0);
+      } catch (e) {
+        button.disabled = false;
+        button.textContent = 'Check every address now';
+        if (said) said.textContent = e.message;
+      }
+    });
+  });
+  return html;
 };
 
 /* Accepted work, and the fact that nothing has taken it anywhere.
