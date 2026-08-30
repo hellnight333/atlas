@@ -1265,8 +1265,8 @@ Qevik must eventually register and dispatch to external machines — the HP and
 the Lenovo — as execution nodes: capabilities (CPU/GPU/RAM), heartbeat and
 health, workload dispatch, agent isolation, per-node execution policy.
 
-**Not started, and the dependency analysis says not yet.** What it needs, and
-where each stands:
+**Foundation complete; blocked on physical access and one network
+prerequisite.** What it needs, and where each stands:
 
 | needs | state |
 |---|---|
@@ -1279,9 +1279,11 @@ where each stands:
 | dispatch through the scheduler and nothing else | **done** — and it stays that way; a node runs what it is given and never queues for itself |
 | **a network-reachable mission ledger** | **done** — Postgres, `QEVIK_LEDGER=POSTGRES` |
 | node identity and registration | **done** — one `WorkerNode` per worker process, `<hostname>:<worker-name>`, on the existing `cluster/` registry |
-| capability advertisement — CPU, GPU, RAM **and which tools the node has** | **done** — probed, not declared; tools derived from the agent's registered tools |
+| capability advertisement — CPU, GPU, RAM **and which tools the node has** | **done** — probed, not declared; tools derived from the agent's registered tools. GPU probing read one line of `nvidia-smi` until 2026-08-30, describing the multi-GPU Z8 as a single-card machine; it now reports every card and advertises the one `CUDA_VISIBLE_DEVICES` pins this process to, never a sum |
 | heartbeat / liveness, distinct from mission-claim staleness | **done** — 90s heartbeat vs 7200s claim timeout; killing one worker made only that identity stale in production |
 | per-node execution policy | missing |
+| **a ledger a second machine can reach** | **missing** — measured 2026-08-30 on the control-plane host: Postgres listens on `127.0.0.1` only and Tailscale is not installed. A worker connects straight to Postgres, so a fully provisioned Z8 with an approved Tailscale login has nothing to connect to. Surfaced as a non-blocking Human Action; `fabric/reachability.py` re-checks it |
+| the two machines themselves | **not provisioned** — neither has ever registered. Surfaced as non-blocking Human Actions with the exact steps; the remaining work is physical |
 
 The last five are the requirement, kept verbatim so a later session cannot
 quietly narrow it: **a network-reachable mission ledger, node identity and
