@@ -108,13 +108,18 @@ def send(conversation: Conversation, *, tenant: TenantId | None, text: str,
 
 
 def plan_for(conversation: Conversation, plan: Plan, *, tenant: TenantId | None,
-             provider: str = "", model: str = ""
+             provider: str = "", model: str = "", agent_id: str = ""
              ) -> tuple[Conversation, BusinessEvent]:
     """Attach a proposed plan and show it. Nothing runs from this.
 
     The provider and model that produced the plan are recorded on the
     conversation as an assistant message, so approval is agreement with a
     specific proposal from a specific model rather than with Qevik in general.
+
+    `agent_id` is the agent that will carry the plan out, recorded for the same
+    reason and carried onto the mission at approval. Without it the mission
+    named nobody, and a mission naming nobody is not dispatchable -- so a plan
+    proposed with no agent is a plan that can be approved and never run.
     """
     tenant = _require_tenant(tenant, method="chat.plan_for")
     if not owns(conversation.tenant_id, tenant):
@@ -133,6 +138,7 @@ def plan_for(conversation: Conversation, plan: Plan, *, tenant: TenantId | None,
                         provider=provider, model=model)
     updated = conversation.model_copy(update={
         "plan": plan,
+        "agent_id": agent_id or conversation.agent_id,
         "messages": (*conversation.messages, described),
         "status": ConversationStatus.PLAN_PROPOSED,
         "updated_at": datetime.now(UTC)})
@@ -208,8 +214,13 @@ def approve(conversation: Conversation, *, tenant: TenantId | None,
     mission, event = mission_service.transition(mission, MissionStatus.PLANNING,
                                                 tenant=tenant, actor=approved_by)
     events.append(event)
+    # The agent recorded when the plan was proposed, not one chosen here. A
+    # mission that names nobody is not dispatchable, so a plan proposed without
+    # an agent becomes a mission that can be approved and never run -- visible
+    # as BLOCKED rather than silently eligible for whichever worker asked first.
     mission, event = mission_service.attach_plan(mission, plan, tenant=tenant,
-                                                 actor=approved_by)
+                                                 actor=approved_by,
+                                                 agent_id=conversation.agent_id)
     events.append(event)
     # Only if policy has not already queued it.
     #

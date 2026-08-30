@@ -30,7 +30,9 @@ from atlas_kernel.fabric.scheduler import (
     EXPENSIVE_UNITS,
     UNPRICED_NEEDS,
     Demand,
+    NodeSnapshot,
     demands_from,
+    eligible,
     next_night,
     unmet_credentials,
 )
@@ -44,7 +46,16 @@ NOON = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 
 
 def _demand(**over: object) -> Demand:
-    base: dict = {"mission_id": "m1", "tenant_id": TENANT, "title": "a mission"}
+    """A demand for routed work, unless a test says otherwise.
+
+    `agent_id` is in the base because every test here is about something else --
+    ordering, budgets, night windows, placement -- and an unrouted demand is now
+    blocked before any of those are reached. `self-check` needs no credentials. Omitting it would have each of
+    those tests silently asserting the unrouted rule instead of its own subject.
+    Tests that mean unrouted pass `agent_id=""` explicitly.
+    """
+    base: dict = {"mission_id": "m1", "tenant_id": TENANT, "title": "a mission",
+                  "agent_id": "implementer"}
     return Demand(**{**base, **over})
 
 
@@ -405,9 +416,172 @@ def test_an_agent_needing_no_credential_is_never_blocked_on_one() -> None:
 # ============================================ the bridge from folded missions
 
 def _folded(**over: object) -> dict:
+    """A folded row for routed work, unless a test says otherwise.
+
+    It records `self-check` because these tests are about deferrals, timestamps
+    and approval — and an unrouted mission is now blocked before any of that is
+    reached. `self-check` needs no credentials, so routing it does not trade the
+    unrouted block for a credential one. `demands_from` is called here without a route map, so this also
+    exercises the fallback to the mission's own recorded agent. Tests that mean
+    unrouted pass `agent_id=""`.
+    """
     mission = Mission(id="m1", tenant_id=TENANT, title="a mission",
-                      status=MissionStatus.QUEUED)
+                      agent_id="self-check", status=MissionStatus.QUEUED)
     return {**mission.summary(), **over}
+
+
+# ============================================ selection: who may run this
+
+def _node(name: str, serves: str, caps: set[str], **over) -> NodeSnapshot:
+    return NodeSnapshot(worker_name=name, serves=serves,
+                        capabilities=frozenset(caps),
+                        placements=frozenset(over.pop("placements", {"either"})),
+                        node_id=over.pop("node_id", f"host:{name}"), **over)
+
+
+PUBLISHER = _node("worker-publish", "site-publisher", {"site-publish"})
+RESEARCHER = _node("worker-research", "researcher", {"dns", "http-fetch"})
+
+
+def test_the_scheduler_names_the_worker_that_may_run_it() -> None:
+    """"Can this be dispatched" and "to whom" are one answer, from one place."""
+    decision = decide(_demand(agent_id="site-publisher",
+                              required_tools=("site-publish",)),
+                      nodes=(PUBLISHER, RESEARCHER), now=NOON)
+    assert decision.queue is Queue.NOW
+    assert decision.worker == "worker-publish"
+
+
+def test_a_worker_that_does_not_advertise_the_tool_is_not_chosen() -> None:
+    decision = decide(_demand(agent_id="researcher",
+                              required_tools=("http-fetch", "site-publish")),
+                      nodes=(RESEARCHER,), now=NOON)
+    assert decision.queue is Queue.BLOCKED
+    assert "site-publish" in decision.why, decision.why
+
+
+def test_requiring_no_tools_is_not_a_wildcard() -> None:
+    """A plan-based mission declares no recipe and therefore no tools. That is
+    not permission to run anywhere: its agent still binds it."""
+    decision = decide(_demand(agent_id="researcher", required_tools=()),
+                      nodes=(PUBLISHER, RESEARCHER), now=NOON)
+    assert decision.worker == "worker-research"
+
+
+def test_a_stale_worker_is_not_chosen() -> None:
+    gone = _node("worker-publish", "site-publisher", {"site-publish"},
+                 fresh=False)
+    decision = decide(_demand(agent_id="site-publisher",
+                              required_tools=("site-publish",)),
+                      nodes=(gone,), now=NOON)
+    assert decision.queue is Queue.BLOCKED
+    assert "stopped reporting" in decision.why, decision.why
+    # The control: the same worker, reporting, is chosen.
+    assert decide(_demand(agent_id="site-publisher",
+                          required_tools=("site-publish",)),
+                  nodes=(PUBLISHER,), now=NOON).worker == "worker-publish"
+
+
+def test_the_most_specific_worker_wins_then_load_then_id() -> None:
+    """Synthetic. No production recipe matches two workers, so this ordering has
+    never been exercised against real work -- which is the reason to pin it."""
+    general = _node("worker-many", "researcher",
+                    {"dns", "http-fetch", "shell"}, node_id="host:aaa")
+    specific = _node("worker-few", "researcher", {"dns", "http-fetch"},
+                     node_id="host:zzz")
+    order = eligible(_demand(agent_id="researcher",
+                             required_tools=("http-fetch",)),
+                     (general, specific))
+    assert [n.worker_name for n in order] == ["worker-few", "worker-many"], (
+        "id sorted first would have picked the generalist")
+
+    busy = _node("worker-a", "researcher", {"dns", "http-fetch"}, load=1)
+    idle = _node("worker-b", "researcher", {"dns", "http-fetch"}, load=0)
+    assert eligible(_demand(agent_id="researcher",
+                            required_tools=("http-fetch",)),
+                    (busy, idle))[0].worker_name == "worker-b"
+
+
+def test_placement_is_a_requirement_of_the_machine_not_a_preference() -> None:
+    """Synthetic: every registered agent declares EITHER today."""
+    cloud = _node("worker-cloud", "site-publisher", {"site-publish"},
+                  placements={"cloud"})
+    assert not eligible(_demand(agent_id="site-publisher",
+                                required_tools=("site-publish",),
+                                placement=Placement.LOCAL), (cloud,))
+    assert eligible(_demand(agent_id="site-publisher",
+                            required_tools=("site-publish",),
+                            placement=Placement.CLOUD), (cloud,))
+
+
+def test_no_node_information_is_not_the_same_as_no_nodes() -> None:
+    """A caller that never mentions workers gets the queue decided as before.
+    A caller that looked and found none gets a block. Collapsing the two would
+    have every mission blocked the moment a surface forgot to pass nodes."""
+    unaware = decide(_demand(agent_id="site-publisher"), nodes=None, now=NOON)
+    empty = decide(_demand(agent_id="site-publisher"), nodes=(), now=NOON)
+    assert unaware.queue is Queue.NOW and unaware.worker == ""
+    assert empty.queue is Queue.BLOCKED
+
+
+def test_plan_publishes_the_assignment_every_caller_reads() -> None:
+    out = plan((_demand(mission_id="m-pub", agent_id="site-publisher",
+                        required_tools=("site-publish",)),
+                _demand(mission_id="m-res", agent_id="researcher",
+                        required_tools=("http-fetch",))),
+               tenant=TENANT, concurrency=4, nodes=(PUBLISHER, RESEARCHER))
+    assert out["assigned"] == {"m-pub": "worker-publish",
+                               "m-res": "worker-research"}
+
+
+def test_an_unrouted_mission_is_not_dispatchable() -> None:
+    """The contract this rule exists to make truthful.
+
+    The scheduler used to call a mission with no agent dispatchable while the
+    worker declined it. Two answers to one question, and the one a reader saw --
+    `GET /schedule` -- was the wrong one.
+    """
+    decision = decide(_demand(agent_id=""), now=NOON)
+    assert decision.queue is Queue.BLOCKED
+    assert "no agent" in decision.why, decision.why
+
+
+def test_it_blocks_before_the_credential_check_because_that_check_needs_an_agent() -> None:
+    """Order matters here. With no agent resolved there are no credentials to
+    be missing, so a later rule would report the mission as perfectly ready."""
+    demand = _demand(agent_id="", missing_credentials=())
+    assert decide(demand, now=NOON).queue is Queue.BLOCKED
+
+
+def test_a_route_naming_an_unregistered_agent_is_still_routed() -> None:
+    """Routed means somebody was named, not that `fabric.agents` knows them.
+
+    `fake` is deliberately absent from the registry and is still something a
+    worker runs. Treating an unresolvable name as unrouted would have made the
+    scheduler block work the worker could carry out, and would have hidden a
+    genuine mismatch behind "nobody was assigned" -- the worker refuses a
+    substitution after claiming, and that is where a wrong name belongs.
+    """
+    rows = [_folded(agent_id="fake")]
+    assert demands_from(rows)[0].agent_id == "fake"
+    assert decide(demands_from(rows)[0], now=NOON).queue is Queue.NOW
+
+
+def test_a_routed_mission_keeps_its_existing_behaviour() -> None:
+    """The negative control for all three above: same mission, agent recorded."""
+    assert decide(_folded_demand(), now=NOON).queue is Queue.NOW
+
+
+def _folded_demand():
+    return demands_from([_folded()])[0]
+
+
+def test_plan_reports_the_unrouted_mission_as_blocked_not_dispatchable() -> None:
+    """Through `plan`, because `dispatchable` is what every caller reads."""
+    rows = [_folded(mission_id="routed"), _folded(mission_id="orphan", agent_id="")]
+    out = plan(demands_from(rows), tenant=TENANT, concurrency=4)
+    assert out["dispatchable"] == ["routed"]
+    assert [d["mission_id"] for d in out["queues"]["BLOCKED"]] == ["orphan"]
 
 
 def test_finished_missions_are_not_scheduled() -> None:
@@ -477,7 +651,7 @@ def test_a_deferred_mission_cannot_be_claimed_by_a_worker_that_ignores_it() -> N
     """The worker takes the oldest queued mission. If the deferral lived only
     in the scheduler's advice, the worker would run the night job at noon."""
     mission = Mission(id="m1", tenant_id=TENANT, title="heavy",
-                      status=MissionStatus.QUEUED)
+                      agent_id="self-check", status=MissionStatus.QUEUED)
     held, _ = service.defer(mission, until=datetime.now(UTC) + timedelta(hours=6),
                             tenant=TENANT, reason="expensive and not urgent")
     with pytest.raises(service.NotPermitted, match="held until"):
@@ -486,7 +660,7 @@ def test_a_deferred_mission_cannot_be_claimed_by_a_worker_that_ignores_it() -> N
 
 def test_the_same_mission_is_claimable_once_its_window_arrives() -> None:
     mission = Mission(id="m1", tenant_id=TENANT, title="heavy",
-                      status=MissionStatus.QUEUED,
+                      agent_id="self-check", status=MissionStatus.QUEUED,
                       not_before=datetime.now(UTC) - timedelta(minutes=1))
     claimed, _ = service.claim(mission, worker="w1", tenant=TENANT)
     assert claimed.status is MissionStatus.PROCESSING
@@ -532,7 +706,7 @@ def test_a_deferral_survives_the_process_that_made_it(tmp_path: Path) -> None:
     """
     sink = Timeline(tmp_path / "missions.jsonl")
     mission = Mission(id="m1", tenant_id=TENANT, title="heavy",
-                      status=MissionStatus.QUEUED)
+                      agent_id="self-check", status=MissionStatus.QUEUED)
     until = datetime.now(UTC) + timedelta(hours=6)
     _, event = service.defer(mission, until=until, tenant=TENANT,
                              reason="expensive and not urgent")
@@ -562,7 +736,7 @@ def test_the_fresh_process_would_have_run_it_without_the_deferral(
     """
     sink = Timeline(tmp_path / "missions.jsonl")
     mission = Mission(id="m1", tenant_id=TENANT, title="heavy",
-                      status=MissionStatus.QUEUED)
+                      agent_id="self-check", status=MissionStatus.QUEUED)
     _, event = service.transition(mission, MissionStatus.PROCESSING,
                                   tenant=TENANT, actor="w1")
     sink.append(event)

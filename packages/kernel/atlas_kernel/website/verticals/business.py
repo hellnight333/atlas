@@ -33,6 +33,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .. import enquiry
+from ..content import ContactDetails, Fact, SiteContent
+
 Lang = Literal["en", "ar"]
 
 #: The only numbers WhatsApp can deliver to.
@@ -92,6 +95,11 @@ class Business:
     intro: Text
     area: str = "Dubai"
     phone: str = ""
+    #: Where an enquiry can actually be delivered. Optional, and absent by
+    #: default: most records carry a phone and no address for email, and the
+    #: enquiry block omits the channel it has no destination for rather than
+    #: rendering a button that goes nowhere.
+    email: str = ""
     address: str = ""
     hours: tuple[tuple[str, Text], ...] = ()
 
@@ -115,6 +123,24 @@ class Business:
     )
     cta_label: Text = Text("Send enquiry", "إرسال الاستفسار")
 
+    #: What a request does and does not commit the business to.
+    #:
+    #: Rendered beside the enquiry block, because the risk it addresses is real:
+    #: a visitor who types "table for four at eight" and presses send has made a
+    #: request, and a page that lets them believe a table is held has cost them
+    #: an evening. The sample copy used to carry this inside `request_note`,
+    #: bundled with "this form is a demonstration that is not connected" -- true
+    #: then, false now that the enquiry block delivers. Separating them keeps the
+    #: half that is still true.
+    #:
+    #: `{name}` is filled with the business name.
+    confirmation_note: Text = field(
+        default_factory=lambda: Text(
+            "Sending this is a request, not a confirmed booking — your place is "
+            "only held once {name} confirms.",
+            "هذا طلب وليس حجزاً مؤكداً — لا يُحجز موعدك إلا بعد تأكيد {name}.",
+        )
+    )
     #: Marks the page as a Qevik demonstration rather than a live business site.
     demo_notice: Text = field(
         default_factory=lambda: Text(
@@ -255,10 +281,13 @@ label{font-size:.86rem;color:var(--ink-2)}
 input,textarea{width:100%;padding:.65rem .8rem;border:1px solid var(--hair);border-radius:8px;
 font:inherit;font-size:.95rem;background:var(--surface);color:var(--ink)}
 textarea{min-height:96px;resize:vertical}
-.notice{display:none;padding:.75rem .9rem;border-radius:8px;background:#FBF1DD;
-border:1px solid #E7D4A8;color:#7A4E08;font-size:.9rem}
-.notice.shown{display:block}
-.formnote{font-size:.84rem;color:var(--stone);max-width:52ch}
+/* The enquiry block, styled to this page's tokens. `website.enquiry` stays
+   medium-agnostic and carries no theme of its own. */
+.enquiry-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin:1rem 0 0}
+.enquiry-send{display:inline-block;background:var(--ink);color:var(--surface);
+padding:.7rem 1.3rem;border-radius:8px;font-weight:600;text-decoration:none}
+.enquiry-send:hover{opacity:.88}
+.enquiry-note{font-size:.84rem;color:var(--stone);max-width:52ch;margin:.9rem 0 0}
 .sticky{position:fixed;left:0;right:0;bottom:0;z-index:9;display:flex;gap:.4rem;
 padding:.5rem;background:color-mix(in srgb,var(--surface) 94%,transparent);
 border-top:1px solid var(--hair);backdrop-filter:blur(8px)}
@@ -300,6 +329,28 @@ def _schema(biz: Business, url: str) -> str:
     return f'<script type="application/ld+json">{payload}</script>' 
 
 
+def _enquiry_content(biz: Business) -> SiteContent:
+    """The minimum `SiteContent` the enquiry block reads.
+
+    A bridge between this vertical's `Business` record and the medium-agnostic
+    content type `website.enquiry` speaks. Only the fields the block uses are
+    populated, and WhatsApp is derived by the same rule as the page's own
+    buttons so the two can never disagree about whether the number can receive
+    a message.
+    """
+    return SiteContent(
+        business_name=Fact(value=biz.name.strip() or "This business",
+                           source="business_record"),
+        contact=ContactDetails(
+            phone=(Fact(value=biz.phone.strip(), source="business_record")
+                   if biz.phone.strip() else None),
+            email=(Fact(value=biz.email.strip(), source="business_record")
+                   if biz.email.strip() else None),
+            whatsapp=(Fact(value=biz.phone.strip(), source="business_record")
+                      if whatsapp_number(biz.phone) else None),
+        ))
+
+
 def render(
     biz: Business,
     *,
@@ -317,6 +368,11 @@ def render(
     other = href_ar if lang == "en" else (root or "../")
 
     tel, wa = dial(biz.phone), whatsapp_number(biz.phone)
+
+    # The working enquiry block, in place of the form that could only announce
+    # that no backend existed. `form()` returns "" when neither channel is
+    # available, and the section then carries nothing rather than a dead control.
+    enquiry_block = enquiry.form(_enquiry_content(biz), arabic=(lang == "ar"))
     maps = (
         "https://www.google.com/maps/search/?api=1&query="
         + e(f"{biz.name} {biz.address}".replace(" ", "+"))
@@ -444,16 +500,8 @@ def render(
 </div></section>''' if faq else ''}
 
 <section class="band" id="request"><div class="wrap">
-  <h2>{e(biz.request_heading.get(lang))}</h2>
-  <p class="sub">{e(biz.request_note.get(lang))}</p>
-  <form id="request-form">
-    <div><label for="rf-name">{c['name_field']}</label><input id="rf-name" name="name" required></div>
-    <div><label for="rf-phone">{c['phone_field']}</label><input id="rf-phone" name="phone" type="tel" required></div>
-    <div><label for="rf-msg">{c['message_field']}</label><textarea id="rf-msg" name="message"></textarea></div>
-    <div class="notice" id="rf-notice" role="status"></div>
-    <button class="btn p" type="submit">{e(biz.cta_label.get(lang))}</button>
-    <p class="formnote">{e(biz.request_note.get(lang))}</p>
-  </form>
+{enquiry_block}
+  <p class="enquiry-note">{e(biz.confirmation_note.get(lang).replace("{name}", biz.name))}</p>
 </div></section>
 </main>
 
@@ -464,16 +512,6 @@ def render(
 
 <nav class="sticky" aria-label="{c['call']}">{sticky}</nav>
 
-<script>
-// No backend exists. Saying so is the only honest thing the form can do — a
-// success message here would tell a real person their request was received.
-document.getElementById('request-form').addEventListener('submit', function (event) {{
-  event.preventDefault();
-  var notice = document.getElementById('rf-notice');
-  notice.textContent = {json.dumps(c["not_sent"], ensure_ascii=True)};
-  notice.className = 'notice shown';
-}});
-</script>
 </body>
 </html>
 """

@@ -471,3 +471,77 @@ def test_memory_kind_must_be_recognised() -> None:
         f"/agents/{agent_id}/memory", json={"kind": "not-a-kind", "asset_id": asset_id}
     )
     assert response.status_code == 400
+
+
+class TestTheCatalogueMatchesReality:
+    """Two defects the production action centre made visible.
+
+    An action list is only read while every item on it is true. One wrong entry
+    teaches people to skim it, and the next real blocker is skimmed too.
+    """
+
+    def test_a_deployment_configured_root_is_connected_not_pending(
+            self, monkeypatch, tmp_path) -> None:
+        """`local` asked to be connected on a deployment that had been
+        publishing to that directory for weeks.
+
+        A filesystem root is how a deployment was installed, not a per-tenant
+        secret somebody stores through the Credential Centre.
+        """
+        from atlas_kernel.integrations.registry import BY_ID, IntegrationStatus
+        from atlas_kernel.publication.connections import ConnectionStore
+
+        store = ConnectionStore()
+        monkeypatch.setenv("QEVIK_SITES_ROOT", str(tmp_path))
+        assert BY_ID["local"].status(store, tenant="qevik") is (
+            IntegrationStatus.CONNECTED)
+
+        # Not vacuous: a root that does not exist is genuinely pending.
+        monkeypatch.setenv("QEVIK_SITES_ROOT", str(tmp_path / "absent"))
+        assert BY_ID["local"].status(store, tenant="qevik") is (
+            IntegrationStatus.PENDING_CREDENTIAL)
+
+    def test_the_default_root_counts_when_no_variable_is_set(
+            self, monkeypatch, tmp_path) -> None:
+        """Production has never set `QEVIK_SITES_ROOT`. It publishes to the
+        documented default, and the catalogue must agree with the publisher
+        rather than with whether somebody typed a setting."""
+        from atlas_kernel.integrations.registry import BY_ID, IntegrationStatus
+        from atlas_kernel.mission import toolrunner
+        from atlas_kernel.publication.connections import ConnectionStore
+
+        monkeypatch.delenv("QEVIK_SITES_ROOT", raising=False)
+        monkeypatch.setattr(toolrunner, "DEFAULT_SITES_ROOT", str(tmp_path))
+        assert BY_ID["local"].status(ConnectionStore(), tenant="qevik") is (
+            IntegrationStatus.CONNECTED)
+
+    def test_google_places_is_in_the_catalogue(self) -> None:
+        """It has working, cost-capped code and was absent from this list, so
+        the action centre could not ask for the one key that turns discovery
+        into a workable prospect list."""
+        from atlas_kernel.integrations.registry import BY_ID
+
+        places = BY_ID["google-places"]
+        assert places.credential == "QEVIK_GOOGLE_PLACES_API_KEY"
+        assert places.adapter_ready is True
+        assert places.blocks, "an integration that blocks nothing cannot be justified"
+        assert places.setup_url, "a request with no route to satisfying it"
+
+    def test_the_credential_name_matches_what_the_code_reads(self) -> None:
+        """A catalogue entry naming a variable nothing reads is a request that
+        cannot be satisfied."""
+        from pathlib import Path
+
+        import atlas_kernel.opportunity.sources.google_places as source
+        from atlas_kernel.integrations.registry import BY_ID
+
+        text = Path(source.__file__).read_text(encoding="utf-8")
+        assert BY_ID["google-places"].credential in text
+
+    def test_every_ready_integration_names_something_it_blocks(self) -> None:
+        """The catalogue's own rule, asserted rather than trusted."""
+        from atlas_kernel.integrations.registry import INTEGRATIONS
+
+        for integration in INTEGRATIONS:
+            if integration.adapter_ready:
+                assert integration.blocks, integration.id

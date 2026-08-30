@@ -94,11 +94,23 @@ def approve(repo: OpportunityRepository, slug: str, by: str) -> int:
         repo.save_message(
             message.model_copy(
                 update={
-                    "status": OutreachStatus.APPROVED,
+                    # `APPROVED_FOR_MANUAL_SEND`, not `APPROVED`. This tool
+                    # records that *the operator* may send these words from
+                    # their own phone; it has never meant that Qevik may deliver
+                    # them, and now that Qevik can, the distinction has to be in
+                    # the data rather than in the reader's memory.
+                    "status": OutreachStatus.APPROVED_FOR_MANUAL_SEND,
                     "approval_id": approval_id,
+                    # A digest of the body, which is the right binding for a
+                    # person re-reading a message before sending it. It is
+                    # deliberately *not* a proposal fingerprint: automated
+                    # delivery binds to the proposal and its evidence, and this
+                    # decision was never made in those terms.
                     "approved_fingerprint": digest,
                     # Explicitly not set. Approval is not delivery.
                     "sent_at": None,
+                    # Never set here. This tool cannot authorise a machine.
+                    "authorized_automated_at": None,
                 }
             )
         )

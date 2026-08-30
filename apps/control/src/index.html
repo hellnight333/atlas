@@ -488,6 +488,7 @@ const PAGES = [
   ['chat', 'Chat'], ['opportunities', 'Opportunities'], ['discovery', 'Discovery'],
   ['actions', 'Human Actions'], ['credentials', 'Credentials'],
   ['models', 'Models'], ['businesses', 'Businesses'], ['publications', 'Publications'],
+  ['fabric', 'Fabric'],
   ['measurements', 'Measurements'], ['reports', 'Reports'], ['history', 'History'],
   ['more', 'More'], ['settings', 'Settings'],
 ];
@@ -1488,9 +1489,29 @@ views.actions = async () => {
         <div class="title">${esc(a.title)} ${a.blocking ? pill('BLOCKING') : ''}</div>
         <div class="meta">${esc(a.instructions || '')}</div>
         ${a.requires ? `<div class="meta">Needs: <code>${esc(a.requires)}</code></div>` : ''}
-        ${a.verification ? `<div class="meta">Verified by: ${esc(a.verification)}</div>` : ''}
+        ${(a.affects || []).length ? `<div class="meta">Holds up: ${esc((a.affects || []).join(', '))}</div>` : ''}
+        ${a.setup_url ? `<div class="meta">Get one: <a href="${esc(a.setup_url)}" rel="noopener" target="_blank">${esc(a.setup_url)}</a></div>` : ''}
+        ${a.verification ? `<div class="meta">Done when: ${esc(a.verification)}</div>` : ''}
       </div><div class="actions">${a.service ? `<a href="#/credentials">${esc(a.service)}</a>` : ''}</div></div>`
     ).join('') || empty('Nothing is waiting on you.')}</div>`;
+};
+
+views.fabric = async () => {
+  const fleet = await API.get('/api/missions/workers');
+  if (!fleet.known) {
+    return `<header class="page"><h2>Fabric</h2></header>
+      ${empty(esc(fleet.detail || 'the cluster could not be read'))}`;
+  }
+  const c = fleet.counts || {};
+  return `<header class="page"><h2>Fabric</h2>
+      <p>Which machines can run work. ${c.ready || 0} ready · ${c.busy || 0} busy · ${c.stale || 0} stale.</p></header>
+    <div class="rows">${(fleet.workers || []).map((w) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(w.name)} ${w.healthy ? '' : pill('STALE')}</div>
+        <div class="meta">runs <code>${esc(w.serves || 'unassigned')}</code> · ${esc(w.state)}</div>
+        <div class="meta">can do: ${esc((w.capabilities || []).join(', ')) || 'nothing declared'}</div>
+      </div><div class="actions"><code>${esc(w.node_id)}</code></div></div>`
+    ).join('') || empty('No worker has registered.')}</div>`;
 };
 
 views.credentials = async () => {

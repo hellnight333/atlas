@@ -142,7 +142,10 @@ def credential_actions(store: ConnectionStore, *, tenant: TenantId | None,
             requires=(integration.credential,),
             setup_url=integration.setup_url,
             affects=integration.blocks,
-            verification=f"a connection to {integration.id} exists for this tenant",
+            # Asked of the integration rather than assumed here. A single
+            # sentence written at this level would be wrong for every entry
+            # whose real test is not "a connection row exists".
+            verification=integration.verifies_by(),
             created_at=at))
     return tuple(found)
 

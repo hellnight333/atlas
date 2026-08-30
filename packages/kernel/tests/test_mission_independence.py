@@ -131,7 +131,9 @@ def test_a_mission_runs_to_completion_with_no_http_process_alive(
         _, event = service.attach_plan(
             mission, Plan(goal="write a file", approval_required=True,
                           steps=(PlanStep(order=1, title="write it"),)),
-            tenant=TENANT)
+            # The agent these workers run. A plan attached without one produces
+            # a mission naming nobody, which is not dispatchable.
+            tenant=TENANT, agent_id="fake")
         timeline.append(event)
 
         approved = client.post(f"/api/missions/{mission_id}/approve", json={})

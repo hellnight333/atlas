@@ -304,16 +304,51 @@ def test_the_sales_module_imports_no_outbound_client() -> None:
         assert endpoint not in source, f"{endpoint} reached the sales module"
 
 
-def test_no_outbound_client_exists_anywhere_in_the_kernel() -> None:
+def test_no_unauthorised_outbound_client_exists_anywhere_in_the_kernel() -> None:
+    """No outbound client enters the kernel without an explicit decision.
+
+    The contract narrowed once, at M1, when sending email stopped being withheld
+    and became an approved capability behind the outreach approval boundary.
+    `smtplib` is therefore permitted in **`outreach/channels.py` alone** — every
+    other client stays forbidden everywhere, and `smtplib` stays forbidden in
+    every other file in the kernel.
+
+    The exception is exactly as small as the decision that caused it. Nothing
+    here permits WhatsApp, an HTTP client, or a provider SDK.
+    """
+    #: The one file allowed to reach the outside world by mail, and the only
+    #: module it may use to do it.
+    PERMITTED = {"channels.py": ("import smtplib", "from smtplib")}
+
     offenders = []
     for path in KERNEL.rglob("*.py"):
         if "test" in path.parts:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        for forbidden in ("import smtplib", "from smtplib", "import twilio", "sendgrid"):
-            if forbidden in text:
-                offenders.append(f"{path.name}: {forbidden}")
+        allowed = PERMITTED.get(path.name, ()) if path.parent.name == "outreach" else ()
+        # The original list, unchanged. `httpx` is deliberately absent from it:
+        # this guard has always been about *outbound messaging* clients, and the
+        # kernel legitimately fetches over HTTP in twenty-one places. The
+        # outreach package forbids httpx separately and still does.
+        for forbidden in ("import smtplib", "from smtplib", "import twilio",
+                          "sendgrid"):
+            if forbidden in text and forbidden not in allowed:
+                offenders.append(f"{path.relative_to(KERNEL)}: {forbidden}")
     assert offenders == [], offenders
+
+
+def test_the_narrowed_kernel_guard_still_has_teeth() -> None:
+    """A guard that permits everything is one nobody notices failing."""
+    permitted = KERNEL / "outreach" / "channels.py"
+    assert permitted.exists(), "the permitted file must exist"
+    assert "import smtplib" in permitted.read_text(encoding="utf-8"), (
+        "the exception exists because this file uses it; if it stops, "
+        "the exception should go too")
+    for path in KERNEL.rglob("*.py"):
+        if "test" in path.parts or path == permitted:
+            continue
+        assert "import smtplib" not in path.read_text(encoding="utf-8", errors="ignore"), (
+            f"{path.relative_to(KERNEL)} may not send mail")
 
 
 def test_the_dashboard_cannot_send_only_open() -> None:

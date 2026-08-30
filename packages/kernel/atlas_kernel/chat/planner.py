@@ -58,16 +58,28 @@ _PROVIDER_REFUSED = frozenset({
 })
 
 
+#: The `fabric.agents` registration for `LLMCodingAgent`, which is what plans
+#: here and what a worker started with `--agent llm` runs. Named once, so the
+#: mission a chat approval creates records the agent that was always going to
+#: carry it out rather than nobody.
+PLANNING_AGENT = "implementer"
+
+
 class Proposal:
     """A plan and the provenance of it. Never one without the other."""
 
-    __slots__ = ("plan", "provider", "model", "reason")
+    __slots__ = ("plan", "provider", "model", "reason", "agent_id")
 
     def __init__(self, plan: Plan, *, provider: str = "", model: str = "",
-                 reason: str = "") -> None:
+                 reason: str = "", agent_id: str = "") -> None:
         self.plan = plan
         self.provider = provider
         self.model = model
+        #: The registered agent that will carry this out. `LLMCodingAgent` is
+        #: `implementer` in `fabric.agents` -- the same agent a worker started
+        #: with `--agent llm` runs, which is the point of planning with it.
+        #: Empty on a blocked proposal: nothing was planned, so nobody is named.
+        self.agent_id = agent_id
         #: How the model was chosen — `selected`, `defaulted`, or why none was.
         self.reason = reason
 
@@ -78,6 +90,7 @@ class Proposal:
     def summary(self) -> dict:
         return {"provider": self.provider, "model": self.model,
                 "reason": self.reason, "blocked": self.blocked,
+                "agent_id": self.agent_id,
                 "plan": self.plan.model_dump(mode="json")}
 
 
@@ -165,7 +178,8 @@ def propose(conversation: Conversation, *, tenant: TenantId | None,
             "Restate the request more concretely, or try another model.",
             kind=PLANNING_FAILED, reason="empty plan")
 
-    return Proposal(plan, provider=provider, model=spec.id, reason=why)
+    return Proposal(plan, provider=provider, model=spec.id, reason=why,
+                    agent_id=PLANNING_AGENT)
 
 
 def _refused_providers(credentials: CredentialService,

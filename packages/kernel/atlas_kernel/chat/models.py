@@ -82,6 +82,11 @@ class Turn(BaseModel):
     mission_id: str = ""
     #: Which business this is about, when it is about one.
     business_id: str = ""
+    #: The agent that produced this plan, and therefore the one that will carry
+    #: it out. Recorded beside the provider and model for the same reason: an
+    #: approval is agreement with a specific proposal, and "who runs it" is part
+    #: of that. Empty until a plan is proposed.
+    agent_id: str = ""
     at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def summary(self) -> dict:
@@ -93,6 +98,7 @@ class Turn(BaseModel):
             "started_by": self.started_by,
             "plan": self.plan.model_dump(mode="json") if self.plan else None,
             "mission_id": self.mission_id, "business_id": self.business_id,
+            "agent_id": self.agent_id,
             "at": self.at.isoformat(),
         }
 
@@ -111,6 +117,8 @@ class Conversation(BaseModel):
     plan: Plan | None = None
     mission_id: str = ""
     business_id: str = ""
+    #: See `Turn.agent_id`.
+    agent_id: str = ""
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -130,7 +138,8 @@ class Conversation(BaseModel):
                     messages=self.messages, status=self.status,
                     title=self.title, started_by=self.started_by,
                     plan=self.plan, mission_id=self.mission_id,
-                    business_id=self.business_id, at=self.updated_at)
+                    business_id=self.business_id, agent_id=self.agent_id,
+                    at=self.updated_at)
 
     def summary(self) -> dict:
         return {**self.turn().summary(),

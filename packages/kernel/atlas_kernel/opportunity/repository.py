@@ -855,9 +855,11 @@ class OpportunityRepository:
         message is about one, and approving outreach for something unpublished
         would authorise a claim that is not true yet.
 
-        **This does not send.** Nothing in this codebase can: `outreach/channels`
-        holds the seam and no provider. What this records is permission, and
-        permission that cannot be exercised is still worth recording honestly.
+        **This does not send**, and that is now a property of this function
+        rather than of the whole codebase: `EmailChannel` has a transport, and
+        `OutreachService.send` can reach it. What this records is permission.
+        Exercising it is a separate, explicit operator action, which is the
+        distinction the whole outreach path is built around.
         """
         if not recipient.strip():
             raise NotApprovable(
@@ -1278,19 +1280,22 @@ class OpportunityRepository:
             session.execute(
                 text("""
                 INSERT INTO atlas_outreach_messages
-                    (id, proposal_id, business_id, channel, recipient, subject, body,
-                     status, approval_id, approved_fingerprint, provider_message_id,
-                     detail, created_at, sent_at)
-                VALUES (:id, :proposal_id, :business_id, :channel, :recipient, :subject,
-                        :body, :status, :approval_id, :approved_fingerprint,
-                        :provider_message_id, :detail, :created_at, :sent_at)
+                    (id, proposal_id, mission_id, business_id, channel, recipient,
+                     subject, body, status, approval_id, approved_fingerprint,
+                     provider_message_id, detail, created_at, sent_at,
+                     authorized_automated_at)
+                VALUES (:id, :proposal_id, :mission_id, :business_id, :channel,
+                        :recipient, :subject, :body, :status, :approval_id,
+                        :approved_fingerprint, :provider_message_id, :detail,
+                        :created_at, :sent_at, :authorized_automated_at)
                 ON CONFLICT (id) DO UPDATE SET
                     status = EXCLUDED.status,
                     approval_id = EXCLUDED.approval_id,
                     approved_fingerprint = EXCLUDED.approved_fingerprint,
                     provider_message_id = EXCLUDED.provider_message_id,
                     detail = EXCLUDED.detail,
-                    sent_at = EXCLUDED.sent_at
+                    sent_at = EXCLUDED.sent_at,
+                    authorized_automated_at = EXCLUDED.authorized_automated_at
                 """),
                 {**message.model_dump(), "status": message.status.value},
             )
@@ -1298,6 +1303,24 @@ class OpportunityRepository:
         return message
 
     # -- measurement ------------------------------------------------------
+
+    def message_for_mission(self, mission_id: str) -> OutreachMessage | None:
+        """The outreach artefact a mission's approval created, if there is one.
+
+        Newest first, so re-approving after an edit finds the current one rather
+        than the superseded record. Returns `None` rather than raising: "this
+        mission has not been approved for automated contact" is an ordinary
+        answer, and the caller says so more usefully than an exception would.
+        """
+        if not mission_id.strip():
+            return None
+        with SessionLocal() as session:
+            row = session.execute(
+                text("SELECT * FROM atlas_outreach_messages "
+                     "WHERE mission_id = :m ORDER BY created_at DESC LIMIT 1"),
+                {"m": mission_id.strip()},
+            ).mappings().first()
+        return OutreachMessage(**dict(row)) if row else None
 
     def messages_for(
         self, business_id: str, *, channel: str | None = None

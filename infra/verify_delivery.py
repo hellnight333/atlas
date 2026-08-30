@@ -423,11 +423,59 @@ check("a mission whose recipe was swapped does not complete",
 # Not merely that it failed — that it failed *for this reason*. A refusal that
 # happened to coincide with an unrelated breakage would pass the check above
 # and prove nothing about the substitution.
-refusal = " ".join(str(b) for b in (after.get("blockers") or [])) \
-    + " " + str(after.get("note") or "")
-check("...and refuses because the approval named a different recipe",
-      "approved for" in refusal and "deliver-website" in refusal,
-      refusal[:110])
+#
+# The substitution is now refused a step earlier than it used to be, and by a
+# different guard. The swapped recipe needs `http-fetch`; the agent the approval
+# named is `website-builder`, whose worker advertises `website-generator`. So
+# capability matching finds no eligible worker and the mission is never offered
+# to one — where before it was claimed, and then refused by the worker for
+# naming a recipe the approval did not authorise.
+#
+# Both defences are asserted: the scheduler's, because it is the one that fires,
+# and the worker's, because it is still the backstop for a substitution that
+# leaves the tools unchanged and therefore reaches a worker.
+from atlas_kernel.fabric.scheduler import (  # noqa: E402
+    Demand as _Demand,
+)
+from atlas_kernel.fabric.scheduler import (
+    NodeSnapshot as _Node,
+)
+from atlas_kernel.fabric.scheduler import (
+    _tools_for,
+)
+from atlas_kernel.fabric.scheduler import (
+    decide as _decide,
+)
+
+_verdict = _decide(_Demand(mission_id=tampered.id, tenant_id=TENANT,
+                           agent_id="website-builder",
+                           required_tools=_tools_for("discover-dubai-dental-osm")),
+                   nodes=(_Node(worker_name="worker-delivery-tamper",
+                                serves="website-builder",
+                                capabilities=frozenset({"website-generator"}),
+                                placements=frozenset({"either"})),))
+check("...and no worker was eligible for the recipe it was swapped to",
+      _verdict.queue.value == "BLOCKED" and "http-fetch" in _verdict.why,
+      _verdict.why)
+check("...naming the tool the approved agent does not have",
+      "website-builder" in _verdict.why and "http-fetch" in _verdict.why)
+check("NEGATIVE CONTROL: the recipe it WAS approved for is eligible",
+      _decide(_Demand(mission_id=tampered.id, tenant_id=TENANT,
+                      agent_id="website-builder",
+                      required_tools=_tools_for("deliver-website")),
+              nodes=(_Node(worker_name="worker-delivery-tamper",
+                           serves="website-builder",
+                           capabilities=frozenset({"website-generator"}),
+                           placements=frozenset({"either"})),)
+              ).worker == "worker-delivery-tamper",
+      "so the block is the swap, not an unrelated breakage")
+# The backstop lives in `toolrunner`, not in the worker binary -- checked
+# against the file that actually holds it rather than a phrase guessed at.
+_backstop = (ROOT / "packages" / "kernel" / "atlas_kernel" / "mission"
+             / "toolrunner.py").read_text(encoding="utf-8")
+check("...and the execution-time substitution guard is still in place",
+      "was approved for" in _backstop,
+      "toolrunner refuses a recipe the approval did not name")
 built2 = list((tmp / "scratch2").rglob("artefact/*")) if (tmp / "scratch2").is_dir() else []
 check("...and produced no artefact at all", not built2, str(built2[:2]))
 

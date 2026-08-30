@@ -23,8 +23,10 @@ compare-and-set. Run one. The limitation is recorded in
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
+import socket
 import sys
 import tempfile
 import time
@@ -213,7 +215,8 @@ PLACEHOLDERS = {"research": RESEARCH_PLACEHOLDER,
 def queued(timeline: Timeline, *, tenant: str,
            connected: frozenset[str] = frozenset(),
            remaining_units: float | None = None,
-           agent_id: str = "") -> list[Mission]:
+           agent_id: str = "", worker_name: str = "",
+           nodes: tuple | None = None) -> list[Mission]:
     """Missions the **scheduler** says may run, in the order it chose.
 
     This used to sort by timestamp and take the first. That is not an ordering
@@ -251,18 +254,40 @@ def queued(timeline: Timeline, *, tenant: str,
     #
     # A worker filtering its own queue is the fix. The backstop stays, and now
     # releases instead of blocking: "not by me" is not a defect in the mission.
+    #
+    # A mission naming no agent used to be offered to **every** worker -- the
+    # clause read `not m.get("agent_id") or m.get("agent_id") == agent_id`. That
+    # is an unrouted mission becoming eligible everywhere, which is the same
+    # mistake as Atlas reading an unresolvable capability as "no constraint":
+    # absence of a requirement is not permission to run anywhere. Unknown is not
+    # a wildcard.
+    #
+    # Explicitly routed work is untouched -- 16 of the 17 missions in the
+    # production timeline name both an agent and a recipe, and the one that
+    # names neither is `cancelled`, so nothing live changes. Unrouted work is now
+    # offered to nobody and is visible as waiting rather than quietly running on
+    # whichever worker asked first.
     if agent_id:
         mine = {m.get("mission_id") for m in folded
-                if not m.get("agent_id") or m.get("agent_id") == agent_id}
+                if m.get("agent_id") == agent_id}
         folded = [m for m in folded if m.get("mission_id") in mine]
     demands = demands_from(folded, agents=AgentRegistry(), agent_for=routes,
                            connected=connected,
                            remaining_units=remaining_units)
-    plan = scheduler.plan(demands, tenant=tenant, done=done, concurrency=1)
+    plan = scheduler.plan(demands, tenant=tenant, done=done, concurrency=1,
+                          nodes=nodes)
 
     by_id = {m.get("mission_id"): m for m in folded}
+    assigned = plan.get("assigned") or {}
     runnable = []
     for mission_id in plan["dispatchable"]:
+        # Who the scheduler chose. Not "may I run this?" asked again here --
+        # this worker reads the answer rather than deciding it, which is what
+        # keeps eligibility in one place. When nothing was assigned (no node
+        # information was supplied) the queue is taken as before.
+        picked = assigned.get(mission_id, "")
+        if picked and worker_name and picked != worker_name:
+            continue
         summary = by_id.get(mission_id)
         # Only what is genuinely unclaimed and queued. The scheduler's advice is
         # about order; the claim is what decides who, and a mission already held
@@ -402,6 +427,292 @@ def release_stale(timeline: Timeline, *, tenant: str) -> int:
     for _, event in released:
         timeline.append(event)
     return len(released)
+
+
+# ---------------------------------------------------------------- the node
+#
+# A worker announces the machine it is on and keeps saying it is alive. That is
+# all this section does. It does not change how work is found, ordered, claimed
+# or dispatched — the seam is deliberately one call at start-up and one call per
+# pass, so that adopting the cluster substrate cannot alter mission behaviour.
+#
+# The registry, heartbeat, tables and endpoints already exist in
+# `atlas_kernel/cluster` and are used by the Atlas API. Nothing here is a second
+# implementation of any of them.
+
+
+def _probe_resources():
+    """What this machine actually has. Absent facts stay absent.
+
+    A missing GPU is `None`, never a guess and never a zero-that-reads-as-known:
+    `vram_gb` stays 0 only because there is no card to have any. Every earlier
+    row in `atlas_workers` carries zeros for everything, which is what an
+    unpopulated schema looks like and is exactly what this replaces.
+    """
+    import shutil
+    import subprocess
+
+    from atlas_kernel.cluster.models import WorkerResources
+
+    cores = os.cpu_count() or 0
+
+    ram_gb = 0
+    try:                                          # Linux
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    ram_gb = int(int(line.split()[1]) / 1024 / 1024)
+                    break
+    except OSError:
+        try:                                      # macOS
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                 capture_output=True, text=True, timeout=5,
+                                 check=False).stdout.strip()
+            ram_gb = int(int(out) / 1024**3) if out.isdigit() else 0
+        except (OSError, subprocess.SubprocessError):
+            ram_gb = 0
+
+    gpu = None
+    vram_gb = 0
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10, check=False).stdout
+            first = out.strip().splitlines()[0] if out.strip() else ""
+            if "," in first:
+                name, _, memory = first.partition(",")
+                gpu = name.strip() or None
+                vram_gb = int(int(memory.strip()) / 1024) if memory.strip().isdigit() else 0
+        except (OSError, subprocess.SubprocessError, ValueError):
+            # A card that would not answer is not a card we can describe.
+            gpu, vram_gb = None, 0
+
+    return WorkerResources(cpu_cores=cores, ram_gb=ram_gb, gpu=gpu,
+                           vram_gb=vram_gb)
+
+
+def _serves(agent_choice: str) -> str:
+    """The agent this worker runs as, by the name a mission would record.
+
+    `REGISTERED_AS` maps a `--agent` choice onto its `fabric.agents` id, and
+    every choice has one **except `fake`**, which is deliberately not a
+    registered agent. Looking it up with a default of `""` said this worker had
+    no declared agent at all -- so a mission routed to `fake` was refused by the
+    only worker that could run it, and the fake path worked solely because such
+    missions used to name nobody. They no longer can: a mission naming nobody is
+    not dispatchable.
+
+    So an unregistered choice serves itself. A worker started with `--agent
+    fake` serves `fake`, which is the truth and is what a mission records.
+    """
+    return REGISTERED_AS.get(agent_choice, agent_choice)
+
+
+def _capabilities_for(agent_choice: str) -> list[str]:
+    """What this worker can do, **derived from the tools its agent declares**.
+
+    Not a second list. `fabric.tools.for_agent` already answers "what may this
+    role reach", and a hand-kept capability list beside it is the drift this
+    codebase has been bitten by repeatedly — the agent would gain a tool and the
+    advertisement would not notice.
+
+    Tool ids are the vocabulary. `WorkerCapability` has its own words for the
+    workloads a node can host, and mapping one onto the other would be a third
+    thing to keep in step; a capability nobody can act on yet is better named
+    honestly than translated.
+    """
+    from atlas_kernel.fabric.agents import Registry as AgentRegistry
+    from atlas_kernel.fabric.agents import UnknownAgent
+    from atlas_kernel.fabric.tools import for_agent
+
+    agent_id = _serves(agent_choice)
+    if not agent_id:
+        return []
+    try:
+        agent = AgentRegistry().get(agent_id)
+    except UnknownAgent:
+        return []
+    return sorted(tool.id for tool in for_agent(agent))
+
+
+def _node_snapshots():
+    """The workers the scheduler is told about. One definition, in the kernel,
+    because `GET /schedule` has to give the same answer this dispatch does."""
+    from atlas_kernel.mission.nodes import snapshots
+    return snapshots()
+
+
+def _node_services():
+    """The cluster services, constructed from what this process already has.
+
+    Direct, not over HTTP. The worker and the Atlas API talk to the same
+    database, and adding a route for a process that can already reach the table
+    would be a second way in for no gain.
+    """
+    # `agents` first, and not for tidiness. `event_bus` imports `agents`, which
+    # imports `runtime`, which imports `worker`, which imports `event_bus` — a
+    # cycle that resolves only when `agents` is the first of them to load.
+    # `composition_root` gets this for free by importing `agents.runtime` at the
+    # top of the file; a lazy import inside a function does not, and lands in
+    # the middle of the cycle.
+    #
+    # Pre-existing and left alone: untangling it is a change to the Atlas
+    # lineage, which this slice does not touch.
+    import atlas_kernel.agents  # noqa: F401  (import order, see above)
+    from atlas_kernel.cluster.heartbeat_service import HeartbeatService
+    from atlas_kernel.cluster.worker_registry import WorkerRegistry
+    from atlas_kernel.event_bus import EventBus
+    from atlas_kernel.repository import AtlasRepository
+
+    repository = AtlasRepository()
+    bus = EventBus()
+    registry = WorkerRegistry(repository, bus)
+    return registry, HeartbeatService(repository, bus, registry)
+
+
+def _source_fingerprint() -> str:
+    """The sha256 of this file, first 12 -- what is actually running here.
+
+    A deploy reported success while shipping none of this file: `deploy_control.sh`
+    synced `packages/kernel/atlas_kernel/` and the console, and nothing has ever
+    shipped `infra/`. The host's own git checkout is 181 commits behind and does
+    not track this file at all, so "is production running the repository's
+    worker?" had no answer that could be checked.
+
+    Reported through the `version` field the registry already stores, so the
+    answer is one query rather than an ssh and a hash. This file is the whole of
+    the worker's out-of-band code -- it imports only the standard library and
+    `atlas_kernel`, and `atlas_kernel` is shipped and health-checked by the
+    existing deploy.
+
+    Unreadable source is reported as `unknown` rather than crashing the worker: a
+    node that cannot describe itself must still do its work.
+    """
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+    except OSError:
+        log.exception("could not fingerprint own source")
+        return "unknown"
+
+
+def _register_node(name: str, agent_choice: str, placement: str = "either") -> str:
+    """Announce this machine once, at start-up. Returns the worker id, or "".
+
+    **A failure here does not stop the worker.** A node that cannot announce
+    itself must still do the work it already knows about: the ledger, the claims
+    and the missions are unaffected by whether anybody knows this machine
+    exists. Reported loudly and carried on from.
+
+    Idempotent per hostname, so a restart keeps the id and its history rather
+    than accumulating a row per boot.
+    """
+    try:
+        from atlas_kernel.cluster.models import WorkerRegistration
+
+        registry, _ = _node_services()
+        resources = _probe_resources()
+        capabilities = _capabilities_for(agent_choice)
+        machine = socket.gethostname()
+        # One identity per **worker process**, not per machine.
+        #
+        # Four Qevik workers share this host and declare different tools. A
+        # machine-level identity would collapse them into one row whose
+        # capabilities are whichever process registered last, and later
+        # capability-matched dispatch would route `site-publish` work to a
+        # machine that collectively claims every tool rather than to the
+        # publisher that holds it.
+        #
+        # `hostname` carries the same composite, and that is not decoration:
+        # `WorkerRegistry.register` falls back to `get_worker_by_hostname` when
+        # the explicit id is not found, so a shared hostname would have the
+        # second process adopt the first process's row on its very first
+        # registration. The machine is kept in `metadata` and `tags`, where
+        # nothing is lost.
+        identity = f"{machine}:{name}"
+        node = registry.register(WorkerRegistration(
+            worker_id=identity,
+            hostname=identity,
+            display_name=name,
+            platform=sys.platform,
+            resources=resources,
+            capabilities=capabilities,
+            max_concurrency=1,
+            # This process collects Qevik missions. It never polls the Atlas
+            # execution queue, so it must not be handed an Atlas execution --
+            # which capability alone could not prevent, because an unresolvable
+            # capability becomes "" and "" is read as no constraint at all.
+            accepts_execution_dispatch=False,
+            version=_source_fingerprint(),
+            # `serves:` is the registered agent id, not the `--agent` choice.
+            # The scheduler matches a mission's recorded agent against it, and
+            # the two vocabularies differ: `--agent research` serves
+            # `researcher`. `placement:` is what this machine can satisfy,
+            # stated rather than guessed at.
+            tags=[f"role:{agent_choice}", f"serves:{_serves(agent_choice)}",
+                  f"placement:{placement}", f"machine:{machine}",
+                  "qevik-mission-worker"],
+            metadata={"machine": machine, "worker_name": name,
+                      "agent": agent_choice, "serves": _serves(agent_choice),
+                      "placement": placement}))
+        log.info("registered as %s on %s: %d core(s), %d GB RAM, gpu=%s, "
+                 "capabilities %s", node.id, machine,
+                 resources.cpu_cores, resources.ram_gb,
+                 resources.gpu or "none", ", ".join(capabilities) or "none")
+        return node.id
+    except Exception:                             # noqa: BLE001 - reported
+        log.exception("could not register this node; continuing without it. "
+                      "The ledger, the claims and the missions do not depend "
+                      "on anybody knowing this machine exists.")
+        return ""
+
+
+def _stand_down(worker_id: str) -> None:
+    """Mark this node offline as the process leaves.
+
+    A registration outlives the process that made it. The heartbeat timeout
+    eventually notices, but for those ninety seconds a worker that has already
+    exited still looks like a healthy candidate -- and once the scheduler
+    started *choosing* a worker rather than merely allowing one, that gap
+    stopped being cosmetic: work was assigned to a process that had gone, and
+    the worker still running skipped it because it had not been chosen.
+
+    Found by running the real binary, not in the test suite: five node rows all
+    serving `self-check`, all left behind by earlier runs, all inside the
+    heartbeat window.
+
+    Best effort by design. A worker killed outright cannot run this, which is
+    exactly what the heartbeat timeout is still there for.
+    """
+    if not worker_id:
+        return
+    try:
+        registry, _ = _node_services()
+        registry.mark_offline(worker_id, reason="worker exited")
+    except Exception:
+        log.exception("could not stand down %s; the heartbeat timeout will",
+                      worker_id)
+
+
+def _heartbeat(worker_id: str) -> None:
+    """Say this machine is alive. Runs every pass, whatever the pass found.
+
+    Independent of mission activity on purpose. Liveness of a *machine* and
+    progress of a *mission* are different facts with different timeouts — 90
+    seconds here, 900 for a claim — and a heartbeat that only fired when work
+    was running would report an idle worker as dead.
+    """
+    if not worker_id:
+        return
+    try:
+        from atlas_kernel.cluster.models import HeartbeatReport
+
+        _, heartbeats = _node_services()
+        heartbeats.record(HeartbeatReport(worker_id=worker_id))
+    except Exception:                             # noqa: BLE001 - reported
+        log.warning("heartbeat failed for %s; the mission work is unaffected",
+                    worker_id, exc_info=True)
 
 
 def _tools_of(mission: Mission) -> tuple[str, ...]:
@@ -738,10 +1049,16 @@ def tick_recurrences(timeline: Timeline, *, tenant: str, name: str,
 
 
 def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
+              node_id: str = "",
               registry: origins.Registry, roles: Roles, claims: object,
               ledger: object, scratch_root: Path, report_root: Path,
               credentials: object = None, agent_choice: str = "") -> int:
     """Recover, then take at most one mission. Returns how many ran."""
+    # First, and unconditionally. A heartbeat that fired only when work was
+    # found would report an idle worker as dead — and "idle" is the normal
+    # state of a worker between nightly recurrences.
+    _heartbeat(node_id)
+
     freed = release_stale(timeline, tenant=tenant)
     if freed:
         log.info("released %d stale mission(s)", freed)
@@ -760,7 +1077,8 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     waiting = queued(timeline, tenant=tenant,
                      connected=usable_for(credentials, tenant=tenant),
                      remaining_units=tenant_headroom(ledger, tenant),
-                     agent_id=REGISTERED_AS.get(agent_choice, ""))
+                     agent_id=_serves(agent_choice),
+                     worker_name=name, nodes=_node_snapshots())
     if not waiting:
         return 0
 
@@ -838,7 +1156,7 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # Three of them, all in the same place and all before any agent runs. Each
     # asks about a different thing that could have changed between the moment a
     # person approved the plan and the moment this worker picked it up.
-    serves = REGISTERED_AS.get(agent_choice, "")
+    serves = _serves(agent_choice)
 
     # A mismatch here means this worker cannot run it — **not** that the mission
     # is bad. It is released for a worker that serves the right agent, and left
@@ -996,6 +1314,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="refuse to start unless the claim database is "
                              "reachable. Use this in production: the default "
                              "logs the loss of safety, this one prevents it")
+    parser.add_argument("--placement", default="either",
+                        choices=("either", "local", "cloud"),
+                        help="what this machine can satisfy. `local` is the "
+                             "operator's own machine; `cloud` survives it "
+                             "sleeping. Stated rather than detected, because a "
+                             "guess here decides where somebody's work runs.")
     parser.add_argument("--agent", default="llm", choices=AGENT_CHOICES,
                         help="'research' carries out a declared recipe through "
                              "registered tools and calls no model; 'delivery' "
@@ -1084,12 +1408,22 @@ def main(argv: list[str] | None = None) -> int:
     # worker saying "no credential configured" had nothing to compare.
     log.info("credentials: %s", describe_credentials(credentials_at.state))
 
+    # Announced once, at start-up, beside the other things this worker says
+    # about itself. A failure returns "" and everything below carries on.
+    node_id = _register_node(args.name, args.agent, args.placement)
+
     if args.once:
-        pass_once(timeline, tenant=args.tenant, name=args.name,
-                  worktrees=worktrees, registry=registry, roles=roles,
-                  claims=claims, ledger=ledger, scratch_root=scratch_root,
-                  report_root=report_root, credentials=credentials,
-                  agent_choice=args.agent)
+        try:
+            pass_once(timeline, tenant=args.tenant, name=args.name,
+                      node_id=node_id,
+                      worktrees=worktrees, registry=registry, roles=roles,
+                      claims=claims, ledger=ledger, scratch_root=scratch_root,
+                      report_root=report_root, credentials=credentials,
+                      agent_choice=args.agent)
+        finally:
+            # A single pass exits immediately, so without this it leaves a row
+            # that looks alive for the next ninety seconds.
+            _stand_down(node_id)
         return 0
 
     # The store, not the path. It said "watching …/missions.jsonl" while reading
@@ -1097,19 +1431,26 @@ def main(argv: list[str] | None = None) -> int:
     # the state is — the sentence somebody reads first during an incident.
     log.info("watching the %s ledger for %s%s", timeline.backend, args.tenant,
              "" if timeline.networked else f" at {timeline.path}")
-    while True:
-        try:
-            pass_once(timeline, tenant=args.tenant, name=args.name,
-                      worktrees=worktrees, registry=registry, roles=roles,
-                      claims=claims, ledger=ledger, scratch_root=scratch_root,
-                      report_root=report_root, credentials=credentials,
-                      agent_choice=args.agent)
-        except KeyboardInterrupt:
-            log.info("stopping")
-            return 0
-        except Exception:                        # noqa: BLE001 - logged, keep going
-            log.exception("pass failed; continuing")
-        time.sleep(args.interval)
+    try:
+        while True:
+            try:
+                pass_once(timeline, tenant=args.tenant, name=args.name,
+                          node_id=node_id,
+                          worktrees=worktrees, registry=registry, roles=roles,
+                          claims=claims, ledger=ledger, scratch_root=scratch_root,
+                          report_root=report_root, credentials=credentials,
+                          agent_choice=args.agent)
+            except KeyboardInterrupt:
+                log.info("stopping")
+                return 0
+            except Exception:                    # noqa: BLE001 - logged, keep going
+                log.exception("pass failed; continuing")
+            time.sleep(args.interval)
+    finally:
+        # Whichever way the loop is left. The claim it may hold is untouched --
+        # standing down says "this machine is gone", never "this mission is
+        # free", and those stay two different questions with two timeouts.
+        _stand_down(node_id)
 
 
 if __name__ == "__main__":

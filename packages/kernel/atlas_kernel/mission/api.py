@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,8 @@ from ..auth.models import Scope, User
 from ..fabric import scheduler
 from ..fabric.scheduler import demands_from
 from ..opportunity.tenancy import TenantId
-from . import origins, reports, service
+from ..opportunity.models import OutreachMessage, OutreachStatus
+from . import artefact, origins, reports, service
 from .models import Mission, MissionStatus
 
 log = logging.getLogger(__name__)
@@ -425,6 +426,61 @@ def build_router() -> APIRouter:
                         _: User = Depends(requires(Scope.READ))) -> dict:
         return blockers(_folded(request, tenant))
 
+    @router.get("/workers")
+    def worker_fleet(request: Request,
+                     tenant: TenantId = Depends(current_tenant),
+                     _: User = Depends(requires(Scope.READ))) -> dict:
+        """Which machines can run work, and what each of them can do.
+
+        A read over the snapshot the scheduler already uses — the same function,
+        so the console cannot show a fleet the dispatcher disagrees with. There
+        is no second registry here and no second notion of health.
+
+        Distinguishes the two states an operator confuses otherwise: a worker
+        that is *stale* has stopped reporting and takes nothing new but keeps any
+        mission it holds, while one that is *busy* is working. Reporting them
+        together as "unavailable" is how somebody restarts a machine that was
+        halfway through a delivery.
+        """
+        from .nodes import snapshots
+
+        fleet = snapshots()
+        if fleet is None:
+            # Not the same as "no workers". Saying so plainly, because a fleet
+            # page that shows an empty list when the database is unreachable
+            # tells an operator their cluster died.
+            return {"known": False, "workers": [], "counts": {},
+                    "detail": ("the cluster could not be read, which is not the "
+                               "same as there being no workers")}
+
+        rows = [{
+            "name": node.worker_name,
+            "serves": node.serves,
+            "capabilities": sorted(node.capabilities),
+            "placements": sorted(node.placements),
+            "healthy": node.fresh,
+            "available": node.free,
+            "load": node.load,
+            "node_id": node.node_id,
+            # What an operator does about it, rather than a flag to interpret.
+            "state": ("stale — stopped reporting; it keeps any mission it holds"
+                      if not node.fresh else
+                      "busy" if not node.free else "ready"),
+        } for node in sorted(fleet, key=lambda n: n.worker_name)]
+
+        return {
+            "known": True,
+            "workers": rows,
+            "counts": {
+                "total": len(rows),
+                "ready": sum(1 for r in rows if r["healthy"] and r["available"]),
+                "busy": sum(1 for r in rows if r["healthy"] and not r["available"]),
+                "stale": sum(1 for r in rows if not r["healthy"]),
+            },
+            # Derived, so the console never hard-codes what a worker can do.
+            "capabilities": sorted({c for r in rows for c in r["capabilities"]}),
+        }
+
     @router.get("/actions")
     def actions(request: Request, tenant: TenantId = Depends(current_tenant),
                 _: User = Depends(requires(Scope.READ))) -> dict:
@@ -439,6 +495,23 @@ def build_router() -> APIRouter:
 
         store = getattr(request.app.state, "connections", None) or ConnectionStore()
         return controlplane.centre(store=store, tenant=tenant)
+
+    def _worker_nodes(request: Request):
+        """Mission workers as the scheduler is told about them, or `None`.
+
+        `None` when the caller has no cluster wired -- a surface that cannot see
+        the workers should report queues as it always did rather than claim
+        there are none, which would show every mission as blocked.
+        """
+        build = getattr(request.app.state, "worker_nodes", None)
+        if build is None:
+            from .nodes import snapshots
+            build = snapshots
+        try:
+            return build()
+        except Exception:                        # noqa: BLE001 - reported below
+            log.exception("could not read worker nodes for the schedule view")
+            return None
 
     @router.get("/schedule")
     def schedule(request: Request, concurrency: int = 1, local_worker: bool = False,
@@ -462,9 +535,13 @@ def build_router() -> APIRouter:
                                           str(m.get("agent_id", "")) for m in found},
                                connected=usable_credentials(request, tenant),
                                remaining_units=tenant_balance(request, tenant))
+        # The same nodes the worker sees, so the view and the dispatch cannot
+        # give different answers. Previously this called `plan` without them and
+        # reported work as dispatchable that no worker would ever take.
         return scheduler.plan(demands, tenant=tenant, done=done,
                               local_worker=local_worker,
-                              concurrency=max(1, min(concurrency, 32)))
+                              concurrency=max(1, min(concurrency, 32)),
+                              nodes=_worker_nodes(request))
 
     # -------------------------------------------------- one mission
 
@@ -742,6 +819,33 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(refused)) from refused
         return recorded
 
+    def _prepare_for(request: Request, mission_id: str, summary: dict,
+                     signal: dict, business, publication: dict,
+                     tenant: TenantId):
+        """Compose the message from the records, once, for every caller.
+
+        The read, the approval and the send all go through here, so none of them
+        can drift into composing something slightly different from the others —
+        which is the failure a fingerprint would then faithfully certify.
+
+        Provenance is read **at the published commit**, not from the mission
+        branch. The branch is a name that can move, and `artefact.provenance`
+        returns `{}` when it cannot read — together those would turn a pruned
+        workspace into a shorter message with no error anywhere. `provenance_at`
+        raises instead, and the caller reports it.
+        """
+        from ..outreach import preparation
+
+        scratch = getattr(request.app.state, "scratch_root", None)
+        recorded = artefact.provenance_at(
+            publication["commit"], summary.get("workspace") or "",
+            scratch=Path(str(scratch)) if scratch else None)
+        answers = tuple(recorded.get("addresses") or ())
+        return preparation.prepare(
+            business=business, signal=signal, publication=publication,
+            approved_scope=summary.get("approved_scope") or "",
+            answers=answers)
+
     @router.get("/{mission_id}/outreach")
     def outreach(mission_id: str, request: Request,
                  tenant: TenantId = Depends(current_tenant),
@@ -842,20 +946,153 @@ def build_router() -> APIRouter:
                 detail=("no verified way to reach this business. Qevik does not "
                         "derive an address from a domain, and a landline is not "
                         "a WhatsApp number."))
+        # The server composes the message again and derives the fingerprint
+        # itself. What the client sends is a *claim about which artefact it is
+        # approving*, checked against what the records actually produce — never
+        # the value that gets stored. A fingerprint taken on trust would let an
+        # edited message inherit an approval, which is the one thing the
+        # fingerprint exists to prevent.
+        try:
+            prepared = _prepare_for(request, mission_id, summary, signal,
+                                    business, published[-1], tenant)
+        except preparation.NotPreparable as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        except artefact.Unreadable as unreadable:
+            raise HTTPException(status_code=409, detail=str(unreadable)) from unreadable
+
+        canonical = prepared.fingerprint
+        if body.fingerprint != canonical:
+            raise HTTPException(
+                status_code=409,
+                detail=("this is not the message on file. The approval names "
+                        f"{body.fingerprint[:12]} and the records compose "
+                        f"{canonical[:12]} — read it again before authorising it."))
+
         try:
             recorded = memory.approve_outreach(
                 mission_id=mission_id, business_id=business.id,
                 signal_id=signal["id"], commit=published[-1]["commit"],
                 recipient=recipient, channel=channel,
-                fingerprint=body.fingerprint, actor=user.username,
+                fingerprint=canonical, actor=user.username,
                 note=body.note, tenant=tenant)
         except NotApprovable as refused:
             raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+        # The artefact automated sending will read. Bound to the mission, and
+        # carrying the moment a person authorised Qevik to deliver it — which is
+        # a different decision from approving the words, and is why sending
+        # requires this field rather than reading it out of a status.
+        message = OutreachMessage(
+            proposal_id="", mission_id=mission_id, business_id=business.id,
+            channel=channel, recipient=recipient,
+            subject=prepared.subject, body=prepared.body,
+            status=OutreachStatus.APPROVED,
+            approval_id=recorded["id"],
+            approved_fingerprint=canonical,
+            authorized_automated_at=datetime.now(UTC))
+        memory.save_message(message)
+
         return {**recorded, "state": "APPROVED_TO_SEND",
+                "message_id": message.id,
                 "sent": False,
-                "why_not_sent": ("no channel has a provider configured. "
-                                 "Approval records permission; it does not "
-                                 "create the ability.")}
+                "why_not_sent": ("approval records permission; it does not "
+                                 "create the ability. Sending is a separate "
+                                 "action.")}
+
+    @router.post("/{mission_id}/outreach/send", status_code=200)
+    def send_outreach(mission_id: str, request: Request,
+                      tenant: TenantId = Depends(current_tenant),
+                      user: User = Depends(requires(Scope.COMMUNICATE))
+                      ) -> dict:
+        """Send the message this mission's approval authorised. One, explicitly.
+
+        **The request carries no message.** There is no recipient, subject, body
+        or content field on this route, and adding one would defeat everything
+        the approval established — a caller who could name a recipient could
+        name any recipient. The path identifies *which* approved artefact to
+        send; the server reconstructs *what* it says from the same records the
+        approval was taken over.
+
+        Separate from approval on purpose. One operator action authorises the
+        words; a second, deliberate action delivers them. Collapsing the two
+        would make a retried HTTP request a second email to a stranger.
+        """
+        from ..opportunity.outreach import OutreachRefused, OutreachService
+        from ..opportunity.profiles import contact_policy_for
+        from ..outreach import preparation
+        from ..outreach.smtp_channel import SmtpOutreachChannel
+
+        summary = _one(request, mission_id, tenant)
+        memory = _opportunities(request)
+
+        approved = memory.message_for_mission(mission_id)
+        if approved is None:
+            raise HTTPException(
+                status_code=409,
+                detail=("nothing has been approved for automated sending on "
+                        "this mission. Approve the message first; approval and "
+                        "sending are separate decisions."))
+        if approved.status is OutreachStatus.SENT:
+            return {"mission_id": mission_id, "state": "SENT",
+                    "message_id": approved.id, "sent": True,
+                    "provider_message_id": approved.provider_message_id,
+                    "sent_at": approved.sent_at.isoformat() if approved.sent_at else "",
+                    "detail": "already sent; this is the record of the first send"}
+
+        signal = memory.get_signal(summary.get("signal_id") or "", tenant=tenant)
+        from ..opportunity.tenancy import ALL_TENANTS
+
+        business = memory.get_business(signal["business_id"],
+                                       tenant=ALL_TENANTS) if signal else None
+        published = memory.publications_for(mission_id, tenant=tenant)
+        if signal is None or business is None or not published:
+            raise HTTPException(status_code=422,
+                                detail="the records this approval rests on are "
+                                       "no longer readable")
+
+        # Composed again from the records, and compared. Nothing sends on the
+        # strength of what was stored at approval time alone: if the evidence,
+        # the publication or the business's address moved, the words moved with
+        # them and the authorisation no longer covers what would go out.
+        try:
+            prepared = _prepare_for(request, mission_id, summary, signal,
+                                    business, published[-1], tenant)
+        except (preparation.NotPreparable, artefact.Unreadable) as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+        # Which contact policy governs this business. Declared in
+        # `opportunity.profiles`, with its date and its source — not chosen
+        # here. A cooldown decides how often a stranger is written to, and a
+        # number living in a route is a commercial term nobody can find.
+        #
+        # A niche is not resolvable from a mission today: `signal.scope` holds an
+        # audited URL, not a niche id. The resolver says so and returns the
+        # declared initial policy rather than pretending to match one.
+        profile = contact_policy_for()
+
+        # Both loaded from the database, never left to default. `SuppressionList()`
+        # and `ContactHistory()` construct empty, and an empty suppression list
+        # suppresses nothing while an empty history has no one inside a cooldown
+        # — two guards that would pass every test and stop nothing in production.
+        service_ = OutreachService(
+            SmtpOutreachChannel(),
+            suppression=memory.load_suppression(),
+            history=memory.load_contact_history(tenant=tenant))
+        try:
+            result = service_.send(approved, prepared, profile)
+        except OutreachRefused as refused:
+            return {"mission_id": mission_id, "state": "BLOCKED",
+                    "message_id": approved.id, "sent": False,
+                    "detail": str(refused)}
+
+        memory.save_message(result)
+        sent = result.status is OutreachStatus.SENT
+        return {"mission_id": mission_id,
+                "state": "SENT" if sent else "FAILED",
+                "message_id": result.id, "sent": sent,
+                "provider_message_id": result.provider_message_id or "",
+                "sent_at": result.sent_at.isoformat() if result.sent_at else "",
+                "detail": result.detail or ""}
 
     @router.post("/{mission_id}/publish", status_code=201)
     def publish(mission_id: str, body: PublishRequest, request: Request,
@@ -1027,8 +1264,13 @@ def build_router() -> APIRouter:
             planning, first = service.transition(
                 mission, MissionStatus.PLANNING, tenant=tenant,
                 actor=user.username, note=f"planning with {agent.id}")
+            # `agent.id`, not blank. This knew which agent proposed the plan,
+            # returned it to the caller as `proposed_by`, and recorded nothing
+            # -- so the mission it produced named nobody, and "who may run
+            # this" had no answer on the very missions this endpoint creates.
             planned, second = service.attach_plan(planning, proposed,
-                                                  tenant=tenant)
+                                                  tenant=tenant,
+                                                  agent_id=agent.id)
         except service.NotPermitted as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         _append(request, first)

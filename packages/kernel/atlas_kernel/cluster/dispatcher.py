@@ -138,6 +138,12 @@ class Dispatcher:
         for worker in self.registry.list_workers():
             if worker.status not in DISPATCHABLE_WORKER_STATES:
                 continue
+            # Before capability, because capability cannot answer this. A node
+            # that collects a different queue is not a slow worker or an
+            # unsuitable one -- it is not a participant, and an execution placed
+            # on it would be leased and then never collected by anybody.
+            if not worker.accepts_execution_dispatch:
+                continue
             if not worker.has_free_slot:
                 continue
             if not self._owns(organization_id, worker.id):
@@ -195,7 +201,11 @@ class Dispatcher:
         healthy = [w for w in workers if w.status in DISPATCHABLE_WORKER_STATES]
         if not healthy:
             return "no worker is online"
-        owned = [w for w in healthy if self._owns(organization_id, w.id)]
+        participating = [w for w in healthy if w.accepts_execution_dispatch]
+        if not participating:
+            return ("no online worker accepts execution dispatch; "
+                    f"{len(healthy)} online but none collects this queue")
+        owned = [w for w in participating if self._owns(organization_id, w.id)]
         if not owned:
             return f"no worker is available to organization {organization_id}"
         capable = [w for w in owned if not capability or self._serves(w, capability)]

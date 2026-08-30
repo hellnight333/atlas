@@ -421,8 +421,13 @@ def test_a_provider_with_no_adapter_is_not_asked_for_a_key() -> None:
     from atlas_kernel.publication import ConnectionStore
 
     store = ConnectionStore()
-    for provider in ("deepseek", "stripe", "smtp"):
+    for provider in ("deepseek", "stripe"):
         assert BY_ID[provider].status(store, tenant=A) is IntegrationStatus.NOT_IMPLEMENTED
+
+    # `smtp` left this group at M1: the adapter exists, so the honest answer is
+    # that the key is missing rather than that the feature is unbuilt. Asking
+    # for a key we can use is fair; asking for one we cannot is not.
+    assert BY_ID["smtp"].status(store, tenant=A) is IntegrationStatus.PENDING_CREDENTIAL
 
 
 # ============================================ records outlive the process

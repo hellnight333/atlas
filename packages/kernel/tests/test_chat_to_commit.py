@@ -138,7 +138,12 @@ def test_a_sentence_becomes_a_commit_with_the_application_destroyed_in_between(
             Plan(goal="Add a services page", approval_required=True,
                  steps=(PlanStep(order=1, title="Write the page",
                                  files=("services.md",)),)),
-            tenant=TENANT, provider="test", model="test-model")
+            # The agent this test's worker actually runs (`--agent fake`).
+            # A plan proposed with no agent becomes a mission naming
+            # nobody, which is not dispatchable -- so the simulation of
+            # "what a configured planner would attach" has to include it.
+            tenant=TENANT, provider="test", model="test-model",
+            agent_id="fake")
         app.state.chat_sink(event)
         assert planned.awaiting_approval
 
@@ -204,7 +209,12 @@ def test_the_commit_is_real_and_on_its_own_branch(files, repository, tmp_path,
         _, event = chat_service.plan_for(
             current, Plan(goal="Write a note", approval_required=True,
                           steps=(PlanStep(order=1, title="Note"),)),
-            tenant=TENANT, provider="test", model="test-model")
+            # The agent this test's worker actually runs (`--agent fake`).
+            # A plan proposed with no agent becomes a mission naming
+            # nobody, which is not dispatchable -- so the simulation of
+            # "what a configured planner would attach" has to include it.
+            tenant=TENANT, provider="test", model="test-model",
+            agent_id="fake")
         app.state.chat_sink(event)
         # Names the origin. The worker below registers it as `acme=<repo>`; the
         # mission carries the *key*, and the registry is the only thing that
@@ -276,7 +286,12 @@ def test_nothing_runs_until_somebody_approves(files, repository, tmp_path,
         _, event = chat_service.plan_for(
             current, Plan(goal="Delete everything", approval_required=True,
                           steps=(PlanStep(order=1, title="Remove files"),)),
-            tenant=TENANT, provider="test", model="test-model")
+            # The agent this test's worker actually runs (`--agent fake`).
+            # A plan proposed with no agent becomes a mission naming
+            # nobody, which is not dispatchable -- so the simulation of
+            # "what a configured planner would attach" has to include it.
+            tenant=TENANT, provider="test", model="test-model",
+            agent_id="fake")
         app.state.chat_sink(event)
     del app, client
 

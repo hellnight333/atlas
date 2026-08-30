@@ -462,8 +462,22 @@ class Proposal(BaseModel):
 
 
 class OutreachStatus(StrEnum):
+    """Where a message is, and -- for approvals -- *which kind* was given.
+
+    Two approvals exist and they authorise different actors. Conflating them is
+    how a message a person meant to send from their own phone becomes one a
+    machine delivers unattended.
+    """
+
     DRAFT = "draft"
     AWAITING_APPROVAL = "awaiting_approval"
+    #: A person reviewed these words **and will send them personally**. This is
+    #: the early human-in-the-loop validation mode, and it is not authorisation
+    #: for Qevik to deliver anything.
+    APPROVED_FOR_MANUAL_SEND = "approved_for_manual_send"
+    #: A person authorised *Qevik* to deliver this. Necessary but not
+    #: sufficient: automated delivery also requires `authorized_automated_at`
+    #: and a fingerprint that still matches the proposal.
     APPROVED = "approved"
     REJECTED = "rejected"
     SENT = "sent"
@@ -481,7 +495,15 @@ class OutreachMessage(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
+    #: The proposal these words came from, for the Opportunity pipeline.
+    #: Empty for a mission-originated message: a mission composes from its own
+    #: signal, evidence and publication, and inventing a `Proposal` to fill this
+    #: in would mean inventing the findings a proposal is required to cite.
     proposal_id: str
+    #: The mission whose published artefact this message is about. Empty for an
+    #: Opportunity-pipeline message. Exactly one of the two is set, and which
+    #: one says which pipeline computed `approved_fingerprint`.
+    mission_id: str = ""
     business_id: str
     channel: str
     recipient: str
@@ -492,10 +514,37 @@ class OutreachMessage(BaseModel):
     #: The proposal fingerprint at the moment of approval. Re-checked at send.
     approved_fingerprint: str | None = None
     created_at: datetime = Field(default_factory=_now)
+    #: When a person authorised **automated** delivery of this exact artefact.
+    #:
+    #: A positive marker, and the reason it exists rather than being inferred
+    #: from `status`: every message that predates automated sending was approved
+    #: for a person to send by hand, and some of those carry `APPROVED`. Reading
+    #: automated authorisation out of a status would grant it retroactively to
+    #: decisions nobody made.
+    #:
+    #: `None` means no such authorisation. Nothing sets it silently -- it is
+    #: written only where a person authorises automated delivery, and its absence
+    #: is why a legacy or manual approval is refused with an accurate reason
+    #: instead of failing later on a fingerprint that was never meant to match.
+    authorized_automated_at: datetime | None = None
     sent_at: datetime | None = None
     #: Why a send failed or was suppressed. Never silently empty on failure.
     detail: str | None = None
     provider_message_id: str | None = None
+
+    @property
+    def authorized_for_automated_send(self) -> bool:
+        """Whether Qevik may deliver this without a person pressing send.
+
+        All three, and each is a different question: the decision was recorded
+        (`APPROVED`), it authorised *automated* delivery (`authorized_automated_at`),
+        and it named the words it covers (`approved_fingerprint`). The fingerprint
+        is still re-checked against the live proposal at send time -- this only
+        says an authorisation of the right kind exists at all.
+        """
+        return (self.status is OutreachStatus.APPROVED
+                and self.authorized_automated_at is not None
+                and bool(self.approved_fingerprint))
 
 
 #: The Opportunity Factory's own name on the timeline. Each factory owns a

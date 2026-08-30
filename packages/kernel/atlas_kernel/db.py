@@ -640,6 +640,27 @@ def init_db() -> None:
         )
         """)
         )
+        # The registry stopped being only Atlas's when Qevik mission workers
+        # registered as nodes. Capability alone cannot separate them -- an
+        # unresolvable capability becomes "" and "" means *no constraint*, so a
+        # mission worker was a candidate for any unconstrained execution, and
+        # the self-check role really does hold `filesystem`. Participation is
+        # therefore declared.
+        #
+        # Additive, and DEFAULT TRUE so every row that predates it keeps the
+        # behaviour it already had. After the CREATE above, never before it:
+        # init_db() is one transaction, and an ALTER ahead of its own CREATE
+        # aborts the lot and leaves a fresh database with no tables at all.
+        #
+        # Reverse with:
+        #   ALTER TABLE atlas_workers DROP COLUMN accepts_execution_dispatch
+        conn.execute(
+            text("""
+        ALTER TABLE atlas_workers
+        ADD COLUMN IF NOT EXISTS accepts_execution_dispatch
+            BOOLEAN NOT NULL DEFAULT TRUE
+        """)
+        )
         conn.execute(
             text("""
         CREATE TABLE IF NOT EXISTS atlas_worker_heartbeats (
@@ -1318,6 +1339,33 @@ def init_db() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
             sent_at TIMESTAMP WITH TIME ZONE
         )
+        """)
+        )
+        # Two columns, one statement. They arrived in separate passes and were
+        # briefly declared twice — harmless, because every clause is IF NOT
+        # EXISTS, but two declarations of one column is how they later disagree.
+        #
+        # `authorized_automated_at` records when a person authorised *automated*
+        # delivery, as opposed to approving words they intended to send
+        # themselves. Nullable, so every row written before automated sending
+        # existed keeps exactly the meaning it had: approved, by a person, for
+        # that person to send. Defaulting it to a timestamp would grant machine
+        # authority to decisions nobody made in those terms.
+        #
+        # `mission_id` says which pipeline composed the message, and therefore
+        # which fingerprint its approval was taken over. Defaulted to empty, so
+        # existing rows stay what they were: Opportunity-pipeline messages,
+        # approved over a `Proposal`.
+        #
+        # Reverse with:
+        #   ALTER TABLE atlas_outreach_messages
+        #   DROP COLUMN authorized_automated_at,
+        #   DROP COLUMN mission_id
+        conn.execute(
+            text("""
+        ALTER TABLE atlas_outreach_messages
+        ADD COLUMN IF NOT EXISTS mission_id TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS authorized_automated_at TIMESTAMP WITH TIME ZONE
         """)
         )
         # Atlas's permanent memory of a company. Append-only, keyed on the

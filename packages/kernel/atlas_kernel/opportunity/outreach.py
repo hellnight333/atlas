@@ -46,6 +46,25 @@ class SendResult:
 
 
 @runtime_checkable
+class Approved(Protocol):
+    """Whatever a pipeline approved, as far as sending is concerned.
+
+    `OutreachService` needs one thing from it: the fingerprint the approval was
+    taken over, to re-check that nothing moved since. `Proposal` satisfies this,
+    and so does a mission's `Prepared` — which is the point. Requiring a
+    `Proposal` specifically would force every upstream pipeline to manufacture
+    one, and a mission has a `Signal` and evidence fingerprints rather than the
+    `Finding`s a proposal must cite.
+
+    The guards do not change and do not move. Only the question "whose words are
+    these" is answered by more than one kind of record.
+    """
+
+    @property
+    def fingerprint(self) -> str: ...
+
+
+@runtime_checkable
 class OutreachChannel(Protocol):
     """Delivers one already-approved, already-checked message.
 
@@ -173,7 +192,7 @@ class OutreachService:
     def send(
         self,
         message: OutreachMessage,
-        proposal: Proposal,
+        proposal: Approved,
         profile: NicheProfile,
         *,
         now: datetime | None = None,
@@ -185,10 +204,29 @@ class OutreachService:
         already no, and reporting the wrong reason for a refusal makes the log
         misleading.
         """
+        if message.status is OutreachStatus.APPROVED_FOR_MANUAL_SEND:
+            raise OutreachRefused(
+                f"message {message.id} was approved for a person to send by "
+                "hand, not for automated delivery. Those are different "
+                "decisions, and this one was not taken."
+            )
+
         if message.status is not OutreachStatus.APPROVED:
             raise OutreachRefused(
                 f"message {message.id} is {message.status.value}, not approved — "
                 "nothing sends without a human decision"
+            )
+
+        # Before the fingerprint comparison, on purpose. A message approved
+        # under the older manual workflow carries a fingerprint of its body
+        # alone, which can never equal a proposal fingerprint — so without this
+        # check it would be refused as though somebody had edited the proposal,
+        # sending the reader to look for a change that was never made.
+        if message.authorized_automated_at is None:
+            raise OutreachRefused(
+                f"message {message.id} carries no authorisation for automated "
+                "delivery. Approval that a person may send these words is not "
+                "authorisation for Qevik to send them."
             )
 
         if message.approved_fingerprint is None:

@@ -61,14 +61,37 @@ class TestWhatsAppIsOnlyOfferedWhereItWorks:
 
 class TestNothingBooks:
     @pytest.mark.parametrize("slug", list(SAMPLES))
-    def test_every_sample_says_its_form_is_not_connected(self, slug: str) -> None:
+    def test_every_sample_offers_a_contact_path_that_delivers(self, slug: str) -> None:
+        """The contract this replaced said the form announced it was *not*
+        connected -- true until M1 wired the enquiry block, and a false
+        statement the moment it did.
+
+        What has not changed is the thing that mattered: the page must not let a
+        visitor believe more happened than did. That is asserted here as
+        delivery, and below as the promise not made.
+        """
         biz, palette = SAMPLES[slug]
         files = render_site(biz, base_url=f"https://x/{slug}", **palette)
         for page in ("index.html", "ar/index.html"):
             html = files[page]
-            assert "request-form" in html
-            # The submit handler must state it did not send, in that language.
-            assert "not connected" in html or "\\u063a\\u064a\\u0631" in html, f"{slug} {page}"
+            assert "request-form" not in html, f"{slug} {page}: the dead form is back"
+            assert "not connected" not in html, (
+                f"{slug} {page}: the page says it cannot deliver, and it can")
+            delivers = "mailto:" in html or "wa.me/" in html
+            assert delivers or 'class="enquiry"' not in html, (
+                f"{slug} {page}: an enquiry form with nowhere to send")
+
+    @pytest.mark.parametrize("slug", list(SAMPLES))
+    def test_every_sample_states_what_a_request_does_not_do(self, slug: str) -> None:
+        """The safety half, now for every sample rather than the two below.
+
+        A visitor who presses send has made a request. A page that lets them
+        believe a table or a chair is held has cost them an evening.
+        """
+        biz, palette = SAMPLES[slug]
+        html = render_site(biz, base_url=f"https://x/{slug}", **palette)["index.html"]
+        assert "not a confirmed booking" in html.lower(), slug
+        assert "only held once" in html.lower(), slug
 
     def test_the_restaurant_does_not_claim_to_hold_a_table(self) -> None:
         biz, palette = SAMPLES["sample-restaurant"]

@@ -71,6 +71,20 @@ class WorkerNode(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metrics: WorkerMetrics = Field(default_factory=WorkerMetrics)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    #: Whether the dispatcher may place an Atlas *execution* here.
+    #:
+    #: Default True, so every worker that existed before this field keeps the
+    #: behaviour it had. False is for a node that is present, healthy and
+    #: advertising capabilities, but collects a different queue -- a Qevik
+    #: mission worker polls missions and would never pick an execution up.
+    #:
+    #: The registry is not only Atlas's any more, and capability alone stopped
+    #: being enough to tell the two apart: `Dispatcher._required_capability`
+    #: resolves anything outside `WorkerCapability` to `""`, which
+    #: `select_candidates` reads as *no constraint*, and the self-check role's
+    #: real tools include `filesystem`, which is a genuine Atlas capability. So
+    #: participation is declared rather than inferred.
+    accepts_execution_dispatch: bool = True
     last_heartbeat_at: datetime | None = None
     registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -96,6 +110,9 @@ class WorkerRegistration(BaseModel):
     version: str = "0.0.0"
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    #: See `WorkerNode.accepts_execution_dispatch`. Default True so an existing
+    #: caller that says nothing keeps registering an ordinary Atlas worker.
+    accepts_execution_dispatch: bool = True
     worker_id: str | None = None
 
 

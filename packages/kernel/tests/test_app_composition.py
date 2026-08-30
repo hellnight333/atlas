@@ -312,7 +312,19 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     # Raised for the artefact review card, the awaiting-publication queue and
     # the outreach card — genuine surfaces, not a failure being silenced. The
     # rules below got stricter each time, which is the condition on moving this.
-    assert Path(CONSOLE / "index.html").stat().st_size < 96_000
+    # Raised again for the Fabric view. The rule below got stricter with it: the
+    # console may not decide whether a worker is healthy. Nothing renders a
+    # fleet the dispatcher would disagree with, because nothing on this side
+    # computes staleness — it prints the `state` and `healthy` the API sent.
+    for deriving in ("last_heartbeat", "last_seen_at -", "> 7200", "> 90",
+                     "stale_after", "HEARTBEAT", "STALE_"):
+        assert deriving not in source, (
+            f"the console derives worker health itself via {deriving!r}; two "
+            "answers to 'is this machine alive', and the one on screen is the "
+            "untested one")
+    assert "w.state" in source and "w.healthy" in source, (
+        "the Fabric view must render the state the scheduler reported")
+    assert Path(CONSOLE / "index.html").stat().st_size < 100_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

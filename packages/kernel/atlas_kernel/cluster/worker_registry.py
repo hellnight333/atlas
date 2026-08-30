@@ -61,6 +61,13 @@ class WorkerRegistry:
                     "resources": registration.resources,
                     "capabilities": list(registration.capabilities),
                     "max_concurrency": max(1, registration.max_concurrency),
+                    # Set on *both* branches on purpose. Registration is
+                    # idempotent, so a worker that has registered before takes
+                    # this path every time it restarts -- and a field written
+                    # only where the node is created would leave every existing
+                    # row on its old value, silently, and only in production
+                    # where the rows already exist.
+                    "accepts_execution_dispatch": registration.accepts_execution_dispatch,
                     "version": registration.version,
                     "tags": list(registration.tags),
                     "metadata": dict(registration.metadata),
@@ -78,6 +85,7 @@ class WorkerRegistry:
                 resources=registration.resources,
                 capabilities=list(registration.capabilities),
                 max_concurrency=max(1, registration.max_concurrency),
+                accepts_execution_dispatch=registration.accepts_execution_dispatch,
                 version=registration.version,
                 tags=list(registration.tags),
                 metadata=dict(registration.metadata),

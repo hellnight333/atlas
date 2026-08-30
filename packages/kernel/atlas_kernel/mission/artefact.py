@@ -207,13 +207,48 @@ def read(mission_id: str, workspace: str, path: str, *,
 
 def provenance(mission_id: str, workspace: str, *,
                scratch: Path | None = None) -> dict:
-    """What the build says it answered, or `{}` when it recorded none."""
+    """What the build says it answered, or `{}` when it recorded none.
+
+    Reads the mission *branch*, which is a name that can move, and returns `{}`
+    rather than raising. Both are right for a display: a reviewer looking at a
+    mission wants whatever is there now, and an absent file is not an error.
+
+    Neither is right for an approval. Use `provenance_at` where the answer has
+    to be the same on two different days — see the note there.
+    """
     try:
         return json.loads(read(mission_id, workspace, PROVENANCE,
                                scratch=scratch))
     except (Unreadable, json.JSONDecodeError) as missing:
         log.info("no provenance for %s: %s", mission_id, missing)
         return {}
+
+
+def provenance_at(commit: str, workspace: str, *,
+                  scratch: Path | None = None) -> dict:
+    """The provenance recorded in one specific commit. Raises if it is not there.
+
+    Two differences from `provenance`, and both exist for approvals.
+
+    **Addressed by commit, not by branch.** `mission/<id>` can be moved; an
+    approval that read through it would authorise whatever it later points at.
+
+    **Absent is an error, not an empty answer.** The message composed for a
+    business includes a paragraph listing what the build addressed, drawn from
+    this file. `provenance` returning `{}` turns a missing file into a *shorter,
+    different message* with no error anywhere — so an approval would be
+    invalidated, or worse honoured, over words nobody changed. Refusing is the
+    only safe direction: it stops the send and says why.
+    """
+    text = read_at(commit, workspace, PROVENANCE, scratch=scratch)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as malformed:
+        raise Unreadable(
+            f"the provenance in {commit[:12]} is not readable JSON. The message "
+            "quotes it, so composing one from a file we cannot parse would "
+            "state something nobody wrote."
+        ) from malformed
 
 
 def commit_of(mission_id: str, workspace: str, *,
@@ -227,5 +262,5 @@ def commit_of(mission_id: str, workspace: str, *,
 
 __all__ = ["COMMIT", "DEFAULT_ROOT", "ENVIRONMENT", "MAX_BYTES", "PREFIX",
            "PROVENANCE", "READABLE", "Entry", "Unreadable", "branch_of",
-           "commit_of", "files", "files_at", "provenance", "read", "read_at",
-           "root"]
+           "commit_of", "files", "files_at", "provenance", "provenance_at",
+           "read", "read_at", "root"]

@@ -28,7 +28,8 @@ import json
 import re
 from urllib.parse import quote
 
-from ..content import Fact, SiteContent
+from .. import enquiry
+from ..content import ContactDetails, Fact, SiteContent
 from . import _strings
 
 NAME = "dental"
@@ -307,19 +308,20 @@ PAGE = """<!doctype html>
            border:1px solid var(--line); border-radius:99px; padding:.35rem .7rem; white-space:nowrap; }}
   .lang:hover {{ border-color:var(--brand); color:var(--brand-dark); }}
 
-  form.request {{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:1.4rem; }}
-  .fields {{ display:grid; gap:.9rem; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }}
-  form.request label {{ display:block; font-size:.88rem; color:var(--muted); }}
-  form.request label.wide {{ margin-top:.9rem; }}
-  form.request input, form.request select, form.request textarea {{
-    width:100%; margin-top:.35rem; padding:.65rem .7rem; font:inherit; color:var(--ink);
+  /* The enquiry block. Styled to this page's tokens rather than restyled in
+     `website.enquiry`, which stays medium-agnostic and carries no theme. */
+  form.enquiry {{ background:#fff; border:1px solid var(--line); border-radius:14px;
+    padding:1.4rem; max-width:640px; }}
+  form.enquiry label {{ display:block; margin:.75rem 0 .25rem; font-size:.88rem;
+    color:var(--muted); }}
+  form.enquiry input, form.enquiry textarea {{
+    width:100%; padding:.65rem .7rem; font:inherit; color:var(--ink);
     border:1px solid var(--line); border-radius:9px; background:#fff; }}
-  form.request button {{ margin-top:1rem; background:var(--brand); color:#fff; border:0;
-    padding:.8rem 1.6rem; border-radius:10px; font:inherit; font-weight:600; cursor:pointer; }}
-  form.request button:hover {{ background:var(--brand-dark); }}
-  .notice {{ margin:.9rem 0 0; font-size:.88rem; color:var(--muted); }}
-  .notice.shown {{ color:var(--ink); background:#fff8e8; border:1px solid var(--accent);
-                   border-radius:9px; padding:.7rem .8rem; }}
+  .enquiry-actions {{ display:flex; gap:.7rem; flex-wrap:wrap; margin:1rem 0 0; }}
+  .enquiry-send {{ display:inline-block; background:var(--brand); color:#fff;
+    padding:.75rem 1.4rem; border-radius:10px; font-weight:600; text-decoration:none; }}
+  .enquiry-send:hover {{ background:var(--brand-dark); }}
+  .enquiry-note {{ margin:.9rem 0 0; font-size:.85rem; color:var(--muted); }}
 
   /* Right-to-left. Logical properties do most of the work; these are the few
      places a physical direction was assumed. */
@@ -416,21 +418,9 @@ PAGE = """<!doctype html>
 
 <section class="alt" id="request">
   <div class="wrap">
-    <h2>{request_heading}</h2>
     <p class="sub">{request_sub}</p>
-    <form class="request" id="appointment-form" novalidate>
-      <div class="fields">
-        <label>{field_name}<input name="name" autocomplete="name" required></label>
-        <label>{field_phone}<input name="phone" type="tel" autocomplete="tel" required></label>
-        <label>{field_when}<input name="preferred" type="datetime-local"></label>
-        <label>{field_service}
-          <select name="service">{service_options}</select>
-        </label>
-      </div>
-      <label class="wide">{field_message}<textarea name="message" rows="3"></textarea></label>
-      <button type="submit">{request_submit}</button>
-      <p class="notice" id="form-notice" role="status">{request_notice}</p>
-    </form>
+{enquiry_block}
+    <p class="enquiry-note">{confirmation_note}</p>
   </div>
 </section>
 
@@ -452,20 +442,34 @@ PAGE = """<!doctype html>
 <div class="sticky">{sticky}</div>
 
 <script type="application/ld+json">{structured}</script>
-<script>
-// The appointment backend does not exist yet. Rather than pretend, the form
-// states that plainly and points the visitor at a channel that does work.
-// A fake success message here would be the one lie that reaches a patient.
-document.getElementById('appointment-form').addEventListener('submit', function (e) {{
-  e.preventDefault();
-  var notice = document.getElementById('form-notice');
-  notice.textContent = {not_implemented_js};
-  notice.className = 'notice shown';
-}});
-</script>
 </body>
 </html>
 """
+
+
+def _enquiry_content(name: str, phone: str, email: str) -> SiteContent:
+    """The minimum `SiteContent` the enquiry block needs.
+
+    A bridge, not a second content model: this vertical is called with plain
+    facts about one clinic, and `enquiry` reasonably speaks the medium-agnostic
+    content type the rest of the website package uses. Only the fields the block
+    actually reads are populated, and each is omitted rather than invented.
+
+    WhatsApp is derived from the phone by the same rule the page's own buttons
+    use, so the enquiry block and the header CTA can never disagree about
+    whether the number can receive a message.
+    """
+    contact = ContactDetails(
+        phone=Fact(value=phone.strip(), source="business_record") if phone.strip() else None,
+        email=Fact(value=email.strip(), source="business_record") if email.strip() else None,
+        # The same recorded number, not a new claim about the business.
+        whatsapp=(Fact(value=phone.strip(), source="business_record")
+                  if whatsapp_href(phone) else None),
+    )
+    return SiteContent(
+        business_name=Fact(value=name.strip() or "Dental Clinic",
+                           source="business_record"),
+        contact=contact)
 
 
 def render(
@@ -480,6 +484,7 @@ def render(
     year: int = 2026,
     lang: str = "en",
     base_url: str = "",
+    email: str = "",
 ) -> str:
     """Render one language of a clinic page.
 
@@ -497,6 +502,21 @@ def render(
     area_x = e(area.strip())
     dial = tel_href(phone)
     wa = whatsapp_href(phone)
+
+    # The enquiry section renders `website.enquiry`, which composes a message in
+    # the visitor's own mail client or WhatsApp. This page used to carry its own
+    # form with a notice saying the backend did not exist -- honest, but a dead
+    # end. The working block already existed in the same package and was reached
+    # only by `execution.capabilities.enquiry`; two implementations of contact,
+    # and the published pages used the weaker one.
+    #
+    # `form()` returns an empty string when the business has neither an email nor
+    # a WhatsApp-capable number, and the section is then omitted entirely. That
+    # is the intended behaviour: sixteen of twenty audited clinics publish a
+    # landline, and a WhatsApp button pointing at a landline is silence rather
+    # than an error.
+    enquiry_block = enquiry.form(_enquiry_content(name, phone, email),
+                                 arabic=(lang == "ar"))
 
     site_root = url or (f"{base_url}/" if base_url else "")
     href_en = site_root
@@ -648,7 +668,12 @@ def render(
         request_submit=strings.request_submit,
         request_notice=strings.request_notice,
         service_options="".join(f"<option>{e(s[0])}</option>" for s in services),
-        not_implemented_js=json.dumps(strings.request_not_implemented),
+        enquiry_block=enquiry_block,
+        confirmation_note=e(
+            ("هذا طلب وليس موعداً مؤكداً — لا يُحجز موعدك إلا بعد تأكيد العيادة."
+             if lang == "ar" else
+             "Sending this is a request, not a confirmed appointment — your time "
+             "is only held once the clinic confirms.")),
         year=year,
         footer_location=e(address or area or ""),
         structured=_structured_data(

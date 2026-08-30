@@ -2,8 +2,18 @@
 
 Updated 2026-08-19.
 
-Five drafts exist for the five ranked prospects. **Nothing has been sent, and
-nothing currently can be.** That is a property of the code, not a setting.
+Five drafts exist for the five ranked prospects, approved for **manual** sending
+— the operator contacts each prospect personally, and the point is to learn how
+the offer lands. Nothing has been sent.
+
+Automated email sending was built later and is a **separate path**: it requires
+its own authorisation (`authorized_automated_at`), a canonical fingerprint over
+the exact artefact, and an explicit send action. The five manual drafts cannot
+enter it — they carry no automated authorisation, and a test asserts they never
+will. See §26–27 of `QEVIK_HISTORICAL_DECISIONS.md`.
+
+What still cannot happen is a *real* send: no SMTP credential is configured, so
+`EmailChannel.configured()` is false and the channel refuses.
 
 ---
 
@@ -64,7 +74,11 @@ sender sees — it is silence. `outreach_drafts.py` calls it before writing any
 draft that recommends WhatsApp, so a campaign cannot report five sends and
 produce three.
 
-### To connect a channel later
+### To connect a channel later — done for email, 2026-08-30
+
+All four steps below were carried out for `EmailChannel`. They are kept as the
+record of what was done, and as the procedure for the next channel — WhatsApp
+has not been connected and, by decision, is not to be automated.
 
 1. Write the provider adapter in its own file under `atlas_kernel/outreach/`.
 2. Make `configured()` return True only when its credential is present, loaded

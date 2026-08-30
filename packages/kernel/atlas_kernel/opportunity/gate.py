@@ -19,6 +19,7 @@ particular thing and a standing permission to contact someone.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
@@ -147,6 +148,12 @@ class OutreachGate:
                 "status": OutreachStatus.APPROVED,
                 "approval_id": approval.id,
                 "approved_fingerprint": current,
+                # This gate is where a person authorises *Qevik* to deliver, as
+                # distinct from approving words they will send themselves. The
+                # marker is written here and nowhere else, so "may a machine
+                # send this" has one origin and is never inferred from a status
+                # that meant something different when it was recorded.
+                "authorized_automated_at": datetime.now(UTC),
             }
         )
 

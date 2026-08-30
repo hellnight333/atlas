@@ -31,20 +31,26 @@ Specifically it never invents a contact, a person, a phone number, a fact about
 the business, or a sending identity. `outreach/identity.py` is the letterhead and
 is stated once; this reads it and does not compose one.
 
-## Three states, and only the first is reachable today
+## Three states
 
     PREPARED          a message exists, addressed to nobody
     APPROVED_TO_SEND  a person decided it may go
     SENT              a provider accepted it
 
-`SENT` is unreachable: `outreach/channels.py` holds the seam and no provider.
-`APPROVED_TO_SEND` is reachable only when there is a verified recipient — and
-for the first published business there is not one, which is the correct answer
-rather than a gap to fill.
+`SENT` became reachable when `EmailChannel` gained a transport, and it is
+reached only through `OutreachService.send` — never from here. This module still
+cannot send: it composes, and composing is not an act.
+
+`APPROVED_TO_SEND` is reachable only when there is a verified recipient.
+
+The approval that authorises *automated* delivery is a separate decision from
+approving the words, and carries `authorized_automated_at`. `fingerprint` below
+is what such an approval binds to.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,6 +99,36 @@ class Prepared:
     blocked_on: tuple[str, ...] = ()
     #: Which stored field each claim came from, so a reader can check them.
     traces: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def fingerprint(self) -> str:
+        """What an approval for automated delivery binds to.
+
+        The mission pipeline's counterpart to `Proposal.fingerprint`, and
+        deliberately not that object: a mission has a `Signal` and evidence
+        fingerprints, not `Finding`s, and manufacturing a `Proposal` to satisfy
+        an interface would mean inventing the evidence it claims to cite.
+
+        Five components, each already authoritative somewhere:
+
+        * `subject`, `body` — the exact words that will be sent, as composed.
+        * `recipient` — from the business record, via `verified_recipient`.
+        * `commit` — the publication this message is *about*. Republish and the
+          approval dies, because the message says "I built one and put it here".
+        * `evidence_fingerprints` — the signal's own record of what was observed.
+          Re-run the audit and the approval dies, because the claim rested on it.
+
+        Sorted, so the digest does not move when a list is read back in another
+        order. `answers` are not a separate component: they are already inside
+        `body`, and including them twice would say nothing new.
+        """
+        return hashlib.sha256("\x1f".join((
+            self.subject,
+            self.body,
+            self.recipient,
+            self.commit,
+            *sorted(self.evidence_fingerprints),
+        )).encode("utf-8")).hexdigest()
 
     @property
     def state(self) -> str:

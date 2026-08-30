@@ -109,6 +109,23 @@ def _message(business: Business, proposal: Proposal, **overrides) -> OutreachMes
     return OutreachMessage(**payload)
 
 
+def _authorised(business: Business, proposal: Proposal, **overrides) -> OutreachMessage:
+    """A message the gate has authorised for **automated** delivery.
+
+    Three things together, because that is what the gate writes: the status, the
+    proposal fingerprint, and the moment a person authorised a machine to send.
+    Approving words a person will send by hand writes only the first two, and
+    the tests that mean *that* build it explicitly rather than through here.
+    """
+    payload = {
+        "status": OutreachStatus.APPROVED,
+        "approved_fingerprint": proposal.fingerprint,
+        "authorized_automated_at": datetime.now(UTC),
+    }
+    payload.update(overrides)
+    return _message(business, proposal, **payload)
+
+
 def _approved(fingerprint: str) -> ApprovalRequest:
     return ApprovalRequest(
         title="Contact Al Noor Dental Clinic",
@@ -204,7 +221,8 @@ class TestSendGuards:
         """Status is a field anyone can set. The fingerprint is the thing that
         cannot be forged by flipping a flag."""
         business, _, proposal = scenario
-        forged = _message(business, proposal, status=OutreachStatus.APPROVED)
+        forged = _message(business, proposal, status=OutreachStatus.APPROVED,
+                          authorized_automated_at=datetime.now(UTC))
         with pytest.raises(OutreachRefused, match="no approved fingerprint"):
             self._service().send(forged, proposal, EXAMPLE_PROFILE)
 
@@ -212,12 +230,8 @@ class TestSendGuards:
         """Belt and braces on purpose: the gate checks at authorisation, and the
         send checks again, because time passes in between."""
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint="something-else",
-        )
+        approved = _authorised(business, proposal,
+                               approved_fingerprint="something-else")
         with pytest.raises(OutreachRefused, match="changed after approval"):
             self._service().send(approved, proposal, EXAMPLE_PROFILE)
 
@@ -225,37 +239,22 @@ class TestSendGuards:
         """The ordering that matters. Someone says "never contact me again"
         after approval was granted; every approved message to them must die."""
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         service = self._service(suppression=SuppressionList(["hello@clinic.test"]))
         with pytest.raises(OutreachRefused, match="suppression list"):
             service.send(approved, proposal, EXAMPLE_PROFILE)
 
     def test_suppressing_a_domain_covers_their_colleagues(self, scenario) -> None:
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-            recipient="someone.else@clinic.test",
-        )
+        approved = _authorised(business, proposal,
+                               recipient="someone.else@clinic.test")
         service = self._service(suppression=SuppressionList(["@clinic.test"]))
         with pytest.raises(OutreachRefused, match="suppression list"):
             service.send(approved, proposal, EXAMPLE_PROFILE)
 
     def test_a_business_inside_the_cooldown_is_not_contacted_again(self, scenario) -> None:
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         history = ContactHistory({business.id: datetime.now(UTC) - timedelta(days=10)})
         service = self._service(history=history)
         with pytest.raises(OutreachRefused, match="cooldown"):
@@ -263,12 +262,7 @@ class TestSendGuards:
 
     def test_past_the_cooldown_it_sends(self, scenario) -> None:
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         channel = RecordingChannel()
         elapsed = EXAMPLE_PROFILE.contact_cooldown_days + 1
         service = OutreachService(
@@ -283,12 +277,7 @@ class TestSendGuards:
 class TestSending:
     def test_a_clean_send_records_what_happened(self, scenario) -> None:
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         channel = RecordingChannel()
         service = OutreachService(channel)
         sent = service.send(approved, proposal, EXAMPLE_PROFILE)
@@ -302,23 +291,13 @@ class TestSending:
         """Atlas has no sending identity yet. The pipeline runs end to end, and
         the output says plainly that nothing left the building."""
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         sent = OutreachService(RecordingChannel()).send(approved, proposal, EXAMPLE_PROFILE)
         assert "not delivered" in (sent.detail or "")
 
     def test_sending_starts_the_cooldown(self, scenario) -> None:
         business, _, proposal = scenario
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         service = OutreachService(RecordingChannel())
         service.send(approved, proposal, EXAMPLE_PROFILE)
         assert service.history.within_cooldown(business.id, EXAMPLE_PROFILE.contact_cooldown_days)
@@ -334,12 +313,7 @@ class TestSending:
             def deliver(self, message):
                 raise RuntimeError("smtp refused connection")
 
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         result = OutreachService(Failing()).send(approved, proposal, EXAMPLE_PROFILE)
         assert result.status is OutreachStatus.FAILED
         assert "smtp refused connection" in (result.detail or "")
@@ -354,12 +328,7 @@ class TestSending:
             def deliver(self, message):
                 raise RuntimeError("smtp refused connection")
 
-        approved = _message(
-            business,
-            proposal,
-            status=OutreachStatus.APPROVED,
-            approved_fingerprint=proposal.fingerprint,
-        )
+        approved = _authorised(business, proposal)
         service = OutreachService(Failing())
         service.send(approved, proposal, EXAMPLE_PROFILE)
         assert service.history.last_contacted(business.id) is None

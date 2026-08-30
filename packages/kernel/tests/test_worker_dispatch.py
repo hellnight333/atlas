@@ -42,17 +42,30 @@ def dispatchable(routes: dict, connected: frozenset, **kw) -> list[str]:
 
 # ------------------------------------------------ the agent registry link
 
-def test_without_a_route_the_scheduler_cannot_see_any_credential_requirement():
-    """The bug, stated as a fact rather than as history.
+def test_without_any_agent_the_scheduler_refuses_rather_than_dispatching_blind():
+    """The bug, and what now stops it.
 
-    With no `agent_for`, every demand gets `placement=EITHER` and no required
+    With no agent resolved, a demand gets `placement=EITHER` and no required
     credentials — so a mission whose agent needs a key nobody configured was
-    dispatched, reported as running, and failed at the provider.
+    dispatched, reported as running, and failed at the provider. The scheduler
+    could not see the requirement, and dispatched anyway.
+
+    It still cannot see the requirement. It no longer dispatches: an unresolved
+    agent is blocked before the credential check, precisely because every fact
+    that check relies on is derived from the agent.
     """
     demands = demands_from([a_folded_mission()], agents=Registry(),
                            agent_for={}, connected=frozenset())
-    assert demands[0].missing_credentials == ()
-    assert dispatchable({}, frozenset()) == ["m-1"]
+    assert demands[0].agent_id == "", "no agent could be resolved"
+    assert demands[0].missing_credentials == (), "so no requirement is visible"
+
+    assert dispatchable({}, frozenset()) == [], (
+        "a mission with nobody to run it was called dispatchable")
+
+    # Not vacuous: the same mission, routed, is dispatchable once its agent's
+    # credentials are present.
+    assert dispatchable({"m-1": "implementer"},
+                        frozenset({"qwen", "anthropic", "openai"})) == ["m-1"]
 
 
 def test_with_a_route_a_missing_credential_holds_the_mission():
@@ -140,11 +153,17 @@ def test_queued_passes_all_three_through(tmp_path):
 
 
 def _event(status: str):
-    """One mission event, built the way the service builds them."""
+    """One mission event, built the way the service builds them.
+
+    Routed to `implementer` explicitly. It used to name no agent and was offered
+    to this worker anyway, through the fallback that has since been removed --
+    which made a test about *credentials* depend on a routing rule it was not
+    written to check.
+    """
     from atlas_kernel.mission import service
     from atlas_kernel.mission.models import Mission, MissionStatus
     mission = Mission(id="m-1", tenant_id=TENANT, title="needs a model",
-                      status=MissionStatus(status))
+                      agent_id="implementer", status=MissionStatus(status))
     return service._event(mission, actor="test", note=status)
 
 
@@ -189,7 +208,17 @@ def test_a_worker_is_not_offered_a_mission_it_cannot_carry_out(tmp_path):
         "the worker that serves it was not offered it")
 
 
-def test_a_mission_with_no_recorded_agent_falls_back_to_the_workers(tmp_path):
+def test_a_mission_with_no_recorded_agent_is_offered_to_nobody(tmp_path):
+    """It used to be offered to *every* worker, and that was the bug.
+
+    The filter read `not m.get("agent_id") or m.get("agent_id") == agent_id`, so
+    a mission naming no agent was eligible everywhere. That is the same mistake
+    as reading an unresolvable capability as "no constraint": the absence of a
+    requirement is not permission to run anywhere, and the worker that happened
+    to ask first would carry out work whose blast radius nobody had recorded.
+
+    Explicitly routed work is untouched -- only the wildcard is gone.
+    """
     timeline = worker.Timeline(tmp_path / "m.jsonl")
     from atlas_kernel.mission import service
     from atlas_kernel.mission.models import Mission, MissionStatus
@@ -197,11 +226,21 @@ def test_a_mission_with_no_recorded_agent_falls_back_to_the_workers(tmp_path):
                         status=MissionStatus.QUEUED)
     timeline.append(service._event(anonymous, actor="test", note="queued"))
 
-    assert worker.queued(timeline, tenant=TENANT, connected=frozenset(),
-                         agent_id="implementer") == []
-    assert [m.id for m in worker.queued(timeline, tenant=TENANT,
-                                        connected=frozenset({"qwen"}),
-                                        agent_id="implementer")] == ["m-2"]
+    for role in ("implementer", "self-check", "researcher", "site-publisher"):
+        assert worker.queued(timeline, tenant=TENANT,
+                             connected=frozenset({"qwen", "anthropic"}),
+                             agent_id=role) == [], (
+            f"an unrouted mission was offered to {role}")
+
+    # Not vacuous: the same mission, once routed, is offered to the worker it
+    # names. Without this the assertions above would pass on a broken fold.
+    routed = Mission(id="m-3", tenant_id=TENANT, title="named",
+                     agent_id="implementer", status=MissionStatus.QUEUED)
+    timeline.append(service._event(routed, actor="test", note="queued"))
+    served = worker.queued(timeline, tenant=TENANT,
+                           connected=frozenset({"qwen", "anthropic"}),
+                           agent_id="implementer")
+    assert [m.id for m in served] == ["m-3"]
 
 
 # ============================================================ no silent fallback

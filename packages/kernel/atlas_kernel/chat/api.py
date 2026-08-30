@@ -207,7 +207,8 @@ def build_router() -> APIRouter:
         try:
             updated, event = service.plan_for(
                 conversation, proposal.plan, tenant=tenant,
-                provider=proposal.provider, model=proposal.model)
+                provider=proposal.provider, model=proposal.model,
+                agent_id=proposal.agent_id)
         except PlanRejected as refused:
             raise HTTPException(status_code=409, detail=str(refused)) from refused
         _append(request, event)

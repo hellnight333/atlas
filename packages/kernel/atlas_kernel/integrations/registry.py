@@ -22,13 +22,36 @@ account.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
 from ..opportunity.tenancy import TenantId
 from ..publication.connections import ConnectionStore
 from ..publication.models import ConnectionKind
+
+
+def _root_exists(variable: str) -> bool:
+    """Whether a filesystem-backed integration actually has somewhere to write.
+
+    Resolved the way the publisher resolves it — the environment variable if set,
+    otherwise the documented default — and then checked for real, because the
+    question is whether publication can happen rather than whether somebody typed
+    a setting.
+
+    Checking only the variable was wrong in exactly the way this whole entry was
+    wrong: production has never set `QEVIK_SITES_ROOT`, publishes to the default
+    `/srv/sites`, and would have kept reporting "connect me" while serving live
+    customer sites out of that directory.
+    """
+    from ..mission.toolrunner import DEFAULT_SITES_ROOT, SITES_ROOT_ENV
+
+    if variable != SITES_ROOT_ENV:                 # pragma: no cover - one today
+        return bool(os.environ.get(variable, "").strip())
+    root = os.environ.get(SITES_ROOT_ENV, DEFAULT_SITES_ROOT).strip()
+    return bool(root) and Path(root).is_dir()
 
 
 class IntegrationStatus(StrEnum):
@@ -63,6 +86,18 @@ class Integration(BaseModel):
     blocks: tuple[str, ...] = ()
     #: False when the adapter itself is not built yet.
     adapter_ready: bool = True
+    #: How a person knows they are finished, in the terms of the actual check.
+    #:
+    #: Empty means the ordinary test: a connection exists for this tenant. Some
+    #: integrations need more, and saying otherwise tells somebody they are done
+    #: when they are not — `smtp` needs five settings before `EmailChannel`
+    #: reports itself configured, and a filesystem root is a directory that has
+    #: to exist rather than a credential anybody stores.
+    verification: str = ""
+
+    def verifies_by(self) -> str:
+        return self.verification or (
+            f"a connection to {self.id} exists for this tenant")
 
     def status(self, store: ConnectionStore, *, tenant: TenantId | None
                ) -> IntegrationStatus:
@@ -70,6 +105,19 @@ class Integration(BaseModel):
             return IntegrationStatus.NOT_IMPLEMENTED
         if store.for_target(self.id, tenant=tenant) is not None:
             return IntegrationStatus.CONNECTED
+        # A filesystem-backed integration is connected when it actually has
+        # somewhere to write. That is not a per-tenant secret somebody stores
+        # through the Credential Centre — it is how the deployment was
+        # installed, and `_root_exists` resolves it exactly as the publisher
+        # does rather than asking whether a variable was typed.
+        #
+        # Without this, the action centre listed "Connect Local filesystem —
+        # blocks publication" on a deployment that had been publishing to that
+        # very directory for weeks. One wrong item is how a human action list
+        # stops being read, which costs more than the item was worth.
+        if self.kind is ConnectionKind.FILESYSTEM:
+            return (IntegrationStatus.CONNECTED if _root_exists(self.credential)
+                    else IntegrationStatus.PENDING_CREDENTIAL)
         return IntegrationStatus.PENDING_CREDENTIAL
 
     def describe(self, store: ConnectionStore, *, tenant: TenantId | None) -> dict:
@@ -138,13 +186,45 @@ INTEGRATIONS: tuple[Integration, ...] = (
         purpose="Send approved outreach and customer notifications.",
         kind=ConnectionKind.API_TOKEN, credential="QEVIK_SMTP_PASSWORD",
         blocks=("outreach:send", "notifications"),
-        adapter_ready=False),
+        verification=("all five of QEVIK_SMTP_HOST, _PORT, _USER, _PASSWORD and "
+                      "_FROM are present, so `EmailChannel.configured()` is true. "
+                      "Sending is proven only by a message arriving in a real "
+                      "inbox with SPF, DKIM and DMARC passing in its headers"),
+        # Built at M1: `outreach.channels.EmailChannel` sends through smtplib,
+        # behind the approval boundary. The credential id is unchanged -- the
+        # entry was extended rather than replaced, so nothing that already
+        # referred to `smtp` has to learn a second name.
+        #
+        # `adapter_ready` says the adapter exists. It does not say a credential
+        # is present, and it must never be read as "email works": the settings
+        # named in `outreach.channels.SMTP_SETTINGS` are what decide that, and
+        # only a delivered message proves it.
+        adapter_ready=True),
+    # Real code, cost-capped, and until now absent from this catalogue — so the
+    # action centre could not ask for the one key that turns discovery from
+    # "2-17% of OpenStreetMap businesses are contactable" into a workable
+    # prospect list. `infra/market_scan.py` is configured for it and the
+    # `qevik-market-scan` unit is dead without it.
+    Integration(
+        id="google-places", name="Google Places",
+        purpose=("Find real businesses with a phone and a website. OpenStreetMap "
+                 "knows 2-17% of them are contactable; Places knows nearly all."),
+        kind=ConnectionKind.API_TOKEN,
+        credential="QEVIK_GOOGLE_PLACES_API_KEY",
+        setup_url="https://console.cloud.google.com/apis/credentials",
+        blocks=("discovery:contactable",),
+        verification=("QEVIK_GOOGLE_PLACES_API_KEY is present and the "
+                      "`qevik-market-scan` unit completes a scan returning "
+                      "businesses with a phone or a website"),
+        adapter_ready=True),
     # --- everything else ---------------------------------------------------
     Integration(
         id="local", name="Local filesystem",
         purpose="Publish a site to a directory a web server serves.",
         kind=ConnectionKind.FILESYSTEM, credential="QEVIK_SITES_ROOT",
-        blocks=("publication",)),
+        blocks=("publication",),
+        verification=("the sites root resolves to a directory that exists — the "
+                      "variable if set, otherwise the deployment default")),
     Integration(
         id="ai-visibility", name="AI search visibility",
         purpose="Find out whether AI assistants mention and cite this business.",

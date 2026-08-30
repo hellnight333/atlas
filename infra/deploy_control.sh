@@ -21,6 +21,7 @@ KEY="$HOME/.ssh/naml_hetzner"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE_APP="/opt/qevik/atlas"
 SERVICE="qevik-control.service"
+WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service"
 HEALTH="http://127.0.0.1:8081/api/health"
 
 ssh_() { ssh -o BatchMode=yes -o ConnectTimeout=15 -i "$KEY" "$TARGET" "$@"; }
@@ -28,12 +29,40 @@ ssh_() { ssh -o BatchMode=yes -o ConnectTimeout=15 -i "$KEY" "$TARGET" "$@"; }
 [ -f "$ROOT/packages/kernel/atlas_kernel/qevik/app.py" ] || {
   echo "REFUSED: no kernel at $ROOT"; exit 1; }
 
+# Refuse rather than half-deploy. `infra/` went unshipped for the whole life of
+# this script and nobody noticed, because a deploy that sends less than it
+# should still exits zero. This asks the opposite question: is anything that
+# changed *not* covered by what we send?
+#
+# Tracked, modified, runtime files only -- tests and documents do not run in
+# production. Committed work is covered too: the comparison is against what the
+# host has, not against the last commit.
+SHIPPED_PREFIXES="packages/kernel/atlas_kernel/ infra/ apps/control/src/"
+UNSHIPPED=""
+for f in $(git -C "$ROOT" ls-files -mo --exclude-standard 2>/dev/null); do
+  case "$f" in
+    */tests/*|tests/*|*.md|docs/*) continue ;;
+  esac
+  covered=""
+  for prefix in $SHIPPED_PREFIXES; do
+    case "$f" in "$prefix"*) covered=yes ;; esac
+  done
+  [ -z "$covered" ] && UNSHIPPED="$UNSHIPPED $f"
+done
+if [ -n "$UNSHIPPED" ]; then
+  echo "REFUSED: these changed runtime files are not shipped by this script:"
+  for f in $UNSHIPPED; do echo "    $f"; done
+  echo "  Add the directory to the rsyncs above, or this deploy would leave"
+  echo "  production running code that is not in this repository."
+  exit 1
+fi
+
 echo "==> checking access to $TARGET"
 ssh_ true || { echo "REFUSED: no SSH access to $TARGET"; exit 1; }
 
 echo "==> keeping the current tree, so a bad deploy can be undone"
 STAMP="$(date -u +%Y%m%d%H%M%S)"
-ssh_ "rm -rf /opt/qevik/rollback && cp -a $REMOTE_APP/packages/kernel/atlas_kernel /opt/qevik/rollback && echo kept $STAMP"
+ssh_ "rm -rf /opt/qevik/rollback /opt/qevik/rollback-infra && cp -a $REMOTE_APP/packages/kernel/atlas_kernel /opt/qevik/rollback && cp -a $REMOTE_APP/infra /opt/qevik/rollback-infra 2>/dev/null; echo kept $STAMP"
 
 echo "==> copying the kernel"
 rsync -a --delete -e "ssh -o BatchMode=yes -i $KEY" \
@@ -44,8 +73,35 @@ echo "==> copying the console"
 rsync -a -e "ssh -o BatchMode=yes -i $KEY" \
   "$ROOT/apps/control/src/" "$TARGET:/srv/qevik-control/"
 
+# The worker binary lives in infra/ and nothing has ever shipped it. A deploy
+# reported success having sent none of it, and the host's own git checkout is
+# 181 commits behind and does not track the file at all. Shipping it here rather
+# than in a second script: one mechanism, one answer to "how does code reach
+# production".
+#
+# No --delete: infra/ on the host may hold operational files this repository
+# does not carry, and a deploy is not the place to discover that.
+echo "==> copying infra (the mission worker lives here)"
+rsync -a -e "ssh -o BatchMode=yes -i $KEY" \
+  --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
+  "$ROOT/infra/" "$TARGET:$REMOTE_APP/infra/"
+
+# Explicitly, and before anything restarts. `init_db` is idempotent -- every
+# statement in it is IF NOT EXISTS -- and it is the only place this repository
+# describes its schema, so running it here adds no second mechanism.
+#
+# It has to be a step of its own. `init_db` is reached only through
+# `composition_root`, which this deploy does not restart, so a schema change
+# would otherwise be applied whenever `qevik-api` next happened to restart. A
+# worker that registers before its column exists fails to register at all.
+echo "==> applying the schema"
+ssh_ "cd $REMOTE_APP && set -a && . /opt/qevik/atlas.env && set +a && PYTHONPATH=$REMOTE_APP/packages/kernel $REMOTE_APP/.venv/bin/python -c 'from atlas_kernel.db import init_db; init_db(); print(\"schema applied\")'" || {
+  echo "FAILED: the schema could not be applied; nothing was restarted"
+  exit 1
+}
+
 echo "==> restarting $SERVICE"
-ssh_ "chown -R qevik:qevik $REMOTE_APP/packages/kernel/atlas_kernel /srv/qevik-control 2>/dev/null; systemctl restart $SERVICE"
+ssh_ "chown -R qevik:qevik $REMOTE_APP/packages/kernel/atlas_kernel /srv/qevik-control 2>/dev/null; systemctl restart $SERVICE qevik-api.service"
 
 echo "==> waiting for it to answer"
 # Polls rather than sleeping a fixed number: a fixed sleep is either too short
@@ -67,6 +123,33 @@ for attempt in $(seq 1 30); do
     exit 1
   }
   sleep 1
+done
+
+# What makes "deployed" checkable. The worker reports the sha256 of its own
+# source as its registry `version`; if the restarted processes do not report the
+# fingerprint of the file just sent, the code running is not the code shipped --
+# which is exactly the failure that went unnoticed before, when the deploy
+# succeeded and shipped nothing.
+FINGERPRINT="$(shasum -a 256 "$ROOT/infra/mission_worker.py" | cut -c1-12)"
+echo "==> restarting the mission workers (expecting fingerprint $FINGERPRINT)"
+ssh_ "chown qevik:qevik $REMOTE_APP/infra/mission_worker.py 2>/dev/null; systemctl restart $WORKERS"
+
+REPORTED=""
+for attempt in $(seq 1 40); do
+  REPORTED="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT DISTINCT version FROM atlas_workers WHERE id LIKE '%:%' AND version <> '0.0.0'\"" 2>/dev/null | tr -d '\r')"
+  COUNT="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT count(*) FROM atlas_workers WHERE id LIKE '%:%' AND version = '$FINGERPRINT'\"" 2>/dev/null | tr -d '\r')"
+  [ "$REPORTED" = "$FINGERPRINT" ] && [ "${COUNT:-0}" -ge 1 ] && {
+    echo "    all $COUNT worker(s) report $FINGERPRINT after ${attempt}s"; break; }
+  [ "$attempt" = 40 ] && {
+    echo "FAILED: workers report '${REPORTED:-nothing}', expected '$FINGERPRINT'"
+    echo "        the code running is not the code that was shipped."
+    echo "==> putting the previous kernel and infra back"
+    ssh_ "rm -rf $REMOTE_APP/packages/kernel/atlas_kernel && cp -a /opt/qevik/rollback $REMOTE_APP/packages/kernel/atlas_kernel && chown -R qevik:qevik $REMOTE_APP/packages/kernel/atlas_kernel"
+    ssh_ "[ -d /opt/qevik/rollback-infra ] && rm -rf $REMOTE_APP/infra && cp -a /opt/qevik/rollback-infra $REMOTE_APP/infra"
+    ssh_ "systemctl restart $SERVICE $WORKERS" || true
+    exit 1
+  }
+  sleep 2
 done
 
 echo "==> what the service now reports"

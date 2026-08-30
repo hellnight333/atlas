@@ -3627,12 +3627,14 @@ class AtlasRepository:
                 INSERT INTO atlas_workers (
                     id, hostname, display_name, platform, resources, capabilities,
                     current_load, max_concurrency, status, version, tags, metrics,
-                    metadata, last_heartbeat_at, registered_at, updated_at
+                    metadata, last_heartbeat_at, registered_at, updated_at,
+                    accepts_execution_dispatch
                 )
                 VALUES (
                     :id, :hostname, :display_name, :platform, :resources, :capabilities,
                     :current_load, :max_concurrency, :status, :version, :tags, :metrics,
-                    :metadata, :last_heartbeat_at, :registered_at, :updated_at
+                    :metadata, :last_heartbeat_at, :registered_at, :updated_at,
+                    :accepts_execution_dispatch
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     hostname = :hostname,
@@ -3648,7 +3650,8 @@ class AtlasRepository:
                     metrics = :metrics,
                     metadata = :metadata,
                     last_heartbeat_at = :last_heartbeat_at,
-                    updated_at = :updated_at
+                    updated_at = :updated_at,
+                    accepts_execution_dispatch = :accepts_execution_dispatch
                 """),
                 {
                     "id": worker.id,
@@ -3667,6 +3670,7 @@ class AtlasRepository:
                     "last_heartbeat_at": worker.last_heartbeat_at,
                     "registered_at": worker.registered_at,
                     "updated_at": worker.updated_at,
+                    "accepts_execution_dispatch": worker.accepts_execution_dispatch,
                 },
             )
             session.commit()
@@ -3915,6 +3919,7 @@ class AtlasRepository:
             last_heartbeat_at=row[13],
             registered_at=row[14],
             updated_at=row[15],
+            accepts_execution_dispatch=row[16],
         )
 
     def _row_to_reservation(self, row: Any) -> ExecutionReservation:
@@ -4281,10 +4286,12 @@ _AUDIT_COLUMNS = (
     "summary, before, after, metadata, created_at"
 )
 
+#: Appended to, never reordered: `_row_to_worker` reads these positionally, so
+#: inserting a column in the middle silently shifts every field after it.
 _WORKER_COLUMNS = (
     "id, hostname, display_name, platform, resources, capabilities, current_load, "
     "max_concurrency, status, version, tags, metrics, metadata, last_heartbeat_at, "
-    "registered_at, updated_at"
+    "registered_at, updated_at, accepts_execution_dispatch"
 )
 
 _RESERVATION_COLUMNS = (

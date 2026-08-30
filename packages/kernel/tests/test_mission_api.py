@@ -52,6 +52,9 @@ def _user(tenant: str, *scopes: Scope) -> User:
                 scopes=frozenset(scopes or frozenset(Scope)))
 
 
+from atlas_kernel.fabric.scheduler import NodeSnapshot
+
+
 @pytest.fixture
 def app(tmp_path):
     application = FastAPI()
@@ -60,6 +63,16 @@ def app(tmp_path):
     application.state.mission_events = []
     application.state.mission_sink = application.state.mission_events.append
     application.state.repository_root = str(tmp_path)
+    # Which workers this application can see. Stated, because the schedule view
+    # now answers "to whom" with the same nodes dispatch uses, and an
+    # application that said nothing would read whatever rows happen to be in the
+    # developer's database. `self-check` is what `_seed` routes to.
+    application.state.worker_nodes = lambda: (
+        NodeSnapshot(worker_name="worker-test", serves="self-check",
+                     capabilities=frozenset({"filesystem", "shell"}),
+                     placements=frozenset({"either"}),
+                     node_id="test:worker-test"),
+    )
     return application
 
 
@@ -80,7 +93,15 @@ def client(app, monkeypatch):
 
 def _seed(app, *, tenant: str = A, status: MissionStatus | None = None,
           **fields) -> Mission:
-    """Put one mission on the timeline, at whatever status the test needs."""
+    """Put one mission on the timeline, at whatever status the test needs.
+
+    It records `self-check` because this shortcut skips `attach_plan`, which is
+    where a real mission gets its agent -- and a mission with none is blocked
+    before any of the rules these tests are about. `self-check` needs no
+    credentials, so routing it does not trade one block for another. A test that
+    means unrouted passes `agent_id=""`.
+    """
+    fields.setdefault("agent_id", "self-check")
     mission, event = service.create(tenant=tenant, title=fields.pop("title", "Work"),
                                     description=fields.pop("description", ""),
                                     requested_by="ayoub")
@@ -604,3 +625,80 @@ def test_a_tenant_with_no_plan_is_unmetered_rather_than_broke(app) -> None:
     request = Req()
     request.app = app  # type: ignore[attr-defined]
     assert tenant_balance(request, A) is None
+
+
+class TestTheFabricSurface:
+    """Which machines can run work, read from the scheduler's own snapshot.
+
+    The console must not be able to show a fleet the dispatcher disagrees with,
+    so this reads `mission.nodes.snapshots` rather than querying workers itself.
+    """
+
+    def _node(self, name, **over):
+        from atlas_kernel.fabric.scheduler import NodeSnapshot
+
+        base = dict(worker_name=name, serves="researcher",
+                    capabilities=frozenset({"dns", "http-fetch"}),
+                    placements=frozenset({"either"}), node_id=f"host:{name}")
+        base.update(over)
+        return NodeSnapshot(**base)
+
+    def test_it_reports_the_fleet_and_what_each_worker_can_do(
+            self, client, app, monkeypatch) -> None:
+        from atlas_kernel.mission import nodes
+
+        monkeypatch.setattr(nodes, "snapshots",
+                            lambda: (self._node("worker-research"),))
+        body = client.get("/api/missions/workers").json()
+
+        assert body["known"] is True
+        assert body["counts"] == {"total": 1, "ready": 1, "busy": 0, "stale": 0}
+        assert body["workers"][0]["capabilities"] == ["dns", "http-fetch"]
+        assert body["capabilities"] == ["dns", "http-fetch"]
+
+    def test_stale_and_busy_are_not_the_same_state(
+            self, client, app, monkeypatch) -> None:
+        """An operator who cannot tell them apart restarts a machine that was
+        halfway through a delivery."""
+        from atlas_kernel.mission import nodes
+
+        monkeypatch.setattr(nodes, "snapshots", lambda: (
+            self._node("gone", fresh=False),
+            self._node("working", free=False, load=1),
+        ))
+        body = client.get("/api/missions/workers").json()
+        states = {w["name"]: w["state"] for w in body["workers"]}
+
+        assert "stale" in states["gone"]
+        assert "keeps any mission it holds" in states["gone"]
+        assert states["working"] == "busy"
+        assert body["counts"] == {"total": 2, "ready": 0, "busy": 1, "stale": 1}
+
+    def test_an_unreadable_cluster_is_not_an_empty_fleet(
+            self, client, app, monkeypatch) -> None:
+        """Showing an empty list when the database is unreachable tells an
+        operator their cluster died."""
+        from atlas_kernel.mission import nodes
+
+        monkeypatch.setattr(nodes, "snapshots", lambda: None)
+        body = client.get("/api/missions/workers").json()
+
+        assert body["known"] is False
+        assert body["workers"] == []
+        assert "not the same as there being no workers" in body["detail"]
+
+    def test_it_reads_the_schedulers_snapshot_rather_than_its_own_query(self) -> None:
+        """Structural: a second way of asking "which workers exist" is a second
+        answer, and they diverge on the day it matters."""
+        import inspect
+
+        from atlas_kernel.mission import api
+
+        source = inspect.getsource(api.build_router)
+        start = source.index("def worker_fleet")
+        end = source.index("def ", start + 10)
+        route = source[start:end]
+
+        assert "from .nodes import snapshots" in route
+        for forbidden in ("WorkerRegistry", "list_workers", "atlas_workers"):
+            assert forbidden not in route, f"the route queries {forbidden} itself"

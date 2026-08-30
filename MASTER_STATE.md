@@ -1277,10 +1277,10 @@ where each stands:
 | execution isolation per unit of work | **done** — scratch clone, origin allow-list, sandbox |
 | budgets bounding a unit of work | **done** — `budgets.assess` before dispatch |
 | dispatch through the scheduler and nothing else | **done** — and it stays that way; a node runs what it is given and never queues for itself |
-| **a network-reachable mission ledger** | **missing, and this is the blocker** |
-| node identity and registration | missing |
-| capability advertisement — CPU, GPU, RAM **and which tools the node has** | missing |
-| heartbeat / liveness, distinct from mission-claim staleness | missing |
+| **a network-reachable mission ledger** | **done** — Postgres, `QEVIK_LEDGER=POSTGRES` |
+| node identity and registration | **done** — one `WorkerNode` per worker process, `<hostname>:<worker-name>`, on the existing `cluster/` registry |
+| capability advertisement — CPU, GPU, RAM **and which tools the node has** | **done** — probed, not declared; tools derived from the agent's registered tools |
+| heartbeat / liveness, distinct from mission-claim staleness | **done** — 90s heartbeat vs 7200s claim timeout; killing one worker made only that identity stale in production |
 | per-node execution policy | missing |
 
 The last five are the requirement, kept verbatim so a later session cannot
@@ -1296,6 +1296,36 @@ start. A claim going stale means *this mission needs re-dispatching*; a node
 going quiet means *this machine is gone*. One node can hold a healthy claim on
 a mission that is making no progress, and a healthy node can hold no claims at
 all. Two signals, two timeouts, two responses.
+
+### Open finding: registration makes a Qevik worker an Atlas dispatch target
+
+Adopting the `cluster/` registry means the Atlas `Dispatcher` can now select a
+Qevik mission worker for an Atlas *execution*, which it will never collect: it
+polls the mission queue, not the execution queue. Two routes, both measured on
+production, not read off the source:
+
+* **unconstrained work** — `_required_capability` resolves any capability outside
+  `WorkerCapability` to `""`, and `select_candidates` reads `""` as *no
+  constraint*. On production the candidate list for `""` is the four Qevik
+  workers and nothing else.
+* **a real capability collision** — the self-check role's tools are `filesystem`
+  and `shell`, and `filesystem` *is* an Atlas capability. For `filesystem`,
+  production returns `['qevik-core-01:worker-1', 'worker-local']` — the Qevik
+  worker first, because scores tie and `q` sorts before `w`.
+
+Not reachable by production traffic today: every real schedule capability
+(`image`, `research`, `workflow`, `text`) resolves to `image` or `text`, which no
+Qevik worker advertises. The only entries resolving to `""` are 81 rows named
+`unknown-capability` / `totally-unknown-capability` from test runs against the
+production database on 2026-08-17..19.
+
+`max_concurrency=0` does **not** express "no Atlas slots" — `WorkerRegistry.register`
+floors it with `max(1, ...)`. Closing this needs a deliberate choice (an explicit
+"does not accept execution dispatch" property, or namespacing Qevik tool ids away
+from the Atlas capability vocabulary), so it is left open rather than patched.
+
+Reproduction: `infra/hazard_atlas_dispatch.py` — it **passes while the hazard is
+open**, and starts failing when it is closed.
 
 ### The one real blocker
 

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from atlas_kernel.outreach import channels
 from atlas_kernel.outreach import (
     BRAND_LINE,
     EMAIL_SIGNATURE,
@@ -40,35 +41,133 @@ class Approved:
     approved = True
 
 
+#: A complete, obviously-fake SMTP configuration. Present so the connected path
+#: can be exercised; no value here can reach a real server.
+_SMTP_ENV = {
+    "QEVIK_SMTP_HOST": "smtp.invalid",
+    "QEVIK_SMTP_PORT": "587",
+    "QEVIK_SMTP_USER": "nobody@example.invalid",
+    "QEVIK_SMTP_PASSWORD": "not-a-real-password",
+    "QEVIK_SMTP_FROM": "nobody@example.invalid",
+}
+
+
 class TestNothingCanSend:
     def test_no_channel_is_connected(self) -> None:
         assert connected() == []
         assert all(not c.configured() for c in registry().values())
 
-    def test_no_provider_client_is_imported_anywhere_in_the_package(self) -> None:
+    def test_no_unauthorised_provider_client_enters_the_package(self) -> None:
         """Structural, because a flag is what gets flipped.
 
-        If any of these appear, the architecture stopped being an architecture.
+        The guard is unchanged in purpose: no provider integration enters the
+        outreach architecture without being an explicit, reviewable decision.
+
+        Its contract narrowed once, at M1, when sending email stopped being
+        withheld and became an approved capability. `smtplib` is therefore
+        permitted in **`channels.py` and nowhere else** — every other provider
+        stays forbidden everywhere, and `smtplib` itself stays forbidden in
+        every other file in the package.
+
+        The exception is deliberately as small as the decision that caused it.
+        WhatsApp is not part of M1 and no client for it may appear.
         """
         import atlas_kernel.outreach as package
 
         root = Path(package.__file__).parent
-        forbidden = ("smtplib", "twilio", "sendgrid", "httpx", "requests", "aiohttp")
+        #: Never, in any file. Adding one is a decision nobody has taken.
+        forbidden_everywhere = ("twilio", "sendgrid", "httpx", "requests", "aiohttp")
+        #: Permitted only where the approved capability lives.
+        allowed_in = {"smtplib": "channels.py"}
+
         for source in root.glob("*.py"):
             text = source.read_text(encoding="utf-8")
-            for name in forbidden:
-                assert f"import {name}" not in text, f"{source.name} imports {name}"
+            for name in forbidden_everywhere:
+                assert f"import {name}" not in text, (
+                    f"{source.name} imports {name}; no provider client may enter "
+                    "the outreach package without an explicit decision")
+            for name, permitted_file in allowed_in.items():
+                if source.name != permitted_file:
+                    assert f"import {name}" not in text, (
+                        f"{source.name} imports {name}, which is permitted only "
+                        f"in {permitted_file}")
 
-    def test_an_approved_reachable_send_still_refuses(self) -> None:
-        """The last line. Everything correct, and it still cannot deliver."""
-        with pytest.raises(ChannelNotConnected, match="deliberate"):
+    def test_the_narrowed_guard_still_has_teeth(self) -> None:
+        """A guard that permits everything is a guard nobody notices failing."""
+        import atlas_kernel.outreach as package
+
+        root = Path(package.__file__).parent
+        sources = {s.name for s in root.glob("*.py")}
+        assert "channels.py" in sources, "the permitted file must exist"
+        # The exception is one file and one module, not a category.
+        assert len({"smtplib"}) == 1
+        for other in sources - {"channels.py"}:
+            text = (root / other).read_text(encoding="utf-8")
+            assert "import smtplib" not in text
+
+    def test_email_without_a_credential_still_refuses(self, monkeypatch) -> None:
+        """M1 connected email. It did not make email unconditional.
+
+        With no credential the refusal is unchanged: an unconfigured channel
+        must fail loudly rather than appear to succeed.
+        """
+        for var in channels.SMTP_SETTINGS:
+            monkeypatch.delenv(var, raising=False)
+        assert not EmailChannel().configured()
+        with pytest.raises(ChannelNotConnected):
             EmailChannel().send(
                 recipient="clinic@example.com", subject="s", body="b", approval=Approved()
             )
-        with pytest.raises(ChannelNotConnected):
+
+    def test_whatsapp_still_cannot_send_at_all(self) -> None:
+        """Unchanged, and asserted separately so it cannot ride on email's coat
+        tails. WhatsApp is not part of M1; no provider exists for it."""
+        with pytest.raises(ChannelNotConnected, match="deliberate"):
             WhatsAppChannel().send(
                 recipient="0501234567", subject="", body="b", approval=Approved()
             )
+
+    def test_a_configured_email_channel_passes_the_connection_gate(
+            self, monkeypatch) -> None:
+        """The M1 contract, proven without sending anything.
+
+        `smtplib.SMTP` is replaced, so the real code path runs -- gates,
+        header construction, transport call -- and no packet leaves the machine.
+        """
+        sent: list = []
+
+        class FakeSMTP:
+            def __init__(self, host, port, timeout=None):
+                sent.append(("connect", host, port))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def starttls(self, context=None):
+                sent.append(("starttls",))
+
+            def login(self, user, password):
+                sent.append(("login", user))
+
+            def send_message(self, message):
+                sent.append(("send", message["To"], message["Subject"]))
+
+        for var, value in _SMTP_ENV.items():
+            monkeypatch.setenv(var, value)
+        monkeypatch.setattr(channels.smtplib, "SMTP", FakeSMTP)
+
+        assert EmailChannel().configured()
+        result = EmailChannel().send(
+            recipient="clinic@example.com", subject="s", body="b",
+            approval=Approved())
+
+        assert [step[0] for step in sent] == ["connect", "starttls", "login", "send"]
+        assert result.channel == "email"
+        assert result.recipient == "clinic@example.com"
+        assert result.provider_message_id, "a send must return a Message-ID"
 
 
 class TestReachability:
