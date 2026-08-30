@@ -1,0 +1,270 @@
+"""The digital product: a website health check a business owner can open.
+
+What is at stake in each rule below is a real business's name on a document.
+Qevik holds 396 audits and the person each one is about has never seen it, so
+this artefact is sent to strangers — an unevidenced claim in it is not a bug,
+it is an accusation nobody can check.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from atlas_kernel.execution.capabilities import EXECUTORS, REQUIRES_CUSTOMER_INPUT
+from atlas_kernel.execution.capabilities.healthcheck import (
+    Check,
+    NothingObserved,
+    Unevidenced,
+    Verdict,
+    build_health_check,
+    render,
+    validate,
+)
+
+#: Shaped exactly like a row from `website_audited` in production.
+REAL = {
+    "url": "https://example-clinic.test/",
+    "observations": [
+        {"feature": "click_to_call", "status": "not_found", "category": "conversion",
+         "evidence": "no tel: link in the homepage HTML",
+         "note": "A patient in pain phones. Without a tel: link they must copy "
+                 "a number by hand."},
+        {"feature": "whatsapp", "status": "not_found", "category": "contact",
+         "evidence": "no wa.me or api.whatsapp.com link",
+         "note": "In the UAE most clinic enquiries arrive on WhatsApp."},
+        {"feature": "opening_hours", "status": "present", "category": "content",
+         "evidence": "day/time pattern found in the homepage text",
+         "note": "Hours are the most-checked fact on a clinic site."},
+        {"feature": "page_speed", "status": "timeout", "category": "performance",
+         "evidence": "", "note": "A slow page loses visitors on mobile data."},
+    ],
+}
+
+
+def _build(research=None):
+    return build_health_check(business_name="Example Clinic",
+                              research=research if research is not None else REAL)
+
+
+class TestWhatTheOwnerActuallyGets:
+    def test_it_produces_one_page_they_can_open(self) -> None:
+        files, provenance = _build()
+
+        assert set(files) == {"index.html"}
+        assert files["index.html"].startswith("<!doctype html>")
+        assert provenance["checks"] == 4
+
+    def test_every_finding_appears_with_the_evidence_behind_it(self) -> None:
+        """The difference between an audit and a sales pitch. The recipient is
+        entitled to check, and cannot if the page only asserts."""
+        page = _build()[0]["index.html"]
+
+        assert "no tel: link in the homepage HTML" in page
+        assert "no wa.me or api.whatsapp.com link" in page
+
+    def test_it_says_what_each_finding_costs_them(self) -> None:
+        page = _build()[0]["index.html"]
+
+        assert "must copy" in page and "WhatsApp" in page
+
+    def test_it_reports_what_is_already_working(self) -> None:
+        """A page listing only faults reads as a pitch. It is also less useful:
+        the owner cannot tell what they should not change."""
+        page = _build()[0]["index.html"]
+
+        assert "already working" in page
+        assert "opening hours" in page
+
+    def test_a_check_that_did_not_complete_is_not_drawn_as_a_fault(self) -> None:
+        """`page_speed` timed out. Presenting that as "your site is slow" puts
+        an invented finding about a real business in writing, in their name."""
+        page = _build()[0]["index.html"]
+        provenance = _build()[1]
+
+        assert "Could not check" in page
+        assert provenance["not_verified"] == 1
+        assert provenance["confirmed_absent"] == 2
+        # And the page says the distinction out loud, because a reader who does
+        # not notice it reads three states as two.
+        assert "not a fault we found" in page
+
+    def test_the_three_states_are_drawn_three_ways(self) -> None:
+        page = _build()[0]["index.html"]
+
+        for tone in ('class="check good"', 'class="check missing"',
+                     'class="check unknown"'):
+            assert tone in page, tone
+
+    def test_it_needs_no_network_to_render_its_own_findings(self) -> None:
+        """Opened from a file, an attachment, or a phone on bad mobile data. A
+        page that needs a CDN to show its findings fails exactly when it is
+        being read."""
+        page = _build()[0]["index.html"]
+
+        for external in ("<script src", "<link rel=\"stylesheet\"", "https://fonts.",
+                         "cdn.", "//unpkg", "@import"):
+            assert external not in page, external
+
+    def test_the_business_name_is_escaped(self) -> None:
+        """It comes from a third-party listing and is rendered into HTML."""
+        page = build_health_check(
+            business_name='Bob\'s <script>alert(1)</script> Clinic',
+            research=REAL)[0]["index.html"]
+
+        assert "<script>alert(1)</script>" not in page
+        assert "&lt;script&gt;" in page
+
+    def test_evidence_text_is_escaped_too(self) -> None:
+        page = build_health_check(business_name="X", research={"observations": [
+            {"feature": "f", "status": "not_found", "category": "contact",
+             "evidence": "<img src=x onerror=alert(1)>"}]})[0]["index.html"]
+
+        assert "<img src=x" not in page
+
+
+class TestValidationRefusesAnUnusableArtefact:
+    def test_a_confirmed_claim_with_no_evidence_is_refused(self) -> None:
+        """This is the rule the product exists to keep. A finding nobody can
+        check is an assertion about a business that Qevik cannot defend."""
+        with pytest.raises(Unevidenced) as refused:
+            validate((Check(feature="booking_link", category="booking",
+                            verdict=Verdict.MISSING, evidence=""),))
+
+        assert "booking_link" in str(refused.value)
+
+    def test_an_unfinished_check_needs_no_evidence(self) -> None:
+        """It claims nothing, so there is nothing to evidence. Requiring it
+        would force the artefact to drop the honest third state."""
+        validate((Check(feature="page_speed", category="performance",
+                        verdict=Verdict.UNKNOWN, evidence=""),))
+
+    def test_an_audit_that_observed_nothing_produces_no_product(self) -> None:
+        """A page saying a business is fine because nothing was examined is
+        worse than no page."""
+        with pytest.raises(NothingObserved):
+            _build({"observations": []})
+
+    def test_the_executor_validates_before_it_returns(self) -> None:
+        """A generated file nobody validated is not a product. Without this the
+        rule above is advice."""
+        with pytest.raises(Unevidenced):
+            _build({"observations": [
+                {"feature": "h1", "status": "not_found", "category": "seo"}]})
+
+    def test_a_nameless_business_is_refused(self) -> None:
+        with pytest.raises(NothingObserved):
+            build_health_check(business_name="  ", research=REAL)
+
+    def test_provenance_lists_every_claim_for_a_reviewer(self) -> None:
+        """A person approving this should not have to open the HTML to see what
+        it asserts about somebody."""
+        claims = _build()[1]["claims"]
+
+        assert len(claims) == 4
+        assert {c["feature"] for c in claims} == {
+            "click_to_call", "whatsapp", "opening_hours", "page_speed"}
+        assert all("verdict" in c and "evidence" in c for c in claims)
+
+
+class TestItFitsTheExecutionArchitecture:
+    def test_it_is_registered_and_executable(self) -> None:
+        assert EXECUTORS["offer-health-check"] is build_health_check
+
+    def test_it_needs_nothing_from_the_customer(self) -> None:
+        """The reason this product was chosen over a calculator or a booking
+        tool: those need prices or a calendar, would sit in the map below, and
+        could never execute through the roadmap."""
+        assert "offer-health-check" not in REQUIRES_CUSTOMER_INPUT
+
+    def test_it_accepts_the_calling_convention_exactly(self) -> None:
+        """Two executors were once registered with an incompatible signature
+        and failed after a customer had approved the work."""
+        import inspect
+
+        from atlas_kernel.execution.capabilities import CALLING_CONVENTION
+
+        parameters = inspect.signature(build_health_check).parameters
+        for name in CALLING_CONVENTION:
+            assert name in parameters, name
+
+    def test_it_has_an_agent_and_a_measurable_dimension(self) -> None:
+        from atlas_kernel.fabric.agents import AGENTS
+        from atlas_kernel.roadmap.service import OFFER_DIMENSION
+
+        agent = next(a for a in AGENTS
+                     if a.offer_id == "offer-health-check")
+        assert "website-generator" in agent.tools
+        assert "offer-health-check" in OFFER_DIMENSION
+
+
+def test_an_unknown_status_is_never_silently_dropped() -> None:
+    """Dropping it would turn "we could not tell" into "we did not look", and
+    the count at the top of the page would then be wrong about how much was
+    examined."""
+    _, provenance = build_health_check(business_name="X", research={
+        "observations": [
+            {"feature": "a", "status": "not_found", "category": "seo",
+             "evidence": "looked"},
+            {"feature": "b", "status": "who knows", "category": "seo"},
+        ]})
+
+    assert provenance["checks"] == 2
+    assert provenance["not_verified"] == 1
+
+
+class TestItNeverSaysSomethingFalseAboutTheBusiness:
+    """The artefact goes to the business it is about, over Qevik's name.
+
+    It ran against 40 real retail businesses and told Sony at the Dubai Mall
+    that "a patient in pain phones" and that emergency patients convert
+    immediately. The audit's notes had been written for dental clinics and
+    applied to everything.
+    """
+
+    def test_no_audit_note_assumes_a_dental_clinic(self) -> None:
+        from atlas_kernel.opportunity.website_audit import FEATURE_NOTES
+
+        assuming = {feature: note for feature, (_, note) in FEATURE_NOTES.items()
+                    if any(word in note.lower()
+                           for word in ("patient", "clinic", "dental", "dentist"))}
+
+        assert not assuming, (
+            "these notes describe a dental clinic and are shown to whatever "
+            f"business was audited: {sorted(assuming)}")
+
+    def test_every_category_the_auditor_emits_has_a_sentence(self) -> None:
+        """Three did not, and rendered as raw slugs — "accessibility",
+        "mobile", "multilingual" — at the bottom of a page sent to a business."""
+        from atlas_kernel.execution.capabilities.healthcheck import CATEGORY_MEANING
+        from atlas_kernel.opportunity.website_audit import FEATURE_NOTES
+
+        emitted = {category.value for category, _ in FEATURE_NOTES.values()}
+        missing = emitted - set(CATEGORY_MEANING)
+
+        assert not missing, (
+            f"the auditor emits categories this page cannot name: {sorted(missing)}")
+
+    def test_every_category_is_also_ordered(self) -> None:
+        """An unordered category sorts to the end regardless of importance."""
+        from atlas_kernel.execution.capabilities.healthcheck import CATEGORY_ORDER
+        from atlas_kernel.opportunity.website_audit import FEATURE_NOTES
+
+        emitted = {category.value for category, _ in FEATURE_NOTES.values()}
+
+        assert not emitted - set(CATEGORY_ORDER), sorted(emitted - set(CATEGORY_ORDER))
+
+    def test_a_retail_business_is_not_told_about_patients(self) -> None:
+        """End to end, through the real note table."""
+        from atlas_kernel.opportunity.website_audit import FEATURE_NOTES
+
+        research = {"observations": [
+            {"feature": feature, "status": "not_found",
+             "category": category.value, "evidence": "checked the homepage",
+             "note": note}
+            for feature, (category, note) in FEATURE_NOTES.items()]}
+
+        page = build_health_check(business_name="Sony | Dubai Mall",
+                                  research=research)[0]["index.html"]
+
+        for word in ("patient", "clinic", "dental", "dentist"):
+            assert word not in page.lower(), word

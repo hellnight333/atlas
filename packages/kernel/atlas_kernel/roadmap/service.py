@@ -50,6 +50,10 @@ OFFER_DIMENSION: dict[str, Dimension] = {
     "offer-one-tap-contact": Dimension.REACHABILITY,
     "offer-enquiry-builder": Dimension.CONVERSION,
     "offer-website": Dimension.TECHNICAL_HEALTH,
+    # It reports on technical health without changing it. The dimension is what
+    # the work is *about*, not what it alters — a health check measured under
+    # anything else would be measured against a metric it never touches.
+    "offer-health-check": Dimension.TECHNICAL_HEALTH,
 }
 
 #: Every offer must appear above. Without this, adding an offer produces tasks

@@ -12,6 +12,7 @@ from typing import Any
 from .arabic import NothingToTranslate, build_arabic_experience
 from .editorial import build_editorial_hub
 from .enquiry import NowhereToSend, build_enquiry_capability
+from .healthcheck import NothingObserved, Unevidenced, build_health_check
 from .imagery import NothingToIllustrate, build_imagery
 from .portfolio import build_portfolio_index
 from .website import NothingToBuild, WebsiteMode, build_website
@@ -76,11 +77,17 @@ EXECUTORS: dict[str, Executor] = {
     # is the simpler thing the theme's `tel:` link already does.
     "offer-enquiry-builder": build_enquiry_capability,
     "offer-imagery": build_imagery,
+    # The digital product. Needs nothing from the customer -- it is built from
+    # the audit Qevik already holds about them, which is why it is absent from
+    # REQUIRES_CUSTOMER_INPUT while a price calculator or a booking tool could
+    # never be.
+    "offer-health-check": build_health_check,
 }
 
 __all__ = ["CALLING_CONVENTION", "EXECUTORS", "REQUIRES_CUSTOMER_INPUT",
-           "Executor", "NothingToBuild", "NothingToTranslate",
-           "NothingToIllustrate", "NowhereToSend", "WebsiteMode",
+           "Executor", "NothingObserved", "NothingToBuild",
+           "NothingToTranslate", "NothingToIllustrate", "NowhereToSend",
+           "Unevidenced", "WebsiteMode",
            "build_arabic_experience", "build_editorial_hub",
-           "build_enquiry_capability", "build_imagery",
+           "build_enquiry_capability", "build_health_check", "build_imagery",
            "build_portfolio_index", "build_website"]

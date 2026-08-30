@@ -210,6 +210,30 @@ OFFERS: tuple[CapabilityOffer, ...] = (
         measurement=("enquiries completed", "enquiries that could be quoted"),
         estimated_units=20,
     ),
+    CapabilityOffer(
+        id="offer-health-check",
+        capability_id="cap-code-generation",
+        name="Website health check",
+        summary="One page showing what an automated read of their homepage "
+                "found, did not find, and could not check — with the evidence "
+                "behind every line.",
+        # It answers the same opportunity a website rebuild does, and is the
+        # far smaller thing: it tells them what is wrong rather than fixing it.
+        answers=frozenset({"weak_web_presence"}),
+        # Every business model. A health check is about a website, and every
+        # business with a website has one — narrowing this would be inventing a
+        # restriction the artefact does not have.
+        business_models=frozenset(),
+        # Nothing. This is the only offer built entirely from what Qevik already
+        # observed, which is why it can execute while the others wait on the
+        # customer.
+        required_inputs=(),
+        outputs=("a self-contained page", "the evidence behind every claim"),
+        qa_layers=("browser", "content", "accessibility"),
+        publication_target="website",
+        measurement=("health checks opened", "replies to a health check"),
+        estimated_units=5,
+    ),
 )
 
 BY_ID: dict[str, CapabilityOffer] = {o.id: o for o in OFFERS}

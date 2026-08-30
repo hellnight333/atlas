@@ -113,40 +113,61 @@ class SiteAudit(BaseModel):
 
 #: What to look for, and how. Each entry is (feature, category, note) — the
 #: detection lives in `audit_html` so the evidence and the rule stay together.
+#:
+#: **The notes are vertical-neutral, and that is a correctness requirement.**
+#: This table was written for dental clinics and applied to every business the
+#: engine audited. It ran against 40 retail businesses and recorded, about Sony
+#: at the Dubai Mall, that "a patient in pain phones" and that emergency
+#: patients convert immediately — sentences that are false about a shop and
+#: would have gone out over Qevik's name once the health-check product started
+#: showing them to the business they are about.
+#:
+#: A note says what a missing feature costs *any* business with a website. Where
+#: a vertical-specific sentence is genuinely better it belongs in a per-vertical
+#: override keyed on the audit's own category, not in the shared table.
 FEATURE_NOTES: dict[str, tuple[Category, str]] = {
     "click_to_call": (
         Category.CONVERSION,
-        "A patient in pain phones. Without a tel: link they must copy a number by hand.",
+        "Someone ready to phone has to copy the number by hand, on the device "
+        "they would have called from.",
     ),
     "whatsapp": (
         Category.CONTACT,
-        "In the UAE most clinic enquiries arrive on WhatsApp, not by form.",
+        "In the UAE most enquiries arrive on WhatsApp rather than through a form.",
     ),
-    "contact_form": (Category.CONTACT, "A written enquiry route for non-urgent patients."),
+    "contact_form": (Category.CONTACT,
+                     "A written route for anyone who would rather not phone."),
     "booking_link": (
         Category.BOOKING,
         "A direct route to book rather than a general contact page.",
     ),
-    "google_maps": (Category.LOCAL_SEO, "Patients choose a clinic they can find and drive to."),
+    "google_maps": (Category.LOCAL_SEO, "People choose a place they can find and drive to."),
     "opening_hours": (
         Category.CONTENT,
-        "Hours are the most-checked fact on a clinic site; absent, patients call to ask or leave.",
+        "Opening hours are among the most-looked-for facts on any local "
+        "site; absent, people phone to ask or go elsewhere.",
     ),
-    "services_navigation": (Category.CONTENT, "Patients arrive looking for one treatment."),
-    "doctors_team": (Category.TRUST, "Named clinicians are the main trust signal in dentistry."),
-    "insurance_info": (Category.TRUST, "Insurance acceptance decides the enquiry in the UAE."),
-    "emergency_info": (Category.CONVERSION, "Emergency patients convert immediately or leave."),
+    "services_navigation": (Category.CONTENT,
+                            "Visitors usually arrive looking for one specific thing."),
+    "doctors_team": (Category.TRUST,
+                     "Named people are one of the strongest trust signals a site has."),
+    "insurance_info": (Category.TRUST,
+                        "Where it applies, what is accepted or covered decides the enquiry."),
+    "emergency_info": (Category.CONVERSION,
+                         "Someone with an urgent need acts immediately or leaves."),
     "social_proof": (Category.TRUST, "Reviews shown on the page rather than only on Google."),
     "structured_data": (
         Category.LOCAL_SEO,
-        "Dentist schema is what puts a clinic into local search results and map packs.",
+        "Structured data is what puts a local business into search results "
+        "and map packs.",
     ),
     "meta_description": (Category.SEO, "Controls the snippet a searcher reads before clicking."),
     "page_title": (Category.SEO, "The clickable line in search results."),
     "viewport_meta": (Category.MOBILE, "Without it a phone renders a desktop page zoomed out."),
     "h1": (Category.SEO, "One clear page heading, for readers and for search."),
     "image_alt_text": (Category.ACCESSIBILITY, "Screen readers, and image search."),
-    "arabic": (Category.MULTILINGUAL, "A large share of Dubai patients read Arabic first."),
+    "arabic": (Category.MULTILINGUAL,
+                "A large share of people in Dubai read Arabic first."),
     "https": (Category.TECHNICAL, "Browsers warn on forms served without it."),
     "page_weight": (Category.PERFORMANCE, "Heavy pages lose mobile visitors before they render."),
 }

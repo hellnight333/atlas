@@ -284,6 +284,12 @@ AGENTS: tuple[Agent, ...] = (
     Agent(id="enquiry-builder", name="Enquiry builder",
           capability=Capability.IMPLEMENT, backend=Backend.EXECUTOR,
           offer_id="offer-enquiry-builder", tools=("website-generator",)),
+    Agent(id="health-check", name="Website health check",
+          capability=Capability.IMPLEMENT, backend=Backend.EXECUTOR,
+          offer_id="offer-health-check", tools=("website-generator",),
+          notes="Reports the audit Qevik already holds. Asserts nothing it "
+                "cannot show the evidence for, and reports an incomplete "
+                "check as unchecked rather than as a fault."),
     Agent(id="imagery-planner", name="Imagery planner",
           capability=Capability.ANALYSE, backend=Backend.EXECUTOR,
           offer_id="offer-imagery", tools=("website-generator",),

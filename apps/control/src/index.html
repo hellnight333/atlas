@@ -910,8 +910,27 @@ function deliveryCard(d) {
   const live = (d.published || [])[(d.published || []).length - 1] || null;
   const last = reviews.length ? reviews[reviews.length - 1] : null;
   const answers = (d.provenance || {}).addresses || [];
+  /* A health check asserts things about a real business, in writing, over
+     Qevik's name. The reviewer approving it should see every claim and the
+     evidence behind it without opening the HTML — which is why the executor
+     puts them in the provenance rather than only in the page. */
+  const claims = (d.provenance || {}).claims || [];
   const withheld = (d.provenance || {}).not_published_for_want_of_a_source || [];
-  return `<div class="card" style="margin-bottom:1rem">
+  const claimRows = claims.length ? `<div class="card" style="margin-bottom:1rem">
+    <h3>What this says about them</h3>
+    <p class="note">${esc(String(claims.length))} claims, each with how it was
+      established. A claim with no evidence would have been refused before this
+      page existed.</p>
+    <dl class="facts">${claims.map((c) => `<dt>${pill(
+      { CONFIRMED_ABSENT: 'not found', CONFIRMED_PRESENT: 'found',
+        NOT_VERIFIED: 'could not check' }[c.verdict] || c.verdict,
+      { CONFIRMED_ABSENT: 'bad', CONFIRMED_PRESENT: 'ok',
+        NOT_VERIFIED: 'warn' }[c.verdict] || '')}
+      ${esc((c.feature || '').replace(/_/g, ' '))}</dt>
+      <dd><span class="note">${esc(c.evidence || 'this check did not complete, so nothing is claimed')}</span></dd>`
+    ).join('')}</dl></div>` : '';
+
+  return claimRows + `<div class="card" style="margin-bottom:1rem">
     <h3>Delivered artefact</h3>
     ${last ? `<p>${pill(last.decision, last.decision === 'accepted' ? 'ok' : 'bad')}
       <span class="note">by ${esc(last.actor)} · ${when(last.at)}${last.note

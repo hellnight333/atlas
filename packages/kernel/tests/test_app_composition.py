@@ -388,6 +388,14 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     # current state — that is how a dead demo keeps looking fine.
     assert "state.checkedPublications = null" in source, (
         "a liveness result is kept beyond the render that shows it")
+    # A health check asserts things about a real business, over Qevik's name.
+    # The reviewer approving it sees every claim and its evidence in the
+    # existing artefact card — not in a new card, and not only inside the HTML
+    # they would otherwise have to open and read.
+    assert "provenance || {}).claims" in source, (
+        "the reviewer cannot see what a health check claims about a business")
+    assert "NOT_VERIFIED: 'could not check'" in source, (
+        "an unfinished check is drawn as a finding in the review")
     assert Path(CONSOLE / "index.html").stat().st_size < 118_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
