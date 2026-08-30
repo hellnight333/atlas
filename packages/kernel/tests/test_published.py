@@ -164,3 +164,41 @@ def test_it_publishes_nothing() -> None:
         assert forbidden not in source, (
             f"the published-sites read references {forbidden!r}; it must read "
             "the timeline and never write to it or to a disk")
+
+
+class TestWhatWasPublishedIsNeverGuessed:
+    """A publication record that cannot say what it published leaves an
+    operator with a URL and no idea whether it is a website or a report about
+    one — and the outreach composer with no way to describe it truthfully."""
+
+    def test_a_record_with_an_offer_carries_it(self) -> None:
+        found = from_events([_event(PUBLICATION_EVENT,
+                                    url="https://s/a/", at="2026-08-30",
+                                    offer="offer-health-check")])
+
+        assert found[0].offer == "offer-health-check"
+
+    def test_a_record_without_one_stays_unknown(self) -> None:
+        """Every publication written before the field existed. Reading these as
+        `offer-website` would describe a health check as a website build."""
+        found = from_events([_event(PUBLICATION_EVENT, url="https://s/a/",
+                                    at="2026-08-27")])
+
+        assert found[0].offer == ""
+
+    def test_the_offer_is_not_inferred_from_the_event_kind(self) -> None:
+        """A demo event and a publication event both put files at an address.
+        Which offer produced them is recorded or it is unknown."""
+        demo, site = from_events([
+            _event(DEMO_EVENT, demo_url="https://s/d/", published_at="2026-08-19"),
+            _event(PUBLICATION_EVENT, url="https://s/p/", at="2026-08-18"),
+        ])
+
+        assert demo.offer == "" and site.offer == ""
+
+    def test_it_travels_in_the_summary(self) -> None:
+        row = from_events([_event(PUBLICATION_EVENT, url="https://s/a/",
+                                  at="2026-08-30",
+                                  offer="offer-website")])[0].summary()
+
+        assert row["offer"] == "offer-website"

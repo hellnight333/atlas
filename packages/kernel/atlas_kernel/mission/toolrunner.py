@@ -626,6 +626,7 @@ class ToolAgent:
                  repository: object | None = None,
                  tenant: str | None = None,
                  signal_id: str = "", publishes: str = "",
+                 publishes_offer: str = "",
                  scratch_root: str = "", source_workspace: str = "",
                  mission_id: str = "") -> None:
         self._recipe = recipe
@@ -654,6 +655,9 @@ class ToolAgent:
         #: The opportunity a person approved, when this is a delivery. A key,
         #: read from Qevik's own memory — never a record a caller supplied.
         self._signal_id = signal_id
+        #: What the mission being published was delivering. Supplied by the
+        #: worker, which is where the source mission is in hand.
+        self._publishes_offer = publishes_offer
         #: What the delivery step wrote, relative to the workspace.
         self.artefact: tuple[str, ...] = ()
         #: What the publication step put on the site host. Not workspace files,
@@ -960,6 +964,12 @@ class ToolAgent:
                     files=list(step.files),
                     actor=f"recipe:{self._recipe.id}",
                     publication_mission=self._mission_id,
+                    # What was published, from the delivering mission's own
+                    # recipe. Not from this one: `publish-website` publishes
+                    # every artefact type and knows only that it published
+                    # files. Empty when the source could not be read, which
+                    # stays unknown rather than becoming a guess.
+                    offer=self._publishes_offer,
                     tenant=self._tenant)
             except Exception:                     # noqa: BLE001 - reported
                 log.exception(

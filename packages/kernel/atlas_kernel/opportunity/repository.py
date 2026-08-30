@@ -849,7 +849,7 @@ class OpportunityRepository:
     def record_publication(self, *, mission_id: str, business_id: str,
                            signal_id: str, commit: str, site_id: str,
                            url: str, files: list[str], actor: str,
-                           publication_mission: str = "",
+                           publication_mission: str = "", offer: str = "",
                            tenant: TenantId | None = None) -> dict:
         """Record that this exact bundle actually went to this exact address.
 
@@ -862,6 +862,16 @@ class OpportunityRepository:
         about one artefact. `publication_mission` is the mission that did the
         publishing, kept beside it because "which run put this live" is a
         different question from "what was put live".
+
+        `offer` is **what** was published, and it comes from the delivering
+        mission's own recipe. Without it a reader has a URL and no idea whether
+        it is a website or a health check, and the outreach composer — which
+        must say truthfully what is at that address — cannot tell either.
+
+        Empty means unknown, and unknown must stay unknown. Every record
+        written before this field existed has none, and reading those as
+        `offer-website` would describe a health check as a website build to the
+        business it is about.
         """
         if not commit.strip():
             raise NotApprovable(
@@ -873,6 +883,7 @@ class OpportunityRepository:
                                        "publication_mission": publication_mission,
                                        "commit": commit.strip(),
                                        "site_id": site_id, "url": url,
+                                       "offer": offer.strip(),
                                        "files": sorted(files)}),
                  "at": datetime.now(UTC)}
         with SessionLocal() as session:
@@ -887,6 +898,7 @@ class OpportunityRepository:
             session.commit()
         return {"id": entry["id"], "mission_id": mission_id,
                 "publication_mission": publication_mission,
+                "offer": offer.strip(),
                 "signal_id": signal_id, "commit": commit.strip(),
                 "site_id": site_id, "url": url, "files": sorted(files),
                 "actor": entry["actor"], "at": entry["at"].isoformat()}
@@ -1016,6 +1028,11 @@ class OpportunityRepository:
                           "commit": detail.get("commit", ""),
                           "site_id": detail.get("site_id", ""),
                           "url": detail.get("url", ""),
+                          # Absent on every record written before the field
+                          # existed. Read as unknown, never as a default: a
+                          # health check described as a website build is a
+                          # false statement to the business it is about.
+                          "offer": detail.get("offer", ""),
                           "files": detail.get("files", []),
                           "at": row["at"].isoformat() if row["at"] else ""})
         return found

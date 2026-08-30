@@ -58,6 +58,10 @@ class Published:
     business_id: str = ""
     mission_id: str = ""
     commit: str = ""
+    #: What is actually at this address. Empty on every record written before
+    #: the publication event carried it, and empty stays unknown — an operator
+    #: told a health check is a website acts on the wrong thing.
+    offer: str = ""
     liveness: Liveness = Liveness.UNKNOWN
     status: int = 0
     detail: str = ""
@@ -72,7 +76,8 @@ class Published:
         return {"url": self.url, "kind": self.kind, "identifier": self.identifier,
                 "at": self.at, "business_id": self.business_id,
                 "mission_id": self.mission_id, "commit": self.commit,
-                "is_demo": self.is_demo, "liveness": self.liveness.value,
+                "offer": self.offer, "is_demo": self.is_demo,
+                "liveness": self.liveness.value,
                 "status": self.status, "detail": self.detail}
 
 
@@ -111,7 +116,11 @@ def from_events(rows: list) -> tuple[Published, ...]:
             at=at,
             business_id=detail.get("business_id") or "",
             mission_id=detail.get("mission_id") or "",
-            commit=detail.get("commit") or detail.get("version_id") or "")
+            commit=detail.get("commit") or detail.get("version_id") or "",
+            # Never inferred from `kind`. A demo event and a publication event
+            # both put files at an address, and which offer produced them is
+            # recorded or it is unknown.
+            offer=detail.get("offer") or "")
         seen = newest.get(url)
         if seen is None or found.at >= seen.at:
             newest[url] = found

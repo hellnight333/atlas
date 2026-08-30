@@ -879,12 +879,28 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
         # this owns the ledger. A publisher that guessed the path would be a
         # publisher that can be pointed at a directory by naming a mission.
         source_workspace = ""
+        source_offer = ""
         if mission.publishes:
             source = next(
                 (m for m in service.fold(Timeline(timeline.path).read(),
                                          tenant=tenant)
                  if m["mission_id"] == mission.publishes), {})
             source_workspace = source.get("workspace") or ""
+            # What the published artefact actually is, from the delivering
+            # mission's own recipe. `publish-website` publishes every artefact
+            # type and knows only that it published files, so a publication
+            # record built from the publisher's recipe would say the same thing
+            # about a website and a health check.
+            #
+            # A source mission that cannot be read leaves this empty, and empty
+            # stays unknown: reading it as `offer-website` would describe a
+            # health check as a website build to the business it is about.
+            try:
+                source_offer = recipes.get(source.get("recipe") or "").delivers
+            except Exception:                     # noqa: BLE001 - reported
+                log.warning("could not read what %s delivered; the publication "
+                            "record will say unknown rather than guess",
+                            mission.publishes)
 
         roles = Roles.all(ToolAgent(recipes.get(mission.recipe),
                                     repository=memory, tenant=tenant,
@@ -893,6 +909,7 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
                                     # hands over a key, never a record.
                                     signal_id=mission.signal_id,
                                     publishes=mission.publishes,
+                                    publishes_offer=source_offer,
                                     scratch_root=str(scratch_root),
                                     source_workspace=source_workspace,
                                     mission_id=mission.id))

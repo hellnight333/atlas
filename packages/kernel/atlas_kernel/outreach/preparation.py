@@ -186,6 +186,52 @@ def verified_recipient(business: Any) -> tuple[str, str]:
     return "", ""
 
 
+#: Offers this module knows how to write about.
+#:
+#: A message describes a specific artefact at a specific address. Composing one
+#: for an offer not listed here would mean guessing what is at the URL, and the
+#: guess would be published to the business it is about.
+COMPOSABLE: tuple[str, ...] = ("offer-website", "offer-health-check")
+
+
+def compose_health_check(*, business_name: str, url: str,
+                         answers: tuple[str, ...]) -> tuple[str, str]:
+    """The message for a published health check.
+
+    It is a *diagnostic*, and the copy says so. The failure this avoids is the
+    website message pointed at a health check — telling a business a site was
+    built for them when what is at that address is a report about the one they
+    already have.
+
+    Approved by the owner on 2026-08-30. What it must never claim, each of
+    which `consistency.check` and the tests hold it to:
+
+    - that the business asked for the audit
+    - that there is any existing relationship
+    - that a website was built
+    - that an unverified finding is certain
+    - that the business has agreed to anything
+    """
+    subject = f"What I found on {business_name}'s website"
+    found = ""
+    if answers:
+        found = ("\n\nSome of what it covers:\n"
+                 + "\n".join(f"  • {line}" for line in answers))
+    body = (
+        f"Hello,\n\n"
+        f"I checked {business_name}'s website and put the findings into a "
+        f"short health check. It shows what is working, what may need "
+        f"attention, and what I could not verify:\n\n  {url}\n\n"
+        f"Every line says how it was checked, so you can see for yourself "
+        f"where each one comes from. Anything the check could not establish is "
+        f"marked as such rather than counted against the site."
+        f"{found}\n\n"
+        f"If you would like, I can also show you what I would change and why. "
+        f"If not, this costs you nothing and you can ignore this message.\n\n"
+        f"{identity.EMAIL_SIGNATURE}\n")
+    return subject, body
+
+
 def compose(*, business_name: str, url: str, answers: tuple[str, ...],
             site_id: str) -> tuple[str, str]:
     """The message, assembled from stored facts and nothing else.
@@ -247,9 +293,28 @@ def prepare(*, business: Any, signal: dict, publication: dict,
     if chosen is None or not chosen.configured():
         blocked.append(NO_SENDING_IDENTITY)
 
-    subject, body = compose(business_name=business.name,
-                            url=publication["url"], answers=tuple(answers),
-                            site_id=publication.get("site_id", ""))
+    # What is actually at that address decides what the message may say.
+    #
+    # A publication written before the record carried an offer has none, and
+    # unknown stays unknown: defaulting to `offer-website` would tell a business
+    # a site was built for them when what is there is a report about the one
+    # they already have. That is a refusal, because the alternative is a false
+    # statement to a stranger.
+    offer = (publication.get("offer") or "").strip()
+    if offer not in COMPOSABLE:
+        raise NotPreparable(
+            f"this publication does not say what it published ({offer or 'no '
+            'offer recorded'}), so the message cannot describe it truthfully. "
+            f"Composable: {', '.join(COMPOSABLE)}.")
+
+    if offer == "offer-health-check":
+        subject, body = compose_health_check(
+            business_name=business.name, url=publication["url"],
+            answers=tuple(answers))
+    else:
+        subject, body = compose(business_name=business.name,
+                                url=publication["url"], answers=tuple(answers),
+                                site_id=publication.get("site_id", ""))
 
     return Prepared(
         business_id=business.id, business_name=business.name,

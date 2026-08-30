@@ -1895,6 +1895,14 @@ async function businessDetail(id) {
     <pre>${esc(JSON.stringify(roadmap || research, null, 2).slice(0, 4000))}</pre></div>`;
 }
 
+/* What is at a published address. Read from the record, never guessed: a
+   publication written before the field existed says nothing, and an operator
+   told a health check is a website acts on the wrong thing. */
+const OFFER_NAME = {
+  'offer-website': 'website',
+  'offer-health-check': 'health check',
+};
+
 const LIVENESS = {
   CONFIRMED_LIVE: ['live', 'ok'],
   CONFIRMED_DOWN: ['down', 'bad'],
@@ -1922,7 +1930,9 @@ views.publications = async () => {
     return `<div class="row"><div class="body">
       <div class="title"><a href="${esc(p.url)}" rel="noopener"
         target="_blank">${esc(p.identifier || p.url)}</a>
-        ${pill(word, tone)} ${p.is_demo ? pill('demo', 'warn') : ''}</div>
+        ${pill(word, tone)} ${p.is_demo ? pill('demo', 'warn') : ''}
+        ${pill(OFFER_NAME[p.offer] || 'what this is was not recorded',
+               p.offer ? '' : 'warn')}</div>
       <div class="meta">${esc(p.url)}</div>
       <div class="meta">${when(p.at)}${p.commit
         ? ' · <code>' + esc(p.commit.slice(0, 12)) + '</code>' : ''}${
