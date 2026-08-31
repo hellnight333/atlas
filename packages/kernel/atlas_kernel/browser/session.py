@@ -197,11 +197,22 @@ class PlaywrightSession:
             user_agent=self._user_agent,
             viewport={"width": self._viewport[0], "height": self._viewport[1]},
         )
-        self._page = self._context.new_page()
-        self._page.set_default_timeout(self._timeout)
+        self._page = self._new_page()
+        return self
+
+    def _new_page(self):
+        """One page, configured the way every page here is configured.
+
+        Extracted so `open()` can start each navigation on a fresh one. The
+        console handler has to be attached per page, and attaching it in one
+        place is what stops a replacement page from silently collecting no
+        evidence.
+        """
+        page = self._context.new_page()
+        page.set_default_timeout(self._timeout)
         # Console errors are evidence. §17 asks for them, and they distinguish
         # "the page loaded" from "the page works".
-        self._page.on(
+        page.on(
             "console",
             lambda msg: (
                 self._console.append(f"{msg.type}: {msg.text}"[:300])
@@ -209,7 +220,7 @@ class PlaywrightSession:
                 else None
             ),
         )
-        return self
+        return page
 
     def close(self) -> None:
         """Release everything. Safe to call twice, and on a session that never
@@ -259,7 +270,37 @@ class PlaywrightSession:
 
     @_on_browser_thread
     def open(self, url: str) -> PageSnapshot:
-        page = self._require_page()
+        """Go to one address, on a page of its own.
+
+        **A fresh page per navigation, and that is a correctness fix rather than
+        hygiene.** `wait_until="domcontentloaded"` returns while a page may
+        still be navigating — a client-side redirect, a meta refresh — and the
+        callers here loop over sites reusing one session. The next site's
+        `goto` then interrupted the previous one, and Playwright raised
+        *"Navigation to <previous> is interrupted by another navigation to
+        <next>"* against the **previous** call.
+
+        The audit recorded that as `reachable=False` for the previous business.
+        Seven of sixty audited businesses were marked unreachable that way,
+        including two large retailers whose sites are plainly fine, and each was
+        then dropped from the funnel for a defect that was ours.
+
+        A page cannot interrupt a navigation it was not part of. The old page is
+        closed after the new one is created, so a failure to close never leaves
+        the session without a page.
+        """
+        self._require_page()
+        previous = self._page
+        self._page = self._new_page()
+        try:
+            if previous is not None:
+                previous.close()
+        except Exception:                          # noqa: BLE001 - best effort
+            # A page that will not close is a leak, not a reason to refuse the
+            # navigation the caller asked for.
+            pass
+
+        page = self._page
         self._console.clear()
         try:
             response = page.goto(url, wait_until="domcontentloaded")

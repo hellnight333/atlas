@@ -109,8 +109,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 reachable += 1
             except Exception as failure:  # noqa: BLE001 - one dead site must not end the run
+                # Whose fault it was decides what is recorded about them. A
+                # navigation our own browser interrupted is not a site that is
+                # down, and `reachable=False` for that is a false statement
+                # about a real business that then drops it from the funnel.
+                from atlas_kernel.browser.failures import reachability
+
+                answered, because = reachability(str(failure))
                 audit.update(
-                    reachable=False,
+                    reachable=answered,
+                    check_failed_because=because if answered is None else "",
                     http_status=0,
                     load_ms=int((time.monotonic() - started) * 1000),
                     page_bytes=0,
@@ -130,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
                         "url": url,
                         "category": row["category"],
                         "reachable": audit["reachable"],
+                        # Present only when the check did not complete on our
+                        # side. Empty otherwise, so a reader can tell "the site
+                        # did not answer" from "we did not manage to ask".
+                        "check_failed_because": audit.get("check_failed_because", ""),
                         "http_status": audit["http_status"],
                         "load_ms": audit["load_ms"],
                         "page_bytes": audit["page_bytes"],
