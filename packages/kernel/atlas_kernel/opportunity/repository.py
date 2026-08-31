@@ -659,6 +659,33 @@ class OpportunityRepository:
             ).scalar()
         return _decoded(found) or {}
 
+    def audit_coverage(self) -> dict:
+        """How much of the discovered population Qevik can currently see.
+
+        One row per business — its **latest** audit. A business audited badly
+        on Monday and well on Tuesday is visible, and counting every audit
+        would report it as a loss and a success at once.
+
+        Reads only. Nothing here re-audits: the nightly verification already
+        revisits these, and duplicating it to produce a number would spend
+        somebody else's bandwidth to make a report look complete.
+        """
+        from .coverage import measure
+
+        with SessionLocal() as session:
+            latest = session.execute(
+                text("""
+                SELECT DISTINCT ON (business_id) business_id, detail
+                FROM atlas_business_events WHERE kind = 'website_audited'
+                ORDER BY business_id, at DESC
+                """)).mappings().all()
+            with_site = session.execute(
+                text("SELECT count(*) FROM atlas_businesses "
+                     "WHERE website IS NOT NULL AND website <> ''")).scalar()
+        return measure(
+            latest_audits=[{"detail": row["detail"]} for row in latest],
+            with_a_website=int(with_site or 0)).summary()
+
     def record_lead(self, *, website: str, host: str, source: str,
                     observations: int = 0, business_id: str = "") -> dict:
         """Record that a business asked Qevik about itself.

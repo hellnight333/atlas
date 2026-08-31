@@ -645,6 +645,20 @@ def build_router() -> APIRouter:
         return {"awaiting": _opportunities(request).awaiting_publication(
             limit=limit, tenant=tenant)}
 
+    @router.get("/coverage")
+    def coverage(request: Request,
+                 _: User = Depends(requires(Scope.READ))) -> dict:
+        """How much of the discovered population Qevik can actually see.
+
+        A business Qevik cannot fetch produces no evidence and leaves the funnel
+        without appearing anywhere as a loss — the operator sees a shorter list,
+        not a gap. This is that gap, with the part that is ours separated from
+        the part that is theirs.
+
+        **Declared above `/{mission_id}`**, like every sibling here.
+        """
+        return _opportunities(request).audit_coverage()
+
     @router.get("/inbound")
     def inbound(request: Request, limit: int = 200,
                 _: User = Depends(requires(Scope.READ))) -> dict:

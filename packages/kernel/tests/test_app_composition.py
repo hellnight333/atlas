@@ -429,7 +429,16 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
             "the opportunity's own evidence and a caller must not redecide it")
     assert "confirm(" in source[:source.index("/api/missions/deliver")][-900:], (
         "approving work about a real business must not be one unguarded click")
-    assert Path(CONSOLE / "index.html").stat().st_size < 122_000
+    # A business Qevik cannot fetch leaves the funnel without appearing as a
+    # loss — the operator sees a shorter list, not a gap. Coverage is that gap,
+    # and the half that is ours is drawn apart from the half that is theirs.
+    assert "/api/missions/coverage" in source, (
+        "the operator cannot see how much of the population Qevik can fetch")
+    assert "blocked by us" in source and "their site did not answer" in source, (
+        "our failure and theirs are drawn the same way")
+    assert source.count("${coverageBlock}") == 2, (
+        "coverage is not rendered on both branches of the discovery view")
+    assert Path(CONSOLE / "index.html").stat().st_size < 126_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

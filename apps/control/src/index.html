@@ -1540,13 +1540,40 @@ async function opportunities() {
 }
 
 async function discoveries() {
-  const [found, vocabulary] = await Promise.all([
+  const [found, vocabulary, coverage] = await Promise.all([
     API.get('/api/discovery?limit=25').catch(() => null),
     API.get('/api/discovery/states').catch(() => null),
+    /* How much of the discovered population Qevik can actually see. A business
+       it cannot fetch produces no evidence and leaves the funnel without
+       appearing anywhere as a loss — the operator sees a shorter list, not a
+       gap. This is that gap. */
+    API.get('/api/missions/coverage').catch(() => null),
   ]);
   const states = (vocabulary || {}).states || [];
+  const c = coverage;
+  const coverageBlock = !c ? '' : `
+    <div class="card" style="margin-bottom:1rem"><h3>What Qevik can see</h3>
+      <div class="grid">
+        <div><div class="stat">${esc(String(c.answered))}</div>
+          <span class="note">audited, evidence exists</span></div>
+        <div><div class="stat">${esc(String(c.never_audited))}</div>
+          <span class="note">waiting for the nightly pass</span></div>
+        <div><div class="stat">${esc(String(c.did_not_answer))}</div>
+          <span class="note">their site did not answer</span></div>
+        <div><div class="stat">${c.we_failed
+            ? pill(String(c.we_failed) + ' blocked by us', 'bad')
+            : pill('none blocked by us', 'ok')}</div>
+          <span class="note">our own check did not complete</span></div>
+      </div>
+      ${c.we_failed ? `<p class="note">These are businesses Qevik could have
+        evidence about and does not, for a reason that was never theirs. The
+        nightly verification revisits them; this number should reach zero on
+        its own.</p>` : ''}
+      <p class="note">${esc(c.note || '')}</p></div>`;
+
   if (!found) {
     return `<header class="page"><h2>Discovery</h2></header>
+      ${coverageBlock}
       <div class="card"><p class="note">The discovery memory could not be read.
       That is not the same as nothing having been discovered.</p></div>`;
   }
@@ -1558,6 +1585,7 @@ async function discoveries() {
           esc(String(found.counts.claiming_about_the_world)) +
           ' of them evidenced as new by their source.'
         : 'Nothing new since the last scan.'}</p></header>
+    ${coverageBlock}
     ${rows.length ? rows.map((r) => {
       const how = discoveryLine(r, states);
       return `<div class="card">
