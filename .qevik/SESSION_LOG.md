@@ -393,3 +393,53 @@ noted on 2026-08-19 that Kings' approved message claims the site "did not
 finish loading within 30 seconds" while a live check found 15.8s. Withdrawing
 it, re-approving it, or attaching it to a manufactured signal would each be a
 decision about what somebody meant.
+
+## The development loop, and the half of the action centre that takes answers
+
+`infra/devloop/` — a driver that runs Claude and Codex without a person in
+between, and `controlplane/human.py` — somewhere for it to put a question when
+it reaches something only a person can settle.
+
+Both were built and both were run. The report of what happened is below,
+including the parts that did not work.
+
+### What the proving runs actually did
+
+Two real tasks went through the loop. Neither reached DONE.
+
+**Run one**, a hand-written task from verified production evidence: BUILDING →
+GATING (changed, tests) → committed → REVIEWING on `183a29a..a38e396` → **three
+blocking findings** → FIXING → GATING → REVIEWING round two → **clean**. Then
+the parser failed to read a clean review whose wording it did not recognise,
+and the driver correctly failed closed and requeued the task. The work is
+good and is on `main`.
+
+**Run two**, a task the loop enqueued itself from production data: same path,
+two findings in round one, three in round two, and the 3600s task runtime limit
+fired during round three's fix. Requeued.
+
+So: the machinery works end to end through multiple rounds — objective gates,
+immutable review units, a blind reviewer, bounded rounds, working limits — and
+**a task has not yet been carried from a production finding to a deployed,
+production-verified change without help.**
+
+### What the runs found in the loop itself
+
+Four defects, none of which static reading found:
+
+- The parser knew clean *sentences* rather than the review's *shape*, and
+  rejected a real clean verdict.
+- `git add -A` adopted whatever else was in the tree, so edits made by hand
+  while the loop ran were committed under a task's name and reviewed as its
+  work. The reviewer duly raised findings against code the task never touched.
+- Every round committed to `main`, including rounds later found defective.
+- `exit 1` was read as failure when it was `error_max_turns` — a builder that
+  finished and then ran out of turns had its work discarded.
+
+The fix for the last one came from the builder answering the reviewer: only a
+turn-limit stop falls through to the gates, and an unexplained failure does
+not. That distinction is better than the one it replaced.
+
+### Next
+Overnight mode is not safe yet — see the report. The first thing to fix is the
+turn limit, which is what both runs actually died on.

@@ -25,6 +25,8 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-12 | Outreach approval | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Fingerprint-bound; 409 on mismatch |
 | C-13 | **SMTP delivery** | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | **BLOCKED** | HA-001, HA-002 — **and B-13: 0 of 412 businesses carry an email address, so clearing those two sends to nobody**. Zero messages sent, ever |
 | C-39 | Places extractor | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | Replayed a real production `place_id`; no novelty claim, no city, no country, no phone |
+| C-47 | Human request/response | Control plane | ✓ | ✓ | ✓ | — | — | — | — | TEST-VERIFIED | One inbox with the derived half; 12 tests, every refusal negative-controlled. **No request has been answered through the UI** |
+| C-46 | Dual-agent development loop | Tooling | ✓ | ✓ | ✓ | — | — | — | — | TEST-VERIFIED | Two real tasks ran build→gate→review→fix→review. **Neither reached DONE**; no task has been deployed by the loop |
 | C-45 | Cross-method reconciliation | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 6 false absences withdrawn across 2 businesses, both with an open opportunity |
 | C-44 | Observation freshness | Control plane | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | The nightly pass writes the three-state record; 7 on the first run, cadence ~9 nights for 359 sites |
 | C-43 | Publication offer recovery | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 4 of 5 publications recovered what they published from the mission's recipe; 3 of 3 businesses now compose, against 1 of 3 before |
