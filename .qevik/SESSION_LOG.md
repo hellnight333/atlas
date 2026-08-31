@@ -379,3 +379,17 @@ Whether an approved-but-unsent message should be flagged when the evidence
 under it has since changed is a **product decision**, and it is recorded as one
 rather than answered. The deterministic half — stating, per prospect, whether
 the evidence moved after the approval — is the next slice.
+
+### What the freshness surface then showed about the two approved messages
+
+Reading the dossier for them on production: `Kings — Dental Center Karama
+Dubai` has **no observations at all** — its latest audit is HTTP status 0, a
+fetch that never completed — and neither it nor Malabar has a `Signal`. So the
+dossier says "Nothing to do — no opportunity names this business" beside a
+message a person approved.
+
+Recorded as **DQ-008** and not acted on. `73_FIRST_COMMERCIAL_TEST.md` already
+noted on 2026-08-19 that Kings' approved message claims the site "did not
+finish loading within 30 seconds" while a live check found 15.8s. Withdrawing
+it, re-approving it, or attaching it to a manufactured signal would each be a
+decision about what somebody meant.

@@ -25,3 +25,33 @@ Only decisions that genuinely require the owner. A decision already resolved in
 | Publication records carry the offer; missing stays unknown | Approved | Owner, this session | 2026-08-31 |
 | Health-check outreach copy | Approved in principle, with the prohibitions held by tests | Owner, this session | 2026-08-31 |
 | Contact cooldown | 14 days, an initial commercial decision rather than a technical default | Owner | 2026-08-30 |
+
+## DQ-008 — approvals that predate the opportunity model, and one that predates its own evidence
+
+**Open. Nothing has been changed, withdrawn or re-approved.**
+
+Two outreach messages carry `approved_fingerprint` and have never been sent.
+Both were approved by hand on 2026-08-19, before missions, signals and
+publications existed as records:
+
+* **Malabar Dental Clinic** — 20 observations, 17 findings, HTTP 200. The
+  evidence is sound; there is simply no `Signal` naming the business, so the
+  dossier says "no opportunity names this business" beside an approved message.
+* **Kings — Dental Center Karama Dubai** — latest audit **0 observations, HTTP
+  status 0**. The fetch never completed. `73_FIRST_COMMERCIAL_TEST.md` recorded
+  on the day that the approved message claims the site "did not finish loading
+  within 30 seconds" and that a live check found it loads in 15.8 seconds.
+
+So one approved message contains a claim already known to be inaccurate, and
+neither is reachable through the model the rest of the system reasons in.
+
+**Why this is not being decided here.** An approval is a person's act. The
+standing instruction is not to reinterpret these five manual approvals, and
+withdrawing one, re-approving it against fresh evidence, or attaching it to a
+manufactured `Signal` would each be a decision about what somebody meant.
+
+**What is needed:** whether these two are (a) withdrawn, (b) re-approved after
+a fresh audit, or (c) left exactly as they are and excluded from any future
+automated send. Until then they sit approved and unsent, which is where they
+have been since 2026-08-19 and is the safe direction.
+
