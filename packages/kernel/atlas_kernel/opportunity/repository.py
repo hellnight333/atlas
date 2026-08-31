@@ -659,6 +659,39 @@ class OpportunityRepository:
             ).scalar()
         return _decoded(found) or {}
 
+    def sighting_coverage(self) -> dict:
+        """How many businesses the sighting layer actually knows about.
+
+        `recent_discoveries` excludes `KNOWN`, which is right — a list of things
+        Qevik already had is not a discovery feed. But an empty feed then reads
+        as "the scan ran and found nothing", and in production it means
+        something else entirely: 352 of 412 businesses arrived through a path
+        that records no sighting at all, and every sighting that does exist is
+        `KNOWN`.
+
+        So the feed's emptiness has to be explainable. This says which kind of
+        empty it is.
+        """
+        with SessionLocal() as session:
+            businesses = session.execute(
+                text("SELECT count(*) FROM atlas_businesses")).scalar() or 0
+            sighted = session.execute(
+                text("SELECT count(DISTINCT business_id) FROM atlas_sightings")
+            ).scalar() or 0
+            states = session.execute(
+                text("SELECT state, count(DISTINCT business_id) n "
+                     "FROM atlas_sightings GROUP BY 1")).mappings().all()
+        return {
+            "businesses": int(businesses),
+            "with_a_sighting": int(sighted),
+            "without_a_sighting": max(0, int(businesses) - int(sighted)),
+            "by_state": {row["state"]: int(row["n"]) for row in states},
+            "note": ("A business with no sighting has no discovery state, so it "
+                     "never appears in the feed. That is a gap in what was "
+                     "recorded about how Qevik came to know it — not evidence "
+                     "that nothing was found."),
+        }
+
     def audit_coverage(self) -> dict:
         """How much of the discovered population Qevik can currently see.
 
@@ -1640,14 +1673,26 @@ class OpportunityRepository:
             rows = (
                 session.execute(
                     text(f"""
-                SELECT m.business_id, MAX(m.sent_at) AS last_sent
+                SELECT m.business_id, m.recipient, MAX(m.sent_at) AS last_sent
                 FROM atlas_outreach_messages m
                 JOIN atlas_businesses b ON b.id = m.business_id
                 WHERE m.status = 'sent' AND m.sent_at IS NOT NULL AND {where}
-                GROUP BY m.business_id
+                GROUP BY m.business_id, m.recipient
                 """), params
                 )
                 .mappings()
                 .all()
             )
-        return ContactHistory({row["business_id"]: row["last_sent"] for row in rows})
+        # Both keys, from the same rows. The address is what received the
+        # message, and two business records sharing a phone are one phone.
+        contacts: dict = {}
+        recipients: dict = {}
+        for row in rows:
+            when = row["last_sent"]
+            business = row["business_id"]
+            if business not in contacts or when > contacts[business]:
+                contacts[business] = when
+            address = (row["recipient"] or "").strip()
+            if address and (address not in recipients or when > recipients[address]):
+                recipients[address] = when
+        return ContactHistory(contacts, recipients)

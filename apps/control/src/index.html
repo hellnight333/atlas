@@ -1601,7 +1601,13 @@ async function discoveries() {
       </div>`;
     }).join('') : `<div class="card"><p class="note">Discovery runs nightly.
       An empty list means the scan ran and found nothing Qevik did not already
-      have — not that it did not run.</p></div>`}
+      have — not that it did not run.</p>
+      ${(found.coverage || {}).without_a_sighting ? `<p class="note">
+        <strong>${esc(String(found.coverage.without_a_sighting))} of
+        ${esc(String(found.coverage.businesses))} businesses have no sighting
+        recorded at all</strong>, so they have no discovery state and can never
+        appear here. That is a gap in what was recorded about how Qevik came to
+        know them — not evidence that nothing was found.</p>` : ''}</div>`}
     ${states.length ? `<div class="card"><h3>What these states mean</h3>
       <dl class="facts">${states.map((st) => `<dt>${pill(st.state,
         STATE_TONE[st.state] || '')}</dt><dd>${esc(st.means)}

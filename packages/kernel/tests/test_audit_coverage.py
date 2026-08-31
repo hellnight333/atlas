@@ -149,3 +149,56 @@ def test_it_re_audits_nothing() -> None:
 
     assert not imported & {"httpx", "requests", "playwright", "socket",
                            "subprocess"}, imported
+
+
+class TestTheDiscoveryFeedExplainsItsOwnEmptiness:
+    """`recent_discoveries` excludes KNOWN, which is right — a list of things
+    Qevik already had is not a discovery feed. But an empty feed then reads as
+    "the scan ran and found nothing", and in production it means something else:
+    352 of 412 businesses arrived through a path that records no sighting, and
+    every sighting that does exist is KNOWN.
+    """
+
+    def test_the_repository_reports_how_many_were_never_sighted(self) -> None:
+        import inspect
+
+        from atlas_kernel.opportunity.repository import OpportunityRepository
+
+        source = inspect.getsource(OpportunityRepository.sighting_coverage)
+
+        assert "without_a_sighting" in source
+        assert "atlas_sightings" in source
+        # It counts; it must not create a sighting to make the number look good.
+        assert "INSERT" not in source.upper()
+
+    def test_the_route_carries_it(self) -> None:
+        import inspect
+
+        from atlas_kernel.opportunity import api
+
+        source = inspect.getsource(api.build_router)
+
+        assert "sighting_coverage()" in source
+        assert '"coverage": coverage' in source
+
+    def test_a_failure_to_read_it_does_not_take_down_the_feed(self) -> None:
+        """The discoveries are the point of the route; the explanation is not
+        worth failing them for."""
+        import inspect
+
+        from atlas_kernel.opportunity import api
+
+        source = inspect.getsource(api.build_router)
+        after = source[source.index("sighting_coverage()"):][:200]
+
+        assert "except Exception" in after
+        assert "coverage = {}" in after
+
+    def test_the_console_says_it_rather_than_implying_a_clean_scan(self) -> None:
+        from pathlib import Path
+
+        console = (Path(__file__).resolve().parents[3]
+                   / "apps" / "control" / "src" / "index.html").read_text()
+
+        assert "have no sighting" in console
+        assert "not evidence that nothing was found" in console

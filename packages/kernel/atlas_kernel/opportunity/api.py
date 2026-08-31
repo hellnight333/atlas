@@ -80,8 +80,17 @@ def build_router() -> APIRouter:
                 detail="the discovery memory could not be read. This is not "
                        "the same as nothing having been discovered.",
             ) from unavailable
+        # Why the list is the length it is. An empty feed reads as "the scan
+        # ran and found nothing", and in production it means something else:
+        # most businesses arrived through a path that records no sighting.
+        try:
+            coverage = repository(request).sighting_coverage()
+        except Exception:                          # noqa: BLE001 - reported
+            coverage = {}
+
         return {
             "discoveries": found,
+            "coverage": coverage,
             "counts": {
                 "total": len(found),
                 "claiming_about_the_world": sum(

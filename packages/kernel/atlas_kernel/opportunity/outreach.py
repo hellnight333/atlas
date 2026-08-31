@@ -144,31 +144,91 @@ class SuppressionList:
         return len(self._addresses) + len(self._domains)
 
 
+def normalise_recipient(recipient: str) -> str:
+    """One spelling per address, so a cooldown cannot be stepped around.
+
+    `+971 50 123 4567`, `+971501234567` and `971501234567` are one phone;
+    `Hello@Example.AE` and `hello@example.ae` are one inbox. Without this the
+    guard is defeated by punctuation.
+    """
+    text = (recipient or "").strip().lower()
+    if not text:
+        return ""
+    if "@" in text:
+        return text
+    digits = "".join(character for character in text if character.isdigit())
+    # A local number and the same number in international form are the same
+    # phone. Comparing the last nine digits is what survives both spellings
+    # without needing to know the country.
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
 class ContactHistory:
-    """When each business was last contacted.
+    """When each business — and each address — was last contacted.
 
     In-memory here; the repository is the durable record. Kept as its own object
     so the cooldown rule has one implementation rather than being reimplemented
     at each call site.
+
+    ## Why the recipient is tracked as well as the business
+
+    A cooldown exists so a stranger is not written to repeatedly. The message
+    arrives at a *recipient*, and a business id is not one: in production four
+    phone numbers are held by nine separate business records — branches of a
+    chain, a group practice on one switchboard — and a cooldown keyed only on
+    the business would let one phone receive three messages inside a fourteen
+    day window, each passing the guard.
+
+    So a contact is inside the cooldown if **either** the business or the
+    address was contacted recently. Both, because they answer different
+    questions: one business reachable at two addresses has still been contacted
+    twice, and two businesses at one address are still one person's phone.
     """
 
-    def __init__(self, contacts: dict[str, datetime] | None = None) -> None:
+    def __init__(self, contacts: dict[str, datetime] | None = None,
+                 recipients: dict[str, datetime] | None = None) -> None:
         self._contacts: dict[str, datetime] = dict(contacts or {})
+        #: Keyed by the address a message actually went to, normalised.
+        self._recipients: dict[str, datetime] = {
+            normalise_recipient(key): value
+            for key, value in (recipients or {}).items()
+            if normalise_recipient(key)
+        }
 
-    def record(self, business_id: str, when: datetime | None = None) -> None:
-        self._contacts[business_id] = when or datetime.now(UTC)
+    def record(self, business_id: str, when: datetime | None = None, *,
+               recipient: str = "") -> None:
+        moment = when or datetime.now(UTC)
+        self._contacts[business_id] = moment
+        address = normalise_recipient(recipient)
+        if address:
+            self._recipients[address] = moment
 
     def last_contacted(self, business_id: str) -> datetime | None:
         return self._contacts.get(business_id)
 
-    def within_cooldown(self, business_id: str, days: int, now: datetime | None = None) -> bool:
-        last = self._contacts.get(business_id)
-        if last is None:
-            return False
+    def last_reached(self, recipient: str) -> datetime | None:
+        """When this address last received something, whoever it was about."""
+        return self._recipients.get(normalise_recipient(recipient))
+
+    def within_cooldown(self, business_id: str, days: int,
+                        now: datetime | None = None, *,
+                        recipient: str = "") -> bool:
+        """Whether contacting this business at this address is too soon.
+
+        `recipient` is optional so every existing caller keeps working, and
+        omitting it checks the business alone — which is the older, weaker
+        rule. `OutreachService.send` always passes it.
+        """
         moment = now or datetime.now(UTC)
-        if last.tzinfo is None:  # pragma: no cover - defensive against naive storage
-            last = last.replace(tzinfo=UTC)
-        return moment - last < timedelta(days=days)
+        for last in (self._contacts.get(business_id),
+                     self._recipients.get(normalise_recipient(recipient))):
+            if last is None:
+                continue
+            if last.tzinfo is None:  # pragma: no cover - naive storage
+                last = last.replace(tzinfo=UTC)
+            if moment - last < timedelta(days=days):
+                return True
+        return False
 
 
 class OutreachService:
@@ -252,12 +312,22 @@ class OutreachService:
             )
             raise OutreachRefused(updated.detail or "suppressed")
 
+        # The address as well as the business. Four phone numbers in production
+        # are held by nine business records, and a cooldown on the business
+        # alone would let one phone receive three messages inside the window.
         if self.history.within_cooldown(
-            message.business_id, profile.contact_cooldown_days, now=now
+            message.business_id, profile.contact_cooldown_days, now=now,
+            recipient=message.recipient,
         ):
-            last = self.history.last_contacted(message.business_id)
+            last = (self.history.last_contacted(message.business_id)
+                    or self.history.last_reached(message.recipient))
+            # Says which rule refused, because "we wrote to this business" and
+            # "we wrote to this number about a different business" are answered
+            # differently by whoever reads the refusal.
+            because = ("this business" if self.history.last_contacted(message.business_id)
+                       else f"{message.recipient}")
             raise OutreachRefused(
-                f"{message.business_id} was contacted on {last:%Y-%m-%d}, inside the "
+                f"{because} was contacted on {last:%Y-%m-%d}, inside the "
                 f"{profile.contact_cooldown_days}-day cooldown for {profile.id}"
             )
 
