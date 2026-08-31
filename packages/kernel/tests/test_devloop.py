@@ -279,6 +279,123 @@ def test_the_driver_never_treats_prose_as_success():
         assert word not in build_fn
 
 
+# ------------------------------------------------- a builder that stopped short
+
+
+def _stopped(subtype: str) -> agents.Outcome:
+    """A builder run that ended badly, the way `claude -p` reports it."""
+    return agents.Outcome(
+        ok=False, exit_code=1, output="",
+        data={"is_error": True, "subtype": subtype}, stop_reason=subtype,
+        detail=f"builder reported an error (exit 1): {subtype}")
+
+
+def test_build_records_how_the_run_ended(monkeypatch):
+    """The harness's own `subtype`, carried rather than flattened to a bool."""
+    monkeypatch.setattr(
+        agents, "_run",
+        lambda *a, **k: (1, '{"is_error": true, "subtype": "error_max_turns"}',
+                         False))
+    out = agents.build({"title": "t", "brief": "b"}, cwd=Path("."),
+                       max_turns=1, timeout=10)
+    assert out.ok is False and out.stop_reason == "error_max_turns"
+    assert agents.stopped_short(out) is True
+    assert agents.stopped_short(_stopped("error_during_execution")) is False
+    assert agents.stopped_short(_stopped("")) is False, \
+        "a stop with no stated reason is unexplained, not completion-like"
+    assert agents.stopped_short(agents.Outcome(ok=True, exit_code=0)) is False
+
+
+def _driver_for(q, tmp_path):
+    from devloop import driver as driver_mod
+
+    ident = q.add(title="one task", brief="do it", origin="human")
+    task = q.claim(owner="test")
+    return driver_mod, driver_mod.Driver(q, driver_mod.Limits(),
+                                         repo=tmp_path), ident, task
+
+
+def test_an_unexplained_builder_failure_never_reaches_the_gates(monkeypatch, q,
+                                                                tmp_path):
+    """A builder that died mid-edit has not carried out the task.
+
+    Nothing downstream can tell finished work from half-finished: the gates
+    read git and pytest, so they establish only that the repository is
+    consistent, and the reviewer is blind to the brief by design. If this fell
+    through, a build that failed after one valid but incomplete edit could pass
+    both and be marked DONE — and deployed.
+    """
+    driver_mod, driver, ident, task = _driver_for(q, tmp_path)
+    monkeypatch.setattr(driver_mod.agents, "build",
+                        lambda *a, **k: _stopped("error_during_execution"))
+
+    def never(**_):
+        raise AssertionError("an unexplained builder failure reached the gates")
+
+    monkeypatch.setattr(driver_mod.gates, "changed", never)
+
+    assert driver.run_task(task) == State.FAILED
+    assert q.get(ident)["state"] == State.FAILED
+    assert any("error_during_execution" in t["reason"]
+               for t in q.transitions(ident)), \
+        "the failure was recorded without saying how the builder ended"
+
+
+def test_a_builder_that_only_ran_out_of_turns_is_judged_by_the_gates(monkeypatch,
+                                                                     q, tmp_path):
+    """Negative control: the one known ending that may hold finished work.
+
+    The builder is told to finish and may have done so on its last turn, so
+    the tree is judged rather than discarded. The gates still decide — here
+    they find nothing changed and fail it, which is the proof they were asked.
+    """
+    driver_mod, driver, ident, task = _driver_for(q, tmp_path)
+    monkeypatch.setattr(driver_mod.agents, "build",
+                        lambda *a, **k: _stopped("error_max_turns"))
+    reached = []
+    monkeypatch.setattr(
+        driver_mod.gates, "changed",
+        lambda **k: (reached.append("changed"),
+                     gates.Gate("changed", False, "nothing was changed"))[1])
+
+    assert driver.run_task(task) == State.FAILED
+    assert reached == ["changed"], "the turn limit was treated as a verdict"
+    assert any("nothing was changed" in t["reason"]
+               for t in q.transitions(ident)), "the gates did not decide it"
+
+
+def test_one_task_runs_are_still_accounted_for(monkeypatch, q, tmp_path):
+    """`--once` bounds the work, and never the run's record of it.
+
+    Returning from inside the loop skipped the accounting below it: a finished
+    task was recorded against a run showing zero completed, a failed one was
+    never counted against the run at all, and the reason written down read
+    `finished` whatever had actually happened.
+    """
+    driver_mod, driver, ident, _ = _driver_for(q, tmp_path)
+    q.move(ident, State.QUEUED, reason="back for the loop to claim")
+    monkeypatch.setattr(driver_mod.projection, "write", lambda *a, **k: None)
+    monkeypatch.setattr(driver_mod.Driver, "run_task",
+                        lambda self, task: State.DONE)
+
+    because = driver.loop(max_tasks=6, stop_after_one=True)
+    assert because == f"one task attempted, ending {State.DONE}"
+    run = q.run(driver.run_id)
+    assert run["tasks_completed"] == 1, "the completed task was not counted"
+    assert run["stopped_because"] == because, "the run recorded a stale reason"
+
+    # And the other half of the accounting: a failed attempt is counted against
+    # the run, so a `--once` invocation that failed does not read as a run that
+    # did nothing.
+    q.add(title="another", brief="b", origin="human")
+    monkeypatch.setattr(driver_mod.Driver, "run_task",
+                        lambda self, task: State.FAILED)
+    failed_run = driver.loop(max_tasks=6, stop_after_one=True)
+    assert failed_run == f"one task attempted, ending {State.FAILED}"
+    assert q.run(driver.run_id)["infra_failures"] == 1
+    assert q.run(driver.run_id)["stopped_because"] == failed_run
+
+
 def test_the_evaluation_queue_holds_third_party_projects_unassessed(q):
     """Nothing is integrated before somebody has looked at it."""
     first = q.add_evaluation(name="Camofox", url="https://example.test/camofox",

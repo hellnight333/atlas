@@ -466,6 +466,12 @@ class Queue:
             return dict(db.execute("SELECT * FROM runs WHERE id = ?",
                                    (run_id,)).fetchone())
 
+    def run(self, run_id: str) -> dict | None:
+        """What one invocation did: tasks completed, failures, why it stopped."""
+        row = self._db.execute("SELECT * FROM runs WHERE id = ?",
+                               (run_id,)).fetchone()
+        return dict(row) if row else None
+
     def record_reviewer_health(self, *, detected: bool, detail: str) -> None:
         with self._write() as db:
             db.execute("INSERT INTO reviewer_health (at, detected, detail)"

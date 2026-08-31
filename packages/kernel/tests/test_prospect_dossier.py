@@ -620,6 +620,64 @@ def test_evidence_moved_since_is_measured_from_the_shown_approval(repo):
         _clean(repo, business.id)
 
 
+def test_an_unapproved_draft_reports_no_moved_evidence_at_all(repo):
+    """No approval, no window — not the window of somebody else's approval.
+
+    The draft on screen is unapproved and an older message was approved, so
+    falling back to the oldest approval measures from a moment before these
+    words existed. The answer would then carry changes that cannot have moved
+    the ground under a draft written after them, under a `known=False` claim
+    about that draft.
+    """
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        _ready_to_write(repo, business.id)
+        old = _draft(repo, business.id, status=OutreachStatus.APPROVED,
+                     approved="fp-1", subject="approved a week ago",
+                     created_at=datetime.now(UTC) - timedelta(days=7))
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="reevaluation",
+            kind="business_reevaluated", actor="recipe:verify-recorded-websites",
+            detail={"changes": [{"feature": "click_to_call",
+                                 "was": "not_found", "now": "present",
+                                 "change": "contradicted"}]}))
+        new = _draft(repo, business.id, subject="written after all of that",
+                     created_at=datetime.now(UTC))
+
+        # The change is real and is visible from the older approval's moment —
+        # so an empty answer below is the fix, not an empty fixture.
+        assert [c["feature"] for c in
+                repo.evidence_changes_since(business.id, old.created_at)] == \
+               ["click_to_call"]
+
+        approval = assemble(business.id, memory=repo,
+                            tenant=TENANT)["answers"]["approval"]
+        assert approval["known"] is False
+        assert approval["message_id"] == new.id
+        assert approval["evidence_moved_since"] == [], \
+            "nothing approves these words, so nothing has moved since one did"
+
+        # Negative control: once these words *are* approved, a change after
+        # that approval is reported — the window exists and is this draft's.
+        approved_now = _draft(repo, business.id,
+                              status=OutreachStatus.APPROVED, approved="fp-2",
+                              subject="and then approved",
+                              created_at=datetime.now(UTC))
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="reevaluation",
+            kind="business_reevaluated", actor="recipe:verify-recorded-websites",
+            detail={"changes": [{"feature": "whatsapp", "was": "present",
+                                 "now": "not_found",
+                                 "change": "contradicted"}]}))
+        after = assemble(business.id, memory=repo,
+                         tenant=TENANT)["answers"]["approval"]
+        assert after["known"] is True and after["message_id"] == approved_now.id
+        assert [c["feature"] for c in after["evidence_moved_since"]] == \
+               ["whatsapp"], "only what moved after the approval on screen"
+    finally:
+        _clean(repo, business.id)
+
+
 def test_every_answer_names_the_model_it_came_from(repo):
     business = _business(repo)
     try:

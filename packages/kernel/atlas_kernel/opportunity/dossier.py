@@ -37,6 +37,11 @@ the business's own page vouches for that address and for no other. Both were
 once `bool(...)` over everything on file, and both then reported evidence for
 something nobody had evidenced.
 
+That extends to what each answer says *around* its fact. `evidence_moved_since`
+is measured from the approval the answer is about, so where no approval covers
+the draft on screen there is no window and nothing has moved since one — not a
+window borrowed from an approval given to different words.
+
 ## It grows with the pipeline
 
 Delivery, the Message-ID, a reply, a conversation, a proposal, a customer and a
@@ -324,11 +329,13 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
     # A fact, not a verdict: the message is still exactly what a person
     # approved, and whether a changed observation should stop a send is their
     # decision. Nothing here withdraws an approval. Measured from the approval
-    # this answer is about, so the window belongs to the words on screen.
+    # this answer is about, so the window belongs to the words on screen — and
+    # when nothing approves those words there is no window at all. Falling back
+    # to an earlier approval's moment would report, under an unapproved draft,
+    # changes that happened before that draft was written.
     moved = memory.evidence_changes_since(
         business_id,
-        authorises.created_at if authorises is not None
-        else min((m.created_at for m in approved), default=None))
+        authorises.created_at if authorises is not None else None)
     answers["approval"] = _answer(
         authorises is not None, OWNERS["approval"],
         # Which draft the answer is about, said out loud: the reader is looking

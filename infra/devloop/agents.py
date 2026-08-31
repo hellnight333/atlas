@@ -70,6 +70,11 @@ class Outcome:
     #: how a loop convinces itself the code is clean.
     infrastructure_failure: bool = False
     detail: str = ""
+    #: The harness's own word for how the run ended — `subtype` in
+    #: `claude -p --output-format json`: `success`, `error_max_turns`,
+    #: `error_during_execution`. Empty when nothing readable was returned,
+    #: which is itself an answer: an unexplained stop is not a known one.
+    stop_reason: str = ""
 
 
 def _run(argv: list[str], *, cwd: Path, timeout: int,
@@ -124,9 +129,10 @@ def build(task: dict, *, cwd: Path, max_turns: int, timeout: int) -> Outcome:
     # exactly the shape of a harness that swallowed something.
     errored = bool(data.get("is_error")) or code != 0
     return Outcome(ok=not errored, exit_code=code, output=out[-4000:],
-                   data=data,
+                   data=data, stop_reason=str(data.get("subtype") or ""),
                    detail="" if not errored else
-                   f"builder reported an error (exit {code})")
+                   f"builder reported an error (exit {code})"
+                   + (f": {data['subtype']}" if data.get("subtype") else ""))
 
 
 def builder_prompt(task: dict) -> str:
@@ -336,6 +342,26 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
     return Outcome(ok=True, exit_code=code, output=message[:2000], data=parsed)
 
 
+#: The one ending that says *the run was cut short*, rather than that
+#: something went wrong inside it. `claude -p` reports `error_max_turns` when
+#: the turn budget ran out, and that is the only stop under which a complete
+#: change can plausibly be sitting in the tree — the builder is told to finish
+#: and may have done so on its last turn.
+#:
+#: Everything else — `error_during_execution`, an unparseable result, a stop
+#: with no `subtype` at all — is an *unexplained* stop. Nothing downstream can
+#: recover the difference: the gates read git and pytest, so they establish
+#: that the repository is consistent and never that the brief was carried out,
+#: and the reviewer is deliberately blind to the brief. Treating those as
+#: acceptable is how half-finished work reaches DONE and a deploy.
+COMPLETION_LIKE_STOPS = frozenset({"error_max_turns"})
+
+
+def stopped_short(outcome: Outcome) -> bool:
+    """Whether a failed run ended in a way that may still hold finished work."""
+    return not outcome.ok and outcome.stop_reason in COMPLETION_LIKE_STOPS
+
+
 def blocking(findings: list[dict]) -> list[dict]:
     """Findings that must be answered before anything ships.
 
@@ -345,5 +371,6 @@ def blocking(findings: list[dict]) -> list[dict]:
     return [f for f in findings if f.get("severity") in ("blocking", "major")]
 
 
-__all__ = ["Outcome", "REVIEW_EFFORT", "blocking", "build", "builder_prompt",
-           "fix", "parse_review", "review", "reviewer_prompt"]
+__all__ = ["COMPLETION_LIKE_STOPS", "Outcome", "REVIEW_EFFORT", "blocking",
+           "build", "builder_prompt", "fix", "parse_review", "review",
+           "reviewer_prompt", "stopped_short"]

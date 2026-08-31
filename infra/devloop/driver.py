@@ -176,15 +176,27 @@ class Driver:
                 boundary=stopped_at[:120])
             return State.WAITING_FOR_HUMAN
         if not built.ok:
-            # An abnormal stop is not a verdict on the work. The builder may
-            # have finished and then hit its turn limit, and discarding a
-            # complete change because the process ended untidily throws away
-            # exactly what the gates exist to judge. Exit codes stay
-            # authoritative for *infrastructure* failure — 124 and 127 are
-            # handled above — and everything else falls through to the gates,
-            # which read git and pytest rather than the agent.
+            if not agents.stopped_short(built):
+                # An unexplained stop is a failure, and stays one. Nothing
+                # after this point can tell finished work from half-finished:
+                # the gates read git and pytest, so they establish that the
+                # repository is consistent and never that *this task* was
+                # carried out, and the reviewer is blind to the brief by
+                # design. Falling through on every non-infrastructure error
+                # would let a builder that died mid-edit reach DONE and deploy.
+                self.q.move(ident, State.FAILED,
+                            reason=built.detail or "build failed")
+                log("FAILED", task=ident, why=built.detail[:120])
+                return State.FAILED
+            # The one exception, and it is a known ending rather than a guess:
+            # the builder ran out of turns. It is told to finish the work and
+            # may have done so on its last one, so discarding the tree because
+            # the process ended untidily throws away exactly what the gates
+            # exist to judge. The gates still decide; they are simply allowed
+            # to look.
             log("BUILDER_STOPPED", task=ident, why=built.detail[:120],
-                note="falling through to the gates, which decide")
+                stop_reason=built.stop_reason,
+                note="turn limit reached — falling through to the gates")
 
         self.q.renew(ident)
         for round_no in range(1, self.limits.review_rounds + 1):
@@ -388,8 +400,11 @@ class Driver:
 
                 outcome = self.run_task(task)
                 projection.write(self.repo, self.q)
-                if stop_after_one:
-                    return f"one task attempted, ending {outcome}"
+                # Accounted for first, and stopped afterwards. `--once` is a
+                # bound on how much work an invocation does, not a reason for
+                # the run to have no record of what it did: returning from here
+                # left a completed task counted as zero, an infrastructure
+                # failure uncounted, and `finished` written as the reason.
                 if outcome == State.DONE:
                     completed += 1
                     self.infra_failures = 0
@@ -402,6 +417,9 @@ class Driver:
                     # the project. This is §17 of the directive: the loop never
                     # halts merely because a human request exists.
                     self.infra_failures = 0
+                if stop_after_one:
+                    because = f"one task attempted, ending {outcome}"
+                    break
         except Stopped:
             because = "stopped by signal"
         finally:
