@@ -176,9 +176,15 @@ class Driver:
                 boundary=stopped_at[:120])
             return State.WAITING_FOR_HUMAN
         if not built.ok:
-            self.q.move(ident, State.FAILED, reason=built.detail or "build failed")
-            log("FAILED", task=ident, why=built.detail[:120])
-            return State.FAILED
+            # An abnormal stop is not a verdict on the work. The builder may
+            # have finished and then hit its turn limit, and discarding a
+            # complete change because the process ended untidily throws away
+            # exactly what the gates exist to judge. Exit codes stay
+            # authoritative for *infrastructure* failure — 124 and 127 are
+            # handled above — and everything else falls through to the gates,
+            # which read git and pytest rather than the agent.
+            log("BUILDER_STOPPED", task=ident, why=built.detail[:120],
+                note="falling through to the gates, which decide")
 
         self.q.renew(ident)
         for round_no in range(1, self.limits.review_rounds + 1):
@@ -344,7 +350,7 @@ class Driver:
 
     # -- the loop -----------------------------------------------------
 
-    def loop(self, *, max_tasks: int) -> str:
+    def loop(self, *, max_tasks: int, stop_after_one: bool = False) -> str:
         run_id = self.run_id = self.q.start_run()
         completed = 0
         because = "finished"
@@ -382,6 +388,8 @@ class Driver:
 
                 outcome = self.run_task(task)
                 projection.write(self.repo, self.q)
+                if stop_after_one:
+                    return f"one task attempted, ending {outcome}"
                 if outcome == State.DONE:
                     completed += 1
                     self.infra_failures = 0
@@ -506,7 +514,8 @@ def main(argv: list[str] | None = None) -> int:
 
     limits = Limits(max_tasks=1 if args.once else args.max_tasks)
     driver = Driver(q, limits)
-    because = driver.loop(max_tasks=limits.max_tasks)
+    because = driver.loop(max_tasks=limits.max_tasks,
+                          stop_after_one=bool(args.once))
     print(f"\nstopped: {because}")
     return 0
 

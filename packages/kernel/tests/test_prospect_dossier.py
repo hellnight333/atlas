@@ -118,16 +118,30 @@ def _draft(repo: OpportunityRepository, business_id: str, *,
            status: OutreachStatus = OutreachStatus.DRAFT,
            recipient: str = "hello@alwaha.test",
            approved: str = "", sent_at: datetime | None = None,
+           subject: str = "What I found on Al Waha Dental's website",
+           created_at: datetime | None = None,
            ) -> OutreachMessage:
     message = OutreachMessage(
         proposal_id="", mission_id="m-1", business_id=business_id,
         channel="email", recipient=recipient,
-        subject="What I found on Al Waha Dental's website",
+        subject=subject,
         body="I looked at your site and put what I found here: ...",
         status=status, approved_fingerprint=approved or None,
         sent_at=sent_at,
+        **({"created_at": created_at} if created_at else {}),
         provider_message_id="<abc@qevik.ai>" if sent_at else None)
     return repo.save_message(message)
+
+
+def _ready_to_write(repo: OpportunityRepository, business_id: str, *,
+                    mission: str = "m-1") -> None:
+    """Everything before the draft, so `next` reaches the approval step."""
+    signal = _signal(repo, business_id)
+    _audit(repo, business_id)
+    _publish(repo, business_id, signal.id, mission=mission)
+    repo.record_review(mission_id=mission, business_id=business_id,
+                       signal_id=signal.id, decision="accepted",
+                       actor="ayoub", commit="abc123", tenant=TENANT)
 
 
 def _clean(repo: OpportunityRepository, business_id: str) -> None:
@@ -468,6 +482,140 @@ def test_an_address_from_nowhere_in_particular_says_that_too(repo):
         why = answers["why_usable"]
         assert why["known"] is False
         assert "not the same evidence" in why["detail"]
+    finally:
+        _clean(repo, business.id)
+
+
+def test_provenance_for_another_address_does_not_vouch_for_this_one(repo):
+    """The one fact that justifies writing to a stranger, matched to the address.
+
+    A page published `info@alwaha.test`; the draft goes to a hand-entered
+    address nobody read anywhere. `bool(provenance)` made the second look
+    evidence-backed because the first exists.
+    """
+    business = _business(repo)
+    try:
+        repo.record_contactability(business.id, address="info@alwaha.test",
+                                   source_url="https://alwaha.test/contact")
+        _draft(repo, business.id, recipient="owner@personal.test")
+
+        answers = assemble(business.id, memory=repo, tenant=TENANT)["answers"]
+        assert answers["recipient"]["address"] == "owner@personal.test"
+        why = answers["why_usable"]
+        assert why["known"] is False, \
+            "a page that published a different address is not evidence for this one"
+        assert why["observations"] == []
+        assert why["other_addresses_observed"] == 1
+        assert "not this one" in why["detail"]
+    finally:
+        _clean(repo, business.id)
+
+
+def test_an_address_the_page_did_publish_is_still_vouched_for(repo):
+    """Negative control for the match: the same fixture, addressed correctly."""
+    business = _business(repo)
+    try:
+        repo.record_contactability(business.id, address="info@alwaha.test",
+                                   source_url="https://alwaha.test/contact")
+        _draft(repo, business.id, recipient="info@alwaha.test")
+
+        why = assemble(business.id, memory=repo,
+                       tenant=TENANT)["answers"]["why_usable"]
+        assert why["known"] is True
+        assert why["address"] == "info@alwaha.test"
+        assert why["observations"][0]["source_url"] == \
+               "https://alwaha.test/contact"
+        assert why["other_addresses_observed"] == 0
+    finally:
+        _clean(repo, business.id)
+
+
+# ------------------------------------------------- the approval is of the draft
+
+
+def test_an_older_approval_does_not_approve_the_newer_draft(repo):
+    """The approval answer is about the words the dossier is showing.
+
+    A message approved last week and a draft written this morning are two
+    different sets of words. `bool(approved)` over every message the business
+    ever had put "Approved, not sent" beside the new draft, and an operator
+    reads `approved` next to a sentence nobody approved.
+    """
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        _ready_to_write(repo, business.id)
+        old = _draft(repo, business.id, status=OutreachStatus.APPROVED,
+                     approved="fp-1", subject="the words somebody approved",
+                     created_at=datetime.now(UTC) - timedelta(days=7))
+        new = _draft(repo, business.id, subject="the words nobody has read",
+                     created_at=datetime.now(UTC))
+
+        answers = assemble(business.id, memory=repo, tenant=TENANT)["answers"]
+        assert answers["message"]["id"] == new.id, "fixture: the newer draft shows"
+        approval = answers["approval"]
+        assert approval["known"] is False, \
+            "an older approval is not an approval of the draft on screen"
+        assert approval["message_id"] == new.id
+        assert "not approved" in approval["detail"]
+        # The earlier approval is not hidden — it happened — but it says which
+        # message it is about.
+        assert [a["message_id"] for a in approval["approvals"]] == [old.id]
+        assert approval["approvals"][0]["is_the_drafted_message"] is False
+        assert approval["superseded_approvals"] == 1
+        assert answers["next"]["action"] == "Review the draft"
+    finally:
+        _clean(repo, business.id)
+
+
+def test_an_approval_of_the_shown_draft_still_reads_as_approved(repo):
+    """Negative control: the same chain, with the newest draft approved."""
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        _ready_to_write(repo, business.id)
+        _draft(repo, business.id, status=OutreachStatus.APPROVED,
+               approved="fp-1", subject="an older approved message",
+               created_at=datetime.now(UTC) - timedelta(days=7))
+        new = _draft(repo, business.id, status=OutreachStatus.APPROVED,
+                     approved="fp-2", subject="the newest words, approved",
+                     created_at=datetime.now(UTC))
+
+        answers = assemble(business.id, memory=repo, tenant=TENANT)["answers"]
+        approval = answers["approval"]
+        assert approval["known"] is True
+        assert approval["message_id"] == new.id
+        assert [a["message_id"] for a in approval["approvals"]
+                if a["is_the_drafted_message"]] == [new.id]
+        assert answers["next"]["action"] == "Approved, not sent"
+    finally:
+        _clean(repo, business.id)
+
+
+def test_evidence_moved_since_is_measured_from_the_shown_approval(repo):
+    """The window belongs to the words on screen, not to the oldest approval.
+
+    A re-reading between an old approval and today's approved draft did not
+    move the ground under the draft — it happened before it was written.
+    """
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        _draft(repo, business.id, status=OutreachStatus.APPROVED,
+               approved="fp-1", subject="approved a week ago",
+               created_at=datetime.now(UTC) - timedelta(days=7))
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="reevaluation",
+            kind="business_reevaluated", actor="recipe:verify-recorded-websites",
+            detail={"changes": [{"feature": "click_to_call",
+                                 "was": "not_found", "now": "present",
+                                 "change": "contradicted"}]}))
+        _draft(repo, business.id, status=OutreachStatus.APPROVED,
+               approved="fp-2", subject="approved just now",
+               created_at=datetime.now(UTC))
+
+        approval = assemble(business.id, memory=repo,
+                            tenant=TENANT)["answers"]["approval"]
+        assert approval["known"] is True
+        assert approval["evidence_moved_since"] == [], \
+            "the re-reading predates the draft this answer is about"
     finally:
         _clean(repo, business.id)
 

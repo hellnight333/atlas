@@ -27,6 +27,16 @@ So every answer carries `known`. `known=False` is not an error and not an empty
 string; it is the state most of these facts are in for most prospects, and it is
 usually the thing somebody has to go and do.
 
+## Every answer is about the thing shown beside it
+
+Two of these questions are about a specific artefact rather than about the
+business. `approval` is about **the draft this dossier displays** — an older
+approved message is not an approval of words written after it — and
+`why_usable` is about **the address it displays**, so an address published on
+the business's own page vouches for that address and for no other. Both were
+once `bool(...)` over everything on file, and both then reported evidence for
+something nobody had evidenced.
+
 ## It grows with the pipeline
 
 Delivery, the Message-ID, a reply, a conversation, a proposal, a customer and a
@@ -55,8 +65,9 @@ OWNERS: dict[str, str] = {
     "message": "atlas_outreach_messages.subject / body",
     "recipient": "atlas_outreach_messages.recipient, "
                  "else outreach.preparation.verified_recipient",
-    "why_usable": "contact_observed — the page that published the address",
-    "approval": "atlas_outreach_messages.approved_fingerprint",
+    "why_usable": "contact_observed — the page that published this address",
+    "approval": "atlas_outreach_messages.approved_fingerprint "
+                "— of the drafted message",
     "sent": "atlas_outreach_messages.status / sent_at / provider_message_id",
     "after": "atlas_business_events — the business's own timeline",
     "next": "derived from the answers above; owns nothing",
@@ -83,6 +94,17 @@ def _age(stamp: str) -> int | None:
     if then.tzinfo is None:
         then = then.replace(tzinfo=UTC)
     return max(0, (datetime.now(UTC) - then).days)
+
+
+def _same_address(recorded: Any, shown: Any) -> bool:
+    """Whether a provenance record is about the address the dossier displays.
+
+    Case and surrounding space only — nothing that could make two different
+    addresses match. `record_contactability` stores the address stripped and
+    lowercased; a draft's recipient is whatever was written on it.
+    """
+    left, right = str(recorded or "").strip().lower(), str(shown or "").strip().lower()
+    return bool(left) and left == right
 
 
 def _detail(raw: Any) -> dict:
@@ -258,29 +280,60 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
             "no verified way to reach this business. Qevik does not derive an "
             "address from a domain, and a landline is not a WhatsApp number.")
 
-    # 9. Why that contact is considered usable — the page that published it.
+    # 9. Why *this* contact is considered usable — the page that published it.
+    #    Provenance is per address, so it is matched against the address this
+    #    dossier displays. A page that published one address is no evidence for
+    #    a different, hand-entered one, and this is the single fact that
+    #    justifies writing to a stranger at all.
     provenance = [_detail(row.get("detail"))
                   for row in memory.contact_provenance(business_id)]
     address = answers["recipient"].get("address", "")
+    for_this = [p for p in provenance if _same_address(p.get("address"), address)]
+    others = len(provenance) - len(for_this)
     answers["why_usable"] = _answer(
-        bool(provenance), OWNERS["why_usable"], observations=provenance,
-        detail="" if provenance else
-        ("this address was not read from their website. It came from whatever "
+        bool(address and for_this), OWNERS["why_usable"],
+        # Only the records that are about the address shown above. The rest are
+        # counted, never shown as evidence for it.
+        observations=for_this, other_addresses_observed=others,
+        address=address,
+        detail="" if (address and for_this) else
+        ("this address was not read from their website — "
+         + ("the address their site published is not this one. "
+            if others == 1 else
+            f"none of the {others} addresses their site published is this "
+            "one. ")
+         + "It came from whatever recorded it, or somebody entered it by "
+           "hand, and that is not the same evidence."
+         if address and others else
+         "this address was not read from their website. It came from whatever "
          "recorded it, or somebody entered it by hand — and that is not the "
          "same evidence." if address else
          "no address has been read from this business's website"))
 
-    # 10–11. Which approval authorises it, and whether it actually went.
+    # 10–11. Which approval authorises **the draft shown above**, and whether it
+    #        actually went. The question is about those words, not about the
+    #        business: an older approved message beside a newer unapproved draft
+    #        would otherwise render the new words under "Approved, not sent",
+    #        and an operator would read `approved` next to a sentence nobody
+    #        approved.
     approved = [m for m in messages if m.approved_fingerprint]
+    authorises = latest if (latest is not None
+                            and latest.approved_fingerprint) else None
     sent = [m for m in messages if m.status.value == "sent"]
     # Whether the ground under those words has moved since they were written.
     # A fact, not a verdict: the message is still exactly what a person
     # approved, and whether a changed observation should stop a send is their
-    # decision. Nothing here withdraws an approval.
+    # decision. Nothing here withdraws an approval. Measured from the approval
+    # this answer is about, so the window belongs to the words on screen.
     moved = memory.evidence_changes_since(
-        business_id, min((m.created_at for m in approved), default=None))
+        business_id,
+        authorises.created_at if authorises is not None
+        else min((m.created_at for m in approved), default=None))
     answers["approval"] = _answer(
-        bool(approved), OWNERS["approval"],
+        authorises is not None, OWNERS["approval"],
+        # Which draft the answer is about, said out loud: the reader is looking
+        # at `message`, and this is the claim made about that id.
+        message_id=(latest.id if latest is not None else ""),
         evidence_moved_since=moved,
         approvals=[{"message_id": m.id, "fingerprint": m.approved_fingerprint,
                     "approval_id": m.approval_id or "",
@@ -289,9 +342,19 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
                     # person to send by hand.
                     "authorises_automated_send":
                         m.authorized_automated_at is not None,
-                    "status": m.status.value} for m in approved],
-        detail="" if approved else
-        "nobody has approved a message to this business")
+                    "status": m.status.value,
+                    # The earlier approvals stay visible — they happened — but
+                    # each says whether it is about the draft on screen.
+                    "is_the_drafted_message":
+                        latest is not None and m.id == latest.id}
+                   for m in approved],
+        superseded_approvals=max(0, len(approved) - (1 if authorises else 0)),
+        detail="" if authorises is not None else
+        (f"the draft shown here is not approved. {len(approved)} earlier "
+         f"message{'' if len(approved) == 1 else 's'} to this business "
+         "carried an approval, and that approval is not about these words."
+         if approved else
+         "nobody has approved a message to this business"))
     answers["sent"] = _answer(
         bool(sent), OWNERS["sent"],
         sent=[{"message_id": m.id,
