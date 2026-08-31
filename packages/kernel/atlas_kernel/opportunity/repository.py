@@ -122,10 +122,14 @@ VERIFIED_EVENT = "website_verified"
 #: grows to ten thousand businesses would otherwise be fetched in one mission,
 #: which is neither polite to them nor recoverable for us.
 #:
-#: Named rather than repeated as a default in two files, because it is half of
-#: every honest statement about freshness: an observation is not stale or fresh
-#: on its own, it is old relative to how long this rate takes to come back
-#: round. `coverage.backlog` reads it for exactly that.
+#: Named rather than repeated as a default in two files: this is the one limit,
+#: and `mission.toolrunner.targets_map_for` — the caller that actually bounds a
+#: production pass, since nothing passes it a limit — reads it from here rather
+#: than carrying its own literal. It named the same 40 independently, so
+#: raising this would have moved the repository default and the freshness
+#: report while the nightly pass carried on at the old rate, which is the
+#: opposite of what naming it was for. `test_audit_backlog.py` fails if the two
+#: ever drift apart again.
 SITES_A_NIGHT = 40
 from .models import (
     OPPORTUNITY_FACTORY,
@@ -896,7 +900,9 @@ class OpportunityRepository:
         observations did start refreshing, most of them were more than a week
         old — which on 350 sites at 40 a night is what a nine-night rotation
         looks like, not a fault. So `backlog` carries the age beside the rate
-        that drains it and separates the part the rate does **not** explain:
+        that drains it — measured from the verification events themselves, so
+        a rotation nothing performed excuses nothing — and separates the part
+        the rate does **not** explain:
         a record older than a full sweep, a site the pass reached and could
         record nothing for, an address nothing can fetch, an address another
         business already holds. Those four are the only half worth acting on,
@@ -952,11 +958,24 @@ class OpportunityRepository:
         observation, and counting them as two would report a rotation that
         looks slower than it is.
 
+        The rate is **read off the timeline, not off the configuration**. A
+        `SITES_A_NIGHT` of forty is an intention in the same way a recurrence
+        saying "nightly" is one, and that intention was already wrong here for
+        twelve days. Counting the verification events of the last week gives
+        the throughput actually achieved, so a scheduler that stopped reports a
+        sweep that is not completing rather than a nine-night rotation
+        excusing every eight-day-old record.
+
+        Attempts rather than distinct sites: on a population smaller than one
+        week's capacity a distinct count saturates at the population and would
+        understate the rate, which lengthens the sweep and excuses staleness
+        that nothing excuses.
+
         Per site rather than in aggregate, so the arithmetic lives in
         `coverage.backlog` where a test can construct the cases that matter
         without a population. A few hundred rows.
         """
-        from .coverage import backlog
+        from .coverage import MEASURED_OVER, backlog
 
         with SessionLocal() as session:
             rows = session.execute(
@@ -995,15 +1014,24 @@ class OpportunityRepository:
                       AND website NOT LIKE 'https://%') AS cannot_be_fetched,
                   (SELECT count(*) FROM atlas_businesses
                     WHERE website LIKE 'http://%'
-                       OR website LIKE 'https://%') AS fetchable
-                """)).mappings().first()
+                       OR website LIKE 'https://%') AS fetchable,
+                  (SELECT count(*) FROM atlas_business_events
+                    WHERE kind = :verified
+                      AND at > now() - (:window * interval '1 day'))
+                    AS verified_recently
+                """), {"verified": VERIFIED_EVENT,
+                       "window": MEASURED_OVER}).mappings().first()
         # Every business holding a fetchable address, minus the addresses. The
         # queue de-duplicates by website, so the difference is businesses no
         # pass will ever reach however long it runs.
         sharing = max(0, int(excluded["fetchable"] or 0) - len(rows))
         return backlog(
-            sites=len(rows), a_night=SITES_A_NIGHT,
+            sites=len(rows), a_night_declared=SITES_A_NIGHT,
             observed_days_ago=[row["days_ago"] for row in rows],
+            # Always a number, never `None`: this read the timeline, and zero
+            # verifications is a measurement — the one that matters most.
+            verified_recently=int(excluded["verified_recently"] or 0),
+            over_nights=MEASURED_OVER,
             reached_without_observation=sum(1 for row in rows
                                             if row["reached_unread"]),
             cannot_be_fetched=int(excluded["cannot_be_fetched"] or 0),
