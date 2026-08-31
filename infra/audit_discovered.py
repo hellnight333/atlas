@@ -97,7 +97,20 @@ def main(argv: list[str] | None = None) -> int:
                 html = session.extract("document.documentElement.outerHTML") or ""
                 elapsed = int((time.monotonic() - started) * 1000)
                 findings = audit_html(html, url=url, page_bytes=len(html))
+                # The same string, in the same pass. The page is fetched for the
+                # audit's own purpose and is not stored, so reading contacts
+                # here costs nothing and fetching it again later would be a
+                # second visit to somebody's site for our benefit.
+                #
+                # Discovery, not authorisation: an address being known says
+                # nothing about permission to write to it, and suppression,
+                # cooldown and approval are untouched.
+                from atlas_kernel.opportunity.contacts import contactable_at, observed
+
+                contacts = observed(html, url=url, at=audit["audited_at"])
                 audit.update(
+                    contacts=[c.summary() for c in contacts],
+                    contactable_at=contactable_at(contacts),
                     reachable=True,
                     http_status=page.status,
                     load_ms=elapsed,
@@ -127,6 +140,21 @@ def main(argv: list[str] | None = None) -> int:
                     error=str(failure).split("\n")[0][:160],
                 )
 
+            # The address the page published, onto the business record. Only
+            # when it has none: a record that already carries one was matched
+            # on it or given it deliberately.
+            if audit.get("contactable_at"):
+                try:
+                    repo.record_contactability(
+                        row["business_id"], address=audit["contactable_at"],
+                        source_url=url)
+                except Exception as failure:      # noqa: BLE001 - reported
+                    # Said, not swallowed. An address discovered and not
+                    # recorded is a business that stays uncontactable for a
+                    # reason nobody can see.
+                    print(f"    could not record the address {url} published: "
+                          f"{type(failure).__name__}", file=sys.stderr)
+
             results.append(audit)
             repo.record_event(
                 BusinessEvent(
@@ -142,6 +170,12 @@ def main(argv: list[str] | None = None) -> int:
                         # side. Empty otherwise, so a reader can tell "the site
                         # did not answer" from "we did not manage to ask".
                         "check_failed_because": audit.get("check_failed_because", ""),
+                        # Every address the page stated, with how it stated it
+                        # and which page — so the claim stays checkable. The
+                        # usable one is named separately; personal and ambiguous
+                        # addresses are recorded and never promoted.
+                        "contacts": audit.get("contacts", []),
+                        "contactable_at": audit.get("contactable_at", ""),
                         "http_status": audit["http_status"],
                         "load_ms": audit["load_ms"],
                         "page_bytes": audit["page_bytes"],

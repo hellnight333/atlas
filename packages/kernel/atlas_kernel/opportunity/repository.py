@@ -692,6 +692,50 @@ class OpportunityRepository:
                      "that nothing was found."),
         }
 
+    def record_contactability(self, business_id: str, *, address: str,
+                              source_url: str) -> bool:
+        """Give a business the address its own website published.
+
+        Returns whether anything changed. **Only fills an absent address**: a
+        record that already carries one was matched on it or given it
+        deliberately, and overwriting from a scrape would move where a message
+        goes without anybody deciding to.
+
+        The address is what makes a business contactable by email, so this is
+        the one write in contact discovery that has an outward consequence. It
+        is still not authorisation: suppression, cooldown and approval all sit
+        between this and a message.
+        """
+        from ..outreach.preparation import EMAIL_SHAPE
+
+        cleaned = (address or "").strip().lower()
+        if not cleaned or not EMAIL_SHAPE.match(cleaned):
+            return False
+        with SessionLocal() as session:
+            done = session.execute(
+                text("""
+                UPDATE atlas_businesses SET email = :email
+                WHERE id = :id AND (email IS NULL OR email = '')
+                """), {"email": cleaned, "id": business_id})
+            changed = bool(done.rowcount)
+            if changed:
+                # The provenance, on the timeline, so the address can always be
+                # traced to the page that stated it.
+                session.execute(
+                    text("""
+                    INSERT INTO atlas_business_events
+                        (id, business_id, factory, kind, opportunity_id, actor,
+                         detail, at)
+                    VALUES (:id, :business_id, 'opportunity', 'contact_observed',
+                            '', 'contact-discovery', :detail, :at)
+                    """), {"id": f"evt-{uuid4().hex[:12]}",
+                           "business_id": business_id,
+                           "detail": json.dumps({"address": cleaned,
+                                                 "source_url": source_url}),
+                           "at": _now()})
+            session.commit()
+        return changed
+
     def audit_coverage(self) -> dict:
         """How much of the discovered population Qevik can currently see.
 
