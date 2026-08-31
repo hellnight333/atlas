@@ -1,0 +1,349 @@
+"""Invoking the two agents. Exit codes decide; prose never does.
+
+Both are real CLIs on this machine, verified before this file existed:
+
+    claude
+    codex  codex-cli 0.144.1
+
+## The rule that shapes everything here
+
+**Codex is never told what Claude did.** It receives the repository and a git
+diff, and nothing else — no task brief, no build report, no claim of
+completion. That is not politeness about bias; it is the reason the reviewer
+works. A reviewer handed the author's account of the change reviews the account.
+
+Proved before this file was written: pointed at one file with no report, Codex
+found two real defects in code that had passed 3964 tests and its author's own
+review. `reviewer_prompt` therefore takes no arguments.
+
+## Prose is not a result
+
+`claude -p --output-format json` returns `is_error` and an exit code; `codex
+exec` returns an exit code and writes its final message to a file. Those are the
+signals. An agent that says "done" and changed nothing is a failure, and the
+gates in `gates.py` decide that from git and pytest rather than from a sentence.
+
+## Two constraints found by running it
+
+Both cost a wasted run before they were understood:
+
+* `~/.codex/config.toml` sets `model_reasoning_effort = "xhigh"`, under which a
+  single-file review did not finish in **8m20s** and wrote no output. Every call
+  here passes an explicit effort.
+* A backgrounded `codex exec` reads stdin and waits. Every call redirects from
+  `/dev/null`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .queue import redact
+
+HERE = Path(__file__).resolve().parent
+SCHEMA = HERE / "review.schema.json"
+
+#: Reasoning effort for the reviewer. `xhigh` — the machine's configured
+#: default — did not return inside eight minutes on one file. `medium` returned
+#: real findings in about ninety seconds.
+REVIEW_EFFORT = "medium"
+
+
+@dataclass
+class Outcome:
+    """What an agent invocation actually did."""
+
+    ok: bool
+    exit_code: int
+    #: Whatever the agent produced, already redacted.
+    output: str = ""
+    #: Parsed structured result, when the invocation asked for one.
+    data: dict = field(default_factory=dict)
+    #: Set when the *tooling* failed rather than the work — a timeout, a
+    #: missing binary, an auth expiry. The driver counts these separately and
+    #: stops on a run of them, because retrying a broken reviewer forever is
+    #: how a loop convinces itself the code is clean.
+    infrastructure_failure: bool = False
+    detail: str = ""
+
+
+def _run(argv: list[str], *, cwd: Path, timeout: int,
+         env: dict | None = None) -> tuple[int, str, bool]:
+    """Run a command with stdin closed. Returns (code, output, timed_out)."""
+    try:
+        done = subprocess.run(
+            argv, cwd=str(cwd), stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, **(env or {})})
+    except FileNotFoundError as missing:
+        return 127, f"{argv[0]} is not installed: {missing}", False
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s", True
+    return done.returncode, redact((done.stdout or "") + (done.stderr or "")), False
+
+
+# ---------------------------------------------------------------- builder
+
+
+def build(task: dict, *, cwd: Path, max_turns: int, timeout: int) -> Outcome:
+    """Ask Claude to carry out one task, headless.
+
+    It is given the task and the repository. **Not the roadmap**: an agent
+    handed the whole roadmap optimises for the roadmap, and this loop exists to
+    do one thing at a time and prove it.
+
+    `--permission-mode acceptEdits` rather than bypassing permissions: the
+    builder may edit and run, and the boundaries it must not cross are not
+    enforced by a permission flag anyway — they are in the prompt and, where it
+    matters, in what the driver refuses to do afterwards.
+    """
+    prompt = builder_prompt(task)
+    code, out, timed_out = _run(
+        ["claude", "-p", prompt, "--output-format", "json",
+         "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
+        cwd=cwd, timeout=timeout)
+    if timed_out or code == 127:
+        return Outcome(ok=False, exit_code=code, output=out,
+                       infrastructure_failure=True,
+                       detail=f"the builder did not run: {out[:300]}")
+    data: dict = {}
+    for line in reversed(out.splitlines()):
+        if line.strip().startswith("{"):
+            try:
+                data = json.loads(line)
+                break
+            except ValueError:
+                continue
+    # `is_error` is the agent's own report and the exit code is the process's.
+    # Disagreement is treated as failure: a zero exit with `is_error` set is
+    # exactly the shape of a harness that swallowed something.
+    errored = bool(data.get("is_error")) or code != 0
+    return Outcome(ok=not errored, exit_code=code, output=out[-4000:],
+                   data=data,
+                   detail="" if not errored else
+                   f"builder reported an error (exit {code})")
+
+
+def builder_prompt(task: dict) -> str:
+    """What the builder is told. One task, the boundaries, and nothing else."""
+    return f"""Carry out exactly this task in the current repository.
+
+TASK: {task['title']}
+
+{task['brief']}
+
+Rules for this run:
+- Implement it fully. Do not write a plan and stop, and do not report progress
+  you have not made — a later step checks the diff and the tests, not your
+  summary.
+- Add or update tests that would fail without your change.
+- Run the relevant tests yourself before finishing.
+- Do NOT commit. The loop commits, so that the reviewed diff is exactly the
+  work of this task.
+- Do NOT deploy, send anything to anybody, change DNS, create or use
+  credentials, or take any irreversible external action.
+- If the task turns out to need a human decision, a credential, physical
+  access, or an irreversible action: change nothing, and say
+  BLOCKED: <one line saying which boundary and why>.
+Finish by stating what you changed in one or two sentences."""
+
+
+def fix(task: dict, findings: list[dict], *, cwd: Path, max_turns: int,
+        timeout: int) -> Outcome:
+    """Ask Claude to answer a reviewer's findings.
+
+    Fix or refute, and a refutation is a claim the reviewer sees again next
+    round — the author does not get to dismiss a finding on their own
+    authority, which is the failure mode that makes review theatre.
+    """
+    listed = "\n\n".join(
+        f"[{f['severity']}] {f['file']}\n"
+        f"  claim: {f['claim']}\n"
+        f"  why it matters: {f['why_it_matters']}\n"
+        f"  failure scenario: {f['failure_scenario']}"
+        for f in findings)
+    prompt = f"""An independent reviewer examined the diff you just produced and
+raised the findings below. It did not see your report — only the code.
+
+{listed}
+
+For each one: fix it, or leave the code alone and write down why the finding is
+wrong. Add a test for anything you fix. Do not commit.
+
+A refutation is not a dismissal: the reviewer re-reads the code afterwards and
+raises it again if it still stands."""
+    code, out, timed_out = _run(
+        ["claude", "-p", prompt, "--output-format", "json",
+         "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
+        cwd=cwd, timeout=timeout)
+    if timed_out or code == 127:
+        return Outcome(ok=False, exit_code=code, output=out,
+                       infrastructure_failure=True,
+                       detail=f"the fixer did not run: {out[:300]}")
+    return Outcome(ok=code == 0, exit_code=code, output=out[-4000:])
+
+
+# --------------------------------------------------------------- reviewer
+
+
+def reviewer_prompt() -> str:
+    """The reviewer's instructions. Fixed, and takes no arguments.
+
+    It cannot be given the task, the brief or the builder's output, because
+    there is no parameter through which to pass them. A test asserts that.
+    """
+    return """Review this diff adversarially. You are the last check before it
+reaches production, and its author believes it is correct.
+
+Assume the author's tests pass and are insufficient. Look for what the tests do
+not cover: a field read but never used, a condition that is true for the wrong
+reason, a value that is correct in the case the test writes and wrong in the
+case production holds, state that is not what the surrounding code assumes.
+
+Report only defects you can name concretely, each with the input or state that
+produces the wrong output. Do not report style, naming, or things you would
+have done differently. If a change is correct, say so — a false finding costs
+more than a missed one here, because it sends the author to rewrite working
+code.
+
+Return the structured result only."""
+
+
+#: How `codex exec review` states a finding:
+#:
+#:     - [P1] Restore the budget comparison direction — /abs/path.py:3-3
+#:       For normal nonnegative values, this now reports overspending as ...
+#:
+#: Parsed rather than schema-driven because **`codex exec review` ignores
+#: `--output-schema`** — verified by running it: the flag is accepted, the
+#: review is emitted in this format regardless, and `-o` receives the same
+#: text. The purpose-built reviewer is worth more than the convenience of a
+#: schema: pointed at a planted defect it named the reversed comparison at P1,
+#: and `--base` makes the review unit a git range rather than a description of
+#: one.
+_FINDING = re.compile(
+    r"^\s*-\s*\[(?P<severity>P[123])\]\s*(?P<claim>.+?)\s+[—-]\s+"
+    r"(?P<file>\S+?):(?P<lines>[\d\-]+)\s*$")
+
+#: P-levels to the severities the queue and the fixer speak in.
+_SEVERITY = {"P1": "blocking", "P2": "major", "P3": "minor"}
+
+
+def parse_review(text: str, *, repo: Path) -> dict | None:
+    """Turn one review message into findings. `None` when it cannot be read.
+
+    Fails closed on purpose. A review whose shape is unrecognised has told us
+    nothing, and returning `CLEAN` for it would be the exact failure this loop
+    exists to prevent — shipping unreviewed code and reporting success.
+    """
+    if not text or not text.strip():
+        return None
+    summary = text.strip().splitlines()[0].strip()
+    findings: list[dict] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        match = _FINDING.match(line)
+        if not match:
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if not following.strip() or _FINDING.match(following):
+                break
+            body.append(following.strip())
+        path = match.group("file")
+        try:
+            path = str(Path(path).resolve().relative_to(repo.resolve()))
+        except (ValueError, OSError):
+            pass
+        findings.append({
+            "severity": _SEVERITY.get(match.group("severity"), "major"),
+            "file": f"{path}:{match.group('lines')}",
+            "claim": match.group("claim").strip(),
+            # Both come from what the reviewer actually wrote. The summary is
+            # its statement of consequence and the body is the case it made;
+            # neither is composed here, because a field invented to satisfy a
+            # schema is worse than an absent one.
+            "why_it_matters": summary,
+            "failure_scenario": " ".join(body) or summary,
+        })
+    if findings:
+        return {"verdict": "DEFECTS_FOUND", "findings": findings}
+    # No bullets. Clean only when the reviewer said so in the words it uses for
+    # it; anything else is unreadable rather than clean.
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in
+           ("no issues", "no findings", "no review comments", "looks correct",
+            "no problems", "did not find")):
+        return {"verdict": "CLEAN", "findings": []}
+    return None
+
+
+def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
+           effort: str = REVIEW_EFFORT) -> Outcome:
+    """Have Codex review one immutable diff, read-only.
+
+    `codex exec review --base <sha>` reviews `sha..HEAD` in the working
+    repository, so the review unit is a git range rather than a description of
+    one, and it cannot move under the reviewer.
+
+    The invocation deliberately carries no information about who wrote the
+    change or what they were trying to do — and here that is structural rather
+    than disciplined: `--base` and a positional prompt are mutually exclusive,
+    so there is no argument through which a builder's report could be passed
+    even by mistake.
+    """
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    code, out, timed_out = _run(
+        ["codex", "exec", "review", "--base", base_sha, "--json",
+         "-c", f"model_reasoning_effort={effort}"],
+        cwd=cwd, timeout=timeout)
+    if timed_out or code == 127:
+        return Outcome(ok=False, exit_code=code, output=out,
+                       infrastructure_failure=True,
+                       detail=f"the reviewer did not run: {out[:300]}")
+
+    message = ""
+    for line in out.splitlines():
+        if not line.strip().startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") or {}
+        if item.get("type") == "agent_message" and item.get("text"):
+            message = item["text"]
+    if not message:
+        # Exit zero with nothing to read is a broken reviewer, not a clean
+        # review. Treating it as clean is how a loop ships unreviewed code all
+        # night and reports success in the morning.
+        return Outcome(ok=False, exit_code=code, output=out[-2000:],
+                       infrastructure_failure=True,
+                       detail="the reviewer produced no review message")
+
+    out_file.write_text(message)
+    parsed = parse_review(message, repo=cwd)
+    if parsed is None:
+        return Outcome(ok=False, exit_code=code, output=message[:2000],
+                       infrastructure_failure=True,
+                       detail="the review could not be read as findings or as "
+                              "a clean verdict")
+    return Outcome(ok=True, exit_code=code, output=message[:2000], data=parsed)
+
+
+def blocking(findings: list[dict]) -> list[dict]:
+    """Findings that must be answered before anything ships.
+
+    `minor` is recorded and does not hold a task: a loop that blocks on every
+    observation never finishes one, and the severity was the reviewer's own.
+    """
+    return [f for f in findings if f.get("severity") in ("blocking", "major")]
+
+
+__all__ = ["Outcome", "REVIEW_EFFORT", "blocking", "build", "builder_prompt",
+           "fix", "parse_review", "review", "reviewer_prompt"]

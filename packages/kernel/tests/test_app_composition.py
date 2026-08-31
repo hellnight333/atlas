@@ -454,7 +454,16 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     # without a number somebody has to justify crossing, it acquires a screen
     # at a time until nobody can read it. Raise it for a capability an operator
     # gains, as the prospect dossier did — never to fit a longer comment.
-    assert Path(CONSOLE / "index.html").stat().st_size < 132_000
+    # The Human Actions view became an inbox with a detail workflow: a person
+    # answering a request must not have to read a transcript, a ledger or a git
+    # history, and that context has to be on the page.
+    assert "humanTask" in source and "data-respond" in source, (
+        "a person cannot answer a request from the console")
+    assert "does not accept" in source, (
+        "the console does not say which responses a request refuses, so a "
+        "refused one reads as a bug rather than as the safety rule it is")
+
+    assert Path(CONSOLE / "index.html").stat().st_size < 140_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

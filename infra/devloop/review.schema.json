@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adversarial review result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["CLEAN", "DEFECTS_FOUND"],
+      "description": "CLEAN only if the diff has no defect you can name concretely."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "claim", "why_it_matters", "failure_scenario"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "major", "minor"],
+            "description": "blocking: wrong result or data loss. major: wrong under a realistic input. minor: worth noting, ships without it."
+          },
+          "file": {"type": "string", "description": "Repository-relative path."},
+          "claim": {"type": "string", "description": "The defect, stated as a fact about the code."},
+          "why_it_matters": {"type": "string", "description": "What goes wrong for a person or a business."},
+          "failure_scenario": {"type": "string", "description": "Concrete input or state, and the wrong output it produces."}
+        }
+      }
+    }
+  }
+}

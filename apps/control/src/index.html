@@ -1839,24 +1839,149 @@ async function conversation(id) {
   return html;
 }
 
+/* One inbox. The derived half (`actions.py` folds a credential nobody stored,
+   a machine nobody provisioned) and the posed half (`human.py` stores a
+   question nobody can measure) arrive in the same list under the same
+   ActionKind, because a person asking "what do you need from me" is asking one
+   question and must not be shown two centres that disagree. */
+const GROUPS = [
+  ['BLOCKING NOW', (a) => a.blocking && a.status !== 'deferred'],
+  ['WAITING FOR ME', (a) => !a.blocking && a.status !== 'deferred'],
+  ['DEFERRED', (a) => a.status === 'deferred'],
+];
+
 views.actions = async () => {
   const centre = await API.get('/api/missions/actions');
+  const open = centre.open || [];
   state.counts.actions = (centre.counts && centre.counts.blocking) || 0;
-  return `<header class="page"><h2>Human Actions</h2>
-      <p>Things only a person can do. Blocking work first.</p></header>
-    <div class="rows">${(centre.open || []).map((a) => `
-      <div class="row"><div class="body">
-        <div class="title">${esc(a.title)} ${a.blocking ? pill('BLOCKING') : ''}</div>
-        <div class="meta">${esc(a.instructions || '')}</div>
-        ${(a.requires || []).length ? `<div class="meta">Needs: ${
-          (a.requires || []).map((r) => '<code>' + esc(r) + '</code>').join(' · ')
-          }</div>` : ''}
-        ${(a.affects || []).length ? `<div class="meta">Holds up: ${esc((a.affects || []).join(', '))}</div>` : ''}
-        ${a.setup_url ? `<div class="meta">Get one: <a href="${esc(a.setup_url)}" rel="noopener" target="_blank">${esc(a.setup_url)}</a></div>` : ''}
-        ${a.verification ? `<div class="meta">Done when: ${esc(a.verification)}</div>` : ''}
-      </div><div class="actions">${a.service ? `<a href="#/credentials">${esc(a.service)}</a>` : ''}</div></div>`
-    ).join('') || empty('Nothing is waiting on you.')}</div>`;
+  if (state.arg) return humanTask(state.arg);
+
+  const blocking = open.filter((a) => a.blocking).length;
+  const lead = blocking
+    ? `You are blocking <strong>${blocking}</strong> ${blocking === 1 ? 'thing' : 'things'}.`
+    : 'Nothing is blocked on you.';
+
+  const groups = GROUPS.map(([label, belongs]) => {
+    const rows = open.filter(belongs);
+    if (!rows.length) return '';
+    return `<h3 style="margin:1.2rem 0 .5rem">${esc(label)}
+        <span class="note">${rows.length}</span></h3>
+      <div class="rows">${rows.map((a) => `
+        <div class="row"><div class="body">
+          <div class="title">${esc(a.title)}
+            ${a.blocking ? pill('BLOCKING', 'bad') : ''}
+            ${a.posed ? pill(esc(a.kind), 'wait') : ''}
+            ${a.reversible === false ? pill('irreversible', 'warn') : ''}</div>
+          <div class="meta">${esc(a.reason || a.instructions || '')}</div>
+          ${(a.affects || []).length
+            ? `<div class="meta">Holds up: ${esc((a.affects || []).join(', '))}</div>` : ''}
+          ${a.verification ? `<div class="meta">Closes when: ${esc(a.verification)}</div>` : ''}
+        </div><div class="actions">${a.posed
+          ? `<a href="#/actions/${encodeURIComponent(a.id)}">Open</a>`
+          : (a.service ? `<a href="#/credentials">${esc(a.service)}</a>` : '')}</div></div>`
+      ).join('')}</div>`;
+  }).join('');
+
+  return `<header class="page"><h2>Human Actions</h2></header>
+    <div class="answer"><p class="lead">${lead}</p>
+      <p class="lead-note">${esc(String(open.length))} open · ${esc(String(
+        (centre.counts || {}).posed || 0))} need an answer from you rather than
+        a setting${centre.posed_unreadable
+          ? ' · <strong>the posed half could not be read</strong>' : ''}</p></div>
+    ${groups || empty('Nothing is waiting on you.')}`;
 };
+
+/* The detail. Everything needed to decide, from what the raiser recorded —
+   never assembled here. A person answering must not have to read a transcript,
+   a markdown ledger or a git history, and the frontend must not invent the
+   wording it shows them. */
+async function humanTask(id) {
+  const t = await API.get(`/api/missions/human/${encodeURIComponent(id)}`)
+    .catch((e) => ({ error: e.message }));
+  if (t.error) return fail(t.error);
+
+  const accepts = t.accepts || [];
+  const said = `<span class="note" data-said="${esc(id)}"></span>`;
+  /* Which controls exist is the request's own answer, not this page's guess.
+     A question has no approve button because the model refuses approval on a
+     question, and a control the API would reject should not be drawn. */
+  const controls = [
+    accepts.includes('approve')
+      ? `<button class="primary" data-respond="approve">Approve</button>` : '',
+    accepts.includes('reject') ? `<button data-respond="reject">Reject</button>` : '',
+    accepts.includes('choose') ? (t.options || []).map((o) =>
+      `<button data-respond="choose" data-choice="${esc(o.key)}">${esc(o.label || o.key)}</button>`).join('') : '',
+    accepts.includes('defer') ? `<button data-respond="defer">Defer</button>` : '',
+  ].join(' ');
+
+  queueMicrotask(() => {
+    const note = document.querySelector(`[data-said="${CSS.escape(id)}"]`);
+    document.querySelectorAll('[data-respond]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const kind = button.dataset.respond;
+        const text = (document.getElementById('answer') || {}).value || '';
+        if (kind === 'approve' && !confirm(
+          'Record your approval for this request?')) return;
+        /* Visible before the await: this is a round trip. */
+        button.disabled = true;
+        const was = button.textContent;
+        button.textContent = 'Recording…';
+        try {
+          const done = await API.post(
+            `/api/missions/human/${encodeURIComponent(id)}/respond`,
+            { response: kind, body: text, chosen: button.dataset.choice || '' });
+          if (note) note.textContent = `Recorded — ${done.state}. Qevik verifies this and resumes the affected work.`;
+          render();
+        } catch (e) {
+          button.disabled = false;
+          button.textContent = was;
+          /* 422 is the model refusing a response this kind does not accept —
+             a stated reason, not a failure to retry past. */
+          if (note) note.textContent = e.message;
+        }
+      });
+    });
+  });
+
+  return `<header class="page"><h2>${esc(t.title)}</h2>
+      <p>${pill(esc(t.kind), 'wait')} ${pill(esc(t.state))}
+        ${t.reversible === false ? pill('irreversible', 'warn') : pill('reversible', 'ok')}</p></header>
+    <div class="card">
+      <h3>Why</h3><p>${esc(t.why || '')}</p>
+      ${t.blocks ? `<h3>Blocks</h3><p>${esc(t.blocks)}</p>` : ''}
+      ${t.asked ? `<h3>What you need to do</h3><p>${esc(t.asked)}</p>` : ''}
+      ${t.consequence ? `<h3>After you answer</h3><p>${esc(t.consequence)}</p>` : ''}
+      ${t.will_not_do ? `<h3>What this does not do</h3><p>${esc(t.will_not_do)}</p>` : ''}
+      ${Object.keys(t.evidence || {}).length
+        ? `<h3>Evidence</h3><pre>${esc(JSON.stringify(t.evidence, null, 2).slice(0, 1200))}</pre>` : ''}
+      ${t.verification ? `<h3>Closes when</h3><p>${esc(t.verification)}</p>` : ''}
+      <p class="note">Raised by <code>${esc(t.created_by || 'unknown')}</code>
+        ${when(t.created_at)}.</p>
+    </div>
+    <div class="card decide"><h3>Your response</h3>
+      ${accepts.includes('answer') || accepts.includes('context') ? `
+        <div class="field"><label for="answer">Answer</label>
+          <textarea id="answer" rows="4" placeholder="Answer in your own words."></textarea></div>` : ''}
+      <div class="actions">${controls}
+        ${accepts.includes('answer') ? `<button class="primary" data-respond="answer">Record answer</button>` : ''}
+        ${accepts.includes('context') ? `<button data-respond="context">Add context</button>` : ''}</div>
+      ${said}
+      <p class="note" style="margin-top:.7rem">This request accepts:
+        ${accepts.map((a) => '<code>' + esc(a) + '</code>').join(' · ') || 'nothing'}.
+        A response it does not accept is refused — a question cannot be
+        approved, and no conversation here authorises an external action.</p>
+    </div>
+    ${(t.responses || []).length ? `<div class="card"><h3>Transcript</h3>
+      <div class="rows">${t.responses.map((r) => `
+        <div class="row"><div class="body">
+          <div class="title">${pill(esc(r.response))} ${esc(r.actor)}</div>
+          <div class="meta">${when(r.at)}${r.chosen ? ' · chose ' + esc(r.chosen) : ''}</div>
+          ${r.body ? `<div class="meta">${esc(r.body)}</div>` : ''}
+        </div></div>`).join('')}</div>
+      <p class="note" style="margin-top:.6rem">The structured decision is
+        authoritative; this transcript is supporting context.</p></div>` : ''}
+    <p style="margin-top:1rem"><a href="#/actions">Back to everything waiting</a></p>`;
+}
 
 views.fabric = async () => {
   const fleet = await API.get('/api/missions/workers');

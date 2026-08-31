@@ -42,6 +42,22 @@ class ActionKind(StrEnum):
     #: sign into. Distinct from a credential because no key can be pasted to
     #: satisfy it: somebody has to be in front of the machine.
     PROVISIONING = "provisioning"
+    #: The four below are *posed* rather than derived. The kinds above are
+    #: measurable — an integration is connected or it is not — so they are
+    #: folded from state and need no store. These cannot be measured from
+    #: anything: "should Qevik collect individual addresses" is not a fact
+    #: about the system, it is a question somebody has to answer. They are
+    #: raised by an agent at a boundary and live in `human.HumanRequest`,
+    #: keyed by this same enum so one inbox holds both halves.
+    QUESTION = "question"
+    #: A choice between stated options — product or architecture. The answer
+    #: is one of the options, never prose that resembles one.
+    DECISION = "decision"
+    #: Something that leaves the building. Requires a structured confirmation
+    #: naming exactly what will happen; conversation never authorises it.
+    EXTERNAL_ACTION = "external_action"
+    #: A person must read something before it proceeds.
+    REVIEW = "review"
 
 
 class ActionStatus(StrEnum):

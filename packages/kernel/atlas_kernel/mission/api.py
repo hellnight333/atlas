@@ -315,6 +315,20 @@ def blockers(missions: list[dict]) -> dict:
     }
 
 
+class HumanAnswer(BaseModel):
+    """What a person said about one request.
+
+    Declared at module scope deliberately: `from __future__ import annotations`
+    makes a model defined inside the router factory a forward reference FastAPI
+    cannot resolve, and the failure appears as a broken OpenAPI document rather
+    than as anything pointing at this class.
+    """
+
+    response: str
+    body: str = ""
+    chosen: str = ""
+
+
 class OutreachApproval(BaseModel):
     """Authorising one exact message to one exact recipient.
 
@@ -558,13 +572,84 @@ def build_router() -> APIRouter:
         except Exception:                          # noqa: BLE001 - reported
             addressable = None
 
-        return controlplane.centre(
+        found = controlplane.centre(
             store=store, tenant=tenant,
             known_nodes=None if known is None
             else tuple(node.node_id for node in known),
             sending_identity=sending,
             addressable=addressable,
             ledger_reachable=reachability.measure().reachable)
+
+        # The posed half of the same inbox. Derived actions cover everything
+        # measurable; a question nobody can measure is stored, and both carry
+        # the same `ActionKind` so this is one list rather than two centres
+        # that disagree about what the person still owes.
+        from ..controlplane import human
+
+        try:
+            posed = human.open_requests()
+        except Exception:                          # noqa: BLE001 - reported
+            # Unreadable is not empty. A centre that silently dropped the
+            # posed half would tell somebody they are blocking nothing.
+            posed, found["posed_unreadable"] = [], True
+        found["open"] = list(found.get("open", [])) + [
+            {"id": r["id"], "kind": r["kind"], "title": r["title"],
+             "blocking": r["state"] != "DEFERRED",
+             "reason": r["why"], "instructions": r["asked"],
+             "affects": [r["blocks"]] if r["blocks"] else [],
+             "requires": [], "status": r["state"].lower(),
+             "verification": r["verification"], "posed": True,
+             "reversible": r["reversible"], "accepts": r["accepts"],
+             "created_at": r["created_at"]}
+            for r in posed]
+        counts = dict(found.get("counts") or {})
+        counts["blocking"] = sum(1 for a in found["open"] if a.get("blocking"))
+        counts["posed"] = len(posed)
+        found["counts"] = counts
+        return found
+
+    @router.get("/human/{request_id}")
+    def human_request(request_id: str, request: Request,
+                      _: User = Depends(requires(Scope.READ))) -> dict:
+        """One request, with everything needed to decide it.
+
+        The whole point of the detail view: a person answering this should not
+        have to read a Claude transcript, a markdown ledger, terminal output or
+        a git history. Every field comes from what the raiser recorded.
+        """
+        from ..controlplane import human
+
+        found = human.get(request_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="no such request")
+        return found
+
+    @router.post("/human/{request_id}/respond", status_code=201)
+    def respond(request_id: str, body: HumanAnswer, request: Request,
+                user: User = Depends(requires(Scope.EXECUTE))) -> dict:
+        """Record what a person decided.
+
+        Refuses anything the request does not accept, and the refusals are the
+        safety property rather than validation: a question cannot be
+        "approved", an external action cannot be authorised by prose, and a
+        credential value cannot pass through here at all.
+        """
+        from ..controlplane import human
+
+        try:
+            kind = human.ResponseKind(body.response)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{body.response!r} is not a response kind") from None
+        try:
+            return human.answer(request_id, response=kind,
+                                actor=user.username, body=body.body,
+                                chosen=body.chosen)
+        except human.UnknownRequest as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing
+        except human.NotAcceptable as refused:
+            raise HTTPException(status_code=422, detail=str(refused)) from refused
 
     def _worker_nodes(request: Request):
         """Mission workers as the scheduler is told about them, or `None`.
