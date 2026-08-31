@@ -46,6 +46,7 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-32 | Game factory | Game | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Roadmap P7 |
 | C-33 | Commerce / marketplace | Commerce | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Amazon / Noon credentials |
 | C-34 | Computer use | Computer use | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DECISION | DQ-002 |
+| C-36 | Funnel coverage | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 359 with a website, 352 audited, 290 answered, 19 theirs, **43 ours**, 7 queued. `we_failed` should reach zero as the nightly pass revisits |
 | C-35 | Desktop surfaces | Desktop | ~ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | PARKED | `apps/STATUS.md`; DQ-003 |
 
 ## Notes on the two that look complete and are not

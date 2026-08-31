@@ -102,7 +102,39 @@ That was reached by asking which tracks were open rather than by looking at what
 the running system was producing. **Read the data before concluding there is
 nothing to do.**
 
+## 2026-08-31 — Session 3 (production-data integrity)
+
+### Traced
+The browser defect's consequences, through real production data rather than
+code:
+- 352 businesses audited; 61 have a latest audit saying unreachable; **43 carry
+  "interrupted by another navigation"**, which only our own browser produces.
+- Those businesses carry a signal **6.6%** of the time against **22.4%** for
+  reachable ones — roughly ten opportunities that were never created.
+- **3** stored signals belong to businesses that ever had an interrupted audit;
+  their evidence rests on later successful audits, not on the failures.
+- The rotation recovers them unaided: **34 of 43 have never been marked
+  `website_verified`**, so they sort to the front of a queue holding ~119
+  unaudited sites at 40 a night.
+
+### Completed
+`opportunity/coverage.py` + `GET /api/missions/coverage` + a Discovery panel.
+Four states kept apart: answered, never-audited (a queue position, not a loss),
+their site did not answer, and **our check did not complete**. Baseline in
+production: 359 with a website, 352 audited, 290 answered, 19 theirs, 43 ours,
+7 queued.
+
+Two history problems it reads correctly: 43 rows predate
+`check_failed_because` and carry only the error text, and 60 rows from an
+earlier producer never wrote `reachable` at all but carry 20 observations each.
+
+### Checked and clean
+`audit_prospects.py` writes no ledger events, so `audit_discovered.py` was the
+only producer putting a false negative into production state.
+`research/net.py`, `outreach/deliverability.py`, `publication/published.py` and
+`credentials/probes.py` already separate a producer failure from a fact about
+the subject.
+
 ### Next
-36 businesses still carry a `reachable=False` our browser wrote; they re-audit
-in nightly rotation and the recovery is worth counting afterwards. Beyond that
-the valuable step remains the first real send — HA-001 and HA-002.
+Watch `we_failed` fall. Beyond that the valuable step remains the first real
+send — HA-001 and HA-002.

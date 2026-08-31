@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: ec55f67 (main)
-Gate result: 3806 passed, 33 skipped, 0 failed
+Repository revision: 7e9c4a2 (main)
+Gate result: 3819 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -55,10 +55,11 @@ The candidates, with why each is not obviously next:
 4. **Publishing the eight remaining health checks** — deterministic and
    valuable inventory for the moment sending works, but each one is a
    commercial decision to approach that business. Now doable from the console.
-5. **Measure the re-audit recovery** — 36 businesses still carry a
-   `reachable=False` our browser wrote. They re-audit in nightly rotation, and
-   how many recover into opportunities is worth counting once they have. Ready
-   now, but the answer arrives on its own schedule.
+5. **Watch the recovery** — `GET /api/missions/coverage` reports 43 businesses
+   blocked by our own failed checks. The nightly pass revisits them; the number
+   falling is the measurement. Nothing to build, and re-auditing by hand would
+   spend somebody else's bandwidth to produce a figure the schedule will give
+   for free.
 
 The honest reading: the next genuinely valuable step is **not** more capability.
 It is the first real send, and that is HA-001 and HA-002.
@@ -82,6 +83,20 @@ fabric and nothing else.
 5 open, and one of them now blocks a track. **DQ-006** — what allowance does
 Qevik's own operating tenant have — holds C-27 and C-28. The rest do not block
 the candidates above.
+
+## The rule this project now runs on
+
+Before declaring a capability production-proven, or concluding there is nothing
+valuable to do, **inspect what the running system is actually producing**. Both
+of the last two batches found real defects that way and neither was visible from
+the code:
+
+- A shared browser page made Qevik record that 43 real businesses had dead
+  websites. They were silently dropped from the funnel.
+- Before that, six failed missions each reported that they ended because a
+  "report was written".
+
+An empty result usually means a measurement failed. Ask whose failure it was.
 
 ## Last production evidence
 

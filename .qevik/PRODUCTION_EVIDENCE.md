@@ -27,6 +27,10 @@ All rows measured on qevik-core-01 unless stated.
 
 | E-16 | C-02 | The audit was recording our own browser failure as a dead website | 64 of 396 audits marked `reachable=False`; 43 carry "interrupted by another navigation". Seven re-audited after the fix: all 7 answered 200 with 20 observations each | PRODUCTION-VERIFIED | 2026-08-31 | ec55f67 | 16% of the audited population was silently dropped from the funnel for a defect that was ours. The remaining 36 re-audit in nightly rotation; that recovery is **not yet measured** |
 
+| E-17 | C-36 | The funnel's blind spot is measurable and attributed | `GET /api/missions/coverage` on the host: 359 with a website, 352 audited, 290 answered, 19 did-not-answer, **43 blocked by us**, 7 never audited | PRODUCTION-VERIFIED | 2026-08-31 | 7e9c4a2 | The baseline. Recovery is **not yet measured** — it happens as the nightly pass revisits, and `we_failed` falling is the measurement |
+| E-18 | C-02 | The rotation will recover them without help | 34 of the 43 have never been marked `website_verified`, so they sort to the front of a queue holding ~119 unaudited sites at 40/night | PRODUCTION-VERIFIED | 2026-08-31 | 7e9c4a2 | Read from the ledger. **No re-audit was run to manufacture evidence** — the schedule already does it |
+| E-19 | C-03 | What the defect cost the funnel | Businesses whose latest audit says unreachable carry a signal 6.6% of the time (4 of 61) against 22.4% (60 of 268) for reachable ones | PRODUCTION-VERIFIED | 2026-08-31 | 7e9c4a2 | Roughly ten opportunities never created. An estimate from real rates, **not** a claim that ten specific businesses were lost |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not
