@@ -715,9 +715,40 @@ class OpportunityRepository:
             with_site = session.execute(
                 text("SELECT count(*) FROM atlas_businesses "
                      "WHERE website IS NOT NULL AND website <> ''")).scalar()
-        return measure(
+        found = measure(
             latest_audits=[{"detail": row["detail"]} for row in latest],
             with_a_website=int(with_site or 0)).summary()
+        found["reachability"] = self.outreach_reachability()
+        return found
+
+    def outreach_reachability(self) -> dict:
+        """Who Qevik could actually write to, by channel.
+
+        A channel with no recipients cannot be unblocked by configuring the
+        sender, and nothing else in the system says so: outreach reports
+        messages blocked on `NO_SENDING_IDENTITY`, which reads as "the sender
+        is missing" rather than "there is no recipient either".
+        """
+        from .coverage import reachable
+
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                SELECT count(*) AS businesses,
+                       count(*) FILTER (WHERE email IS NOT NULL AND email <> '')
+                           AS with_email,
+                       count(*) FILTER (WHERE phone IS NOT NULL AND phone <> '')
+                           AS with_phone,
+                       count(*) FILTER (WHERE (email IS NULL OR email = '')
+                                    AND (phone IS NULL OR phone = ''))
+                           AS with_neither
+                FROM atlas_businesses
+                """)).mappings().first()
+        return reachable(
+            businesses=int(row["businesses"] or 0),
+            with_email=int(row["with_email"] or 0),
+            with_phone=int(row["with_phone"] or 0),
+            with_neither=int(row["with_neither"] or 0)).summary()
 
     def record_lead(self, *, website: str, host: str, source: str,
                     observations: int = 0, business_id: str = "") -> dict:

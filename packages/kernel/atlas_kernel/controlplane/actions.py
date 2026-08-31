@@ -340,7 +340,8 @@ def node_actions(known: tuple[str, ...] | None, *,
 
 
 def sending_identity_actions(measured: object | None, *,
-                             tenant: TenantId | None = None
+                             tenant: TenantId | None = None,
+                             addressable: bool | None = None
                              ) -> tuple[HumanAction, ...]:
     """What the sending domain still needs before mail is worth sending.
 
@@ -375,7 +376,14 @@ def sending_identity_actions(measured: object | None, *,
         reason="; ".join(
             f"{record.name}: {record.matters_because}"
             for record in getattr(measured, "records", ())
-            if record.name in missing),
+            if record.name in missing)
+        # Said in the reason, not a footnote. Doing this work in the belief it
+        # unblocks sending, when no business in the pipeline has an email
+        # address, is an afternoon spent for nothing.
+        + ("" if addressable is not False else
+           " — NOTE: no business Qevik has discovered carries an email "
+           "address, so completing this enables email to nobody until a "
+           "source of addresses exists."),
         instructions=(
             "Cloudflare holds this zone and Qevik has no token for it, so every "
             "record is created by hand in the Cloudflare dashboard. The exact "
@@ -397,6 +405,7 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
            outstanding_tasks: tuple[dict, ...] = (),
            known_nodes: tuple[str, ...] | None = None,
            sending_identity: object | None = None,
+           addressable: bool | None = None,
            ledger_reachable: bool | None = None) -> dict:
     """Everything waiting on a person, ordered by what it holds up.
 
@@ -409,7 +418,8 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
         + approval_actions(pending_approvals or [], tenant=tenant)
         + customer_task_actions(outstanding_tasks, tenant=tenant)
         + node_actions(known_nodes, tenant=tenant)
-        + sending_identity_actions(sending_identity, tenant=tenant)
+        + sending_identity_actions(sending_identity, tenant=tenant,
+                                   addressable=addressable)
         + fleet_reachability_actions(ledger_reachable, tenant=tenant)
     )
     ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))

@@ -140,5 +140,52 @@ def measure(*, latest_audits: list, with_a_website: int) -> Coverage:
         never_audited=max(0, with_a_website - audited))
 
 
-__all__ = ["LEGACY_OUR_FAILURE", "OUR_FAILURE_FIELD", "Coverage", "measure",
-           "ours"]
+@dataclass(frozen=True)
+class Reachability:
+    """Who Qevik could actually write to, by channel.
+
+    Measured because the answer was surprising and it changes what is worth
+    doing: on 2026-08-31, **412 businesses and not one email address**. No
+    source Qevik has ever collects one — OpenStreetMap's extractor does not
+    read it, the Places field mask has no email field because the API does not
+    return one, and nothing reads contacts out of the audited homepages.
+
+    So configuring DNS and SMTP would enable email to nobody. That is worth
+    knowing before spending an afternoon on it, and it is not visible from any
+    other number in the system: the outreach pipeline reports messages blocked
+    on `NO_SENDING_IDENTITY`, which reads as "the sender is missing" rather
+    than "there is no recipient either".
+    """
+
+    businesses: int
+    by_email: int
+    by_phone: int
+    by_neither: int
+
+    @property
+    def email_is_addressable(self) -> bool:
+        """Whether an SMTP identity would have anywhere to send."""
+        return self.by_email > 0
+
+    def summary(self) -> dict:
+        return {
+            "businesses": self.businesses,
+            "by_email": self.by_email,
+            "by_phone": self.by_phone,
+            "by_neither": self.by_neither,
+            "email_is_addressable": self.email_is_addressable,
+            "note": ("A channel with no recipients cannot be unblocked by "
+                     "configuring the sender. Email and WhatsApp are counted "
+                     "separately because only one of them is automated."),
+        }
+
+
+def reachable(*, businesses: int, with_email: int, with_phone: int,
+              with_neither: int) -> Reachability:
+    """Who could be written to, from counts the repository has."""
+    return Reachability(businesses=businesses, by_email=with_email,
+                        by_phone=with_phone, by_neither=with_neither)
+
+
+__all__ = ["LEGACY_OUR_FAILURE", "OUR_FAILURE_FIELD", "Coverage",
+           "Reachability", "measure", "ours", "reachable"]

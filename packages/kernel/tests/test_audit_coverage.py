@@ -202,3 +202,72 @@ class TestTheDiscoveryFeedExplainsItsOwnEmptiness:
 
         assert "have no sighting" in console
         assert "not evidence that nothing was found" in console
+
+
+class TestWhoCanActuallyBeWrittenTo:
+    """412 businesses and not one email address. Completing DNS and SMTP would
+    enable email to nobody, and nothing else in the system says so: outreach
+    reports `NO_SENDING_IDENTITY`, which reads as "the sender is missing"
+    rather than "there is no recipient either"."""
+
+    def test_a_population_with_no_email_is_not_addressable(self) -> None:
+        from atlas_kernel.opportunity.coverage import reachable
+
+        found = reachable(businesses=412, with_email=0, with_phone=349,
+                          with_neither=63)
+
+        assert found.email_is_addressable is False
+        assert found.by_phone == 349, "the other channel is counted separately"
+
+    def test_one_email_makes_it_addressable(self) -> None:
+        """The negative control. A measure that always said 'no' would pass the
+        test above and be useless."""
+        from atlas_kernel.opportunity.coverage import reachable
+
+        assert reachable(businesses=1, with_email=1, with_phone=0,
+                         with_neither=0).email_is_addressable is True
+
+    def test_the_channels_are_not_added_together(self) -> None:
+        """Only one of them is automated. A single 'reachable' number would
+        report the pipeline as ready to send when every recipient is a phone
+        and WhatsApp is manual by standing instruction."""
+        from atlas_kernel.opportunity.coverage import reachable
+
+        summary = reachable(businesses=10, with_email=0, with_phone=8,
+                            with_neither=2).summary()
+
+        assert summary["by_email"] == 0 and summary["by_phone"] == 8
+        assert "reachable" not in summary, "no combined figure"
+
+    def test_the_dns_action_says_what_it_does_not_unblock(self) -> None:
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+        from atlas_kernel.outreach.deliverability import Record, State
+
+        measured = type("M", (), {
+            "unreadable": False, "missing": ("MX",), "domain": "qevik.ai",
+            "records": (Record(name="MX", matters_because="replies bounce" * 4,
+                               state=State.ABSENT),)})()
+
+        blocked = sending_identity_actions(measured, tenant="t",
+                                           addressable=False)[0]
+        fine = sending_identity_actions(measured, tenant="t",
+                                        addressable=True)[0]
+
+        assert "enables email to nobody" in blocked.reason
+        assert "enables email to nobody" not in fine.reason
+
+    def test_an_unknown_addressability_makes_no_claim(self) -> None:
+        """The read can fail. Saying nothing beats saying the wrong thing to
+        somebody about to spend an afternoon on DNS."""
+        from atlas_kernel.controlplane.actions import sending_identity_actions
+        from atlas_kernel.outreach.deliverability import Record, State
+
+        measured = type("M", (), {
+            "unreadable": False, "missing": ("MX",), "domain": "qevik.ai",
+            "records": (Record(name="MX", matters_because="replies bounce" * 4,
+                               state=State.ABSENT),)})()
+
+        action = sending_identity_actions(measured, tenant="t",
+                                          addressable=None)[0]
+
+        assert "enables email to nobody" not in action.reason

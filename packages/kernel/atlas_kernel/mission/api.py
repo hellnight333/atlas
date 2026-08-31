@@ -549,11 +549,21 @@ def build_router() -> APIRouter:
         # this host's own access as the fleet's.
         from ..fabric import reachability
 
+        # Whether an SMTP identity would have anywhere to send. Read here so
+        # the DNS action can say plainly that completing it unblocks nothing
+        # while no discovered business carries an email address.
+        try:
+            addressable = _opportunities(request).outreach_reachability()[
+                "email_is_addressable"]
+        except Exception:                          # noqa: BLE001 - reported
+            addressable = None
+
         return controlplane.centre(
             store=store, tenant=tenant,
             known_nodes=None if known is None
             else tuple(node.node_id for node in known),
             sending_identity=sending,
+            addressable=addressable,
             ledger_reachable=reachability.measure().reachable)
 
     def _worker_nodes(request: Request):
