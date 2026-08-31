@@ -758,6 +758,48 @@ class OpportunityRepository:
             ).mappings().all()
         return [self._signal_from_row(row) for row in rows]
 
+    @staticmethod
+    def _delivered_offer(session, mission_id: str) -> str:
+        """What a publication published, recovered from the mission's recipe.
+
+        Four of the five addresses Qevik has put on the internet record no
+        offer — they were written before the field existed — and
+        `outreach.preparation` refuses a publication that cannot say what it
+        is. Permanently: nothing re-publishes them, so two real businesses
+        with a live artefact and a reachable number can never be written to.
+
+        The value was never lost. `offer` is read from the delivering
+        mission's recipe at publication time, and that recipe id is on the
+        mission's own ledger. Reading it back from the same place is a
+        recovery, not a guess — and the caller labels it as recovered, so a
+        resolved offer is never mistaken for a recorded one.
+
+        Empty whenever the chain breaks: no mission, no transition, an
+        unknown recipe, or a recipe that delivers nothing. Unknown stays
+        unknown, because a health check described as a website build is a
+        false statement to the business it is about.
+        """
+        if not mission_id:
+            return ""
+        recipe = session.execute(
+            text("""
+            SELECT detail->>'recipe' FROM atlas_business_events
+            WHERE kind = 'mission_transition'
+              AND detail->>'mission_id' = :mission
+              AND coalesce(detail->>'recipe', '') <> ''
+            ORDER BY at DESC LIMIT 1
+            """), {"mission": mission_id}).scalar()
+        if not recipe:
+            return ""
+        # Imported here: `fabric` imports this package, and at module scope
+        # this would be a cycle.
+        from ..fabric.recipes import UnknownRecipe
+        from ..fabric.recipes import get as recipe_for
+        try:
+            return recipe_for(recipe).delivers or ""
+        except UnknownRecipe:
+            return ""
+
     def publications_of(self, business_id: str) -> list[dict]:
         """Everything Qevik has published for one business, oldest first.
 
@@ -777,23 +819,42 @@ class OpportunityRepository:
                 {"published": PUBLISHED_EVENT, "demo": "website_demo_published",
                  "business": business_id},
             ).mappings().all()
-        found = []
-        for row in rows:
-            detail = _decoded(row["detail"]) or {}
-            found.append({
-                "id": row["id"], "kind": row["kind"], "actor": row["actor"],
-                "signal_id": row["opportunity_id"],
-                "business_id": business_id,
-                "mission_id": detail.get("mission_id", ""),
-                "commit": detail.get("commit", ""),
-                "site_id": detail.get("site_id", ""),
-                "url": detail.get("url", ""),
-                # Absent on every record written before the field existed, and
-                # unknown stays unknown: a health check described as a website
-                # build is a false statement to the business it is about.
-                "offer": detail.get("offer", ""),
-                "at": row["at"].isoformat() if row["at"] else ""})
+            found = []
+            for row in rows:
+                detail = _decoded(row["detail"]) or {}
+                found.append(self._publication_row(
+                    session, detail,
+                    {"id": row["id"], "kind": row["kind"], "actor": row["actor"],
+                     "signal_id": row["opportunity_id"],
+                     "business_id": business_id,
+                     "at": row["at"].isoformat() if row["at"] else ""}))
         return found
+
+    def _publication_row(self, session, detail: dict, base: dict) -> dict:
+        """One publication, with what it published resolved once for everybody.
+
+        Both readers go through here so a publication cannot describe itself
+        one way to the operator and another to the thing composing the message.
+        """
+        mission_id = detail.get("mission_id", "")
+        recorded = (detail.get("offer") or "").strip()
+        recovered = "" if recorded else self._delivered_offer(session, mission_id)
+        return {
+            **base,
+            "mission_id": mission_id,
+            "commit": detail.get("commit", ""),
+            "site_id": detail.get("site_id", ""),
+            "url": detail.get("url", ""),
+            "publication_mission": detail.get("publication_mission", ""),
+            "offer": recorded or recovered,
+            # Which of the two it is. A recovered offer is as true as a
+            # recorded one and did not come from the same place, and a reader
+            # that cannot tell them apart cannot audit either.
+            "offer_recorded": bool(recorded),
+            "offer_from": ("the publication record" if recorded
+                           else "the recipe the mission ran" if recovered
+                           else ""),
+        }
 
     def contact_provenance(self, business_id: str) -> list[dict]:
         """Where each of this business's addresses was read from.
@@ -1281,25 +1342,16 @@ class OpportunityRepository:
                 """),
                 {"kind": PUBLISHED_EVENT, "mission": mission_id},
             ).mappings().all()
-        found = []
-        for row in rows:
-            detail = _decoded(row["detail"]) or {}
-            found.append({"id": row["id"], "actor": row["actor"],
-                          "signal_id": row["opportunity_id"],
-                          "business_id": row["business_id"],
-                          "mission_id": detail.get("mission_id", ""),
-                          "publication_mission":
-                              detail.get("publication_mission", ""),
-                          "commit": detail.get("commit", ""),
-                          "site_id": detail.get("site_id", ""),
-                          "url": detail.get("url", ""),
-                          # Absent on every record written before the field
-                          # existed. Read as unknown, never as a default: a
-                          # health check described as a website build is a
-                          # false statement to the business it is about.
-                          "offer": detail.get("offer", ""),
-                          "files": detail.get("files", []),
-                          "at": row["at"].isoformat() if row["at"] else ""})
+            found = []
+            for row in rows:
+                detail = _decoded(row["detail"]) or {}
+                found.append({
+                    **self._publication_row(session, detail, {
+                        "id": row["id"], "actor": row["actor"],
+                        "signal_id": row["opportunity_id"],
+                        "business_id": row["business_id"],
+                        "at": row["at"].isoformat() if row["at"] else ""}),
+                    "files": detail.get("files", [])})
         return found
 
     def publication_approvals_for(self, mission_id: str, *,

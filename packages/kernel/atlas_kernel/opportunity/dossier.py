@@ -78,7 +78,7 @@ def _detail(raw: Any) -> dict:
 
 def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
     """The thirteen answers for one prospect, each read from its own owner."""
-    from ..outreach.preparation import verified_recipient
+    from ..outreach.preparation import COMPOSABLE, verified_recipient
     from .tenancy import ALL_TENANTS
 
     # A company is shared; an opportunity belongs to a tenant. `save_business`
@@ -168,6 +168,15 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
         # Unknown stays unknown. A health check reported as a website build is
         # a false statement to the business it is about.
         offer=(live or {}).get("offer", ""),
+        # Where that came from. Four of Qevik's five publications record no
+        # offer and it is recovered from the mission's recipe — as true, and
+        # not from the same place, so the dossier says which.
+        offer_from=(live or {}).get("offer_from", ""),
+        # Whether a message can truthfully describe what is at that address.
+        # Four of the five things Qevik has published record no offer, and
+        # `prepare` refuses them — so telling an operator to write the message
+        # would send them at a door the system holds shut.
+        describable=(live or {}).get("offer", "") in COMPOSABLE,
         commit=(live or {}).get("commit", ""),
         published_at=(live or {}).get("at", ""),
         reviews=[{"decision": r["decision"], "actor": r["actor"],
@@ -333,6 +342,12 @@ def _next_action(answers: dict) -> dict:
                    "there is a live artefact and no verified address or number "
                    "to tell anybody about it")
     if not answers["message"]["known"]:
+        if not answers["produced"]["describable"]:
+            offer = answers["produced"]["offer"]
+            return act("Record what was published",
+                       f"the publication says {offer or 'nothing'} about what "
+                       "is at that address, so no message can describe it "
+                       "truthfully and preparing one is refused")
         return act("Prepare the message",
                    "there is something to say and somebody to say it to, and "
                    "nothing has been drafted")

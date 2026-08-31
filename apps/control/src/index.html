@@ -2052,6 +2052,8 @@ const ANSWER = {
     ${a.findings.length} recorded finding(s)`,
   produced: (a) => `${esc(OFFER_NAME[a.offer] || a.offer || 'not recorded')}
     ${a.accepted ? pill('accepted', 'ok') : pill('not accepted', 'wait')}
+    ${a.offer && a.offer_from !== 'the publication record'
+      ? pill('recovered from the recipe', 'wait') : ''}
     <span class="note">· mission ${esc(a.mission_id || '—')}</span>`,
   live: (a) => `<a href="${esc(a.url)}" target="_blank" rel="noreferrer">${esc(a.url)}</a>`,
   message: (a) => `${pill(a.status)} via ${esc(a.channel)}

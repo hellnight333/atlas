@@ -314,7 +314,10 @@ def test_the_dossier_composes_nothing():
         if isinstance(node, ast.ImportFrom)
         and (node.level > 0 or (node.module or "").startswith("atlas_kernel"))
         for alias in node.names}
-    assert imported == {"verified_recipient", "ALL_TENANTS"}, (
+    # `COMPOSABLE` is a tuple of offer names — data owned elsewhere, read so
+    # this module does not keep a second opinion about which publications can
+    # be described. Reading a constant is not composing a message.
+    assert imported == {"verified_recipient", "ALL_TENANTS", "COMPOSABLE"}, (
         "the dossier imports something that is not a read: composing, "
         "preparing or sending here creates a second answer to a question that "
         f"already has one. Imported: {sorted(imported)}")
@@ -520,5 +523,48 @@ def test_the_dossier_is_served_through_the_composed_app(tmp_path, monkeypatch,
             # Negative control on the route order: the neighbouring path still
             # belongs to the handler that declares it.
             assert client.get("/api/discovery/opportunities").status_code == 200
+    finally:
+        _clean(repo, business.id)
+
+
+def test_a_publication_that_does_not_say_what_it_is_blocks_the_message(repo):
+    """Found in production: four of five publications record no offer.
+
+    `prepare` refuses them, permanently — the field did not exist when they
+    were written. The dossier said "Prepare the message", which sends an
+    operator at a door the system holds shut.
+    """
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        signal = _signal(repo, business.id)
+        _audit(repo, business.id)
+        repo.record_publication(
+            mission_id="m-1", business_id=business.id, signal_id=signal.id,
+            commit="abc123", site_id="alwaha", url="https://sites.test/alwaha",
+            files=["index.html"], actor="worker", offer="", tenant=TENANT)
+        repo.record_review(mission_id="m-1", business_id=business.id,
+                           signal_id=signal.id, decision="accepted",
+                           actor="ayoub", commit="abc123", tenant=TENANT)
+
+        answers = assemble(business.id, memory=repo, tenant=TENANT)["answers"]
+        assert answers["produced"]["describable"] is False
+        assert answers["next"]["action"] == "Record what was published"
+
+        # Negative control: the same chain with a composable offer asks for the
+        # message, so the refusal above is the offer and not the fixture.
+        _clean(repo, business.id)
+        business2 = _business(repo, email="hello@alwaha.test")
+        signal2 = _signal(repo, business2.id)
+        _audit(repo, business2.id)
+        _publish(repo, business2.id, signal2.id, mission="m-2")
+        repo.record_review(mission_id="m-2", business_id=business2.id,
+                           signal_id=signal2.id, decision="accepted",
+                           actor="ayoub", commit="abc123", tenant=TENANT)
+        try:
+            second = assemble(business2.id, memory=repo, tenant=TENANT)["answers"]
+            assert second["produced"]["describable"] is True
+            assert second["next"]["action"] == "Prepare the message"
+        finally:
+            _clean(repo, business2.id)
     finally:
         _clean(repo, business.id)
