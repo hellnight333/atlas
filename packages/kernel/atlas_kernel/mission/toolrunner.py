@@ -1206,6 +1206,13 @@ class ToolAgent:
         # unmarked is one the next run picks first and the run after that picks
         # again — a queue that never advances past whatever fails.
         self._mark_verified(businesses, audited, responses)
+        # The addresses these pages published, from the responses this pass
+        # already holds. **This is the path that actually runs nightly.**
+        # Contact discovery was first wired into `infra/audit_discovered.py`,
+        # which ran once on 2026-08-19 and is scheduled by nothing — so it was
+        # deployed into code nobody executes, and `Business.email` stayed empty
+        # while the capability looked shipped.
+        self._remember_contacts(businesses, responses)
         signals = detect.from_verification(audited, businesses, responses,
                                            source=self._recipe.id)
         found.steps.append(Step(
@@ -1228,6 +1235,40 @@ class ToolAgent:
             except Exception:                     # noqa: BLE001 - reported
                 log.exception("could not store signal %s", scored.signal_id)
         return len(audited)
+
+    def _remember_contacts(self, businesses: dict, responses: dict) -> None:
+        """Record the addresses each page published, from this pass's own bodies.
+
+        No second fetch: `audit_pass` already read these responses to produce
+        findings, and the body is on the evidence. Reading contacts here costs
+        one pass over a string that is already in memory.
+
+        Discovery, not authorisation. An address becoming a business's
+        contactability makes it *reachable*; suppression, cooldown, approval
+        and the sending identity all still sit between that and a message.
+        """
+        from ..opportunity.contacts import contactable_at, observed
+
+        for business_id, piece in responses.items():
+            business = businesses.get(business_id)
+            if business is None:
+                continue
+            body = (piece.observed or {}).get("body")
+            if not isinstance(body, str) or not body:
+                continue
+            url = str((piece.observed or {}).get("url") or piece.source or "")
+            try:
+                found = observed(body, url=url,
+                                 at=getattr(piece, "observed_at", "") and
+                                 str(piece.observed_at))
+                address = contactable_at(found)
+                if address:
+                    self._repository.record_contactability(
+                        business_id, address=address, source_url=url)
+            except Exception:                     # noqa: BLE001 - reported
+                # A business left without an address is one the next pass picks
+                # up again. Failing the run over it would lose the findings too.
+                log.exception("could not read contacts from %s", url)
 
     def _mark_verified(self, businesses: dict, audited: dict,
                        responses: dict) -> None:

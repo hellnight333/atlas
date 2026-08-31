@@ -306,3 +306,61 @@ class TestTemplatePlaceholders:
                          url="https://x/")
 
         assert [c.address for c in found] == [address]
+
+
+class TestItRunsOnThePathThatActuallyRuns:
+    """Contact discovery was first wired into `infra/audit_discovered.py`,
+    which ran once on 2026-08-19 and is scheduled by nothing. It was deployed
+    into code nobody executes: `Business.email` stayed empty while the
+    capability looked shipped, and production said so — `website_audited`
+    events stopped on the 19th while `website_verified` ran that morning.
+    """
+
+    def test_the_nightly_verification_reads_contacts(self) -> None:
+        import inspect
+
+        from atlas_kernel.mission import toolrunner
+
+        source = inspect.getsource(toolrunner.ToolAgent._audit)
+
+        assert "_remember_contacts(businesses, responses)" in source
+
+    def test_it_reads_the_body_this_pass_already_fetched(self) -> None:
+        """No second request. `audit_pass` already read these responses to
+        produce findings; the body is on the evidence."""
+        import inspect
+
+        from atlas_kernel.mission import toolrunner
+
+        source = inspect.getsource(toolrunner.ToolAgent._remember_contacts)
+
+        assert '(piece.observed or {}).get("body")' in source
+        for fetching in ("httpx", "requests", "session.open", "fetch("):
+            assert fetching not in source, fetching
+
+    def test_a_failure_to_read_contacts_does_not_lose_the_findings(self) -> None:
+        """The pass exists to produce findings. Losing them because one page's
+        contacts could not be read would be the worse outcome."""
+        import inspect
+
+        from atlas_kernel.mission import toolrunner
+
+        source = inspect.getsource(toolrunner.ToolAgent._remember_contacts)
+
+        assert "except Exception" in source
+        assert "log.exception" in source
+
+    def test_the_recipe_that_runs_nightly_is_the_one_audited(self) -> None:
+        """`verify-recorded-websites` is what the nightly recurrence names, and
+        it is the recipe whose `_audit` now reads contacts."""
+        from atlas_kernel.fabric import recipes
+        from atlas_kernel.mission.recurrence import RECURRENCES
+
+        nightly = next(r for r in RECURRENCES
+                       if r.id == "rec-nightly-website-verification")
+        recipe = recipes.get(nightly.recipe)
+
+        assert recipe.id == "verify-recorded-websites"
+        assert recipe.audit == "website", (
+            "contacts are read inside the audit step; a recipe that audits "
+            "nothing would fetch pages and read no addresses")
