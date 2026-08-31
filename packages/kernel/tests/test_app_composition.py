@@ -404,6 +404,31 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "the console does not show businesses that asked about themselves")
     assert source.count("${inboundBlock}") == 2, (
         "inbound is not rendered on both branches of the opportunities view")
+    # An allowance has three states and the console draws three. `.catch(() =>
+    # null)` collapsed "this tenant is not on a plan" into "nothing to show",
+    # so the card vanished and an operator whose metered work was about to be
+    # refused had no way to learn why.
+    assert "'no-plan'" in source and "'unreadable'" in source, (
+        "the console cannot tell a provisioning gap from a failed read")
+    assert "e.status === 409" in source, (
+        "the plan route raises 409 for a provisioning gap; nothing reads it")
+    assert "not on a plan" in source, (
+        "the provisioning gap is not named in the console")
+    assert "provisioning gap, not an" in source, (
+        "an operator must not read a provisioning gap as a spent balance")
+    # The most important operator decision in the commercial chain, and the
+    # console could not make it: `POST /api/missions/deliver` approves the
+    # opportunity and creates the mission, and nothing called it.
+    assert "/api/missions/deliver" in source, (
+        "an operator cannot approve an opportunity from the console")
+    approving = source[source.index("/api/missions/deliver"):][:200]
+    assert "signal_id" in approving, "the approval must name the opportunity"
+    for decided in ("recipe", "origin", "approved_scope"):
+        assert decided not in approving, (
+            f"the approval body carries {decided!r}; what the work is came from "
+            "the opportunity's own evidence and a caller must not redecide it")
+    assert "confirm(" in source[:source.index("/api/missions/deliver")][-900:], (
+        "approving work about a real business must not be one unguarded click")
     assert Path(CONSOLE / "index.html").stat().st_size < 122_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can

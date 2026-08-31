@@ -1448,6 +1448,12 @@ function opportunityCard(row) {
       ${next ? `<dt>Recommended</dt><dd>${esc(next.statement)}
         ${row.needs_approval ? pill('needs you', 'warn') : ''}</dd>` : ''}
     </dl>
+    ${next && row.needs_approval ? `<div class="actions">
+      <button data-approve-opportunity="${esc(row.id)}">Approve this</button>
+      <span class="note">Approving decides <em>that</em> the work happens. What
+        the work is came from this opportunity's own evidence and cannot be
+        changed here. Nothing is sent to the business.</span>
+      <span class="note" data-said="${esc(row.id)}"></span></div>` : ''}
     ${row.business_id ? `<p class="trail"><a
       href="#/discovery/${encodeURIComponent(row.business_id)}">See the evidence
       &rarr;</a></p>` : ''}
@@ -1491,6 +1497,37 @@ async function opportunities() {
       read. That is not the same as there being none.</p></div>`;
   }
   const rows = found.opportunities || [];
+
+  queueMicrotask(() => {
+    document.querySelectorAll('[data-approve-opportunity]').forEach((button) => {
+      const signal = button.dataset.approveOpportunity;
+      const said = document.querySelector(`[data-said="${signal}"]`);
+      button.addEventListener('click', async () => {
+        if (!confirm('Approve work for this business?\n\nIt creates the '
+                     + 'mission that carries out what this opportunity '
+                     + 'recommends. Nothing is sent to anybody.')) return;
+        /* Visible before the await: this creates a mission and the round trip
+           is not instant. */
+        button.disabled = true;
+        button.textContent = 'Approving…';
+        if (said) said.textContent = '';
+        try {
+          const mission = await API.post('/api/missions/deliver',
+                                         { signal_id: signal });
+          if (said) said.textContent = 'Mission ' + mission.mission_id + ' created.';
+          render();
+        } catch (e) {
+          button.disabled = false;
+          button.textContent = 'Approve this';
+          /* 422 means the opportunity's action names nothing deliverable and
+             409 that it is not approvable. Both are the system refusing for a
+             stated reason, not a failure to retry past. */
+          if (said) said.textContent = e.message;
+        }
+      });
+    });
+  });
+
   return `
     <header class="page"><h2>Opportunities</h2>
       <p class="lead">${rows.length
@@ -2112,10 +2149,18 @@ views.history = async () => {
 };
 
 views.settings = async () => {
+  /* Three answers from the plan route, not two. `.catch(() => null)` collapsed
+     "this tenant is not on a plan" into "nothing to show", so the card simply
+     vanished — and an operator whose metered work is about to be refused had
+     no way to learn why. 409 is the provisioning gap the route deliberately
+     raises; anything else is a read that failed. */
   const [me, health, plan] = await Promise.all([
     API.get('/auth/me').catch(() => null),
     API.get('/api/health').catch(() => null),
-    API.get('/api/customer/plan').catch(() => null),
+    API.get('/api/customer/plan')
+      .then((found) => ({ state: 'on-a-plan', found }))
+      .catch((e) => ({ state: e.status === 409 ? 'no-plan' : 'unreadable',
+                       detail: e.message })),
   ]);
   return `<header class="page"><h2>Settings</h2></header>
     <div class="grid">
@@ -2123,9 +2168,25 @@ views.settings = async () => {
         <p><code>${esc(me ? me.username : '—')}</code></p>
         <p class="note">Tenant <code>${esc((me && me.tenant_id) || '—')}</code></p>
         <p class="note">Scopes: ${esc(((me && me.scopes) || []).join(', '))}</p></div>
-      ${plan ? `<div class="card"><h3>Plan</h3><div class="stat">${esc(plan.plan)}</div>
-        <p class="note">${esc(plan.remaining)} of ${esc(plan.included_units)} units left.
-        ${esc(plan.note || '')}</p></div>` : ''}
+      <div class="card"><h3>Allowance</h3>${
+        plan.state === 'on-a-plan'
+          ? `<div class="stat">${esc(plan.found.plan)}</div>
+             <p class="note">${esc(plan.found.remaining)} of
+               ${esc(plan.found.included_units)} units left${
+               plan.found.reserved_for_essential
+                 ? ', ' + esc(plan.found.reserved_for_essential) + ' held back for essential work'
+                 : ''}.</p>
+             ${plan.found.resets_at ? `<p class="note">Resets ${when(plan.found.resets_at)}.</p>` : ''}`
+        : plan.state === 'no-plan'
+          ? `<div class="stat">${pill('not on a plan', 'warn')}</div>
+             <p class="note">This tenant has no allowance, so anything metered
+               refuses rather than running. That is a provisioning gap, not an
+               empty balance — nothing has been used up.</p>
+             <p class="note">Units, never money. There is no pricing in this
+               layer and no figure here claims to know one.</p>`
+          : `<div class="stat">${pill('unknown', 'warn')}</div>
+             <p class="note">The allowance could not be read, which is not the
+               same as there being none. ${esc(plan.detail || '')}</p>`}</div>
       ${health ? `<div class="card"><h3>Deployment</h3>
         <p>${pill(health.status)}</p>
         ${Object.entries(health.components || {}).map(([name, c]) =>
