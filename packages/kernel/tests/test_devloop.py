@@ -199,10 +199,16 @@ def test_a_review_is_read_from_what_the_reviewer_actually_wrote(text, expect):
     assert parsed and parsed["verdict"] == expect
 
 
-def test_an_unreadable_review_is_never_clean():
-    """Fails closed. The one failure that ships unreviewed code silently."""
-    assert agents.parse_review("...unexpected shape...", repo=Path(".")) is None
+def test_an_empty_review_is_never_clean():
+    """Fails closed on nothing at all.
+
+    Prose with no findings section *is* clean — that is decided by shape in
+    `test_a_clean_review_in_words_the_parser_had_not_seen_is_still_clean`. An
+    empty message is different: the reviewer said nothing, which establishes
+    nothing.
+    """
     assert agents.parse_review("", repo=Path(".")) is None
+    assert agents.parse_review("   \n  ", repo=Path(".")) is None
 
 
 def test_severity_comes_from_the_reviewers_own_p_level():
@@ -404,3 +410,58 @@ def test_the_evaluation_queue_holds_third_party_projects_unassessed(q):
                              why="duplicate")
     assert first == again, "the evaluation queue is not idempotent"
     assert q.evaluations()[0]["state"] == "UNEVALUATED"
+
+
+# ------------------------------- what the proving run found in the driver
+
+
+def test_a_clean_review_in_words_the_parser_had_not_seen_is_still_clean():
+    """The defect the first proving run hit, in the reviewer's own words.
+
+    Round two came back "The changes consistently scope provenance and approval
+    data ... without an evident regression." — a clean review. The parser knew
+    a list of clean phrases, did not recognise that one, and failed closed, so
+    a task that had actually passed was requeued.
+
+    Clean is decided by shape now: `codex exec review` prints a "Review
+    comment:" section when it has findings, so its absence is the verdict.
+    """
+    real = ("The changes consistently scope provenance and approval data to "
+            "the displayed recipient and draft, preserve historical context, "
+            "and add appropriate regression tests. The devloop accounting and "
+            "stop-reason handling also address the identified failure modes "
+            "without an evident regression.")
+    parsed = agents.parse_review(real, repo=Path("."))
+    assert parsed == {"verdict": "CLEAN", "findings": []}
+
+
+def test_a_review_that_announces_findings_and_parses_none_is_unreadable():
+    """The half that must keep failing closed.
+
+    A reviewer that says "Review comment:" and then writes something this
+    cannot read has findings nobody has seen. Reporting that clean is how
+    unreviewed code ships overnight.
+    """
+    assert agents.parse_review(
+        "Something is wrong here.\n\nReview comments:\n\n  (unparseable)",
+        repo=Path(".")) is None
+
+
+def test_a_task_refuses_to_start_on_a_dirty_tree(tmp_path, monkeypatch):
+    """The other defect the proving run exposed.
+
+    `_commit` stages everything, so edits made by hand while the loop ran were
+    committed under the task's name and reviewed as its work — and the reviewer
+    duly raised findings against code the task never touched.
+    """
+    import devloop.driver as drv
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="t", brief="b", origin="human")
+    task = q.claim(owner="d")
+    monkeypatch.setattr(drv, "_git",
+                        lambda *a, **k: (0, " M somebody_elses_file.py"))
+    driver = drv.Driver(q, drv.Limits(), repo=tmp_path)
+    assert driver.run_task(task) == State.FAILED
+    assert q.get(ident)["state"] == State.QUEUED, (
+        "a refused task must return to the queue, not be lost")

@@ -279,14 +279,22 @@ def parse_review(text: str, *, repo: Path) -> dict | None:
         })
     if findings:
         return {"verdict": "DEFECTS_FOUND", "findings": findings}
-    # No bullets. Clean only when the reviewer said so in the words it uses for
-    # it; anything else is unreadable rather than clean.
-    lowered = text.lower()
-    if any(phrase in lowered for phrase in
-           ("no issues", "no findings", "no review comments", "looks correct",
-            "no problems", "did not find")):
-        return {"verdict": "CLEAN", "findings": []}
-    return None
+    # No bullets. Whether that is clean is decided structurally, not by
+    # matching phrases: `codex exec review` prints a "Review comment:" section
+    # when it has something to say, so its absence is the reviewer stating it
+    # found nothing.
+    #
+    # The first version listed the wordings it knew and failed closed on the
+    # rest, which is the safe direction but wrong here — a real clean review
+    # ("...without an evident regression") was rejected as unreadable and the
+    # task was requeued. Failing closed on an unrecognised *shape* is right;
+    # failing closed on an unrecognised *sentence* is a parser guessing at
+    # prose.
+    if re.search(r"(?im)^\s*review comments?\s*:", text):
+        # It announced findings and none parsed. That is unreadable, and
+        # reporting it clean is how unreviewed code ships.
+        return None
+    return {"verdict": "CLEAN", "findings": []}
 
 
 def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,

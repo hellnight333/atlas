@@ -151,6 +151,21 @@ class Driver:
         """One task through the machine. Returns its terminal state."""
         started = time.monotonic()
         ident = task["id"]
+        # A dirty tree would be committed under this task's name and reviewed
+        # as its work. Refused rather than adopted: the review unit has to be
+        # the task's diff and nothing else.
+        readable, dirty = _git("status", "--porcelain", cwd=self.repo)
+        # Only when git actually answered. An unreadable status has not shown
+        # the tree is dirty, and the `changed` gate already reports a repo it
+        # cannot read as unmeasured rather than as a pass.
+        if readable == 0 and dirty:
+            self.q.move(ident, State.QUEUED,
+                        reason="the working tree was not clean when the task "
+                               "was claimed; the review unit must contain only "
+                               "this task's work")
+            log("REFUSED", task=ident, why="working tree not clean",
+                files=len(dirty.splitlines()))
+            return State.FAILED
         base = head_sha(self.repo)
         self.q.move(ident, State.BUILDING, reason=f"base {base[:12]}",
                     base_sha=base)
@@ -341,6 +356,18 @@ class Driver:
         return State.DONE
 
     def _commit(self, task: dict, round_no: int) -> None:
+        """Commit the task's work, and only the task's work.
+
+        `git add -A` swept whatever else was in the tree into the review unit,
+        and the proving run showed exactly what that costs: edits made by hand
+        while the loop was running were committed under the task's name and
+        reviewed as though the builder had written them. The reviewer then
+        raised findings against work the task never touched.
+
+        So the tree is required to be clean before a task starts, and anything
+        present at that point is the caller's to deal with rather than the
+        loop's to adopt.
+        """
         _git("add", "-A", cwd=self.repo)
         code, out = _git("diff", "--cached", "--quiet", cwd=self.repo)
         if code == 0:
