@@ -1282,7 +1282,7 @@ class ToolAgent:
         direction: stale and true beats fresh and invented.
         """
         from ..opportunity.audit_import import audit_event
-        from ..opportunity.website_audit import audit_html
+        from ..opportunity.website_audit import audit_html, reconcile
 
         record = getattr(self._repository, "record_event", None)
         latest = getattr(self._repository, "latest_audit", None)
@@ -1315,6 +1315,15 @@ class ToolAgent:
                 # history is immutable and the delta is worthless if the
                 # baseline moves.
                 before = latest(business_id) or {}
+                # An absence a better reading contradicts is not an absence.
+                # The first real pass produced five of them on one site in a
+                # night, because the reading it was compared against was a
+                # rendered browser and this one is a plain fetch.
+                read_by = f"recipe:{self._recipe.id}/http-fetch"
+                findings = reconcile(
+                    findings, previous=before.get("observations") or [],
+                    previous_read_by=str(before.get("read_by") or ""),
+                    current_read_by=read_by)
                 audit = {
                     "url": str(observed.get("url") or piece.source or ""),
                     "http_status": int(status),
@@ -1323,8 +1332,7 @@ class ToolAgent:
                     "audited_at": datetime.now(UTC).isoformat(),
                     "findings": [f.model_dump(mode="json") for f in findings],
                 }
-                record(audit_event(business_id, audit,
-                                   read_by=f"recipe:{self._recipe.id}/http-fetch"))
+                record(audit_event(business_id, audit, read_by=read_by))
                 written += 1
                 if self._compare_audit(business_id, before, audit):
                     compared += 1

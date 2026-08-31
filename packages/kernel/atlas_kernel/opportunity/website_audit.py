@@ -236,6 +236,56 @@ def _finding(feature: str, status: Status, evidence: str = "") -> Finding:
     )
 
 
+def reconcile(current: list[Finding], *, previous: list[dict],
+              previous_read_by: str, current_read_by: str) -> list[Finding]:
+    """Refuse to confirm an absence a better reading contradicts.
+
+    Measured on the first real pass, not predicted. One business went from
+    `present` to `not_found` on five features in a single night —
+    `booking_link`, `contact_form`, `meta_description`, `services_navigation`
+    and `viewport_meta`. A site does not lose its `<head>` overnight. The
+    earlier reading was a rendered browser and this one a plain fetch, and a
+    page whose markup is assembled client-side is very nearly empty to the
+    second.
+
+    So when the two readings were not made the same way, a feature that *was*
+    seen and is now missing is `UNVERIFIED`, not `NOT_FOUND`. That is the whole
+    meaning of the third state — "could not tell" — and this module exists
+    because telling a business their site lacks something it has is the fastest
+    way to lose the argument and the meeting.
+
+    Deliberately one-directional. `not_found → present` is left alone: a
+    reading that *sees* something is confirming it, and a richer reading
+    confirming a feature is not in doubt.
+
+    A previous reading whose method was never recorded — every audit written
+    before the field existed — counts as a different method. Unknown provenance
+    cannot establish that two readings are comparable, and treating it as
+    "probably the same" is how the false absence gets through.
+    """
+    if not previous:
+        return current
+    comparable = bool(current_read_by) and previous_read_by == current_read_by
+    if comparable:
+        return current
+    was = {str(row.get("feature") or ""): str(row.get("status") or "")
+           for row in previous}
+    reconciled: list[Finding] = []
+    for finding in current:
+        if (finding.status is Status.NOT_FOUND
+                and was.get(finding.feature) == Status.PRESENT.value):
+            reconciled.append(finding.model_copy(update={
+                "status": Status.UNVERIFIED,
+                "evidence": (
+                    f"not seen in this reading, and a previous reading "
+                    f"({previous_read_by or 'method not recorded'}) found it. "
+                    f"The two were not made the same way, so this establishes "
+                    f"nothing about the site.")[:300]}))
+            continue
+        reconciled.append(finding)
+    return reconciled
+
+
 def audit_html(html: str, *, url: str, page_bytes: int) -> list[Finding]:
     """Read one homepage and report what it demonstrably has.
 

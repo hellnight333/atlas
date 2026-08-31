@@ -39,6 +39,7 @@ from atlas_kernel.mission.toolrunner import ToolAgent
 from atlas_kernel.opportunity.crawler import BODY_KEPT
 from atlas_kernel.opportunity.models import Business, Evidence, EvidenceKind
 from atlas_kernel.opportunity.repository import OpportunityRepository
+from atlas_kernel.opportunity.website_audit import audit_html
 
 TENANT = "tenant-audit-freshness"
 
@@ -407,3 +408,103 @@ def test_an_audit_with_no_timestamp_is_unknown_age_not_ancient(repo):
     assert _age("") is None
     assert _age("not a date") is None
     assert _age(datetime.now(UTC).isoformat()) == 0
+
+
+# ------------------------------------- an absence a better reading contradicts
+
+
+def test_a_plain_fetch_does_not_contradict_a_rendered_reading(repo):
+    """The defect the first real production pass produced.
+
+    One business went from `present` to `not_found` on five features in a
+    single night — `booking_link`, `contact_form`, `meta_description`,
+    `services_navigation` and `viewport_meta`. A site does not lose its
+    `<head>` overnight; the earlier reading was Playwright and this one a plain
+    fetch, and a page assembled client-side is nearly empty to the second.
+
+    Five false claims, on their way to a health check that would have shown the
+    business each of them.
+    """
+    from atlas_kernel.opportunity.website_audit import Status, reconcile
+
+    previous = [{"feature": "viewport_meta", "status": "present"},
+                {"feature": "contact_form", "status": "present"},
+                {"feature": "structured_data", "status": "not_found"}]
+    current = audit_html(
+        "<html><head></head><body><p>rendered client-side</p></body></html>",
+        url="https://alwaha.test", page_bytes=60)
+    by_feature = {f.feature: f for f in current}
+    assert by_feature["viewport_meta"].status is Status.NOT_FOUND, "fixture"
+
+    reconciled = {f.feature: f for f in reconcile(
+        current, previous=previous,
+        previous_read_by="audit_discovered.py/browser",
+        current_read_by="recipe:verify-recorded-websites/http-fetch")}
+    assert reconciled["viewport_meta"].status is Status.UNVERIFIED
+    assert reconciled["contact_form"].status is Status.UNVERIFIED
+    assert "not made the same way" in reconciled["viewport_meta"].evidence
+    # One-directional. A reading that *sees* something is confirming it, and a
+    # feature the old reading missed stays exactly as this one found it.
+    assert reconciled["structured_data"].status is by_feature[
+        "structured_data"].status
+
+
+def test_two_readings_of_the_same_kind_still_contradict_each_other(repo):
+    """The negative control, and the reason this is not a blanket demotion.
+
+    A business that genuinely removes its contact form must still be recorded
+    as having removed it, or the audit can never report a real regression.
+    """
+    from atlas_kernel.opportunity.website_audit import Status, reconcile
+
+    same = "recipe:verify-recorded-websites/http-fetch"
+    previous = [{"feature": "viewport_meta", "status": "present"}]
+    current = audit_html("<html><head></head><body>x</body></html>",
+                         url="https://alwaha.test", page_bytes=40)
+    reconciled = {f.feature: f for f in reconcile(
+        current, previous=previous, previous_read_by=same, current_read_by=same)}
+    assert reconciled["viewport_meta"].status is Status.NOT_FOUND
+
+
+def test_a_previous_reading_of_unrecorded_method_is_not_assumed_comparable(repo):
+    """Every audit written before `read_by` existed says nothing about method.
+
+    Treating unknown provenance as "probably the same" is exactly how the false
+    absence gets through — all 396 historical rows are in that state.
+    """
+    from atlas_kernel.opportunity.website_audit import Status, reconcile
+
+    reconciled = {f.feature: f for f in reconcile(
+        audit_html("<html><head></head><body>x</body></html>",
+                   url="https://alwaha.test", page_bytes=40),
+        previous=[{"feature": "viewport_meta", "status": "present"}],
+        previous_read_by="",
+        current_read_by="recipe:verify-recorded-websites/http-fetch")}
+    assert reconciled["viewport_meta"].status is Status.UNVERIFIED
+    assert "method not recorded" in reconciled["viewport_meta"].evidence
+
+
+def test_the_pass_writes_the_reconciled_record_not_the_raw_one(repo):
+    """End to end: what lands on the timeline is what a health check reports."""
+    from atlas_kernel.opportunity.models import BusinessEvent
+
+    business = _business(repo)
+    try:
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="website", kind="website_audited",
+            actor="audit_discovered.py",
+            detail={"url": business.website, "audited_at": "2026-08-19T20:00:00Z",
+                    "observations": [{"feature": "viewport_meta",
+                                      "status": "present",
+                                      "evidence": "<meta name=viewport>"}]}))
+        # A shell page: everything the browser saw is invisible to a fetch.
+        _run_audit(repo, business,
+                   _evidence("<html><head></head><body>loading</body></html>",
+                             url=business.website))
+        fresh = {o["feature"]: o["status"]
+                 for o in repo.latest_audit(business.id)["observations"]}
+        assert fresh["viewport_meta"] == "unverified", (
+            "a claim the previous rendered reading contradicts reached the "
+            "timeline, and the health check reports from exactly this record")
+    finally:
+        _clean(business.id)
