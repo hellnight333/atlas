@@ -23,6 +23,13 @@ it is **whose failure it was**:
 Read-only, derived from the timeline. Nothing here re-audits: the nightly
 verification already revisits these, and duplicating it to produce a number
 would spend somebody else's bandwidth to make a report look complete.
+
+`Backlog` answers the question one step further on. Once the observations do
+refresh, most of them being older than a week is the next thing anybody
+notices — and on a population larger than one night's fetch that is the
+rotation, not a fault. So the age is reported beside the rate that drains it,
+and the part the rate does **not** explain is separated out, because that part
+is the only half worth acting on.
 """
 
 from __future__ import annotations
@@ -140,6 +147,153 @@ def measure(*, latest_audits: list, with_a_website: int) -> Coverage:
         never_audited=max(0, with_a_website - audited))
 
 
+#: The age the question arrives as: "most observation records are more than a
+#: week old". A threshold worth naming because it is not the interesting one —
+#: on a population bigger than one night's fetch, a week says nothing until it
+#: is read beside how long a full sweep takes.
+A_WEEK = 7
+
+
+@dataclass(frozen=True)
+class Backlog:
+    """Why an observation is as old as it is: the queue, or something else.
+
+    The nightly pass fetches a bounded number of sites, least recently verified
+    first. On a population larger than that bound, *most* observations being
+    older than a week is arithmetic rather than a fault: forty a night over
+    three hundred and fifty sites is a nine-night sweep, so an eight-day-old
+    reading is the rotation working exactly as declared. Reported as staleness
+    with nothing beside it, that number invites somebody to fix a cadence that
+    is not broken.
+
+    What the rotation cannot excuse is a record older than **one full sweep**.
+    The queue has been all the way round by then, so something else is true:
+    the pass reached the site and could record nothing, or the site never
+    enters the queue at all. Those are counted separately and never added to
+    the first — the same distinction `reevaluation` draws between a fact about
+    their site and a fact about our own checking, and summing them would hide
+    the only half anybody can act on.
+    """
+
+    #: What one sweep must cover: distinct fetchable addresses, counted the way
+    #: the queue itself counts them rather than by counting businesses. Two
+    #: businesses sharing a website are one fetch.
+    sites: int
+    #: How many of them one pass takes.
+    a_night: int
+    #: Whole days since each site's latest observation, one entry per site in
+    #: the queue; ``None`` for one that has never been observed.
+    observed_days_ago: tuple[int | None, ...]
+    #: Sites a pass reached since their last observation and wrote nothing for
+    #: — a truncated body, an error page, a refusal, a document that was not
+    #: HTML. Another turn of the queue does not clear these.
+    reached_without_observation: int = 0
+    #: Businesses holding an address no fetcher may be handed: `mailto:`, or no
+    #: scheme at all. Not observable at any cadence.
+    cannot_be_fetched: int = 0
+    #: Businesses whose website another business already holds. The queue
+    #: de-duplicates by address, so only one of them is ever fetched and the
+    #: rest carry whatever observations they were given elsewhere.
+    shares_an_address: int = 0
+
+    @property
+    def nights_for_a_full_sweep(self) -> int:
+        """How long the declared cadence takes to come back round.
+
+        At least one whenever there is anything to fetch, so "up to N days old
+        is the queue" is never read as "up to zero".
+        """
+        if self.sites <= 0 or self.a_night <= 0:
+            return 0
+        return max(1, -(-self.sites // self.a_night))
+
+    @property
+    def observed(self) -> tuple[int, ...]:
+        return tuple(d for d in self.observed_days_ago if d is not None)
+
+    @property
+    def never_observed(self) -> int:
+        return sum(1 for d in self.observed_days_ago if d is None)
+
+    @property
+    def older_than_a_week(self) -> int:
+        return sum(1 for d in self.observed if d > A_WEEK)
+
+    @property
+    def older_than_a_full_sweep(self) -> int:
+        """The residue the cadence does not explain.
+
+        Nothing here can be answered with "it has not come round yet": by
+        definition it has.
+        """
+        nights = self.nights_for_a_full_sweep
+        return sum(1 for d in self.observed if d > nights) if nights else 0
+
+    @property
+    def explained_by_the_backlog(self) -> int:
+        """Older than a week, and no older than one turn of the queue."""
+        return max(0, self.older_than_a_week - self.older_than_a_full_sweep)
+
+    @property
+    def the_cadence_explains_the_age(self) -> bool:
+        """Whether every old record is one the queue has yet to reach.
+
+        False the moment a single reading is older than a full sweep, because
+        one that old is a different question from the cadence and reading it as
+        the cadence is how it stays unanswered.
+        """
+        return self.older_than_a_full_sweep == 0
+
+    def summary(self) -> dict:
+        nights = self.nights_for_a_full_sweep
+        return {
+            "sites": self.sites,
+            "a_night": self.a_night,
+            "nights_for_a_full_sweep": nights,
+            "observed": len(self.observed),
+            "never_observed": self.never_observed,
+            "older_than_a_week": self.older_than_a_week,
+            "explained_by_the_backlog": self.explained_by_the_backlog,
+            "older_than_a_full_sweep": self.older_than_a_full_sweep,
+            "the_cadence_explains_the_age": self.the_cadence_explains_the_age,
+            "reached_without_observation": self.reached_without_observation,
+            "cannot_be_fetched": self.cannot_be_fetched,
+            "shares_an_address": self.shares_an_address,
+            "note": (
+                f"{self.a_night} a night over {self.sites} site(s) is a "
+                f"{nights}-night sweep, so an observation up to {nights} day(s) "
+                f"old is the rotation and not a fault — "
+                f"{self.explained_by_the_backlog} of the "
+                f"{self.older_than_a_week} older than a week are that. "
+                f"{self.older_than_a_full_sweep} are older than a full sweep, "
+                f"which the cadence does not explain; of the population "
+                f"{self.reached_without_observation} were reached by a pass "
+                f"that could record nothing, "
+                f"{self.cannot_be_fetched} hold an address that cannot be "
+                f"fetched and {self.shares_an_address} share an address with "
+                f"another business, and none of those three age out."),
+        }
+
+
+def backlog(*, sites: int, a_night: int,
+            observed_days_ago: list[int | None] | tuple[int | None, ...],
+            reached_without_observation: int = 0, cannot_be_fetched: int = 0,
+            shares_an_address: int = 0) -> Backlog:
+    """The cadence read as arithmetic, from counts the repository has.
+
+    Pure, and separate from the query for the reason `measure` is: the
+    interesting cases — a sweep longer than a week, a record older than one —
+    are ones a test has to be able to construct without a population.
+    """
+    return Backlog(
+        sites=max(0, int(sites)), a_night=max(0, int(a_night)),
+        observed_days_ago=tuple(None if d is None else max(0, int(d))
+                                for d in observed_days_ago),
+        reached_without_observation=max(0, int(reached_without_observation)),
+        cannot_be_fetched=max(0, int(cannot_be_fetched)),
+        shares_an_address=max(0, int(shares_an_address)))
+
+
 @dataclass(frozen=True)
 class Reachability:
     """Who Qevik could actually write to, by channel.
@@ -187,5 +341,6 @@ def reachable(*, businesses: int, with_email: int, with_phone: int,
                         by_phone=with_phone, by_neither=with_neither)
 
 
-__all__ = ["LEGACY_OUR_FAILURE", "OUR_FAILURE_FIELD", "Coverage",
-           "Reachability", "measure", "ours", "reachable"]
+__all__ = ["A_WEEK", "LEGACY_OUR_FAILURE", "OUR_FAILURE_FIELD", "Backlog",
+           "Coverage", "Reachability", "backlog", "measure", "ours",
+           "reachable"]

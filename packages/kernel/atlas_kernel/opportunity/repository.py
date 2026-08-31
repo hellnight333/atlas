@@ -117,6 +117,16 @@ OUTREACH_EVENT = "outreach_approved_for_manual_send"
 #: marks it — a second spelling would silently stop the rotation, and the run
 #: would still report success.
 VERIFIED_EVENT = "website_verified"
+
+#: How many sites one verification pass fetches. Bounded because a market that
+#: grows to ten thousand businesses would otherwise be fetched in one mission,
+#: which is neither polite to them nor recoverable for us.
+#:
+#: Named rather than repeated as a default in two files, because it is half of
+#: every honest statement about freshness: an observation is not stale or fresh
+#: on its own, it is old relative to how long this rate takes to come back
+#: round. `coverage.backlog` reads it for exactly that.
+SITES_A_NIGHT = 40
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -881,6 +891,17 @@ class OpportunityRepository:
         Reported as a distribution rather than one number, because "the newest
         audit is from today" is true of a population whose median is a
         fortnight old.
+
+        And the distribution alone is still not an answer. Once the
+        observations did start refreshing, most of them were more than a week
+        old — which on 350 sites at 40 a night is what a nine-night rotation
+        looks like, not a fault. So `backlog` carries the age beside the rate
+        that drains it and separates the part the rate does **not** explain:
+        a record older than a full sweep, a site the pass reached and could
+        record nothing for, an address nothing can fetch, an address another
+        business already holds. Those four are the only half worth acting on,
+        and without this they were indistinguishable from a queue doing its
+        job.
         """
         with SessionLocal() as session:
             row = session.execute(
@@ -918,7 +939,75 @@ class OpportunityRepository:
             "note": ("`website_verified` is not this. It records that a site "
                      "had its turn and whether it answered; it carries no "
                      "observations and must never be read as a fresh audit."),
+            "backlog": self.audit_backlog(),
         }
+
+    def audit_backlog(self) -> dict:
+        """The age of the observations, read against the rate that refreshes them.
+
+        The population is counted the way `businesses_by_website` counts it —
+        distinct fetchable addresses, one fetch per address — because a sweep
+        length taken over a different population is a sweep length that is
+        wrong. Two businesses sharing a website are one night's work and one
+        observation, and counting them as two would report a rotation that
+        looks slower than it is.
+
+        Per site rather than in aggregate, so the arithmetic lives in
+        `coverage.backlog` where a test can construct the cases that matter
+        without a population. A few hundred rows.
+        """
+        from .coverage import backlog
+
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                WITH site AS (
+                    SELECT DISTINCT ON (website) id
+                    FROM atlas_businesses
+                    WHERE website IS NOT NULL AND website <> ''
+                      AND (website LIKE 'http://%' OR website LIKE 'https://%')
+                    ORDER BY website, first_seen_at
+                ), audited AS (
+                    SELECT DISTINCT ON (business_id) business_id, at
+                    FROM atlas_business_events WHERE kind = 'website_audited'
+                    ORDER BY business_id, at DESC
+                ), verified AS (
+                    SELECT business_id, max(at) AS at
+                    FROM atlas_business_events WHERE kind = :verified
+                    GROUP BY business_id
+                )
+                SELECT
+                  floor(extract(epoch FROM now() - audited.at) / 86400)::int
+                    AS days_ago,
+                  (verified.at IS NOT NULL
+                   AND (audited.at IS NULL OR verified.at > audited.at))
+                    AS reached_unread
+                FROM site
+                LEFT JOIN audited ON audited.business_id = site.id
+                LEFT JOIN verified ON verified.business_id = site.id
+                """), {"verified": VERIFIED_EVENT}).mappings().all()
+            excluded = session.execute(
+                text("""
+                SELECT
+                  (SELECT count(*) FROM atlas_businesses
+                    WHERE website IS NOT NULL AND website <> ''
+                      AND website NOT LIKE 'http://%'
+                      AND website NOT LIKE 'https://%') AS cannot_be_fetched,
+                  (SELECT count(*) FROM atlas_businesses
+                    WHERE website LIKE 'http://%'
+                       OR website LIKE 'https://%') AS fetchable
+                """)).mappings().first()
+        # Every business holding a fetchable address, minus the addresses. The
+        # queue de-duplicates by website, so the difference is businesses no
+        # pass will ever reach however long it runs.
+        sharing = max(0, int(excluded["fetchable"] or 0) - len(rows))
+        return backlog(
+            sites=len(rows), a_night=SITES_A_NIGHT,
+            observed_days_ago=[row["days_ago"] for row in rows],
+            reached_without_observation=sum(1 for row in rows
+                                            if row["reached_unread"]),
+            cannot_be_fetched=int(excluded["cannot_be_fetched"] or 0),
+            shares_an_address=sharing).summary()
 
     def evidence_changes_since(self, business_id: str, since) -> list[dict]:
         """What a later reading found different, after some moment.
@@ -1541,7 +1630,7 @@ class OpportunityRepository:
             if row["detected_at"] else "",
         }
 
-    def businesses_by_website(self, *, limit: int = 40,
+    def businesses_by_website(self, *, limit: int = SITES_A_NIGHT,
                               tenant: TenantId | None = None
                               ) -> dict[str, Business]:
         """The websites Qevik has evidence for, and whose they are.
@@ -1573,6 +1662,16 @@ class OpportunityRepository:
         for every site a verification pass **attempted** — not only for the ones
         that answered. A site that refuses robots or times out has still had its
         turn, and leaving it unmarked would let it hold up the queue for ever.
+
+        **An address the fetcher may not be handed is excluded here, not
+        afterwards.** It used to be dropped in Python, below, after the `LIMIT`
+        had already spent a slot on it — and because nothing fetches it,
+        nothing marks it verified, so it sorted `NULLS FIRST` and took that
+        same slot again the next night, and every night after. A handful of
+        scheme-less rows quietly narrowed a forty-site pass; enough of them
+        would have stopped the rotation dead while the run still reported
+        success. The Python guard below stays as the guard on what is handed to
+        the fetcher: this one is about not wasting the night.
         """
         with SessionLocal() as session:
             rows = session.execute(
@@ -1581,6 +1680,7 @@ class OpportunityRepository:
                     SELECT DISTINCT ON (website) *
                     FROM atlas_businesses
                     WHERE website IS NOT NULL AND website <> ''
+                      AND (website LIKE 'http://%' OR website LIKE 'https://%')
                     ORDER BY website, first_seen_at
                 ) AS site
                 LEFT JOIN (
@@ -1607,7 +1707,7 @@ class OpportunityRepository:
             found[website] = self._business_from_row(row)
         return found
 
-    def recorded_websites(self, *, limit: int = 40,
+    def recorded_websites(self, *, limit: int = SITES_A_NIGHT,
                           tenant: TenantId | None = None) -> list[str]:
         """The allow-list a verification recipe fetches.
 
