@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 7e9c4a2 (main)
-Gate result: 3819 passed, 33 skipped, 0 failed
+Repository revision: 1bd4ad0 (main)
+Gate result: 3839 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -55,7 +55,11 @@ The candidates, with why each is not obviously next:
 4. **Publishing the eight remaining health checks** — deterministic and
    valuable inventory for the moment sending works, but each one is a
    commercial decision to approach that business. Now doable from the console.
-5. **Watch the recovery** — `GET /api/missions/coverage` reports 43 businesses
+5. **Close the discovery-provenance gap (B-12)** — 353 of 412 businesses have
+   no sighting, so no discovery state and no `claims_about_the_world`. The feed
+   now says so; the gap is not closed. Deterministic, no external dependency,
+   and it is what makes the discovery layer honest rather than merely quiet.
+6. **Watch the recovery** — `GET /api/missions/coverage` reports 43 businesses
    blocked by our own failed checks. The nightly pass revisits them; the number
    falling is the measurement. Nothing to build, and re-auditing by hand would
    spend somebody else's bandwidth to produce a figure the schedule will give
@@ -108,6 +112,18 @@ An empty result usually means a measurement failed. Ask whose failure it was.
   `NO_SENDING_IDENTITY`.
 - Five workers registered and fresh.
 - `qevik.ai` MX, SPF, DMARC and DKIM all CONFIRMED_ABSENT, resolver readable.
+
+## What the production data said to fix, in order found
+
+Three batches, three defects, none visible from the code:
+
+1. Six failed missions each reported ending because a "report was written".
+2. A shared browser page made Qevik record that 43 real businesses had dead
+   websites.
+3. The contact cooldown could be stepped around by duplicate business records —
+   four phone numbers across nine records, each with its own 14-day window.
+
+Every one was found by reading what the running system produced.
 
 ## Next execution batch
 

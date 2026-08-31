@@ -18,6 +18,8 @@ the project blocked; every row names what can continue instead.
 
 | B-11 | No tenant is on a plan | PRODUCT_DECISION | C-27, C-28 | DQ-006 | none — it is a decision, not a credential | Yes — everything except metered work | An allowance is defined for Qevik's own operating tenant | OPEN |
 
+| B-12 | 353 businesses have no sighting, so no discovery provenance | CODE | C-38 | The Places import path writes no sighting | none | Yes | Every business carries a sighting and a discovery state | OPEN |
+
 ## The rule this file exists to enforce
 
 Ten open blockers and **none of them stops the next batch**. B-01 and B-02 hold

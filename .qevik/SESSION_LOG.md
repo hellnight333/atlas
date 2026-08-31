@@ -135,6 +135,40 @@ only producer putting a false negative into production state.
 `credentials/probes.py` already separate a producer failure from a fact about
 the subject.
 
+## 2026-08-31 — Session 4 (discovery audit)
+
+### Traced
+The discovery stage against production: 412 businesses, 359 with a website, 349
+with a phone, 53 with neither. Sources: google-places 352 (100% with a site),
+openstreetmap 59 (10%). Funnel: 412 discovered → 352 audited → 126 with a
+signal → 4 approved → 3 published.
+
+### Found and fixed
+- **The contact cooldown could be stepped around.** Keyed on `business_id`
+  alone, and four phone numbers in production are held by nine business
+  records. One phone could have received three messages inside the fourteen-day
+  window, each passing the guard. Now keyed on the recipient as well, with
+  addresses normalised so punctuation cannot defeat it. Proven on a real shared
+  number.
+- **The discovery feed could not be empty honestly.** 353 of 412 businesses
+  have no sighting at all and every sighting is `KNOWN`, which the feed
+  excludes — so it is permanently empty and said "the scan ran and found
+  nothing". Same shape as the browser defect. It now says which kind of empty
+  it is.
+
+### Not a defect
+`roasterscoffee.ae` holds six business records with six different phones. Those
+are six branches of a chain sharing one website, not duplicates. Merging them
+would be wrong.
+
+### Corrected
+A gate reported one failure that passed in isolation — two gates were running
+at once against the same database. My error; the clean run is the result.
+
+### Human boundary
+HA-001 and HA-002 cannot be executed by Claude: the Cloudflare zone and the
+mailbox password are Ayoub's, and the first send is an irreversible external act
+needing his authorisation.
+
 ### Next
-Watch `we_failed` fall. Beyond that the valuable step remains the first real
-send — HA-001 and HA-002.
+B-12: 353 businesses have no sighting. Deterministic and unblocked.

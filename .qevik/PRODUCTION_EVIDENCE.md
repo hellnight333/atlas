@@ -31,6 +31,9 @@ All rows measured on qevik-core-01 unless stated.
 | E-18 | C-02 | The rotation will recover them without help | 34 of the 43 have never been marked `website_verified`, so they sort to the front of a queue holding ~119 unaudited sites at 40/night | PRODUCTION-VERIFIED | 2026-08-31 | 7e9c4a2 | Read from the ledger. **No re-audit was run to manufacture evidence** — the schedule already does it |
 | E-19 | C-03 | What the defect cost the funnel | Businesses whose latest audit says unreachable carry a signal 6.6% of the time (4 of 61) against 22.4% (60 of 268) for reachable ones | PRODUCTION-VERIFIED | 2026-08-31 | 7e9c4a2 | Roughly ten opportunities never created. An estimate from real rates, **not** a claim that ten specific businesses were lost |
 
+| E-20 | C-37 | The cooldown could be stepped around by duplicate records | 4 phone numbers held by 9 business records. On a real 3-record number: old rule blocked the 2nd = False, new rule = True, unrelated number = not blocked | PRODUCTION-VERIFIED | 2026-08-31 | 1bd4ad0 | Exercised against production data. **No message was sent** — the history has zero sends, so the check was made by recording one in memory |
+| E-21 | C-38 | Most businesses have no recorded provenance | 412 businesses, 59 with a sighting, 353 without; every sighting is `KNOWN` | PRODUCTION-VERIFIED | 2026-08-31 | 1bd4ad0 | The discovery feed is permanently empty and now explains why. The 352 Google Places businesses arrived by a path that writes no sighting |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not
