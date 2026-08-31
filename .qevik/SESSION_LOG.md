@@ -78,6 +78,31 @@ Qevik's own operating tenant on one would record Qevik as a customer of itself.
 An internal tenant kind is the honest shape and nobody has decided what it is
 allowed. B-11 raised.
 
+### Also completed — the audit was lying about 64 businesses
+- One `PlaywrightSession` is started once and the audit loops over businesses
+  calling `open()` on the same page. `wait_until="domcontentloaded"` returns
+  while a page may still be navigating, so the next business's `goto` cancelled
+  the previous one — and Playwright raised against the **previous** call, whose
+  business got the blame.
+- 64 of 396 audits were recorded `reachable=False`; 43 carry "interrupted by
+  another navigation". Among them Crate and Barrel and Interiors, whose sites
+  plainly work. Each was dropped from the funnel: no observations, no findings,
+  no opportunity, no health check.
+- `open()` now starts each navigation on a fresh page. `browser/failures.py`
+  separates failures that can only be ours from a site that did not answer, and
+  the first records `reachable=None` — not established, which is not down. The
+  classifier is conservative: DNS failures, refused connections, bad
+  certificates and timeouts stay findings about the site.
+- Proven on production: 7 of 7 previously-unreachable sites answered 200 with
+  20 observations each.
+
+### Corrected
+The previous session concluded that nothing was both ready and worth doing.
+That was reached by asking which tracks were open rather than by looking at what
+the running system was producing. **Read the data before concluding there is
+nothing to do.**
+
 ### Next
-No track is both ready and clearly worth doing. The next genuinely valuable step
-is the first real send — HA-001 and HA-002.
+36 businesses still carry a `reachable=False` our browser wrote; they re-audit
+in nightly rotation and the recovery is worth counting afterwards. Beyond that
+the valuable step remains the first real send — HA-001 and HA-002.

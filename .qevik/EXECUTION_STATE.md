@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 04c1e99 (main)
-Gate result: 3792 passed, 33 skipped, 0 failed
+Repository revision: ec55f67 (main)
+Gate result: 3806 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -35,10 +35,15 @@ None in progress. The health-check slice closed at its external boundary.
 Ranked by the selection rules in the execution controller (§17 of the memory
 spec). See `CAPABILITY_LEDGER.md` for evidence behind each.
 
-**Nothing is both ready and clearly worth doing next**, which is itself the
-finding. Every remaining track is one of: waiting on a decision, waiting on a
-credential, or building ahead of demand that does not exist. The candidates,
-with why each is not obviously next:
+The last batch's reading — that nothing was both ready and worth doing — was
+wrong, and the way it was wrong is worth remembering: it was reached by asking
+which *tracks* were open rather than by looking at what the running system was
+actually producing. Reading production data found a defect that had dropped 16%
+of the audited population from the funnel.
+
+**Look at the data before concluding there is nothing to do.**
+
+The candidates, with why each is not obviously next:
 
 1. **CRM pipeline (C-26)** — capture landed; qualification and stages have not.
    Zero real inbound rows exist, so a pipeline would be a shape with nothing in
@@ -50,6 +55,10 @@ with why each is not obviously next:
 4. **Publishing the eight remaining health checks** — deterministic and
    valuable inventory for the moment sending works, but each one is a
    commercial decision to approach that business. Now doable from the console.
+5. **Measure the re-audit recovery** — 36 businesses still carry a
+   `reachable=False` our browser wrote. They re-audit in nightly rotation, and
+   how many recover into opportunities is worth counting once they have. Ready
+   now, but the answer arrives on its own schedule.
 
 The honest reading: the next genuinely valuable step is **not** more capability.
 It is the first real send, and that is HA-001 and HA-002.

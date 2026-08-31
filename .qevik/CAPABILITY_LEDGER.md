@@ -12,7 +12,7 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | ID | Capability | Track | Code | Tests | Integration | UI | Deploy | Production | Commercial | Status | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | C-01 | Business discovery | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 329 `business_discovered` |
-| C-02 | Website evidence audit | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 396 `website_audited`, 240 `website_verified`, 352 screenshots |
+| C-02 | Website evidence audit | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 396 `website_audited`, 240 `website_verified`, 352 screenshots. **64 were recorded unreachable, 43 of them by our own browser** — fixed 2026-08-31, proven on 7 of 7; the rest re-audit in nightly rotation |
 | C-03 | Opportunity detection | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 45 `prospect_scored`; 108 open signals |
 | C-04 | Website generation | Website | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 20 `website_demo_published`, all live |
 | C-05 | Artefact review | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 6 `artefact_reviewed` |
