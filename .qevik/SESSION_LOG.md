@@ -318,3 +318,64 @@ blocked only on `NO_SENDING_IDENTITY`.
 The blockers are HA-001 and HA-002, both Ayoub's. `website_audited` has not run
 since 2026-08-19 — the nightly pass writes `website_verified`, which carries
 `{answered, findings}` and no observations — so fact 3 is honest but ageing.
+
+## `website_audited` had no scheduled producer, and never had one
+
+The finding was reported as "the audit stopped running on 2026-08-19". It had
+not stopped. It had never started.
+
+`rec-nightly-website-verification` runs `verify-recorded-websites` daily and
+completed on 08-27, 28, 29, 30 and 31. It calls `verification.audit_pass`,
+which returns `Finding`s — and a finding is an **absence**. The three-state
+record everything else reads comes from `website_audit.audit_html`, whose only
+callers were `infra/audit_discovered.py` (336 events, one day, Playwright) and
+`infra/import_audits.py` reading a JSON file (60 more). Neither is in
+`RECURRENCES`; the host's only timers are backup and market-scan.
+
+So the defects refreshed nightly and the observations stood still. 319 of 352
+businesses had been verified *since* their last observations record, and the
+health check — which reads `latest_audit()` and refuses without observations —
+was reporting twelve-day-old evidence beside signals computed that night. One
+commercial decision, two vintages.
+
+The fix is one call at the layer that already runs: the same `audit_html` over
+the bodies the pass already holds, written through the same
+`audit_import.audit_event`. No second engine, no second fetch, no new
+schedule. The cadence is the existing recurrence — 40 sites a night,
+least-recently-verified first, so about nine nights for the 359 recorded sites.
+That is the existing rule and no new one was invented.
+
+### The first real pass found the next defect in one night
+
+Seven observation records written, three comparisons — and two of the seven
+carried claims the previous reading contradicts. Harman House Dubai Mall lost
+`contact_form`, `booking_link`, `services_navigation`, `meta_description` and
+`viewport_meta`; Marina Flowers lost `arabic`. A site does not lose its
+`<head>` overnight: the 2026-08-19 reading was a rendered browser and this one
+a plain fetch, and a page assembled client-side is nearly empty to the second.
+
+**Both businesses have an open opportunity**, so this was not theoretical — a
+health check approved that day would have shown each of them five or six things
+they have.
+
+`reconcile` demotes `not_found` to `unverified` when two readings were not made
+the same way, which is what the third state means. One-directional:
+`not_found → present` is a confirmation and is left alone, and two readings of
+the same method still contradict each other, so a real regression is still
+recorded. A previous reading whose method was never recorded counts as
+different — all 396 historical rows are in that state.
+
+### What was not done
+
+Nothing downstream was invalidated. `reevaluation.compare` already owned this
+policy and is the right one; it appends `business_reevaluated` and overwrites
+nothing. Through both production passes the commercial records were unchanged:
+16 messages, 2 approved, 0 sent, 5 published. An approved message whose
+evidence moves is a decision for a person, and a nightly pass that withdrew an
+approval would be making it for them.
+
+### Next
+Whether an approved-but-unsent message should be flagged when the evidence
+under it has since changed is a **product decision**, and it is recorded as one
+rather than answered. The deterministic half — stating, per prospect, whether
+the evidence moved after the approval — is the next slice.

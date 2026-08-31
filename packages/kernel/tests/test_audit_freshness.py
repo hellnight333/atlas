@@ -508,3 +508,41 @@ def test_the_pass_writes_the_reconciled_record_not_the_raw_one(repo):
             "timeline, and the health check reports from exactly this record")
     finally:
         _clean(business.id)
+
+
+def test_an_audit_that_does_not_say_when_it_read_still_has_an_age(repo):
+    """336 of the audits on file carry no reading time.
+
+    A reader with only `audited_at` has to choose between calling them undated
+    — so every stale record shows no age at all, which is exactly the 346 this
+    slice exists to surface — or calling the write time a reading time, which
+    is the same lie pointing the other way. It reports both and says which.
+    """
+    from atlas_kernel.opportunity.dossier import assemble
+    from atlas_kernel.opportunity.models import BusinessEvent
+
+    business = _business(repo)
+    try:
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="website", kind="website_audited",
+            actor="audit_discovered.py",
+            detail={"url": business.website,
+                    "observations": [{"feature": "viewport_meta",
+                                      "status": "present", "evidence": "x"}]}))
+        audit = repo.latest_audit(business.id)
+        assert not audit.get("audited_at")
+        assert audit["recorded_at"], "a row always knows when it was written"
+
+        observed = assemble(business.id, memory=repo,
+                            tenant=TENANT)["answers"]["observed"]
+        assert observed["days_old"] == 0
+        assert "does not say when the page was read" in observed["age_is"]
+
+        # Negative control: an audit that does say gets the reading time and
+        # says so, which is how the two are told apart on the screen.
+        _run_audit(repo, business, _evidence(PAGE, url=business.website))
+        fresh = assemble(business.id, memory=repo,
+                         tenant=TENANT)["answers"]["observed"]
+        assert fresh["age_is"] == "when the page was read"
+    finally:
+        _clean(business.id)

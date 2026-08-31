@@ -25,6 +25,8 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-12 | Outreach approval | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Fingerprint-bound; 409 on mismatch |
 | C-13 | **SMTP delivery** | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | **BLOCKED** | HA-001, HA-002 — **and B-13: 0 of 412 businesses carry an email address, so clearing those two sends to nobody**. Zero messages sent, ever |
 | C-39 | Places extractor | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | Replayed a real production `place_id`; no novelty claim, no city, no country, no phone |
+| C-45 | Cross-method reconciliation | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 6 false absences withdrawn across 2 businesses, both with an open opportunity |
+| C-44 | Observation freshness | Control plane | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | The nightly pass writes the three-state record; 7 on the first run, cadence ~9 nights for 359 sites |
 | C-43 | Publication offer recovery | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 4 of 5 publications recovered what they published from the mission's recipe; 3 of 3 businesses now compose, against 1 of 3 before |
 | C-42 | Prospect dossier | Control plane | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | Thirteen facts, each read from its owner. Verified on four real prospects |
 | C-41 | Contact discovery | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 96 pages read, 69 email-contactable (72%) by browser. **Wired into the nightly pass and proven: one run populated 19 addresses with 19 provenance events**, `email_is_addressable` true for the first time |

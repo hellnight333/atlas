@@ -167,7 +167,16 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
             # Empty on every record written before the field existed, and that
             # stays unknown rather than being assumed to be either kind.
             read_by=audit.get("read_by", ""),
-            days_old=_age(audit.get("audited_at", "")),
+            recorded_at=audit.get("recorded_at", ""),
+            # From the reading time when there is one, and from the write time
+            # when there is not — 336 of the audits on file carry no reading
+            # time. Which of the two it is, said out loud: a write time is an
+            # upper bound on the age of the reading, not the age itself.
+            days_old=_age(audit.get("audited_at")
+                          or audit.get("recorded_at", "")),
+            age_is=("when the page was read" if audit.get("audited_at")
+                    else "when the record was written; this audit does not say "
+                         "when the page was read"),
             observations=observations)
 
     # 4. What the claim rests on.

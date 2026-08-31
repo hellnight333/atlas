@@ -649,15 +649,28 @@ class OpportunityRepository:
         site is fine because nobody looked.
         """
         with SessionLocal() as session:
-            found = session.execute(
+            row = session.execute(
                 text("""
-                SELECT detail FROM atlas_business_events
+                SELECT detail, at FROM atlas_business_events
                 WHERE kind = 'website_audited' AND business_id = :business
                 ORDER BY at DESC LIMIT 1
                 """),
                 {"business": business_id},
-            ).scalar()
-        return _decoded(found) or {}
+            ).mappings().first()
+        if row is None:
+            return {}
+        found = _decoded(row["detail"]) or {}
+        if not found:
+            return {}
+        # When the row was written, which is not when the page was read.
+        #
+        # Kept separate rather than filled into `audited_at`. The 336 audits
+        # `infra/audit_discovered.py` wrote carry no reading time at all, and a
+        # reader with only one field would have to choose between calling them
+        # undated — so every stale record shows no age — or calling the write
+        # time a reading time, which is the same lie in the other direction.
+        found["recorded_at"] = row["at"].isoformat() if row["at"] else ""
+        return found
 
     def sighting_coverage(self) -> dict:
         """How many businesses the sighting layer actually knows about.

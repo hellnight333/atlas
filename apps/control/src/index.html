@@ -2075,7 +2075,8 @@ const ANSWER = {
     <span class="note">of ${a.checked}, ${when(a.audited_at)}</span>
     ${a.days_old !== null && a.days_old > 7
       ? pill(a.days_old + ' days old', 'warn') : ''}
-    ${a.read_by ? '' : pill('read method not recorded', 'wait')}`,
+    ${a.read_by ? '' : pill('read method not recorded', 'wait')}
+    <span class="owner">age is ${esc(a.age_is)}</span>`,
   evidence: (a) => `${a.fingerprints.length} evidence fingerprint(s),
     ${a.findings.length} recorded finding(s)`,
   produced: (a) => `${esc(OFFER_NAME[a.offer] || a.offer || 'not recorded')}
