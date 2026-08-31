@@ -190,6 +190,12 @@ class Backlog:
     still reported beside the measured rate, because a pass managing half of
     what it was asked for is its own finding.
 
+    And a rotation excuses an age only as far as **the sweep it was promised
+    at**. A pass managing a seventh of its rate measures a sixty-two-night
+    rotation rather than a nine-night one, and taking that at face value would
+    hand the worst-performing scheduler the longest alibi. So the excuse is
+    capped at the promised sweep and the shortfall is reported as itself.
+
     What a rotation cannot excuse is a record older than **one full sweep**.
     The queue has been all the way round by then, so something else is true:
     the pass reached the site and could record nothing, or the site never
@@ -290,12 +296,22 @@ class Backlog:
         that long is arithmetically capable of excusing any age at all — the
         same false reassurance the configured rate used to give, arrived at
         from the other direction. So a sweep only accounts for an age while the
-        pass is running at the rate the sweep was promised at.
+        pass is running at the rate the sweep was promised at, which is what
+        `nights_the_rotation_explains` enforces and this reports.
+
+        One night's tolerance, and exactly one. The window is a whole number of
+        nights and the pass runs at some hour inside it, so a run that slips
+        past midnight lands two runs in one night and none in another; a
+        `>= over_nights × expected` test would call that a degraded pass every
+        time the clock drifted. Anything short of `over_nights - 1` full nights
+        is a pass that genuinely missed one, which is worth saying.
 
         Unmeasured is not a claim of falling behind, and reads true.
         """
-        observed = self.a_night_observed
-        return True if observed is None else observed >= self.a_night_expected
+        if self.verified_recently is None or self.over_nights <= 0:
+            return True
+        return self.verified_recently >= (self.a_night_expected
+                                          * max(1, self.over_nights - 1))
 
     @property
     def nights_for_a_full_sweep(self) -> int:
@@ -305,10 +321,52 @@ class Backlog:
         is the queue" is never read as "up to zero". Zero means no sweep
         completes — nothing to fetch, or nothing fetching — and is never a
         sweep of length zero.
+
+        The honest length, reported as it is even when it is enormous: a queue
+        that takes sixty-two nights is itself the finding. What it is *not* is
+        a licence to excuse sixty-two-day-old records — see
+        `nights_the_rotation_explains`.
         """
         if not self.a_sweep_completes:
             return 0
         return max(1, math.ceil(self.sites / self.a_night_effective))
+
+    @property
+    def nights_a_promised_sweep_takes(self) -> int:
+        """How long a sweep takes when the pass runs at the rate it was asked
+        for. Zero when there is nothing to sweep or nothing was asked for."""
+        if self.sites <= 0 or self.a_night_expected <= 0:
+            return 0
+        return max(1, -(-self.sites // self.a_night_expected))
+
+    @property
+    def nights_the_rotation_explains(self) -> int:
+        """The oldest age the queue can account for: **the shorter of the two
+        sweeps.**
+
+        Not the measured sweep on its own. A single forty-site pass in a week
+        over three hundred and fifty sites measures 5.7 a night, which is a
+        sixty-two-night rotation, and a sixty-two-night rotation arithmetically
+        excuses a two-month-old observation — so a scheduler that ran once
+        would be handed a longer excuse than a healthy one, and the worse it
+        performed the more it would explain away. That is the configured
+        rate's false reassurance reached from the other direction, and it is
+        the reason `the_pass_is_keeping_up` exists.
+
+        Not the promised sweep on its own either. A pass running *faster* than
+        its limit comes round sooner, and excusing an age the queue has already
+        passed over twice is the same failure again.
+
+        So: what a rotation excuses is what a rotation both **achieves** and
+        **was promised**. Degradation then shows in the residue in proportion
+        to how far behind the pass is, rather than at a cliff edge — nothing
+        flips because one run slipped past midnight.
+        """
+        if not self.a_sweep_completes:
+            return 0
+        promised = self.nights_a_promised_sweep_takes
+        measured = self.nights_for_a_full_sweep
+        return min(measured, promised) if promised else measured
 
     @property
     def observed(self) -> tuple[int, ...]:
@@ -334,10 +392,14 @@ class Backlog:
         Returning zero there is the trap: a scheduler that stopped a week ago
         leaves every observation eight days old, and an untested nine-night
         rotation would report all of it as the queue working.
+
+        Measured against `nights_the_rotation_explains` and never against the
+        raw measured sweep, or a pass limping at a seventh of its rate would
+        buy itself a seven times longer excuse.
         """
         if not self.a_sweep_completes:
             return self.older_than_a_week
-        nights = self.nights_for_a_full_sweep
+        nights = self.nights_the_rotation_explains
         return sum(1 for d in self.observed if d > nights)
 
     @property
@@ -370,7 +432,9 @@ class Backlog:
         return (f"{self.a_night_observed:.3g} a night measured from "
                 f"{self.verified_recently} verification(s) over the last "
                 f"{self.over_nights} night(s), against "
-                f"{self.a_night_declared} a night configured")
+                f"{self.a_night_declared} a night configured"
+                + ("" if self.the_pass_is_keeping_up
+                   else " — the pass is behind what it was asked for"))
 
     def _residue_note(self) -> str:
         """What is left over once the rotation has been allowed for."""
@@ -382,6 +446,7 @@ class Backlog:
 
     def summary(self) -> dict:
         nights = self.nights_for_a_full_sweep
+        explains = self.nights_the_rotation_explains
         if not self.a_sweep_completes:
             note = (
                 f"No sweep is completing — {self._rate_note()}, over "
@@ -390,11 +455,22 @@ class Backlog:
                 f"observation(s) older than a week and all of them are counted "
                 f"as unexplained; {self._residue_note()}")
         else:
+            # The sweep the pass achieves, and the age that sweep is allowed to
+            # excuse. The same number while the pass keeps up, and deliberately
+            # not while it does not: a rotation is only an explanation up to the
+            # length it was promised at, or falling further behind would buy a
+            # longer alibi.
+            reach = (f"a {nights}-night sweep, so an observation up to "
+                     f"{nights} day(s) old is the rotation and not a fault"
+                     if explains >= nights else
+                     f"a {nights}-night sweep, which is longer than the "
+                     f"{explains}-night one this population was promised — so "
+                     f"only an observation up to {explains} day(s) old is "
+                     f"counted as the rotation, and the rest of that sweep is "
+                     f"the pass being behind rather than an explanation")
             note = (
-                f"{self._rate_note()}: over {self.sites} site(s) that is a "
-                f"{nights}-night sweep, so an observation up to {nights} "
-                f"day(s) old is the rotation and not a fault — "
-                f"{self.explained_by_the_backlog} of the "
+                f"{self._rate_note()}: over {self.sites} site(s) that is "
+                f"{reach} — {self.explained_by_the_backlog} of the "
                 f"{self.older_than_a_week} older than a week are that. "
                 f"{self.older_than_a_full_sweep} are older than a full sweep, "
                 f"which the cadence does not explain; {self._residue_note()}")
@@ -409,7 +485,14 @@ class Backlog:
             "verified_recently": self.verified_recently,
             "over_nights": self.over_nights,
             "the_pass_is_running": self.the_pass_is_running,
+            # Reported, because a pass at a seventh of its rate is neither
+            # stopped nor healthy and the running flag alone cannot say so.
+            "the_pass_is_keeping_up": self.the_pass_is_keeping_up,
+            "a_night_expected": self.a_night_expected,
             "nights_for_a_full_sweep": nights,
+            # What that sweep is allowed to excuse. Lower than the sweep itself
+            # exactly when the pass is behind.
+            "nights_the_rotation_explains": explains,
             "observed": len(self.observed),
             "never_observed": self.never_observed,
             "older_than_a_week": self.older_than_a_week,

@@ -167,7 +167,16 @@ class Driver:
                 files=len(dirty.splitlines()))
             return State.FAILED
         base = head_sha(self.repo)
-        self.q.move(ident, State.BUILDING, reason=f"base {base[:12]}",
+        # One branch per task, and `main` only when the reviewer is clean.
+        #
+        # The second proving run showed why. Each round commits, because the
+        # review unit has to be an immutable range — and committing to `main`
+        # put rounds one and two there, including a round the reviewer then
+        # raised three blocking findings against. Work under review is not work
+        # that has passed, and `main` should not hold it.
+        branch = f"devloop/{ident}"
+        _git("checkout", "-q", "-B", branch, cwd=self.repo)
+        self.q.move(ident, State.BUILDING, reason=f"base {base[:12]} on {branch}",
                     base_sha=base)
         log("BUILDING", task=ident, title=task["title"][:60], base=base[:12])
 
@@ -282,6 +291,9 @@ class Driver:
                 return self._ship(task, started)
 
             if round_no == self.limits.review_rounds:
+                # The branch stays. A person reading a contested task needs the
+                # rounds, and `main` never saw them.
+                _git("checkout", "-q", "main", cwd=self.repo)
                 self.q.move(ident, State.CONTESTED,
                             reason=f"{len(must)} finding(s) after "
                                    f"{round_no} rounds")
@@ -303,9 +315,27 @@ class Driver:
         return State.CONTESTED
 
     def _ship(self, task: dict, started: float) -> str:
-        """Review is clean. Run the remaining declared gates, then finish."""
+        """Review is clean. Land it, run the remaining gates, then finish."""
         ident = task["id"]
         needed = gates.required(task)
+        # Only now does it reach `main` — as one commit, so the history says
+        # "this task, reviewed clean" rather than replaying the argument the
+        # builder and the reviewer had on the way there.
+        branch = f"devloop/{ident}"
+        _git("checkout", "-q", "main", cwd=self.repo)
+        merged, out = _git("merge", "--squash", branch, cwd=self.repo)
+        if merged != 0:
+            self.q.move(ident, State.CONTESTED,
+                        reason=f"the reviewed work would not land: {out[:300]}")
+            return State.CONTESTED
+        _git("commit", "-q", "-m",
+             f"{task['title']}\n\n{task['brief'][:900]}\n\n"
+             f"devloop task {ident}; reviewer clean after "
+             f"{task.get('review_rounds') or 1} round(s).\n\n"
+             "Co-Authored-By: Claude Opus 5 (1M context) "
+             "<noreply@anthropic.com>", cwd=self.repo)
+        _git("branch", "-D", branch, cwd=self.repo)
+        log("LANDED", task=ident, sha=head_sha(self.repo)[:12])
 
         if "deployed" in needed:
             # The whole suite before anything leaves this machine. A narrowed

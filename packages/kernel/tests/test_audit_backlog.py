@@ -22,6 +22,7 @@ degraded, stopped, or faster than the configured limit would suggest.
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,19 @@ def _sweep(*, verified_recently, days_ago, sites=SITES, **rest):
     return backlog(sites=sites, a_night_declared=SITES_A_NIGHT,
                    observed_days_ago=days_ago,
                    verified_recently=verified_recently, **rest)
+
+
+def _forget(*business_ids: str) -> None:
+    """Every row the database tests below leave behind."""
+    with SessionLocal() as session:
+        for business_id in business_ids:
+            for table, column in (("atlas_business_events", "business_id"),
+                                  ("atlas_findings", "business_id"),
+                                  ("atlas_businesses", "id")):
+                session.execute(
+                    text(f"DELETE FROM {table} WHERE {column} = :b"),
+                    {"b": business_id})
+        session.commit()
 
 
 class TestTheCadenceIsMeasuredNotAssumed:
@@ -107,17 +121,21 @@ class TestTheCadenceIsMeasuredNotAssumed:
         assert not found.the_pass_is_running
 
     def test_a_degraded_pass_reports_the_longer_sweep_it_actually_achieves(self):
-        """Half throughput is a real eighteen-night rotation, not a fault.
+        """Half throughput is a real eighteen-night rotation, and it says so.
 
-        And not a nine-night one either: the record that the slower sweep
-        genuinely has not reached is separated from the one that is older than
-        even that.
+        Reported as eighteen because that is how long the queue is now taking —
+        the number a reader needs. What it does *not* become is an
+        eighteen-night licence: see
+        `TestARotationOnlyExcusesTheSweepItWasPromised`, which is the half of
+        this that a longer sweep must never buy.
         """
         found = _sweep(verified_recently=A_HEALTHY_WEEK // 2,
                        days_ago=[8] * 300 + [20] * 50)
 
         assert found.a_night_observed == SITES_A_NIGHT / 2
         assert found.nights_for_a_full_sweep == 18
+        assert not found.the_pass_is_keeping_up
+        assert found.nights_the_rotation_explains == 9
         assert found.explained_by_the_backlog == 300
         assert found.older_than_a_full_sweep == 50
         assert not found.the_cadence_explains_the_age
@@ -168,6 +186,127 @@ class TestTheCadenceIsMeasuredNotAssumed:
         assert _sweep(verified_recently=0, days_ago=[]).a_night_observed == 0
         assert backlog(sites=1, a_night_declared=SITES_A_NIGHT,
                        observed_days_ago=[]).a_night_observed is None
+
+
+class TestARotationOnlyExcusesTheSweepItWasPromised:
+    """Measuring the rate solves half the problem and opens the other half.
+
+    A sweep length taken from the *configured* limit excuses any age the
+    configuration implies, whether or not a pass ran. But a sweep length taken
+    from the *measured* rate alone excuses more the worse the pass performs: a
+    single forty-site run in a week over three hundred and fifty sites measures
+    5.7 a night, which is a sixty-two-night rotation, and a sixty-two-night
+    rotation arithmetically accounts for a two-month-old observation. A
+    scheduler that had all but stopped would be handed a longer alibi than a
+    healthy one — the same false reassurance, reached from the other direction.
+
+    So the excuse is the shorter of the sweep the pass achieves and the sweep
+    it was promised, and the shortfall is reported as itself.
+    """
+
+    def test_a_pass_that_all_but_stopped_earns_no_sixty_two_night_excuse(self):
+        """The finding, in the shape it actually arrives in.
+
+        One forty-site pass inside the window over the production population.
+        The eight-day-old records are still within the nine nights a healthy
+        rotation takes, so they stay explained and the report does not cry
+        wolf — but the forty-day-old ones are residue, and under the measured
+        sweep alone all fifty of them would have been filed as the queue
+        working its way round.
+        """
+        found = _sweep(verified_recently=SITES_A_NIGHT,
+                       days_ago=[8] * 300 + [40] * 50)
+
+        assert found.the_pass_is_running, (
+            "forty verifications is not an outage, and reporting it as one "
+            "would hide that this is a throughput problem")
+        assert found.nights_for_a_full_sweep == 62, (
+            "the achieved sweep is reported honestly; a queue taking two "
+            "months is itself the finding")
+        assert not found.the_pass_is_keeping_up
+        assert found.nights_the_rotation_explains == 9, (
+            "a rotation explains an age only as far as the sweep it was "
+            "promised at")
+        assert found.older_than_a_full_sweep == 50
+        assert found.explained_by_the_backlog == 300
+        assert not found.the_cadence_explains_the_age
+
+    def test_a_faster_pass_is_held_to_the_sweep_it_achieves(self):
+        """The cap is a ceiling on the excuse and never a floor under it.
+
+        Double throughput comes round in five nights, so a six-day-old record
+        is one the queue has already passed over. Excusing it up to the nine
+        nights the configuration promises would be the configured rate's
+        original lie, kept alive in the cap.
+        """
+        found = _sweep(verified_recently=A_HEALTHY_WEEK * 2,
+                       days_ago=[6] * SITES)
+
+        assert found.a_night_observed == SITES_A_NIGHT * 2
+        assert found.nights_for_a_full_sweep == 5
+        assert found.nights_the_rotation_explains == 5
+        assert found.the_pass_is_keeping_up
+        assert found.older_than_a_full_sweep == SITES
+        assert not found.the_cadence_explains_the_age
+
+    def test_one_slipped_night_is_not_a_degraded_pass(self):
+        """Exactly one night of tolerance, and it is not arbitrary.
+
+        The window is a whole number of nights and the pass runs at some hour
+        inside it, so a run that drifts past midnight lands twice in one night
+        and not at all in another. A flag that fired on that would be on most
+        weeks, and a warning that is always on is a warning nobody reads. Two
+        missed nights is a real shortfall.
+        """
+        def keeping_up(nights_run: int) -> bool:
+            return _sweep(verified_recently=SITES_A_NIGHT * nights_run,
+                          days_ago=[]).the_pass_is_keeping_up
+
+        assert keeping_up(MEASURED_OVER)
+        assert keeping_up(MEASURED_OVER - 1)
+        assert not keeping_up(MEASURED_OVER - 2)
+
+    def test_a_small_market_is_never_permanently_behind(self):
+        """Twenty sites cannot be verified forty a night.
+
+        Holding a small market to the configured limit would leave the flag
+        raised for ever on a queue coming round nightly, so what is expected is
+        the limit or the population, whichever is smaller.
+        """
+        found = _sweep(verified_recently=20 * MEASURED_OVER, sites=20,
+                       days_ago=[1] * 20)
+
+        assert found.a_night_expected == 20
+        assert found.the_pass_is_keeping_up
+        assert found.nights_the_rotation_explains == 1
+
+    def test_the_payload_carries_the_shortfall_and_the_note_explains_it(self):
+        """A reader of the JSON must be able to see the difference.
+
+        The achieved sweep and the age it is allowed to excuse are the same
+        number while the pass keeps up and deliberately are not while it does
+        not, so reporting only one of them puts the reader back where they
+        started.
+        """
+        payload = _sweep(verified_recently=SITES_A_NIGHT,
+                         days_ago=[8] * SITES).summary()
+
+        assert payload["the_pass_is_keeping_up"] is False
+        assert payload["a_night_expected"] == SITES_A_NIGHT
+        assert payload["nights_for_a_full_sweep"] == 62
+        assert payload["nights_the_rotation_explains"] == 9
+        assert "behind what it was asked for" in payload["note"]
+        assert "promised" in payload["note"]
+
+    def test_a_healthy_pass_says_nothing_about_a_shortfall(self):
+        """The other half: the note stays quiet when there is nothing to say."""
+        payload = _sweep(verified_recently=A_HEALTHY_WEEK,
+                         days_ago=[8] * SITES).summary()
+
+        assert payload["the_pass_is_keeping_up"] is True
+        assert payload["nights_the_rotation_explains"] == 9
+        assert payload["nights_for_a_full_sweep"] == 9
+        assert "behind what it was asked for" not in payload["note"]
 
 
 class TestWhatTheRotationNeverExplains:
@@ -322,19 +461,197 @@ class TestItReadsTheRealTimeline:
                 after["verified_recently"] / MEASURED_OVER, 2)
             assert after["sites"] >= 1
         finally:
-            with SessionLocal() as session:
-                for table, column in (("atlas_business_events", "business_id"),
-                                      ("atlas_findings", "business_id"),
-                                      ("atlas_businesses", "id")):
-                    session.execute(
-                        text(f"DELETE FROM {table} WHERE {column} = :b"),
-                        {"b": business.id})
-                session.commit()
+            _forget(business.id)
 
     def test_the_freshness_report_carries_it(self, repo):
         payload = repo.audit_freshness()["backlog"]
 
         assert {"a_night_declared", "a_night_observed", "verified_recently",
-                "the_pass_is_running", "nights_for_a_full_sweep",
+                "the_pass_is_running", "the_pass_is_keeping_up",
+                "nights_for_a_full_sweep", "nights_the_rotation_explains",
                 "explained_by_the_backlog", "older_than_a_full_sweep"} <= \
                set(payload)
+
+
+class TestTheNumeratorAndTheDenominatorAreOnePopulation:
+    """Throughput counted over sites the queue does not serve.
+
+    The sweep length is `sites / rate`. The denominator is the queue's own
+    population — distinct fetchable addresses — so a numerator counting every
+    recent `website_verified` event on the timeline is a rate over a different
+    set: work on a business whose address has since been emptied, changed, or
+    de-duplicated behind an older record is work this rotation will never
+    repeat. Counted in, it shortens the reported sweep, and a shorter sweep
+    excuses fewer stale records than it should — the report goes quiet about
+    exactly what it exists to surface.
+    """
+
+    @pytest.fixture(scope="class", autouse=True)
+    def schema(self):
+        db.init_db()
+
+    @pytest.fixture
+    def repo(self) -> OpportunityRepository:
+        return OpportunityRepository()
+
+    @staticmethod
+    def _verify(repo, business_id: str) -> None:
+        repo.record_event(BusinessEvent(
+            business_id=business_id, kind=VERIFIED_EVENT,
+            actor="recipe:verify-recorded-websites",
+            detail={"answered": True, "findings": 0}))
+
+    def test_an_address_the_queue_cannot_fetch_does_not_count_as_throughput(
+            self, repo):
+        """A `mailto:` is excluded from the sweep, so it is excluded from
+        the rate that drains it."""
+        empty = repo.audit_backlog()
+        business = repo.save_business(Business(
+            name="Al Waha Dental", geography="United Arab Emirates",
+            website="mailto:hello@backlog-unfetchable.test", sources=["seed"]))
+        try:
+            before = repo.audit_backlog()
+            assert before["cannot_be_fetched"] == empty["cannot_be_fetched"] + 1
+            assert before["sites"] == empty["sites"], (
+                "an unfetchable address is not one of the sites a sweep covers")
+
+            self._verify(repo, business.id)
+
+            after = repo.audit_backlog()
+            assert after["sites"] == before["sites"]
+            assert after["verified_recently"] == before["verified_recently"], (
+                "a verification of a site the queue does not serve inflates "
+                "the rate against a population it is not in")
+        finally:
+            _forget(business.id)
+
+    def test_a_deduplicated_business_does_not_count_but_the_canonical_one_does(
+            self, repo):
+        """Two businesses, one address, one fetch a night.
+
+        The queue serves the earliest holder of the address and nothing else,
+        so only that record's verifications are work on this population — and
+        they must still be counted, or the restriction would fix the inflation
+        by throwing the measurement away.
+        """
+        shared = "https://backlog-shared-address.test"
+        older = repo.save_business(Business(
+            name="Al Waha Dental", geography="United Arab Emirates",
+            website=shared, sources=["seed"],
+            first_seen_at=datetime(2026, 1, 1, tzinfo=UTC)))
+        newer = repo.save_business(Business(
+            name="Al Waha Dental Clinic", geography="United Arab Emirates",
+            website=shared, sources=["seed"],
+            first_seen_at=datetime(2026, 2, 1, tzinfo=UTC)))
+        try:
+            before = repo.audit_backlog()
+
+            self._verify(repo, newer.id)
+            deduplicated = repo.audit_backlog()
+            assert deduplicated["verified_recently"] == \
+                   before["verified_recently"], (
+                "the queue never fetches the de-duplicated record, so nothing "
+                "it carries is throughput")
+
+            self._verify(repo, older.id)
+            canonical = repo.audit_backlog()
+            assert canonical["verified_recently"] == \
+                   before["verified_recently"] + 1
+        finally:
+            _forget(older.id, newer.id)
+
+
+class TestAnObservationIsOfAnAddress:
+    """`save_business` overwrites `website` on every re-ingestion.
+
+    The audit on the timeline records the URL it read. Joined to a business by
+    id alone, the audit of an address that business has since left is reported
+    as an observation of the address it holds now — a replacement URL nothing
+    has ever fetched, shown as observed today. That is the freshest reading the
+    report can produce, of a page nobody has looked at.
+    """
+
+    @pytest.fixture(scope="class", autouse=True)
+    def schema(self):
+        db.init_db()
+
+    @pytest.fixture
+    def repo(self) -> OpportunityRepository:
+        return OpportunityRepository()
+
+    def test_an_audit_of_a_previous_address_is_not_an_observation_of_the_new_one(
+            self, repo):
+        was = "https://backlog-previous-address.test"
+        now = "https://backlog-replacement-address.test"
+        business = repo.save_business(Business(
+            name="Al Waha Dental", geography="United Arab Emirates",
+            website=was, sources=["seed"]))
+        try:
+            unobserved = repo.audit_backlog()
+
+            repo.record_event(BusinessEvent(
+                business_id=business.id, kind="website_audited",
+                actor="test:backlog",
+                detail={"url": was, "observations": []}))
+            observed = repo.audit_backlog()
+            assert observed["observed"] == unobserved["observed"] + 1
+            assert observed["never_observed"] == unobserved["never_observed"] - 1
+
+            # The address moves. The audit stays where it is — history is
+            # immutable — and it names the address that was read.
+            repo.save_business(business.model_copy(update={"website": now}))
+            moved = repo.audit_backlog()
+
+            assert moved["sites"] == observed["sites"], (
+                "one business, one fetchable address, before and after")
+            assert moved["observed"] == unobserved["observed"], (
+                "the replacement address has never been read")
+            assert moved["never_observed"] == unobserved["never_observed"]
+        finally:
+            _forget(business.id)
+
+    def test_an_audit_of_the_same_address_survives_a_redirect_difference(
+            self, repo):
+        """The comparison is `verification.same_website` and not equality.
+
+        A scheme or a trailing slash is what a redirect changes, and treating
+        those as a different site would file most of the population as never
+        observed — a worse misreport than the one this guards against, and
+        arrived at while looking careful.
+        """
+        business = repo.save_business(Business(
+            name="Al Waha Dental", geography="United Arab Emirates",
+            website="https://backlog-redirect.test", sources=["seed"]))
+        try:
+            before = repo.audit_backlog()
+            repo.record_event(BusinessEvent(
+                business_id=business.id, kind="website_audited",
+                actor="test:backlog",
+                detail={"url": "http://backlog-redirect.test/",
+                        "observations": []}))
+
+            after = repo.audit_backlog()
+            assert after["observed"] == before["observed"] + 1
+        finally:
+            _forget(business.id)
+
+    def test_an_audit_that_predates_the_url_field_is_still_an_observation(
+            self, repo):
+        """Several hundred historical audits carry no `url` at all.
+
+        Reading their silence as "this was some other address" would call the
+        whole backlog unobserved on the strength of a field nobody wrote.
+        """
+        business = repo.save_business(Business(
+            name="Al Waha Dental", geography="United Arab Emirates",
+            website="https://backlog-legacy-audit.test", sources=["seed"]))
+        try:
+            before = repo.audit_backlog()
+            repo.record_event(BusinessEvent(
+                business_id=business.id, kind="website_audited",
+                actor="test:backlog", detail={"observations": []}))
+
+            after = repo.audit_backlog()
+            assert after["observed"] == before["observed"] + 1
+        finally:
+            _forget(business.id)

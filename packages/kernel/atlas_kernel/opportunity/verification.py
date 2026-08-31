@@ -194,6 +194,19 @@ def audit_pass(businesses: dict[str, Business], evidence: list[Evidence], *,
     return found
 
 
+def same_website(one: str, other: str) -> bool:
+    """Whether two recorded addresses are the same website.
+
+    The rule `owner_of` joins a response to a business by, made public because
+    a second reader needs it. `audit_backlog` has to decide whether the audit
+    recorded against a business was an audit of the address that business
+    holds *now* — a website that changed leaves an event describing the old
+    one — and answering that with its own comparison would let the freshness
+    report and the audit disagree about which addresses are the same site.
+    """
+    return _key(one) == _key(other)
+
+
 def _key(url: str) -> str:
     """A URL reduced to what makes two addresses the same website here.
 
@@ -209,4 +222,5 @@ def _key(url: str) -> str:
 
 
 __all__ = ["DETECTOR", "READABLE", "Unreadable", "audit", "audit_pass",
-           "observation_from", "owner_index", "owner_of", "requested_url"]
+           "observation_from", "owner_index", "owner_of", "requested_url",
+           "same_website"]

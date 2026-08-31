@@ -131,6 +131,35 @@ VERIFIED_EVENT = "website_verified"
 #: opposite of what naming it was for. `test_audit_backlog.py` fails if the two
 #: ever drift apart again.
 SITES_A_NIGHT = 40
+
+def site_queue(columns: str = "id, website") -> str:
+    """The population one sweep covers, as SQL.
+
+    Distinct fetchable addresses, the earliest recorded holder of each — what
+    `businesses_by_website` serves to the nightly pass, and what
+    `audit_backlog` measures that pass against. One definition because those
+    two must be the same set of sites, in three ways that each fail silently:
+
+    * a sweep length divided by a population the queue does not serve is a
+      sweep length that is wrong;
+    * a throughput counted over verifications the queue no longer serves — a
+      business whose website changed, emptied, or lost the de-duplication to an
+      older record — inflates the rate against a denominator it is not in,
+      shortening the reported sweep and explaining away stale records;
+    * and a filter that drifts between the two would do both while each query
+      still read correctly on its own.
+
+    `columns` is a literal from this module, never anything a caller supplies;
+    the fragment is spliced into a subquery or a `WITH`.
+    """
+    return f"""
+        SELECT DISTINCT ON (website) {columns}
+        FROM atlas_businesses
+        WHERE website IS NOT NULL AND website <> ''
+          AND (website LIKE 'http://%' OR website LIKE 'https://%')
+        ORDER BY website, first_seen_at"""
+
+
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -971,23 +1000,38 @@ class OpportunityRepository:
         understate the rate, which lengthens the sweep and excuses staleness
         that nothing excuses.
 
+        **The rate is counted over the same population the sweep is measured
+        against.** A count of every recent verification includes work on
+        businesses that have since had their website changed, emptied or
+        de-duplicated out of the queue — sites this rotation will never come
+        back to. Counted into the numerator they inflate the rate against a
+        denominator they are not in, which shortens the sweep and hides exactly
+        the stale records the report exists to surface. `site_queue` is the one
+        definition of that population and both halves read it.
+
+        **An observation is an observation of an address, not of a business.**
+        `save_business` overwrites `website` on every re-ingestion, and the
+        `website_audited` event carries the URL it read in its detail. Joining
+        on `business_id` alone would report a replacement address nothing has
+        ever fetched as observed a day ago — the freshest possible reading of a
+        page nobody has looked at. So an audit naming a different address is
+        not this site's observation, and the site counts as never observed
+        until a pass reads the address it holds now.
+
         Per site rather than in aggregate, so the arithmetic lives in
         `coverage.backlog` where a test can construct the cases that matter
         without a population. A few hundred rows.
         """
         from .coverage import MEASURED_OVER, backlog
+        from .verification import same_website
 
         with SessionLocal() as session:
             rows = session.execute(
-                text("""
-                WITH site AS (
-                    SELECT DISTINCT ON (website) id
-                    FROM atlas_businesses
-                    WHERE website IS NOT NULL AND website <> ''
-                      AND (website LIKE 'http://%' OR website LIKE 'https://%')
-                    ORDER BY website, first_seen_at
+                text(f"""
+                WITH site AS ({site_queue()}
                 ), audited AS (
-                    SELECT DISTINCT ON (business_id) business_id, at
+                    SELECT DISTINCT ON (business_id) business_id, at,
+                           detail->>'url' AS url
                     FROM atlas_business_events WHERE kind = 'website_audited'
                     ORDER BY business_id, at DESC
                 ), verified AS (
@@ -996,6 +1040,8 @@ class OpportunityRepository:
                     GROUP BY business_id
                 )
                 SELECT
+                  site.website AS website,
+                  audited.url AS audited_url,
                   floor(extract(epoch FROM now() - audited.at) / 86400)::int
                     AS days_ago,
                   (verified.at IS NOT NULL
@@ -1006,7 +1052,9 @@ class OpportunityRepository:
                 LEFT JOIN verified ON verified.business_id = site.id
                 """), {"verified": VERIFIED_EVENT}).mappings().all()
             excluded = session.execute(
-                text("""
+                text(f"""
+                WITH site AS ({site_queue()}
+                )
                 SELECT
                   (SELECT count(*) FROM atlas_businesses
                     WHERE website IS NOT NULL AND website <> ''
@@ -1015,9 +1063,10 @@ class OpportunityRepository:
                   (SELECT count(*) FROM atlas_businesses
                     WHERE website LIKE 'http://%'
                        OR website LIKE 'https://%') AS fetchable,
-                  (SELECT count(*) FROM atlas_business_events
-                    WHERE kind = :verified
-                      AND at > now() - (:window * interval '1 day'))
+                  (SELECT count(*) FROM atlas_business_events e
+                     JOIN site ON site.id = e.business_id
+                    WHERE e.kind = :verified
+                      AND e.at > now() - (:window * interval '1 day'))
                     AS verified_recently
                 """), {"verified": VERIFIED_EVENT,
                        "window": MEASURED_OVER}).mappings().first()
@@ -1025,15 +1074,31 @@ class OpportunityRepository:
         # queue de-duplicates by website, so the difference is businesses no
         # pass will ever reach however long it runs.
         sharing = max(0, int(excluded["fetchable"] or 0) - len(rows))
+        observed_days_ago: list[int | None] = []
+        reached_unread = 0
+        for row in rows:
+            audited_url = str(row["audited_url"] or "")
+            # An event with no URL at all predates the field. It is read as
+            # this site's — the conservative direction, because the alternative
+            # is asserting that several hundred historical audits observed
+            # nothing, which is a claim nobody checked either.
+            for_this_site = (not audited_url
+                             or same_website(audited_url,
+                                             str(row["website"] or "")))
+            observed_days_ago.append(row["days_ago"] if for_this_site else None)
+            # And a verification that predates the change says nothing about
+            # the new address, so it is not evidence of a page reached and
+            # unread. `never_observed` already carries the site.
+            if for_this_site and row["reached_unread"]:
+                reached_unread += 1
         return backlog(
             sites=len(rows), a_night_declared=SITES_A_NIGHT,
-            observed_days_ago=[row["days_ago"] for row in rows],
+            observed_days_ago=observed_days_ago,
             # Always a number, never `None`: this read the timeline, and zero
             # verifications is a measurement — the one that matters most.
             verified_recently=int(excluded["verified_recently"] or 0),
             over_nights=MEASURED_OVER,
-            reached_without_observation=sum(1 for row in rows
-                                            if row["reached_unread"]),
+            reached_without_observation=reached_unread,
             cannot_be_fetched=int(excluded["cannot_be_fetched"] or 0),
             shares_an_address=sharing).summary()
 
@@ -1700,16 +1765,17 @@ class OpportunityRepository:
         would have stopped the rotation dead while the run still reported
         success. The Python guard below stays as the guard on what is handed to
         the fetcher: this one is about not wasting the night.
+
+        The de-duplication itself is `site_queue`, shared with `audit_backlog`
+        rather than written out twice. The freshness report divides by this
+        population and measures this pass's throughput over it, so a filter
+        that drifted between the two would give a sweep length for a queue that
+        does not exist — and both queries would still read correctly alone.
         """
         with SessionLocal() as session:
             rows = session.execute(
-                text("""
-                SELECT site.* FROM (
-                    SELECT DISTINCT ON (website) *
-                    FROM atlas_businesses
-                    WHERE website IS NOT NULL AND website <> ''
-                      AND (website LIKE 'http://%' OR website LIKE 'https://%')
-                    ORDER BY website, first_seen_at
+                text(f"""
+                SELECT site.* FROM ({site_queue('*')}
                 ) AS site
                 LEFT JOIN (
                     SELECT business_id, max(at) AS last_at

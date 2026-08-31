@@ -465,3 +465,24 @@ def test_a_task_refuses_to_start_on_a_dirty_tree(tmp_path, monkeypatch):
     assert driver.run_task(task) == State.FAILED
     assert q.get(ident)["state"] == State.QUEUED, (
         "a refused task must return to the queue, not be lost")
+
+
+def test_work_under_review_never_lands_on_main(tmp_path):
+    """The second proving run put a defective round on `main`.
+
+    Each round has to commit, because the review unit must be an immutable
+    range. Committing them to `main` meant a round the reviewer then raised
+    three blocking findings against was already there. Work under review is not
+    work that has passed.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    assert '"checkout", "-q", "-B", branch' in run_task, (
+        "a task builds on `main` rather than on its own branch")
+    ship = source[source.index("def _ship("):source.index("def _commit(")]
+    assert '"merge", "--squash", branch' in ship, (
+        "reviewed work does not land as one commit")
+    # Landing may only happen after the review is clean, which is the only
+    # path into `_ship`.
+    assert "_ship(" in run_task[run_task.index("if not must:"):
+                                run_task.index("if not must:") + 200]
