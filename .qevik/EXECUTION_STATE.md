@@ -1,7 +1,7 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 5070e4a (main)
+Repository revision: 04c1e99 (main)
 Gate result: 3792 passed, 33 skipped, 0 failed
 
 ## Overall position
@@ -35,15 +35,24 @@ None in progress. The health-check slice closed at its external boundary.
 Ranked by the selection rules in the execution controller (§17 of the memory
 spec). See `CAPABILITY_LEDGER.md` for evidence behind each.
 
-1. **CRM pipeline (C-26)** — capture landed this session; qualification,
-   stages and follow-up have not. Only worth building once real rows exist or
-   outreach can send, so it is ready but not urgent.
-2. **Control plane (app.qevik.ai)** — several backend capabilities have no
-   operator surface; see the ledger.
-3. **Productization** — accounts, projects, usage, credits, quotas. Roadmap P8.
-   No external credential required for the foundations.
-4. **Digital Product expansion** — a second product type beyond the health
-   check.
+**Nothing is both ready and clearly worth doing next**, which is itself the
+finding. Every remaining track is one of: waiting on a decision, waiting on a
+credential, or building ahead of demand that does not exist. The candidates,
+with why each is not obviously next:
+
+1. **CRM pipeline (C-26)** — capture landed; qualification and stages have not.
+   Zero real inbound rows exist, so a pipeline would be a shape with nothing in
+   it.
+2. **Customer-facing surface (C-27)** — `/api/customer/*` has seven reads no
+   client consumes. They are for customers, and there are none.
+3. **Digital Product expansion** — a second product type multiplies something
+   no business has yet received.
+4. **Publishing the eight remaining health checks** — deterministic and
+   valuable inventory for the moment sending works, but each one is a
+   commercial decision to approach that business. Now doable from the console.
+
+The honest reading: the next genuinely valuable step is **not** more capability.
+It is the first real send, and that is HA-001 and HA-002.
 
 ## Blocked tracks
 
@@ -61,7 +70,9 @@ fabric and nothing else.
 
 ## Product decisions required
 
-4 open. See `DECISION_QUEUE.md`. None blocks the ready tracks above.
+5 open, and one of them now blocks a track. **DQ-006** — what allowance does
+Qevik's own operating tenant have — holds C-27 and C-28. The rest do not block
+the candidates above.
 
 ## Last production evidence
 
@@ -76,12 +87,16 @@ fabric and nothing else.
 
 ## Next execution batch
 
-**Productization foundations (C-27, C-28)** — `/api/customer/*` exists and
-almost nothing consumes it; accounts, projects, usage and quotas are roadmap P8
-and need no external credential. Chosen over the CRM pipeline because a pipeline
-with zero rows in it is a shape without content, and over Digital Product
-expansion because a second product type multiplies something that has not yet
-reached a single business.
+Productization was selected and **found already built**: `credits/`, `quota/`
+and `fabric/budgets.py` are complete and wired, and the ledger is durable. What
+was missing was operator visibility, which this batch supplied, and a decision
+(DQ-006) about what Qevik's own tenant is allowed.
+
+If a batch must be chosen without the owner: **publish health checks for the
+eight remaining approved-able opportunities**, building inventory for the moment
+sending works. Each is a commercial decision to approach that business, so it
+wants the owner's word, and it is now doable from the console rather than a
+script.
 
 ## Stop condition
 

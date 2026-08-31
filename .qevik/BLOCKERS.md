@@ -16,6 +16,8 @@ the project blocked; every row names what can continue instead.
 | B-09 | Computer-use lineage undecided | ARCHITECTURE | C-34 | DQ-002 | none | Yes | A lineage is chosen | OPEN |
 | B-10 | Dormant Atlas surfaces undecided | PRODUCT_DECISION | C-35 | DQ-003 | none | Yes | Revive or retire is decided | OPEN |
 
+| B-11 | No tenant is on a plan | PRODUCT_DECISION | C-27, C-28 | DQ-006 | none — it is a decision, not a credential | Yes — everything except metered work | An allowance is defined for Qevik's own operating tenant | OPEN |
+
 ## The rule this file exists to enforce
 
 Ten open blockers and **none of them stops the next batch**. B-01 and B-02 hold

@@ -51,7 +51,33 @@ DQ-005) and one unknown (DQ-001); none blocks the ready tracks.
   does not exist. Nothing exercised it, so the whole gate passed. There is now
   a test that imports it.
 
+## 2026-08-31 — Session 2 (productization)
+
+### Discovered
+- **Productization is built, not designed.** The ledger said C-28 DESIGNED.
+  `credits/` (Plan, Reservation, CreditService), `quota/` (QuotaLedger with
+  windows and replay) and `fabric/budgets.py` (TENANT ⊃ MISSION ⊃ AGENT ⊃
+  CONVERSATION) are complete and wired into the app.
+- **Nothing is metered.** No tenant is on a plan, so `/api/customer/plan` 409s
+  for everyone and any metered work would refuse.
+- A suspicion checked and **found wrong**: the quota ledger looked in-memory in
+  production because no `quota.jsonl` exists. `QEVIK_STATE` is set for
+  `qevik-control`, so the path resolves; the file is absent because nothing has
+  ever been spent. No fix was shipped for a defect that did not exist.
+
+### Completed
+- The console draws all three allowance states. It previously collapsed "not on
+  a plan" into "nothing to show" and omitted the card entirely.
+- **An operator can approve an opportunity.** `POST /api/missions/deliver`
+  existed and nothing called it — every approval this session was made from a
+  script. Behind a confirm, carrying only the signal id.
+
+### Human boundary
+DQ-006 recorded: LIST/PRO/ADVANCED/ENTERPRISE are commercial plans, and putting
+Qevik's own operating tenant on one would record Qevik as a customer of itself.
+An internal tenant kind is the honest shape and nobody has decided what it is
+allowed. B-11 raised.
+
 ### Next
-Productization foundations (C-27, C-28). The CRM *pipeline* is ready but not
-urgent: zero real inbound rows exist, and a pipeline with nothing in it is a
-shape without content.
+No track is both ready and clearly worth doing. The next genuinely valuable step
+is the first real send — HA-001 and HA-002.

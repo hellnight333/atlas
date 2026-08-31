@@ -22,6 +22,9 @@ All rows measured on qevik-core-01 unless stated.
 | E-12 | C-13 | — | — | — | — | — | **No evidence exists.** Zero messages sent. Nothing to record |
 | E-13 | C-25 | A public audit records who asked, and the operator can see them | Wrote one row, read it back through `GET /api/missions/inbound`, counts correct, no personal data in the payload; synthetic row then removed | PRODUCTION-VERIFIED | 2026-08-31 | 5070e4a | The *mechanism* is verified. **Zero real inbound rows exist** — nobody has used the public audit. Do not read this as demand |
 
+| E-14 | C-27a | An operator can approve an opportunity from the console | `data-approve-opportunity` and `/api/missions/deliver` present in the shipped console; the route resolves in the deployed router | PRODUCTION-VERIFIED | 2026-08-31 | 04c1e99 | The markup and route are verified. **No opportunity has been approved through the UI** — every approval this session was made from a script |
+| E-15 | C-27, C-28 | The allowance ledger is durable, and nothing is metered | `QEVIK_STATE=/var/lib/qevik/control` is set for `qevik-control`, so the quota timeline resolves; `plan_of()` raises `NoPlan` for every tenant tried | PRODUCTION-VERIFIED | 2026-08-31 | 04c1e99 | Checked the suspicion that the ledger was in-memory. **It is not** — the env var is set and the file is simply absent because nothing has ever been spent |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not

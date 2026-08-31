@@ -37,8 +37,9 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-24 | Sending-identity check | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | MX/SPF/DMARC/DKIM all CONFIRMED_ABSENT |
 | C-25 | Inbound capture | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | A public audit records who asked; route and console verified on the host. **Zero real rows** — nobody has used the public audit yet |
 | C-26 | CRM pipeline | Commercial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Qualification, stages, follow-up. Nothing implemented; C-25 is the capture, not the pipeline |
-| C-27 | Customer control plane | Productization | ~ | ✓ | ~ | ~ | ✓ | ✗ | ✗ | IMPLEMENTED | `/api/customer/*` exists; no operator or customer surface uses most of it |
-| C-28 | Usage / credits / quotas | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Roadmap P8 |
+| C-27 | Customer control plane | Productization | ✓ | ✓ | ✓ | ~ | ✓ | ~ | ✗ | **BLOCKED (DQ-006)** | Substrate complete: `credits/` (Plan, Reservation, CreditService), `quota/` ledger durable via `$QEVIK_STATE/quota.jsonl`, `fabric/budgets.py` scopes. `/api/customer/plan` is rich and the console now draws its three states. **No tenant is on a plan**, so it 409s for everyone |
+| C-27a | Operator approves an opportunity | Control plane | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | `POST /api/missions/deliver` reachable from the console; route and markup live on the host |
+| C-28 | Usage / credits / quotas | Productization | ✓ | ✓ | ✓ | ✓ | ✓ | ~ | ✗ | **BLOCKED (DQ-006)** | Built, not DESIGNED as the ledger previously said. Nothing has ever been spent, so there is nothing to meter yet |
 | C-29 | Stripe payment handoff | Productization | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | DESIGNED | Payment Links sufficient; adapter deliberately unbuilt |
 | C-30 | Media generation | Creative | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Provider decision + credentials |
 | C-31 | App factory | App | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | BLOCKED | Apple / Google Play accounts |
