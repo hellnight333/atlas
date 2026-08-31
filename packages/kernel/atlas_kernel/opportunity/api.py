@@ -152,6 +152,23 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="no such opportunity")
         return found
 
+    @router.get("/{business_id}/dossier")
+    def dossier(business_id: str, request: Request,
+                tenant: TenantId = Depends(current_tenant),
+                _: User = Depends(requires(Scope.READ))) -> dict:
+        """Everything known about one prospect, from the models that own it.
+
+        Thirteen questions a person asks before deciding whether to write to a
+        stranger. It assembles and stores nothing: a second copy of "was this
+        sent" would be a second answer to a question that has one.
+
+        A missing fact is reported as missing. A dossier that filled gaps would
+        be most confident exactly where it knows least.
+        """
+        from .dossier import assemble
+
+        return assemble(business_id, memory=repository(request), tenant=tenant)
+
     @router.get("/{business_id}/sightings")
     def sightings(business_id: str, request: Request,
                   tenant: TenantId = Depends(current_tenant),

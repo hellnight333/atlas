@@ -194,6 +194,37 @@ header.page p { margin: 0; color: var(--muted); }
 }
 @media (max-width: 820px) { .lead { font-size: 24px; } }
 
+/* ------------------------------------------------------- one prospect */
+/*
+ * A chain, not a grid of cards. The numbering is earned: these are the
+ * commercial steps in the order they run, and the first one without an answer
+ * is the next thing somebody has to do — so the gaps must be findable by
+ * scanning one edge rather than by reading.
+ *
+ * A fact that does not exist is a break in the rule and dimmed text, never the
+ * absence colour: "nobody has approved this" is not a problem with the
+ * business, and drawing it red invents a finding somebody then repeats aloud.
+ */
+.dossier { list-style: none; margin: 0; padding: 0; }
+.dossier li {
+  border-left: 2px solid var(--line); padding: .5rem 0 .5rem .9rem;
+}
+.dossier li.gap { border-left-style: dashed; }
+.dossier .q {
+  font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dim); font-variant-numeric: tabular-nums;
+}
+.dossier .a { margin: .15rem 0 0; overflow-wrap: anywhere; }
+.dossier li.gap .a { color: var(--muted); }
+.dossier .owner {
+  font-family: var(--mono); font-size: 11px; color: var(--dim);
+  display: block; margin-top: .2rem;
+}
+.dossier blockquote {
+  margin: .4rem 0 0; padding: .5rem .7rem; border: 1px solid var(--line);
+  border-radius: 4px; white-space: pre-wrap; font-size: 13.5px;
+}
+
 /* ------------------------------------------------- a plan somebody approves */
 /*
  * This is the screen where a person takes responsibility for what runs against
@@ -1982,17 +2013,99 @@ views.businesses = async () => {
     ${me ? `<p class="note" style="margin-top:1rem">Tenant <code>${esc(me.tenant_id || '')}</code></p>` : ''}`;
 };
 
+/* The thirteen questions, in the order the commercial chain runs them.
+   Their keys are the API's, so a renamed answer shows up as a missing question
+   rather than as a question quietly rendering the wrong field. */
+const DOSSIER = [
+  ['who', 'Who they are'],
+  ['why', 'Why Qevik selected them'],
+  ['observed', 'What Qevik observed'],
+  ['evidence', 'What that rests on'],
+  ['produced', 'What Qevik produced'],
+  ['live', 'Where the artefact is'],
+  ['message', 'What exactly would be sent'],
+  ['recipient', 'Who would receive it'],
+  ['why_usable', 'Why that contact is usable'],
+  ['approval', 'What authorises it'],
+  ['sent', 'Whether it was sent'],
+  ['after', 'What happened afterwards'],
+];
+
+/* One renderer per question — not a generic dump, which is what this screen
+   replaces. Each draws a fact that exists; the API's own `detail` explains one
+   that does not. */
+const ANSWER = {
+  who: (a) => `${esc(a.name)}${a.website ? ` · <a href="${esc(a.website)}"
+      target="_blank" rel="noreferrer">${esc(a.website)}</a>` : ''}
+    ${a.geography ? `<span class="note">· ${esc(a.geography)}</span>` : ''}`,
+  why: (a) => `${esc(a.statement)} ${pill(a.state)}
+    ${a.needs_approval ? pill('needs a person', 'warn') : ''}
+    ${a.others ? `<span class="note">· ${a.others} other opportunit${
+      a.others === 1 ? 'y' : 'ies'} about them</span>` : ''}`,
+  /* Three counts, never two. An observation nobody could complete is not an
+     absence, and folding it in would report our own failure as their fault. */
+  observed: (a) => `${a.confirmed_absent} confirmed absent ·
+    ${a.confirmed_present} present ·
+    ${a.not_verified} ${a.not_verified === 1 ? 'was' : 'were'} not verified
+    <span class="note">of ${a.checked}, ${when(a.audited_at)}</span>`,
+  evidence: (a) => `${a.fingerprints.length} evidence fingerprint(s),
+    ${a.findings.length} recorded finding(s)`,
+  produced: (a) => `${esc(OFFER_NAME[a.offer] || a.offer || 'not recorded')}
+    ${a.accepted ? pill('accepted', 'ok') : pill('not accepted', 'wait')}
+    <span class="note">· mission ${esc(a.mission_id || '—')}</span>`,
+  live: (a) => `<a href="${esc(a.url)}" target="_blank" rel="noreferrer">${esc(a.url)}</a>`,
+  message: (a) => `${pill(a.status)} via ${esc(a.channel)}
+    <blockquote><strong>${esc(a.subject)}</strong>\n\n${esc(a.body)}</blockquote>`,
+  recipient: (a) => `<code>${esc(a.address)}</code> · ${esc(a.channel)}
+    ${a.is_the_drafted_recipient && !a.still_matches_the_record
+      ? pill('the record now says something else', 'warn') : ''}`,
+  why_usable: (a) => a.observations.map((o) => `read from
+    <a href="${esc(o.source_url)}" target="_blank" rel="noreferrer">${esc(o.source_url)}</a>`
+    ).join('<br>'),
+  approval: (a) => a.approvals.map((v) => `${pill(v.status)}
+    ${v.authorises_automated_send
+      ? pill('automated send authorised', 'warn')
+      : 'approved for a person to send by hand'}
+    <code>${esc(String(v.fingerprint || '').slice(0, 16))}</code>`).join('<br>'),
+  sent: (a) => a.sent.map((m) => `${when(m.at)} to <code>${esc(m.recipient)}</code>
+    ${m.provider_message_id ? `<code>${esc(m.provider_message_id)}</code>` : ''}`).join('<br>'),
+  after: (a) => a.events.length
+    ? a.events.map((e) => `${when(e.at)} · ${esc(e.kind)}
+        <span class="note">(${esc(e.factory)})</span>`).join('<br>')
+    : esc(a.detail),
+};
+
 async function businessDetail(id) {
-  const [research, roadmap, tasks] = await Promise.all([
-    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/research`).catch((e) => ({ error: e.message })),
-    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/roadmap`).catch(() => null),
-    API.get(`/api/customer/businesses/${encodeURIComponent(id)}/tasks`).catch(() => null),
-  ]);
-  if (research.error) return fail(research.error);
-  return `<div class="card" style="margin-top:1rem"><h3>${esc(id)}</h3>
-    ${tasks ? `<p class="note">${(tasks.outstanding || []).length} outstanding customer task(s),
-      ${(tasks.completed || []).length} done</p>` : ''}
-    <pre>${esc(JSON.stringify(roadmap || research, null, 2).slice(0, 4000))}</pre></div>`;
+  const found = await API.get(
+    `/api/discovery/${encodeURIComponent(id)}/dossier`).catch((e) => ({ error: e.message }));
+  if (found.error) return fail(found.error);
+  if (!found.known) return `<div class="card" style="margin-top:1rem">
+    <p class="note">${esc(found.detail || 'not found')}</p></div>`;
+  const a = found.answers;
+
+  /* What to do, above the file rather than under it: the only derived answer
+     here, and the only one acted on. It never offers to send — sending goes
+     through the approval boundary, and a suggestion shaped like a control is
+     the first step to becoming one. */
+  const next = `<div class="answer"><p class="lead">${esc(a.next.action)}</p>
+    <p class="lead-note">${esc(a.next.because)}</p></div>`;
+
+  const chain = DOSSIER.map(([key, question], i) => {
+    const answer = a[key];
+    if (!answer) return '';
+    const body = answer.known
+      ? (ANSWER[key] ? ANSWER[key](answer) : esc(answer.detail || ''))
+      : esc(answer.detail || 'not established');
+    return `<li class="${answer.known ? '' : 'gap'}">
+      <div class="q">${String(i + 1).padStart(2, '0')} · ${esc(question)}</div>
+      <div class="a">${body}</div>
+      <span class="owner">${esc(answer.from)}</span></li>`;
+  }).join('');
+
+  return `${next}<div class="card"><h3>${esc(a.who.name)}
+    <span class="note">${esc(id)}</span></h3>
+    <ul class="dossier">${chain}</ul>
+    <p class="note" style="margin-top:.9rem">${esc(found.note)}</p></div>`;
 }
 
 /* What is at a published address. Read from the record, never guessed: a

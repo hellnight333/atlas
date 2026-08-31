@@ -438,7 +438,23 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "our failure and theirs are drawn the same way")
     assert source.count("${coverageBlock}") == 2, (
         "coverage is not rendered on both branches of the discovery view")
-    assert Path(CONSOLE / "index.html").stat().st_size < 126_000
+    # One prospect, answered from the models that own each fact. The screen it
+    # replaced printed `JSON.stringify(roadmap || research)` into a `<pre>`,
+    # which is a structural answer to a commercial question.
+    assert "/dossier" in source, (
+        "an operator cannot read one prospect's file from the console")
+    assert "What exactly would be sent" in source, (
+        "the console does not show what a business would actually receive")
+    # The gaps are the point. A dossier that filled them would be most
+    # confident exactly where it knows least.
+    assert "gap" in source and "not established" in source, (
+        "a fact that does not exist is not drawn as missing")
+
+    # A ceiling on drift, not a technical limit: this console is one file, and
+    # without a number somebody has to justify crossing, it acquires a screen
+    # at a time until nobody can read it. Raise it for a capability an operator
+    # gains, as the prospect dossier did — never to fit a longer comment.
+    assert Path(CONSOLE / "index.html").stat().st_size < 132_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and

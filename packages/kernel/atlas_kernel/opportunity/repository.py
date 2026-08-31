@@ -736,6 +736,81 @@ class OpportunityRepository:
             session.commit()
         return changed
 
+    def signals_for(self, business_id: str, *, limit: int = 20,
+                    tenant: TenantId | None = None) -> list[dict]:
+        """TENANT_SCOPED. Every opportunity about one business, newest first.
+
+        Any state, and that is the point. This is not `open_signals` filtered:
+        an opportunity somebody approved is no longer open, so reading a
+        business's reason for selection out of the open list reports "no reason
+        established" for exactly the prospects that got furthest.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT * FROM atlas_signals
+                WHERE business_id = :business
+                  AND (:tenant = '' OR tenant_id = :tenant)
+                ORDER BY detected_at DESC, id LIMIT :limit
+                """),
+                {"business": business_id, "tenant": str(tenant or ""),
+                 "limit": max(1, min(int(limit), 100))},
+            ).mappings().all()
+        return [self._signal_from_row(row) for row in rows]
+
+    def publications_of(self, business_id: str) -> list[dict]:
+        """Everything Qevik has published for one business, oldest first.
+
+        Keyed on the business column rather than `detail->>'business_id'`,
+        which the demo writer does not always set. Both writers are read, and
+        each row keeps its `kind`: a demo and a delivered artefact are not the
+        same thing to say to somebody.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT id, kind, actor, opportunity_id, detail, at
+                FROM atlas_business_events
+                WHERE kind IN (:published, :demo) AND business_id = :business
+                ORDER BY at
+                """),
+                {"published": PUBLISHED_EVENT, "demo": "website_demo_published",
+                 "business": business_id},
+            ).mappings().all()
+        found = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            found.append({
+                "id": row["id"], "kind": row["kind"], "actor": row["actor"],
+                "signal_id": row["opportunity_id"],
+                "business_id": business_id,
+                "mission_id": detail.get("mission_id", ""),
+                "commit": detail.get("commit", ""),
+                "site_id": detail.get("site_id", ""),
+                "url": detail.get("url", ""),
+                # Absent on every record written before the field existed, and
+                # unknown stays unknown: a health check described as a website
+                # build is a false statement to the business it is about.
+                "offer": detail.get("offer", ""),
+                "at": row["at"].isoformat() if row["at"] else ""})
+        return found
+
+    def contact_provenance(self, business_id: str) -> list[dict]:
+        """Where each of this business's addresses was read from.
+
+        The answer to "why is this address considered usable". Written by
+        `record_contactability` when a page published one; empty for an address
+        that arrived any other way, which is itself the honest answer.
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT detail FROM atlas_business_events
+                WHERE kind = 'contact_observed' AND business_id = :business
+                ORDER BY at DESC
+                """), {"business": business_id}).mappings().all()
+        return [{"detail": row["detail"]} for row in rows]
+
     def audit_coverage(self) -> dict:
         """How much of the discovered population Qevik can currently see.
 
