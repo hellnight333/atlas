@@ -40,6 +40,9 @@ All rows measured on qevik-core-01 unless stated.
 | E-24 | C-41 | Businesses publish addresses Qevik can read | 100 sampled, 96 pages read, 0 our failure: **61 business email, 8 individual business contact, 8 only unusable, 19 none**. 88 distinct addresses, 5 shared across businesses, 12 businesses with several. 65 from `mailto`, 30 from page text | PRODUCTION-VERIFIED | 2026-08-31 | 2cbb4da | **Answers DQ-007: external discovery is unnecessary.** ~258 addressable extrapolated over 359 with a website — an extrapolation, not a count |
 | E-25 | C-41 | The classifier works on real production pages | Deployed and replayed: owner-on-Gmail → INDIVIDUAL (name "Ahmed Hassan", role "owner"); business channel → BUSINESS; testimonial → PERSONAL; theme placeholder → filtered | PRODUCTION-VERIFIED | 2026-08-31 | 2cbb4da | `by_email` is still 0 in canonical data. Discovery is deployed; the field fills through the nightly audit |
 
+| E-26 | C-41 | Contact discovery was deployed into code nobody runs | `infra/audit_discovered.py` last wrote a `website_audited` event on 2026-08-19; `website_verified` ran 2026-08-31 05:00. The script is scheduled by nothing | PRODUCTION-VERIFIED | 2026-08-31 | — | **Static inspection would not have found this.** I had told the owner the field would fill through the nightly audit; it would not have |
+| E-27 | C-41 | Addresses now populate from the nightly pass | One real `verify-recorded-websites` run: **19 addresses written, 19 `contact_observed` provenance events**, `email_is_addressable` true, 18 of 19 also phone-reachable | PRODUCTION-VERIFIED | 2026-08-31 | 9fb4d7d+ | ~48% of the pass's ~40 sites, against 72% by browser — the nightly pass uses plain `http-fetch`, so JavaScript-rendered contacts are not seen. An honest difference, not a defect |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not

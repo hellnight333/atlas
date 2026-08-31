@@ -243,6 +243,24 @@ sending, approval, suppression or cooldown from the module. Shared addresses
 already participate in the cooldown fixed earlier, which is keyed on the
 normalised recipient. Nothing sent.
 
+### Then production contradicted me
+I had said the field would fill through the nightly audit. It would not have.
+`infra/audit_discovered.py`, where contact discovery was wired, ran **once** on
+2026-08-19 and is scheduled by nothing — `website_audited` events stop there
+while `website_verified` ran at 05:00 this morning. The capability was deployed
+into code nobody executes.
+
+The nightly recurrence runs `verify-recorded-websites` through the toolrunner,
+whose audit step already holds every response body. Contact discovery moved
+there: no second fetch, one pass over a string already in memory.
+
+**Proven on a real run: 19 addresses written, 19 provenance events,
+`email_is_addressable` true for the first time, 18 of 19 also phone-reachable.**
+
+~48% against the browser's 72%, because the nightly pass uses plain
+`http-fetch` and does not see JavaScript-rendered contacts. Measured, not
+assumed; not worth a second fetching path yet.
+
 ### Next
-The nightly audit fills `Business.email`. Then HA-001 and HA-002 are the real
-blockers again.
+The backlog fills at ~40 sites a night. HA-001 and HA-002 are the real blockers
+again, and both are Ayoub's.

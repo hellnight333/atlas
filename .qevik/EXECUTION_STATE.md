@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-31
 Repository revision: 2cbb4da (main)
-Gate result: 3913 passed, 33 skipped, 0 failed
+Gate result: 3917 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -79,9 +79,15 @@ are email-contactable — 72%.** Extrapolated over the 359 with a website, rough
 So the path is now: nightly audit fills `Business.email` → HA-001 (DNS) →
 HA-002 (SMTP) → one prepared message → explicit approval → first send.
 
-`by_email` is still 0 in canonical data. Discovery is deployed and the field
-fills as the audit revisits each business; that is the deterministic recovery,
-not a gap.
+**19 addresses are now in canonical data**, from one real nightly pass, each
+with a `contact_observed` provenance event. `email_is_addressable` is true for
+the first time. The rest fill as the pass works through the backlog at ~40
+sites a night.
+
+One caveat measured rather than assumed: the nightly pass uses plain
+`http-fetch` and reached ~48% where the browser reached 72%. JavaScript-rendered
+contact details are not seen by it. That is a known difference, not a defect,
+and it is not worth a second fetching path until the backlog is exhausted.
 
 ## Blocked tracks
 
