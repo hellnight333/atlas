@@ -312,6 +312,128 @@ def extract_overpass(evidence: Evidence, *,
     return found
 
 
+# ============================================================ Google Places
+
+#: Reads a Places `searchText` response. The second declared source, and the
+#: reason the first one's note says "chosen as the *first* real source" rather
+#: than the only one.
+#:
+#: Its absence was a real gap. `sources/google_places.py` could fetch from
+#: Places and nothing could turn the result into sightings, so 352 of 412
+#: businesses in production arrived through a script that wrote business rows
+#: directly and no sighting — leaving them with no discovery state and no
+#: `claims_about_the_world`, invisible to the discovery feed for ever.
+#:
+#: `can_evidence_novelty=False`, like OpenStreetMap and for the same reason:
+#: Places returns what it holds and never states that a listing is new to it.
+#: A sighting from here can be `NEW_TO_QEVIK` or `KNOWN` and can never be
+#: `PROVEN_NEW_TO_SOURCE`, which is the honest ceiling for a source that makes
+#: no novelty claim.
+GOOGLE_PLACES = Extractor(
+    id="google-places",
+    source="google-places",
+    evidence_kind=EvidenceKind.HTTP_RESPONSE,
+    content_type="json",
+    can_evidence_novelty=False,
+    fields=(
+        Field_(name="name", reads=("displayName.text", "displayName"),
+               required=True,
+               notes="A place with no display name cannot be written to or "
+                     "researched, and would arrive as an anonymous row."),
+        Field_(name="source_url", reads=("websiteUri",),
+               notes="Places states one website or none. Unlike OSM there is "
+                     "no second key to fall back to, and inventing one would "
+                     "be reading a field the source did not return."),
+    ),
+    notes=("`city` and `country` are deliberately absent, and the model refused "
+           "an earlier version of this that filled them. Places returns one "
+           "`formattedAddress` rather than structured parts, so a city read out "
+           "of it would be Qevik parsing an address and calling the result a "
+           "fact the source stated — the same rule OpenStreetMap's entry "
+           "applies to its bounding box.\n\n"
+           "`nationalPhoneNumber` is fetched and not extracted here for a "
+           "different reason: a phone is not a `Sighting` field. A sighting "
+           "records that a source saw a business; how to reach it belongs to "
+           "the business record, and `Field_` refuses any name that is not a "
+           "declared Sighting field rather than letting an extractor grow its "
+           "own shape."),
+)
+
+
+def _nested(place: dict, path: str) -> str:
+    """One dotted path out of a Places record.
+
+    Places nests where OSM is flat: `displayName` is an object carrying `text`
+    and `languageCode`. Reading it as a string would produce a name like
+    `{'text': ...}`, which is the sort of value that reaches a real business in
+    a real message.
+    """
+    current: object = place
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(part)
+    return str(current).strip() if isinstance(current, str) else ""
+
+
+def extract_google_places(evidence: Evidence, *,
+                          extractor: Extractor = GOOGLE_PLACES
+                          ) -> list[Extraction]:
+    """Every named place in a Places response, as declared extractions."""
+    _refuse_wrong_evidence(extractor, evidence)
+    try:
+        payload = json.loads(str(evidence.observed.get("body")))
+    except json.JSONDecodeError as broken:
+        raise ExtractionError(
+            f"{extractor.id} could not read the response as JSON: {broken}"
+        ) from broken
+
+    places = payload.get("places")
+    if not isinstance(places, list):
+        # An empty answer is a list; a missing one is a different response.
+        # Telling them apart is what stops "Places returned nothing" and
+        # "we called the wrong endpoint" reading the same.
+        raise ExtractionError(
+            f"{extractor.id} expects a Places response with a `places` list "
+            "and this has none.")
+
+    found: list[Extraction] = []
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        stated: set[str] = set()
+        fields: dict[str, str] = {}
+        for rule in extractor.fields:
+            value = ""
+            for key in rule.reads:
+                value = _nested(place, key)
+                if value:
+                    break
+            if value:
+                fields[rule.name] = value
+                stated.add(rule.name)
+            elif rule.required:
+                break
+        else:
+            place_id = str(place.get("id") or "").strip()
+            if not place_id:
+                # Without it a second scan cannot recognise the same listing,
+                # and every run would report the whole city as new.
+                continue
+            found.append(Extraction(
+                extractor=extractor.id,
+                source_id=place_id,
+                fields=fields,
+                presence=extractor.presence_for(stated),
+                evidence_fingerprint=evidence.fingerprint,
+                evidence_source=evidence.source,
+                # Kept, not promoted. Opening hours are useful to a detector
+                # and are not a Sighting field.
+                extra={"has_opening_hours": bool(place.get("regularOpeningHours"))},
+            ))
+    return found
+
+
 def sighting_from(extraction: Extraction, evidence: Evidence, *,
                   source: str, origin: Origin = Origin.SCAN,
                   novelty: Novelty | None = None) -> Sighting:
@@ -338,7 +460,7 @@ def sighting_from(extraction: Extraction, evidence: Evidence, *,
 #: Extractors this deployment has. In code, beside the other registries, for the
 #: same reason: what a source is allowed to produce is a decision somebody makes
 #: on purpose.
-EXTRACTORS: tuple[Extractor, ...] = (OPENSTREETMAP,)
+EXTRACTORS: tuple[Extractor, ...] = (OPENSTREETMAP, GOOGLE_PLACES)
 
 
 class UnknownExtractor(Exception):
