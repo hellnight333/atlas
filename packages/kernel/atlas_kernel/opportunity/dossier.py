@@ -67,6 +67,24 @@ def _answer(known: bool, source: str, **detail: Any) -> dict:
     return {"known": known, "from": source, **detail}
 
 
+def _age(stamp: str) -> int | None:
+    """Whole days since an observation was made, or None if it does not say.
+
+    `None`, never a large number: an audit with no timestamp is one whose age
+    is unknown, and reporting that as very old is a claim about a record rather
+    than a reading of it.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        then = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=UTC)
+    return max(0, (datetime.now(UTC) - then).days)
+
+
 def _detail(raw: Any) -> dict:
     if isinstance(raw, str):
         try:
@@ -144,6 +162,12 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
             confirmed_present=confirmed_present,
             not_verified=len(observations) - confirmed_absent - confirmed_present,
             url=audit.get("url", ""), audited_at=audit.get("audited_at", ""),
+            # How the page was read, because it decides what an absence is
+            # worth: a browser renders a phone number a plain fetch never sees.
+            # Empty on every record written before the field existed, and that
+            # stays unknown rather than being assumed to be either kind.
+            read_by=audit.get("read_by", ""),
+            days_old=_age(audit.get("audited_at", "")),
             observations=observations)
 
     # 4. What the claim rests on.

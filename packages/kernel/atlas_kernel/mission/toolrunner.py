@@ -45,6 +45,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..fabric.agents import Agent, Registry, UnknownAgent
@@ -1213,6 +1214,12 @@ class ToolAgent:
         # deployed into code nobody executes, and `Business.email` stayed empty
         # while the capability looked shipped.
         self._remember_contacts(businesses, responses)
+        # What each page demonstrably has, in all three states. `audit_pass`
+        # above produces `Finding`s, which are absences only — so until this
+        # existed the nightly pass refreshed the defects and never refreshed
+        # the observations, and every consumer that reads observations was
+        # reading `infra/audit_discovered.py`'s output from 2026-08-19.
+        recorded, compared = self._record_audit(businesses, responses)
         signals = detect.from_verification(audited, businesses, responses,
                                            source=self._recipe.id)
         found.steps.append(Step(
@@ -1221,7 +1228,9 @@ class ToolAgent:
             passed=True,
             detail=(f"{len(found.evidence)} response(s) read, "
                     f"{sum(len(f) for f in audited.values())} finding(s) on "
-                    f"{len(audited)} site(s), {len(signals)} opportunity(ies)")))
+                    f"{len(audited)} site(s), {len(signals)} opportunity(ies), "
+                    f"{recorded} observation record(s), "
+                    f"{compared} compared with a previous one")))
         if not signals:
             return len(audited)
 
@@ -1235,6 +1244,126 @@ class ToolAgent:
             except Exception:                     # noqa: BLE001 - reported
                 log.exception("could not store signal %s", scored.signal_id)
         return len(audited)
+
+    def _record_audit(self, businesses: dict, responses: dict) -> tuple[int, int]:
+        """Write what each page demonstrably has, and how it differs from before.
+
+        `audit_pass` produces `Finding`s, and a finding is an *absence*. The
+        record a health check reports from — what was checked, what was there,
+        and what could not be told either way — comes from `website_audit`,
+        and nothing scheduled had ever called it: `infra/audit_discovered.py`
+        wrote 336 of these on 2026-08-19 and `infra/import_audits.py` 60 more
+        from a JSON file, and neither is in `RECURRENCES` or in any timer. So
+        the defects refreshed nightly while the observations behind every
+        health check stayed twelve days old.
+
+        The same engine, on this pass's own bodies. No second audit
+        implementation, no second fetch and no new schedule — the cadence is
+        the recurrence that already runs.
+
+        ## What it refuses to audit
+
+        Three, and each would put a false claim in front of a business:
+
+        **A truncated body.** `crawler.evidence_from` keeps the first
+        `BODY_KEPT` bytes, and `audit_html` has no notion of a document that
+        stopped early — it would report everything below the cut as absent.
+        `WebsiteDetector` guards this with `body_complete`; this is the same
+        rule for the same reason.
+
+        **An error page.** A 500 says nothing about the homepage's booking
+        link. **And a refusal is not a response**: status 0 with an error is
+        our own guard or a dead host, and auditing it would report a business
+        Qevik was not allowed to fetch as a business with a broken site.
+
+        **Anything that is not HTML.** A PDF with no `<title>` is not a defect.
+
+        A business it refuses keeps the audit it already had, which is the safe
+        direction: stale and true beats fresh and invented.
+        """
+        from ..opportunity.audit_import import audit_event
+        from ..opportunity.website_audit import audit_html
+
+        record = getattr(self._repository, "record_event", None)
+        latest = getattr(self._repository, "latest_audit", None)
+        if not (callable(record) and callable(latest)):
+            return 0, 0
+
+        written = compared = 0
+        for business_id, piece in responses.items():
+            if business_id not in businesses:
+                continue
+            observed = piece.observed or {}
+            body = observed.get("body")
+            status = observed.get("status") or 0
+            if (not isinstance(body, str) or not body
+                    or observed.get("body_truncated")
+                    or observed.get("error")
+                    or not (200 <= int(status) < 400)):
+                continue
+            content_type = str(observed.get("content_type") or "")
+            if content_type and "html" not in content_type.lower():
+                continue
+            try:
+                findings = audit_html(
+                    body, url=str(observed.get("url") or piece.source or ""),
+                    page_bytes=int(observed.get("bytes") or len(body)))
+                if not findings:
+                    continue
+                # Read before the new one is written, or the comparison is
+                # against itself. The previous audit stays exactly where it is:
+                # history is immutable and the delta is worthless if the
+                # baseline moves.
+                before = latest(business_id) or {}
+                audit = {
+                    "url": str(observed.get("url") or piece.source or ""),
+                    "http_status": int(status),
+                    "load_ms": observed.get("elapsed_ms"),
+                    "page_bytes": int(observed.get("bytes") or len(body)),
+                    "audited_at": datetime.now(UTC).isoformat(),
+                    "findings": [f.model_dump(mode="json") for f in findings],
+                }
+                record(audit_event(business_id, audit,
+                                   read_by=f"recipe:{self._recipe.id}/http-fetch"))
+                written += 1
+                if self._compare_audit(business_id, before, audit):
+                    compared += 1
+            except Exception:                     # noqa: BLE001 - reported
+                # One site's audit is not worth the pass. It keeps the record
+                # it had and is offered again on the next run.
+                log.exception("could not record the audit for %s", business_id)
+        return written, compared
+
+    def _compare_audit(self, business_id: str, before: dict,
+                       audit: dict) -> bool:
+        """Record how this reading differs from the last one. Overwrites nothing.
+
+        `reevaluation.compare` is the existing policy and it is the right one:
+        a feature confirmed before and absent now is a fact about their site, a
+        feature confirmed before and unverifiable now is a fact about **our**
+        checking, and the two must never be summed. It has existed since M-13
+        and was reachable only from two hand-run scripts.
+
+        Nothing downstream is invalidated by this. An approved message, a
+        published artefact and a recorded approval all stand — what the delta
+        does is make it possible to see that the evidence under one has moved,
+        which is a decision for a person and not for a nightly pass.
+        """
+        previous = before.get("observations") or []
+        if not previous:
+            return False
+        from . import reevaluation
+
+        comparison = reevaluation.compare(
+            business_id=business_id, tenant=self._tenant,
+            previous=previous, current=audit["findings"])
+        if not comparison.anything_changed:
+            return False
+        record = getattr(self._repository, "record_event", None)
+        if callable(record):
+            record(reevaluation.to_event(
+                comparison, actor=f"recipe:{self._recipe.id}"))
+        return True
 
     def _remember_contacts(self, businesses: dict, responses: dict) -> None:
         """Record the addresses each page published, from this pass's own bodies.

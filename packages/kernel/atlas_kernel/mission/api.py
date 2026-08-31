@@ -665,9 +665,17 @@ def build_router() -> APIRouter:
         not a gap. This is that gap, with the part that is ours separated from
         the part that is theirs.
 
+        Carries freshness beside reach, because they are one question. A
+        business Qevik audited a fortnight ago is not one it can currently see:
+        the nightly pass refreshed findings and left the observations behind
+        every health check standing at 2026-08-19, and nothing said so.
+
         **Declared above `/{mission_id}`**, like every sibling here.
         """
-        return _opportunities(request).audit_coverage()
+        memory = _opportunities(request)
+        found = memory.audit_coverage()
+        found["freshness"] = memory.audit_freshness()
+        return found
 
     @router.get("/inbound")
     def inbound(request: Request, limit: int = 200,

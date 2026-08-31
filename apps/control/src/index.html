@@ -1570,6 +1570,30 @@ async function opportunities() {
     ${rows.length ? `<p class="note">${esc(found.note || '')}</p>` : ''}`;
 }
 
+/* How old what Qevik has observed actually is.
+ *
+ * Beside reach rather than on its own screen, because they are one question:
+ * a business audited a fortnight ago is not one the system can currently see.
+ * It went unnoticed for twelve days that the nightly pass refreshed the
+ * defects and left the observations behind every health check standing still,
+ * so the cadence is drawn as a measurement and never as a claim about the
+ * schedule.
+ */
+function freshness(f) {
+  if (!f || !f.with_observations) return '';
+  const stale = f.older_than_a_week;
+  return `<p class="note" style="margin-top:.6rem">
+    <strong>${esc(String(f.fresh_within_two_days))}</strong> observed in the
+    last two days, ${esc(String(f.fresh_within_a_week))} within a week,
+    ${stale ? pill(String(stale) + ' older than a week', 'warn')
+            : pill('none older than a week', 'ok')},
+    ${esc(String(f.never_observed))} never observed.
+    Newest ${when(f.newest)}, oldest ${when(f.oldest)}.</p>
+  <p class="note">A site that answered is not a site that was read:
+    <code>website_verified</code> records the turn and carries no
+    observations.</p>`;
+}
+
 async function discoveries() {
   const [found, vocabulary, coverage] = await Promise.all([
     API.get('/api/discovery?limit=25').catch(() => null),
@@ -1600,6 +1624,7 @@ async function discoveries() {
         evidence about and does not, for a reason that was never theirs. The
         nightly verification revisits them; this number should reach zero on
         its own.</p>` : ''}
+      ${freshness(c.freshness)}
       <p class="note">${esc(c.note || '')}</p></div>`;
 
   if (!found) {
@@ -2047,7 +2072,10 @@ const ANSWER = {
   observed: (a) => `${a.confirmed_absent} confirmed absent ·
     ${a.confirmed_present} present ·
     ${a.not_verified} ${a.not_verified === 1 ? 'was' : 'were'} not verified
-    <span class="note">of ${a.checked}, ${when(a.audited_at)}</span>`,
+    <span class="note">of ${a.checked}, ${when(a.audited_at)}</span>
+    ${a.days_old !== null && a.days_old > 7
+      ? pill(a.days_old + ' days old', 'warn') : ''}
+    ${a.read_by ? '' : pill('read method not recorded', 'wait')}`,
   evidence: (a) => `${a.fingerprints.length} evidence fingerprint(s),
     ${a.findings.length} recorded finding(s)`,
   produced: (a) => `${esc(OFFER_NAME[a.offer] || a.offer || 'not recorded')}

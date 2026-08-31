@@ -264,3 +264,57 @@ assumed; not worth a second fetching path yet.
 ### Next
 The backlog fills at ~40 sites a night. HA-001 and HA-002 are the real blockers
 again, and both are Ayoub's.
+
+## The prospect dossier, and what it found on first contact with real data
+
+Thirteen questions a person asks before writing to a stranger, each read from
+the model that owns it: `GET /api/discovery/{business_id}/dossier`, drawn at
+`#/businesses/<id>` as a chain rather than a grid, with a break in the rule
+wherever a fact does not exist.
+
+It composes nothing. What will be sent is the stored draft's own subject and
+body — a second rendering here would be a second answer to a question that has
+one, and the approval fingerprint would faithfully certify the difference
+between what a person read and what went out. A structural test parses the
+module and refuses any import that is not a read, negative-controlled against a
+mutant that imports `prepare`.
+
+### Three facts were being read from the wrong place
+
+Each was invisible statically and each was caught by a test or by production:
+
+* `open_signals` stops returning a signal the moment somebody approves it, so
+  reading the reason for selection from it reports "no reason to approach them"
+  for exactly the prospects that got furthest.
+* Businesses carry no tenant at all — `save_business` writes none — so scoping
+  the dossier on the company record found nothing for anybody. The gate sits on
+  the signal, which is the row that has one.
+* `decision == "accept"` matched nothing; the repository's word is `accepted`.
+
+### Then production found two more
+
+Read against four real prospects, it told the operator to "Prepare the message"
+for Apex Plumbing. Nobody can: its publication records no offer, `prepare`
+refuses a publication that cannot say what it is, and the dossier printed that
+absence two lines above the instruction.
+
+Behind it, the larger one. **Four of the five addresses Qevik has put on the
+internet never recorded what they published.** Written before the field existed,
+never re-published — so two businesses with a live artefact, an accepted review
+and a reachable number were permanently unreachable, and nothing said so.
+
+The value was never lost: `offer` is read from the delivering mission's recipe
+at publication time, and that recipe id is on the mission's own ledger. It now
+resolves on read — not a backfill, because the events are append-only and a
+resolver cannot go stale or need remembering — and `offer_from` says whether an
+offer was recorded or recovered, because a reader who cannot tell them apart
+cannot audit either. It refuses at every break in the chain, each with its own
+test.
+
+Before: 1 of 3 businesses could be written about. After: 3 of 3, two of them
+blocked only on `NO_SENDING_IDENTITY`.
+
+### Next
+The blockers are HA-001 and HA-002, both Ayoub's. `website_audited` has not run
+since 2026-08-19 — the nightly pass writes `website_verified`, which carries
+`{answered, findings}` and no observations — so fact 3 is honest but ageing.

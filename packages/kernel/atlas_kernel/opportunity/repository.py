@@ -856,6 +856,57 @@ class OpportunityRepository:
                            else ""),
         }
 
+    def audit_freshness(self) -> dict:
+        """How old what Qevik has observed actually is.
+
+        The cadence, made observable. A recurrence that says it runs nightly is
+        a declaration; this is the measurement, and the two disagreed for
+        twelve days without anything saying so — the nightly pass refreshed
+        findings and never refreshed observations, so `website_verified` moved
+        every night while `website_audited` stood still.
+
+        Reported as a distribution rather than one number, because "the newest
+        audit is from today" is true of a population whose median is a
+        fortnight old.
+        """
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                WITH latest AS (
+                    SELECT DISTINCT ON (business_id) business_id, at,
+                           detail->>'read_by' AS read_by
+                    FROM atlas_business_events WHERE kind = 'website_audited'
+                    ORDER BY business_id, at DESC)
+                SELECT
+                  (SELECT count(*) FROM atlas_businesses
+                    WHERE website IS NOT NULL AND website <> '') with_a_website,
+                  (SELECT count(*) FROM latest) with_observations,
+                  (SELECT count(*) FROM latest WHERE at > now() - interval '2 days') last_two_days,
+                  (SELECT count(*) FROM latest WHERE at > now() - interval '8 days') last_week,
+                  (SELECT count(*) FROM latest WHERE coalesce(read_by, '') <> '') read_by_recorded,
+                  (SELECT max(at) FROM latest) newest,
+                  (SELECT min(at) FROM latest) oldest
+                """)).mappings().first()
+        with_site = int(row["with_a_website"] or 0)
+        have = int(row["with_observations"] or 0)
+        return {
+            "with_a_website": with_site,
+            "with_observations": have,
+            "never_observed": max(0, with_site - have),
+            "fresh_within_two_days": int(row["last_two_days"] or 0),
+            "fresh_within_a_week": int(row["last_week"] or 0),
+            "older_than_a_week": max(0, have - int(row["last_week"] or 0)),
+            # How the page was read is recorded only from the pass that writes
+            # it. An older row says nothing, and that is reported as unknown
+            # rather than assumed to be either kind.
+            "read_method_recorded": int(row["read_by_recorded"] or 0),
+            "newest": row["newest"].isoformat() if row["newest"] else "",
+            "oldest": row["oldest"].isoformat() if row["oldest"] else "",
+            "note": ("`website_verified` is not this. It records that a site "
+                     "had its turn and whether it answered; it carries no "
+                     "observations and must never be read as a fresh audit."),
+        }
+
     def contact_provenance(self, business_id: str) -> list[dict]:
         """Where each of this business's addresses was read from.
 

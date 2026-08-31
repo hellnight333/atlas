@@ -210,7 +210,8 @@ def commercial_score(audit: dict) -> tuple[float, list[str]]:
 
 
 def audit_event(
-    business_id: str, audit: dict, *, opportunity_id: str | None = None
+    business_id: str, audit: dict, *, opportunity_id: str | None = None,
+    read_by: str = "",
 ) -> BusinessEvent:
     """The whole audit, all three states, as permanent history.
 
@@ -218,6 +219,13 @@ def audit_event(
     It keeps `present` and `unverified` alongside `not_found`, which findings
     deliberately do not — so the timeline can show that a feature was never
     checked, rather than leaving a silence that later reads as absence.
+
+    `read_by` says how the page was obtained, because that decides what an
+    absence is worth. A browser renders a phone number a plain fetch never
+    sees, so `not_found` from an unrendered read and `not_found` from a
+    rendered one are not the same claim. Recorded rather than reasoned about
+    here: the events that predate this field say nothing, and a default would
+    assert something about them that nobody checked.
     """
     counts = {"present": 0, "not_found": 0, "unverified": 0}
     for row in audit.get("findings", []):
@@ -236,6 +244,7 @@ def audit_event(
             "load_ms": audit.get("load_ms"),
             "page_bytes": audit.get("page_bytes"),
             "audited_at": str(audit.get("audited_at", "")),
+            "read_by": read_by,
             "counts": counts,
             "commercial_score": score,
             "score_reasons": reasons,
