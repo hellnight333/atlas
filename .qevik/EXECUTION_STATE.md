@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 1bd4ad0 (main)
-Gate result: 3839 passed, 33 skipped, 0 failed
+Repository revision: 889c07a (main)
+Gate result: 3861 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -65,8 +65,15 @@ The candidates, with why each is not obviously next:
    spend somebody else's bandwidth to produce a figure the schedule will give
    for free.
 
-The honest reading: the next genuinely valuable step is **not** more capability.
-It is the first real send, and that is HA-001 and HA-002.
+**The critical path changed on 2026-08-31.** The first real send was thought to
+be blocked on HA-001 (DNS) and HA-002 (SMTP). It is not: 412 businesses carry
+**zero** email addresses and no source collects one, so completing both enables
+email to nobody. The first send by email now needs HA-008 — a decision about
+where addresses come from — before the credentials matter.
+
+The channel that *does* have recipients is WhatsApp: 349 businesses have a
+phone, and WhatsApp is manual by standing instruction. The five approved drafts
+remain the only path to a first real interaction.
 
 ## Blocked tracks
 
@@ -122,6 +129,8 @@ Three batches, three defects, none visible from the code:
    websites.
 3. The contact cooldown could be stepped around by duplicate business records —
    four phone numbers across nine records, each with its own 14-day window.
+4. 412 businesses and not one email address, while DNS and SMTP were being
+   treated as the last blockers before a first send.
 
 Every one was found by reading what the running system produced.
 

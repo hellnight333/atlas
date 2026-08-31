@@ -170,5 +170,37 @@ HA-001 and HA-002 cannot be executed by Claude: the Cloudflare zone and the
 mailbox password are Ayoub's, and the first send is an irreversible external act
 needing his authorisation.
 
+## 2026-08-31 — Session 5 (B-12, then the critical path)
+
+### B-12 closed at its real boundary
+`EXTRACTORS` was a one-tuple holding OpenStreetMap, so no recipe could name
+Places as its extractor and no Places response could become a sighting — the
+source adapter existed the whole time and nothing could read what it fetched.
+`GOOGLE_PLACES` is declared with the existing model: no novelty claim, no city
+or country (the model refused a version that filled them from
+`formattedAddress`), no phone (not a Sighting field).
+
+**Nothing was backfilled.** The `business_discovered` events do preserve real
+evidence — `place_id`, `query`, listed phone and website — but a sighting
+carries a discovery state, and that state depends on whether the business was
+known to Qevik at the moment it was seen. All 352 are known today.
+Reconstructing 2026-08-19 would be inference presented as observation in the one
+field this system is most careful about.
+
+### Then production said something that changes the plan
+**412 businesses. Zero email addresses.** No source collects one: OSM's
+extractor reads name/source_url/city/country, the Places field mask has no email
+field because the API does not return one, and nothing reads contacts out of the
+audited homepages. 0 outreach rows have ever been addressed to an email.
+
+So **HA-001 and HA-002 are necessary and not sufficient.** Completing both
+enables email to nobody. Nothing in the system said this — outreach reports
+`NO_SENDING_IDENTITY`, which reads as "the sender is missing" rather than "there
+is no recipient either". The DNS action now says so in its own reason.
+
+HA-008 and DQ-007 raised: where do addresses come from? Reading `mailto:` off an
+audited homepage is technically deterministic, and it is collecting contact
+details for unsolicited outreach — the substance of DQ-005, not mine to decide.
+
 ### Next
-B-12: 353 businesses have no sighting. Deterministic and unblocked.
+No deterministic slice remains that does not need a decision or a credential.

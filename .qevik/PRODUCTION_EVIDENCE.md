@@ -34,6 +34,9 @@ All rows measured on qevik-core-01 unless stated.
 | E-20 | C-37 | The cooldown could be stepped around by duplicate records | 4 phone numbers held by 9 business records. On a real 3-record number: old rule blocked the 2nd = False, new rule = True, unrelated number = not blocked | PRODUCTION-VERIFIED | 2026-08-31 | 1bd4ad0 | Exercised against production data. **No message was sent** — the history has zero sends, so the check was made by recording one in memory |
 | E-21 | C-38 | Most businesses have no recorded provenance | 412 businesses, 59 with a sighting, 353 without; every sighting is `KNOWN` | PRODUCTION-VERIFIED | 2026-08-31 | 1bd4ad0 | The discovery feed is permanently empty and now explains why. The 352 Google Places businesses arrived by a path that writes no sighting |
 
+| E-22 | C-39 | Places responses can become sightings | Extractor deployed and replayed against a real `place_id` from the ledger: name and source_url extracted, novelty None, city and country empty | PRODUCTION-VERIFIED | 2026-08-31 | fe79f27 | Places *scanning* stays blocked on HA-006. Nothing was backfilled |
+| E-23 | C-40, C-13 | The email channel has no recipients | 412 businesses, 0 with an email, 349 with a phone, 0 outreach rows ever addressed to an email; no extractor or field mask collects one | PRODUCTION-VERIFIED | 2026-08-31 | 889c07a | **Changes the critical path.** HA-001 and HA-002 are no longer sufficient for a first send |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not
