@@ -37,6 +37,9 @@ All rows measured on qevik-core-01 unless stated.
 | E-22 | C-39 | Places responses can become sightings | Extractor deployed and replayed against a real `place_id` from the ledger: name and source_url extracted, novelty None, city and country empty | PRODUCTION-VERIFIED | 2026-08-31 | fe79f27 | Places *scanning* stays blocked on HA-006. Nothing was backfilled |
 | E-23 | C-40, C-13 | The email channel has no recipients | 412 businesses, 0 with an email, 349 with a phone, 0 outreach rows ever addressed to an email; no extractor or field mask collects one | PRODUCTION-VERIFIED | 2026-08-31 | 889c07a | **Changes the critical path.** HA-001 and HA-002 are no longer sufficient for a first send |
 
+| E-24 | C-41 | Businesses publish addresses Qevik can read | 100 sampled, 96 pages read, 0 our failure: **61 business email, 8 individual business contact, 8 only unusable, 19 none**. 88 distinct addresses, 5 shared across businesses, 12 businesses with several. 65 from `mailto`, 30 from page text | PRODUCTION-VERIFIED | 2026-08-31 | 2cbb4da | **Answers DQ-007: external discovery is unnecessary.** ~258 addressable extrapolated over 359 with a website — an extrapolation, not a count |
+| E-25 | C-41 | The classifier works on real production pages | Deployed and replayed: owner-on-Gmail → INDIVIDUAL (name "Ahmed Hassan", role "owner"); business channel → BUSINESS; testimonial → PERSONAL; theme placeholder → filtered | PRODUCTION-VERIFIED | 2026-08-31 | 2cbb4da | `by_email` is still 0 in canonical data. Discovery is deployed; the field fills through the nightly audit |
+
 ## What is deliberately absent
 
 There is no COMMERCIAL-VERIFIED row anywhere in this file, and there will not

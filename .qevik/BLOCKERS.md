@@ -20,7 +20,7 @@ the project blocked; every row names what can continue instead.
 
 | B-12 | 353 businesses have no sighting, so no discovery provenance | CODE | C-38 | The Places import path writes no sighting | none | Yes | Every business carries a sighting and a discovery state | OPEN |
 
-| B-13 | No business has an email address | PRODUCT_DECISION | C-13 email sending | DQ-007 | none — a decision, not a credential | Yes | A source of addresses exists, or email outreach is dropped | OPEN |
+| B-13 | No business has an email address | PRODUCT_DECISION | C-13 email sending | DQ-007 | none | Yes | ~~A source of addresses exists~~ — **RESOLVED 2026-08-31**: contact discovery reads them from the pages the audit already fetches. 72% of a real sample. Canonical data fills through the nightly pass | RESOLVED |
 
 ## The rule this file exists to enforce
 

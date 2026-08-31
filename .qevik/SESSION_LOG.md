@@ -202,5 +202,47 @@ HA-008 and DQ-007 raised: where do addresses come from? Reading `mailto:` off an
 audited homepage is technically deterministic, and it is collecting contact
 details for unsolicited outreach — the substance of DQ-005, not mine to decide.
 
+## 2026-08-31 — Session 6 (contact discovery, DQ-007)
+
+### The framing that was wrong
+"412 businesses, 0 email addresses" described Qevik's canonical data, not what
+those businesses publish. They publish addresses; nothing was reading them.
+
+### Measured on 100 real businesses
+96 pages read, 0 our own failure, 4 sites did not answer:
+- **61** publish a business channel
+- **8** present a named individual as the contact
+- **8** carry only addresses that cannot be tied to the business
+- **19** publish none
+- **69 email-contactable — 72%**, all 69 also reachable by phone
+- 88 distinct addresses; **5 shared across businesses**; 12 businesses with
+  several; **65 from `mailto`, 30 from page text** — a mailto-only reader would
+  have missed a third
+
+**External discovery is unnecessary.** No LinkedIn, no social, no open search.
+
+### Built
+Four contact types decided from page *context*, never the domain:
+BUSINESS_EMAIL, INDIVIDUAL_BUSINESS_CONTACT, PERSONAL_OR_AMBIGUOUS, UNKNOWN.
+An owner-operated business whose contact is a Gmail address is inventory; a
+testimonial address on the business's own domain is not.
+
+Full provenance per address: page, exact string, type, displayed name, displayed
+role, association, extraction method, timestamp.
+
+### Bugs found in my own work, by measuring
+- `mailto:` addresses live in attributes, so stripping tags before reading
+  context lost them entirely — the owner example classified as UNKNOWN.
+- The name extractor returned "Owner" instead of "Ahmed Hassan".
+- `you@company.com`, a shipped theme placeholder, was counted as two
+  businesses' contact.
+
+### Boundaries held
+Discovery is not authorisation — a structural test refuses any reference to
+sending, approval, suppression or cooldown from the module. Shared addresses
+already participate in the cooldown fixed earlier, which is keyed on the
+normalised recipient. Nothing sent.
+
 ### Next
-No deterministic slice remains that does not need a decision or a credential.
+The nightly audit fills `Business.email`. Then HA-001 and HA-002 are the real
+blockers again.

@@ -25,6 +25,7 @@ Reconciled against the repository at 1a46afa and against qevik-core-01 on
 | C-12 | Outreach approval | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | Fingerprint-bound; 409 on mismatch |
 | C-13 | **SMTP delivery** | Commercial | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | **BLOCKED** | HA-001, HA-002 — **and B-13: 0 of 412 businesses carry an email address, so clearing those two sends to nobody**. Zero messages sent, ever |
 | C-39 | Places extractor | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | Replayed a real production `place_id`; no novelty claim, no city, no country, no phone |
+| C-41 | Contact discovery | Commercial | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 96 real pages read, **69 email-contactable (72%)**. Four contact types from page context, never the domain. Canonical `by_email` still 0 — it fills through the nightly audit |
 | C-40 | Outreach reachability | Control plane | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | PRODUCTION-VERIFIED | 412 businesses, 0 by email, 349 by phone, 63 by neither |
 | C-14 | Enquiry delivery evidence | Commercial | ✓ | ✓ | — | — | — | ✗ | ✗ | BLOCKED | Depends on C-13 |
 | C-15 | Worker registration | Fabric | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | PRODUCTION-VERIFIED | 5 workers, one agent each, fresh |

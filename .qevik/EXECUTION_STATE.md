@@ -1,8 +1,8 @@
 # QEVIK EXECUTION STATE
 
 Last updated: 2026-08-31
-Repository revision: 889c07a (main)
-Gate result: 3861 passed, 33 skipped, 0 failed
+Repository revision: 2cbb4da (main)
+Gate result: 3913 passed, 33 skipped, 0 failed
 
 ## Overall position
 
@@ -65,15 +65,23 @@ The candidates, with why each is not obviously next:
    spend somebody else's bandwidth to produce a figure the schedule will give
    for free.
 
-**The critical path changed on 2026-08-31.** The first real send was thought to
-be blocked on HA-001 (DNS) and HA-002 (SMTP). It is not: 412 businesses carry
-**zero** email addresses and no source collects one, so completing both enables
-email to nobody. The first send by email now needs HA-008 — a decision about
-where addresses come from — before the credentials matter.
+**The critical path moved twice on 2026-08-31, and is now back on DNS + SMTP.**
 
-The channel that *does* have recipients is WhatsApp: 349 businesses have a
-phone, and WhatsApp is manual by standing instruction. The five approved drafts
-remain the only path to a first real interaction.
+First: "412 businesses, 0 email addresses" was read as a fact about those
+businesses. It was a fact about Qevik's canonical data. They publish addresses;
+nothing was reading them.
+
+Then contact discovery measured it on 100 real businesses: **69 of 96 pages read
+are email-contactable — 72%.** Extrapolated over the 359 with a website, roughly
+258 addressable. External discovery — LinkedIn, social, open search — is
+**not necessary**.
+
+So the path is now: nightly audit fills `Business.email` → HA-001 (DNS) →
+HA-002 (SMTP) → one prepared message → explicit approval → first send.
+
+`by_email` is still 0 in canonical data. Discovery is deployed and the field
+fills as the audit revisits each business; that is the deterministic recovery,
+not a gap.
 
 ## Blocked tracks
 
