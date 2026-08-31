@@ -568,3 +568,46 @@ def test_a_publication_that_does_not_say_what_it_is_blocks_the_message(repo):
             _clean(repo, business2.id)
     finally:
         _clean(repo, business.id)
+
+
+def test_an_approval_says_whether_its_evidence_has_since_moved(repo):
+    """A fact for the operator, never a verdict from the system.
+
+    The two approved messages in production were drafted at 13:35 on
+    2026-08-19 against an audit from 12:05 the same day, and nothing has
+    re-read those sites since. The nightly pass will reach them, and when it
+    does the words stay exactly what a person approved while the ground under
+    them moves. Those are two different facts and the screen must show both.
+    """
+    from atlas_kernel.opportunity.models import BusinessEvent, OutreachStatus
+
+    business = _business(repo, email="hello@alwaha.test")
+    try:
+        _draft(repo, business.id, status=OutreachStatus.APPROVED,
+               approved="fp-1")
+        before = assemble(business.id, memory=repo,
+                          tenant=TENANT)["answers"]["approval"]
+        assert before["known"] is True
+        assert before["evidence_moved_since"] == []
+
+        repo.record_event(BusinessEvent(
+            business_id=business.id, factory="reevaluation",
+            kind="business_reevaluated", actor="recipe:verify-recorded-websites",
+            detail={"changes": [
+                {"feature": "click_to_call", "was": "not_found",
+                 "now": "present", "change": "contradicted"},
+                # About our checking, not their site. It must not appear: an
+                # operator trained to ignore the flag ignores the real one too.
+                {"feature": "arabic", "was": "present", "now": "unverified",
+                 "change": "now_unverified"}]}))
+
+        after = assemble(business.id, memory=repo,
+                         tenant=TENANT)["answers"]["approval"]
+        moved = after["evidence_moved_since"]
+        assert [c["feature"] for c in moved] == ["click_to_call"]
+        # The approval itself is untouched. Nothing withdrew it.
+        assert after["approvals"][0]["fingerprint"] == "fp-1"
+        assert repo.messages_for(business.id)[-1].status is OutreachStatus.APPROVED
+        assert after["known"] is True
+    finally:
+        _clean(repo, business.id)

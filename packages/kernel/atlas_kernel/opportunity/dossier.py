@@ -273,8 +273,15 @@ def assemble(business_id: str, *, memory: Any, tenant: Any = None) -> dict:
     # 10–11. Which approval authorises it, and whether it actually went.
     approved = [m for m in messages if m.approved_fingerprint]
     sent = [m for m in messages if m.status.value == "sent"]
+    # Whether the ground under those words has moved since they were written.
+    # A fact, not a verdict: the message is still exactly what a person
+    # approved, and whether a changed observation should stop a send is their
+    # decision. Nothing here withdraws an approval.
+    moved = memory.evidence_changes_since(
+        business_id, min((m.created_at for m in approved), default=None))
     answers["approval"] = _answer(
         bool(approved), OWNERS["approval"],
+        evidence_moved_since=moved,
         approvals=[{"message_id": m.id, "fingerprint": m.approved_fingerprint,
                     "approval_id": m.approval_id or "",
                     # A positive marker, never inferred from status: every

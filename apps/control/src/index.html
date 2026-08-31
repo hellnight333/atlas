@@ -2093,7 +2093,14 @@ const ANSWER = {
   why_usable: (a) => a.observations.map((o) => `read from
     <a href="${esc(o.source_url)}" target="_blank" rel="noreferrer">${esc(o.source_url)}</a>`
     ).join('<br>'),
-  approval: (a) => a.approvals.map((v) => `${pill(v.status)}
+  approval: (a) => (a.evidence_moved_since.length ? `
+    <p class="note">${pill(a.evidence_moved_since.length +
+      ' observation(s) changed since this was approved', 'warn')}
+      ${a.evidence_moved_since.map((c) => esc(
+        `${c.feature}: ${c.was || '—'} → ${c.now || '—'}`)).join(' · ')}
+      <br>The message still says what a person approved. Whether a changed
+      observation should stop a send is their decision, not this screen's.</p>`
+    : '') + a.approvals.map((v) => `${pill(v.status)}
     ${v.authorises_automated_send
       ? pill('automated send authorised', 'warn')
       : 'approved for a person to send by hand'}

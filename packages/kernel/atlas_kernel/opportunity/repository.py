@@ -920,6 +920,45 @@ class OpportunityRepository:
                      "observations and must never be read as a fresh audit."),
         }
 
+    def evidence_changes_since(self, business_id: str, since) -> list[dict]:
+        """What a later reading found different, after some moment.
+
+        The moment is usually when a message was composed. A draft states what
+        Qevik observed; if a reading after it disagrees, the words are still
+        the words a person approved and the ground under them has moved — and
+        those are two different facts that an operator has to be able to see
+        separately.
+
+        **Only changes about the business.** `reevaluation` separates a site
+        that changed from a reading that could not see, and a message flagged
+        because our own crawler lost visibility would train an operator to
+        ignore the flag.
+
+        Returns changes, never a judgement. Whether a moved observation should
+        stop a send is a decision for a person; this says only that it moved.
+        """
+        if since is None:
+            return []
+        from ..mission.reevaluation import ABOUT_THE_BUSINESS
+
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("""
+                SELECT detail, at FROM atlas_business_events
+                WHERE kind = 'business_reevaluated' AND business_id = :business
+                  AND at > :since
+                ORDER BY at
+                """), {"business": business_id, "since": since}).mappings().all()
+        about_business = {c.value for c in ABOUT_THE_BUSINESS}
+        found: list[dict] = []
+        for row in rows:
+            detail = _decoded(row["detail"]) or {}
+            for change in detail.get("changes") or []:
+                if change.get("change") in about_business:
+                    found.append({**change,
+                                  "at": row["at"].isoformat() if row["at"] else ""})
+        return found
+
     def contact_provenance(self, business_id: str) -> list[dict]:
         """Where each of this business's addresses was read from.
 
