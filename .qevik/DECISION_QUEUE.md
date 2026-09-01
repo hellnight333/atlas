@@ -141,3 +141,18 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-c61027684e89`
 - **Review unit:** `5cdbc4e8da18..db29c4ac3d07`
+
+<!-- devloop:contested:t-422b20848039 -->
+## Contested — Say why one outreach draft is unreviewed
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/outreach/unreviewed.py:324-330` [blocking] Account for approval-request events
+  - `packages/kernel/atlas_kernel/outreach/unreviewed.py:427-429` [major] Require a provably later timestamp for supersession
+  - `packages/kernel/atlas_kernel/opportunity/service.py:192-194` [major] Synchronize terminal approval decisions with the message
+  - `packages/kernel/atlas_kernel/opportunity/service.py:218-218` [blocking] Wire terminal approval events back to persisted messages
+  - `packages/kernel/atlas_kernel/opportunity/gate.py:208-212` [major] Verify the rejection belongs to this message
+  - `packages/kernel/atlas_kernel/opportunity/service.py:202-206` [major] Clear awaiting status after an approved send is refused
+
+- **Driver task:** `t-422b20848039`
+- **Review unit:** `7a899cd2c6b8..484ed2a33fac`
