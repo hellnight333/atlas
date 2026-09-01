@@ -156,3 +156,20 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-422b20848039`
 - **Review unit:** `7a899cd2c6b8..484ed2a33fac`
+
+<!-- devloop:contested:t-b0dfd18dd170 -->
+## Contested — Wire terminal approval decisions back to the persisted message
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/opportunity/service.py:255-255` [blocking] Wire terminal approval events into record_decision
+  - `packages/kernel/atlas_kernel/opportunity/service.py:239-243` [major] Refuse approval requests for already-decided messages
+  - `packages/kernel/atlas_kernel/opportunity/gate.py:278-280` [major] Do not treat non-unique fields as an exact rejection binding
+  - `packages/kernel/atlas_kernel/opportunity/service.py:267-274` [blocking] Validate the persisted row before requesting approval
+  - `packages/kernel/atlas_kernel/opportunity/service.py:282-290` [major] Avoid leaving an approval behind when message persistence fails
+  - `packages/kernel/atlas_kernel/opportunity/service.py:359-361` [major] Make decision writeback conditional on the row remaining open
+  - `packages/kernel/atlas_kernel/opportunity/service.py:316-318` [blocking] Claim the message atomically before creating an approval
+  - `packages/kernel/atlas_kernel/opportunity/service.py:410-412` [blocking] Persist the refusal only while the message remains open
+
+- **Driver task:** `t-b0dfd18dd170`
+- **Review unit:** `..`
