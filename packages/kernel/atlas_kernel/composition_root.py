@@ -27,6 +27,7 @@ from .graph_service import GraphService
 from .logging_setup import configure_logging
 from .models import ActionSpec, CapabilitySpec, ExecutorSpec, ModelSpec, ProviderSpec, RecipeSpec
 from .onboarding import OnboardingService
+from .opportunity.service import OpportunityService, watch_outreach_decisions
 from .orchestrator import Orchestrator
 from .organization.audit import AuditService
 from .organization.identity import IdentityService
@@ -63,6 +64,10 @@ class AtlasRuntime:
     agent_scheduler: AgentScheduler
     approval_service: ApprovalService
     approval_gate: RuntimeApprovalGate
+    #: The Opportunity Factory's answer half. Holds no pipeline — it exists so
+    #: that an approval decided through this process is written back onto the
+    #: outreach message it was raised about. See `watch_outreach_decisions`.
+    outreach_decisions: OpportunityService
     worker_registry: WorkerRegistry
     heartbeat_service: HeartbeatService
     lease_manager: LeaseManager
@@ -142,6 +147,13 @@ def create_runtime(
         policy_engine=ApprovalPolicyEngine(),
     )
     approval_gate = RuntimeApprovalGate(service=approval_service, event_bus=event_bus)
+    # The approvals surface lives in this process and the outreach pipeline does
+    # not, so this is the only place the write-back can be subscribed. Without
+    # it a rejection through /approvals/{id}/reject moves the approval and
+    # nothing else, and the outreach row goes on asking a question somebody has
+    # answered. Cheap to construct and inert for every other kind of approval:
+    # the handler filters on the outreach action before it touches a database.
+    outreach_decisions = watch_outreach_decisions(approval_service)
     worker_registry = WorkerRegistry(repository=repository, event_bus=event_bus)
     heartbeat_service = HeartbeatService(
         repository=repository, event_bus=event_bus, registry=worker_registry
@@ -253,6 +265,7 @@ def create_runtime(
         agent_scheduler=agent_scheduler,
         approval_service=approval_service,
         approval_gate=approval_gate,
+        outreach_decisions=outreach_decisions,
         worker_registry=worker_registry,
         heartbeat_service=heartbeat_service,
         lease_manager=lease_manager,

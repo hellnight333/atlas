@@ -56,7 +56,7 @@ from atlas_kernel.opportunity.outreach import (
     SuppressionList,
 )
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
-from atlas_kernel.opportunity.repository import OpportunityRepository
+from atlas_kernel.opportunity.repository import OpportunityRepository, StaleMessage
 from atlas_kernel.opportunity.service import OpportunityService
 from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
@@ -503,6 +503,124 @@ class TestTheAnswerReachesTheMessage:
             "though it had"
         )
 
+    def test_a_decision_taken_before_the_row_names_its_request_still_reaches_it(
+        self,
+    ) -> None:
+        """The window between creating the question and linking it to the row.
+
+        `request_approval` claims the row first and writes `approval_id` onto it
+        second, because the id does not exist until the request does. Inside that
+        gap the question is live and the row does not name it — and an approver
+        looking at the pending list can answer it there. Found by `approval_id`
+        alone, that answer is discarded, the linkage write then lands, and the row
+        is left at `AWAITING_APPROVAL` for ever under an approval nobody can
+        re-decide.
+
+        Written as the two halves of `request_approval` with the rejection
+        interleaved, because that is what the race is.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        claimed = prepared.message.model_copy(
+            update={"status": OutreachStatus.AWAITING_APPROVAL}
+        )
+        repository.save_message(claimed, expecting=OutreachStatus.DRAFT)
+        request = service.gate.request(prepared.outcome, requested_by="atlas")
+        assert not _stored(repository, prepared.message).approval_id, (
+            "the row must still be unlinked, or this is not the window under test"
+        )
+
+        runtime.approval_service.reject(request.id, actor="ayoub", comment="not this one")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED
+        assert row.approval_id == request.id
+        assert row.detail == FORECLOSED[ApprovalState.REJECTED]
+
+        # And the linkage write that was on its way cannot undo it: it was
+        # decided against a row that was open, and the row no longer is.
+        with pytest.raises(StaleMessage):
+            repository.save_message(
+                claimed.model_copy(update={"approval_id": request.id}),
+                expecting=OutreachStatus.AWAITING_APPROVAL,
+            )
+
+    def test_that_window_does_not_let_a_refusal_close_somebody_elses_question(
+        self,
+    ) -> None:
+        """The fallback binds on the approval's own record of which row it named,
+        and that is weaker than the row naming the approval back — so it applies
+        only to a row that names *no* approval. A row already raised under one
+        request is not closed by a decision about another."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        first = service.request_approval(prepared)
+
+        # Nothing in the pipeline creates a second question about a linked row —
+        # `request_approval` refuses — so this is built by hand, which is exactly
+        # the case a binding has to survive.
+        other = runtime.approval_service.create_request(
+            title="Contact Al Noor Dental Clinic",
+            context=ApprovalContext(action=OUTREACH_ACTION, requested_by="atlas"),
+            metadata={
+                "business_id": prepared.message.business_id,
+                BOUND_MESSAGE: prepared.message.id,
+            },
+        )
+        runtime.approval_service.reject(other.id, actor="ayoub")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL
+        assert row.approval_id == first.id
+
+    def test_a_suppression_that_landed_nowhere_is_not_written_to_the_timeline(
+        self,
+    ) -> None:
+        """A `SUPPRESSED` entry beside the `SENT` that beat it is worse than no
+        entry at all.
+
+        The timeline is where the no-spam guarantee is read back from, and an
+        entry saying a guard stopped a message that in fact went out reads as a
+        recipient who was protected and was not. Same rule as `record_decision`:
+        a write that landed nowhere is not reported as though it had.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(
+            runtime.approval_service,
+            suppression=SuppressionList(["hello@alnoor.test"]),
+        )
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+
+        # Somebody else records the send while this worker is between the
+        # approval it read and the refusal it is about to write.
+        asked = _stored(repository, prepared.message)
+        repository.save_message(
+            asked.model_copy(
+                update={
+                    "status": OutreachStatus.SENT,
+                    "sent_at": datetime.now(UTC),
+                    "provider_message_id": "provider-1",
+                }
+            )
+        )
+
+        with pytest.raises(OutreachRefused, match="suppression list"):
+            service.send(prepared, approved, EXAMPLE_PROFILE)
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.SENT
+        assert row.provider_message_id == "provider-1"
+        assert PipelineEventKind.SUPPRESSED not in [event.kind for event in service.events], (
+            "a suppression that landed nowhere must not be reported on the timeline "
+            "beside the send that beat it"
+        )
+        assert prepared.message.status is not OutreachStatus.SUPPRESSED
+
     def test_a_message_that_already_went_out_is_passed_over(self) -> None:
         """The same protection one step earlier, through the ordinary path: a row
         recording a send is not a row with an open question on it."""
@@ -547,6 +665,74 @@ class TestTheAnswerReachesTheMessage:
             "the refusal must keep what the approval established, or it reads as a "
             "row nobody ever decided"
         )
+
+
+class TestTheDecidingProcessIsWired:
+    """Where the write-back actually has to be subscribed.
+
+    Every test above builds an `OpportunityService`, and building one is what
+    subscribes the handler — which is why they all pass and none of them says
+    anything about production. The process that decides approvals is
+    `atlas_kernel.api`, which constructs a runtime and no pipeline: nothing there
+    ever built an `OpportunityService`, so `/approvals/{id}/reject` moved the
+    approval and left the outreach row saying `AWAITING_APPROVAL` for ever.
+
+    So these build no watching service at all. If the composition root stops
+    wiring it, they fail.
+    """
+
+    def test_the_runtime_watches_outreach_approvals(self) -> None:
+        runtime = create_runtime()
+
+        assert runtime.outreach_decisions.watching
+
+    def test_the_wired_service_has_no_way_to_send(self) -> None:
+        """It exists to write answers back, and is on no path that should reach a
+        channel. A recording channel would capture the message and hand back a
+        provider id, which is how an accidental send comes to look like it
+        worked."""
+        runtime = create_runtime()
+
+        assert runtime.outreach_decisions.outreach.channel_name == "unwired"
+        with pytest.raises(OutreachRefused, match="no sending identity"):
+            runtime.outreach_decisions.outreach._channel.deliver(  # noqa: SLF001
+                OutreachMessage(
+                    proposal_id="p", business_id="b", channel="unwired",
+                    recipient="nobody@example.test", subject="s", body="b",
+                )
+            )
+
+    def test_a_rejection_closes_the_row_with_no_pipeline_in_the_process(self) -> None:
+        """The pipeline here is built against an approval service with no bus, so
+        it subscribes to nothing. The only subscriber on the runtime's bus is the
+        one the composition root made — and it is the one that has to do the
+        work."""
+        runtime = create_runtime()
+        pipeline, repository = _durable(None)
+        assert not pipeline.watching, "this pipeline must not be the thing under test"
+        _, _, prepared = _prepared(pipeline)
+
+        # Asking, done the way `request_approval` does it, but through a bare
+        # gate so that nothing in this test subscribes to the runtime's bus.
+        asking = OutreachGate(approvals=runtime.approval_service)
+        request = asking.request(prepared.outcome, requested_by="atlas")
+        repository.save_message(
+            prepared.message.model_copy(
+                update={
+                    "status": OutreachStatus.AWAITING_APPROVAL,
+                    "approval_id": request.id,
+                }
+            ),
+            expecting=OutreachStatus.DRAFT,
+        )
+
+        runtime.approval_service.reject(request.id, actor="ayoub", comment="not this one")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED, (
+            "nothing in the deciding process wrote the answer back onto the row"
+        )
+        assert row.detail == FORECLOSED[ApprovalState.REJECTED]
 
 
 class TestARefusalMustBeAboutTheseWords:

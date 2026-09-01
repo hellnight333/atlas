@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from .detectors.base import DetectorRegistry, DiscoveryResult
-from .gate import FORECLOSED, OutreachGate, OutreachNotApproved, OutreachOutcome
+from .gate import BOUND_MESSAGE, FORECLOSED, OutreachGate, OutreachNotApproved, OutreachOutcome
 from .metrics import FunnelReport, build_report
 from .models import (
     Business,
@@ -135,6 +135,13 @@ class OpportunityService:
         asking people about strangers and quietly stop recording what they said,
         and the only symptom is a review queue that never empties. Constructing
         the service is the wiring.
+
+        Which is only half the wiring, because the two halves run in different
+        processes. Asking happens in a pipeline run; answering happens in the API
+        that serves the approvals surface, and that process builds no pipeline at
+        all. ``watch_outreach_decisions`` is the answer half on its own, and
+        ``composition_root`` calls it — without which every decision taken through
+        ``/approvals/{id}/reject`` publishes to a bus nothing is listening on.
 
         ``watching`` is ``False`` against an approval service with no event bus —
         every hand-built double in the tests — and that is the honest value, not
@@ -273,11 +280,15 @@ class OpportunityService:
 
         ``approval_id`` is written in a second guarded write, after the request
         exists, because the id does not exist before it. That leaves one window,
-        and it is the safe one: a crash between the two leaves the row claimed
-        and unlinked, where it blocks a second question rather than inviting one.
-        A failure of the write itself is repaired rather than left — the request
-        is withdrawn, because a question nobody can reach is worse than no
-        question.
+        and a crash inside it is the harmless case: the row is left claimed and
+        unlinked, where it blocks a second question rather than inviting one. A
+        failure of the write itself is repaired rather than left — the request is
+        withdrawn, because a question nobody can reach is worse than no question.
+
+        An *answer* arriving inside that window is not harmless, and is not
+        handled here. The row cannot yet name the request, so the write-back has
+        to find it from the other end; ``_message_asked_about`` reads the
+        ``BOUND_MESSAGE`` the request already carries, and says why.
 
         Both guards read the **stored** row, and the write is built from it. The
         caller's copy is a snapshot from whenever it last looked, and
@@ -329,6 +340,13 @@ class OpportunityService:
                 # asked about the same words. A withdrawal that fails too
                 # surfaces with this failure chained behind it — an unreachable
                 # pending request deserves an error nobody can miss.
+                #
+                # The withdrawal is itself a foreclosure, so the write-back sees
+                # it and closes the claimed row through `BOUND_MESSAGE` — the row
+                # never named this request, which is why it is being withdrawn.
+                # That is the wanted outcome: the claim is released as a decision
+                # rather than left stuck at AWAITING_APPROVAL refusing every
+                # future ask, and `prepare` can make the question afresh.
                 self.gate.withdraw(request)
                 raise
 
@@ -439,11 +457,34 @@ class OpportunityService:
     def _message_asked_about(self, approval) -> OutreachMessage | None:
         """The persisted message raised under this approval, if it is still open.
 
-        Found through ``approval_id`` alone. The timeline entry cannot serve: it
-        names an approval and an opportunity, never a message, and a business
-        holding a WhatsApp draft beside an email draft is exactly the case that
-        decides it — attributing the answer to rows would close both when at most
-        one was ever asked about.
+        Found through an **identifier**, and through one of the two that exist.
+        The timeline entry cannot serve: it names an approval and an opportunity,
+        never a message, and a business holding a WhatsApp draft beside an email
+        draft is exactly the case that decides it — attributing the answer to rows
+        would close both when at most one was ever asked about.
+
+        ``approval_id`` on the row is the first, and the ordinary one. It is
+        written by ``request_approval`` in a second guarded write, *after* the
+        request exists, because the id does not exist before it — and that leaves
+        a window in which the question is live and the row does not yet name it.
+        An answer arriving inside that window is exactly the case this second
+        lookup exists for: without it the decision is discarded, the linkage write
+        then lands, and the row is left at ``AWAITING_APPROVAL`` for ever under an
+        approval somebody already closed. That is not the harmless half of the
+        window ``request_approval`` reasons about — a crash there leaves a claim
+        nobody can reach, and this leaves a *terminal decision* nobody recorded.
+
+        ``BOUND_MESSAGE`` is that second identifier: the same link written from
+        the approval's end, at the moment the request was created, which is why it
+        is already there while the row's own copy is not. ``gate._must_describe``
+        reads both ends for the same reason and accepts either alone.
+
+        The fallback insists the row names **no** approval. A row that names a
+        different one was asked about separately, and closing it here would be the
+        wrong-row closure the binding exists to prevent. Only one live request can
+        find a row unlinked and claimed — ``_claim`` guards on ``DRAFT``, so a
+        second ask is refused while the first holds it — which is what makes the
+        weaker-looking match safe.
 
         Rows that already record an outcome are passed over rather than closed.
         A message sent before its request was cancelled stays sent.
@@ -453,8 +494,16 @@ class OpportunityService:
         business_id = str(approval.metadata.get("business_id") or "")
         if not business_id:
             return None
-        for message in self.repository.messages_for(business_id):
+        rows = self.repository.messages_for(business_id)
+        for message in rows:
             if message.approval_id == approval.id and _undecided(message):
+                return message
+
+        raised_about = str(approval.metadata.get(BOUND_MESSAGE) or "")
+        if not raised_about:
+            return None
+        for message in rows:
+            if message.id == raised_about and not message.approval_id and _undecided(message):
                 return message
         return None
 
@@ -551,6 +600,10 @@ class OpportunityService:
         was answered the moment ``authorise`` returned, and a row left at
         ``AWAITING_APPROVAL`` after a guard closed the send goes on telling the
         review queue that a person still owes a decision they have already given.
+
+        That write is guarded, and the timeline entry follows it rather than the
+        attempt: a refusal recorded against a row another writer has since
+        decided is a refusal about a state that no longer exists.
         """
         open_at_entry = prepared.message.status
         authorised = self.gate.authorise(prepared.message, approval, prepared.proposal)
@@ -585,19 +638,35 @@ class OpportunityService:
                 except StaleMessage:
                     landed = False
                     log.warning(
-                        "message %s moved before its suppression could be recorded", refused.id
+                        "message %s moved before its suppression could be recorded; "
+                        "no SUPPRESSED event was written, because the row records "
+                        "somebody else's decision about this message",
+                        refused.id,
                     )
             if landed:
-                # Only when the record agrees. A caller left holding a copy that
-                # says `suppressed` over a row somebody else decided would carry
-                # that disagreement into whatever it does next.
+                # Only when the record agrees, and the timeline goes with it.
+                #
+                # A caller left holding a copy that says `suppressed` over a row
+                # somebody else decided would carry that disagreement into
+                # whatever it does next — and a `SUPPRESSED` entry beside the
+                # `SENT` that beat it is the same disagreement made permanent.
+                # That one is the dangerous direction: the timeline is where the
+                # no-spam guarantee is read back from, and an entry saying a
+                # guard stopped a message that in fact went out reads as a
+                # recipient who was protected and was not.
+                #
+                # Same rule as `record_decision`, for the same reason: a write
+                # that landed nowhere is not reported as though it had. The
+                # refusal is not lost — nothing was delivered by this call, the
+                # exception carries the reason to the caller, and the warning
+                # above says the entry was withheld.
                 prepared.message = refused
-            self._record(
-                prepared.business.id,
-                PipelineEventKind.SUPPRESSED,
-                {"reason": str(refusal), "message_id": refused.id},
-                opportunity_id=prepared.opportunity.id,
-            )
+                self._record(
+                    prepared.business.id,
+                    PipelineEventKind.SUPPRESSED,
+                    {"reason": str(refusal), "message_id": refused.id},
+                    opportunity_id=prepared.opportunity.id,
+                )
             raise
 
         kind = (
@@ -708,3 +777,57 @@ class OpportunityService:
         if self.repository is not None:
             self.repository.record_event(event)
         return event
+
+
+class _UnwiredChannel:
+    """The channel of a service that exists to answer and never to ask.
+
+    ``deliver`` raises. A decisions-only service has no sending identity behind
+    it and is not on any path that should reach a channel, so the honest thing
+    for one to do is fail loudly: ``RecordingChannel`` would capture the message
+    and report a provider id, which is how an accidental send comes to look like
+    it worked.
+    """
+
+    @property
+    def name(self) -> str:
+        return "unwired"
+
+    def deliver(self, message: OutreachMessage):
+        raise OutreachRefused(
+            f"message {message.id} reached the channel of a decisions-only "
+            "service, which exists to write approval outcomes back onto rows and "
+            "has no sending identity; build a service with a real channel to send"
+        )
+
+
+def watch_outreach_decisions(
+    approvals, repository: OpportunityRepository | None = None
+) -> OpportunityService:
+    """The answer half of the pipeline, wired into a process that never asks.
+
+    ``OpportunityService.__post_init__`` subscribes the write-back, which makes
+    building the service the wiring — and is enough only where the service is
+    built. It is not built in the process that decides: ``composition_root``
+    constructs the ``ApprovalService`` that ``/approvals/{id}/reject``,
+    ``/approvals/{id}/cancel`` and ``expire_due`` all publish on, and nothing in
+    that process runs a pipeline. Left there, every decision an approver takes
+    reaches a bus with no outreach subscriber on it, and the row goes on saying
+    ``AWAITING_APPROVAL`` under a question somebody answered — the exact failure
+    ``record_decision`` exists to prevent, arrived at by never being reachable.
+
+    So the answer half is separable, because its dependencies are: it needs the
+    gate and the repository and nothing else. Detectors and a channel belong to
+    asking, and this hands over an empty registry and a channel that refuses,
+    rather than plausible ones — a service that could quietly discover nothing
+    or quietly record a send is worse than one that cannot pretend.
+
+    Returns the service, so a caller can read ``watching`` and tell a wired
+    process from one whose approval service has no bus.
+    """
+    return OpportunityService(
+        detectors=DetectorRegistry(),
+        gate=OutreachGate(approvals=approvals),
+        outreach=OutreachService(_UnwiredChannel()),
+        repository=repository if repository is not None else OpportunityRepository(),
+    )
