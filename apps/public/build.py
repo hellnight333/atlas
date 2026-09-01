@@ -35,6 +35,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import copy_ar  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
+
+#: The stylesheet and photography the build hashes and copies into `dist/`.
+#:
+#: Named rather than spelled out at its one use, because whether this directory
+#: is here decides whether the site can be built at all, and a test has to be
+#: able to ask. `apps/public/assets/` is covered by the blanket `assets/` rule
+#: in .gitignore — see the note at the top of `infra/deploy_public.sh` — so the
+#: artwork is not in the repository and a checkout is not guaranteed to have it.
+ARTWORK = HERE / "assets"
+
 SITE = "https://qevik.ai"
 TODAY = date(2026, 8, 19).isoformat()
 
@@ -576,16 +586,19 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
         "tagline": "Digital products for Dubai businesses. Built, tested and hosted.",
     }
 
-    # Only the five primary routes exist in Arabic. A work detail page has no
-    # Arabic counterpart, so it must not advertise one — an hreflang pointing at
-    # a 404 is worse than none, and a language switch that breaks is the first
-    # thing an Arabic-speaking visitor tests.
-    #
-    # The 404 pages are excluded even though both languages have one: hreflang
-    # is a statement to a search engine about pages it should index, and these
-    # are the two pages it must not.
-    bilingual = (path in PRIMARY or arabic) and path not in NOINDEX
-    if bilingual:
+    # Only the five primary routes exist in Arabic, and so do the two 404 pages.
+    # A work detail page has no counterpart, so it must not advertise one — an
+    # hreflang pointing at a 404 is worse than none, and a language switch that
+    # breaks is the first thing an Arabic-speaking visitor tests.
+    paired = path in PRIMARY or arabic or path in NOINDEX
+
+    # The hreflang pair and the visible switch are not the same statement, and
+    # the 404 pages want one without the other. hreflang tells a search engine
+    # which pages to index, and these are the two it must not. The switch is
+    # navigation for somebody already looking at the page — and the 404 is where
+    # a visitor is most lost, so it is the last page on the site that should be
+    # the only one offering no way back into their own language.
+    if paired and path not in NOINDEX:
         en_href = f"{SITE}{other if arabic else path}"
         ar_href = f"{SITE}{path if arabic else other}"
         alternates = (
@@ -593,13 +606,16 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
             f'<link rel="alternate" hreflang="ar" href="{ar_href}">\n'
             f'<link rel="alternate" hreflang="x-default" href="{en_href}">'
         )
+    else:
+        alternates = ""
+
+    if paired:
         switch = (
             f'<a class="lang" href="{other}" lang="{"en" if arabic else "ar"}" '
             f'hreflang="{"en" if arabic else "ar"}">'
             f'{ui["english"] if arabic else ui["arabic"]}</a>'
         )
     else:
-        alternates = ""
         switch = ""
 
     nav_paths = PRIMARY if not arabic else tuple(counterpart(p) for p in PRIMARY)
@@ -1230,16 +1246,31 @@ def contact() -> str:
 """
 
 
-#: What the 404 page offers instead. The five primary routes, each with the one
-#: line that tells someone whether it is the page they meant — a bare list of
-#: nav labels is the same dead end in a different font.
-NOT_FOUND_LINKS = (
-    ("/", "Home", "What Qevik builds, who it is for, and how the process works."),
-    ("/services/", "Services", "Websites, applications, storefronts and automation — and their limits."),
-    ("/work/", "Work", "Live samples you can open and use right now."),
-    ("/about/", "About", "Who builds it, and the licensed company behind the brand."),
-    ("/contact/", "Contact", "WhatsApp and a phone number that reach a person directly."),
-)
+#: What the 404 page offers instead: the primary routes, each with the one line
+#: that tells someone whether it is the page they meant — a bare list of nav
+#: labels is the same dead end in a different font.
+#:
+#: Only the gloss is written here. The routes come from PRIMARY and their labels
+#: from PAGES, because this is the page whose entire job is to name the routes
+#: that exist, and a hand-kept second copy of that list is how it would quietly
+#: stop doing it. A sixth route now fails the build asking for its one sentence
+#: instead of going missing from the page.
+NOT_FOUND_GLOSS = {
+    "/": "What Qevik builds, who it is for, and how the process works.",
+    "/services/": "Websites, applications, storefronts and automation — and their limits.",
+    "/work/": "Live samples you can open and use right now.",
+    "/about/": "Who builds it, and the licensed company behind the brand.",
+    "/contact/": "WhatsApp and a phone number that reach a person directly.",
+}
+
+
+def route_list(gloss: dict[str, str], *, arabic: bool = False) -> str:
+    """One item per primary route: where it goes, and what is on it."""
+    routes = [counterpart(p) for p in PRIMARY] if arabic else list(PRIMARY)
+    return "".join(
+        f'<li><a href="{route}">{PAGES[route][0]}</a> — {gloss[route]}</li>'
+        for route in routes
+    )
 
 
 def not_found() -> str:
@@ -1253,10 +1284,7 @@ def not_found() -> str:
     Short on purpose. Whoever is reading it wanted something else, so the useful
     content is the list of places they might have meant.
     """
-    items = "".join(
-        f'<li><a href="{href}">{label}</a> — {gloss}</li>'
-        for href, label, gloss in NOT_FOUND_LINKS
-    )
+    items = route_list(NOT_FOUND_GLOSS)
     return f"""
 <section class="page-head">
   <div class="wrap">
@@ -1286,9 +1314,7 @@ def not_found() -> str:
 
 def ar_not_found() -> str:
     c = copy_ar.NOT_FOUND
-    items = "".join(
-        f'<li><a href="{href}">{label}</a> — {gloss}</li>' for href, label, gloss in c["items"]
-    )
+    items = route_list({href: gloss for href, _, gloss in c["items"]}, arabic=True)
     return f"""
 <section class="page-head"><div class="wrap">
   <p class="eyebrow">{c["eyebrow"]}</p>
@@ -1663,12 +1689,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=HERE / "dist")
     args = parser.parse_args(argv)
 
-    out = args.out
-    if out.exists():
-        shutil.rmtree(out)
-    (out / "assets").mkdir(parents=True)
-
-    # Hash and copy assets first, so the pages can reference the hashed names.
+    # Every file the build copies, named before anything is removed.
     #
     # The portfolio thumbnails are derived from SHOWCASE rather than listed by
     # hand. They were listed by hand, and adding two samples shipped two cards
@@ -1676,7 +1697,7 @@ def main(argv: list[str] | None = None) -> int:
     # falls back to the bare name when an asset is unknown, so the page built
     # cleanly, deployed cleanly, and rendered two broken boxes. A list that has
     # to be kept in step with another list will eventually not be.
-    for asset in (
+    assets = (
         "site.css",
         "sample_mobile_en.png",
         "sample_mobile_ar.png",
@@ -1690,11 +1711,33 @@ def main(argv: list[str] | None = None) -> int:
         "sample-salon.png",
         "og.png",
         "icon-180.png",
-    ):
-        source = HERE / "assets" / asset
-        if not source.exists():
-            print(f"missing asset: {source}", file=sys.stderr)
-            return 1
+    )
+
+    # Refused up front, and refused whole. Checked one at a time inside the copy
+    # loop, the previous build in `out` was already deleted by the time a
+    # checkout without the artwork discovered it could not produce a new one —
+    # so a run that changes nothing left less behind than it found. Listing all
+    # of them also distinguishes the two cases that matter: one name is a file
+    # that went missing, the whole list is a working tree that never had them.
+    if missing := [name for name in dict.fromkeys(assets) if not (ARTWORK / name).exists()]:
+        print(
+            f"REFUSED — {ARTWORK} does not have the artwork this build copies. It is "
+            "covered by the blanket `assets/` rule in .gitignore, so it is not in the "
+            "repository and a checkout does not come with it:",
+            file=sys.stderr,
+        )
+        for name in missing:
+            print(f"  missing asset: {ARTWORK / name}", file=sys.stderr)
+        return 1
+
+    out = args.out
+    if out.exists():
+        shutil.rmtree(out)
+    (out / "assets").mkdir(parents=True)
+
+    # Hash and copy assets first, so the pages can reference the hashed names.
+    for asset in assets:
+        source = ARTWORK / asset
         digest = hashlib.sha256(source.read_bytes()).hexdigest()[:8]
         stem, _, suffix = asset.rpartition(".")
         hashed = f"{stem}.{digest}.{suffix}"

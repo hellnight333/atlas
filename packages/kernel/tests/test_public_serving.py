@@ -101,7 +101,28 @@ def dist(tmp_path_factory) -> Path:
     passing test in another file red, reporting missing assets with nothing
     pointing back here. Restore what the build changed: the tests below read the
     built files off disk and never need the map.
+
+    Skipped, not failed, where the artwork is not in the working tree. The
+    stylesheet and photography are covered by the blanket `assets/` rule in
+    .gitignore — see the note at the top of `infra/deploy_public.sh` — so they
+    are not in the repository and a checkout is not guaranteed to have them.
+    Without them `build.main()` refuses, this fixture asserted on the refusal,
+    and the thirteen tests that ask for `dist` all errored: a report that reads
+    exactly like a broken site, on a machine where nothing about the site is
+    being asserted at all. A missing local prerequisite has to say so by name.
+
+    The directory being absent is the whole of that condition. A directory that
+    is here but short a file is a real defect and still fails: that is the drift
+    `test_every_showcase_entry_has_the_thumbnail_it_renders` exists to catch.
     """
+    if not build.ARTWORK.is_dir():
+        pytest.skip(
+            f"{build.ARTWORK} is not in this working tree, so the site cannot be "
+            "built here. The artwork is covered by the blanket `assets/` rule in "
+            ".gitignore and is not in the repository — see infra/deploy_public.sh. "
+            "Nothing below is being asserted about the site."
+        )
+
     out = tmp_path_factory.mktemp("public") / "dist"
     before = dict(build.ASSETS)
     try:
@@ -240,13 +261,71 @@ def test_the_arabic_404_answers_in_arabic_and_right_to_left(dist) -> None:
 
 
 def test_the_404_pages_are_kept_out_of_the_index(dist) -> None:
-    """A search result reading "Page not found" is worse than no result."""
+    """A search result reading "Page not found" is worse than no result.
+
+    The assertion is against `<link rel="alternate">` specifically, not against
+    the word "hreflang". That pair is the statement to a search engine — "index
+    these two pages as one another's translations" — and it is the statement
+    these two pages must not make. The `hreflang` attribute on the header's
+    language link is a different thing: it describes where a link goes, to a
+    person clicking it, and the test below requires it.
+    """
     listed = re.findall(r"<loc>https://qevik\.ai(/[^<]*)</loc>", build.sitemap())
     for path in build.NOINDEX:
         assert path not in listed, f"{path} is advertised in the sitemap"
         html = (dist / path.lstrip("/")).read_text(encoding="utf-8")
         assert '<meta name="robots" content="noindex">' in html, path
-        assert "hreflang" not in html, f"{path} advertises a language alternate"
+        assert '<link rel="alternate"' not in html, (
+            f"{path} advertises a language alternate to a search engine")
+
+
+def test_the_404_keeps_the_language_switch_the_rest_of_the_site_has(dist) -> None:
+    """Both languages have a 404, so both 404s must offer the other one.
+
+    hreflang and the visible switch were decided by one flag, so excluding the
+    404 pages from the index also stripped the header's language link — leaving
+    the single page on the site where a visitor is most lost as the only page
+    with no way back into their own language. The two are separate statements:
+    one is for a crawler, one is for a person.
+    """
+    english = (dist / "404.html").read_text(encoding="utf-8")
+    arabic = (dist / "ar" / "404.html").read_text(encoding="utf-8")
+
+    assert '<a class="lang" href="/ar/404.html"' in english, english[:2000]
+    assert '<a class="lang" href="/404.html"' in arabic, arabic[:2000]
+    # And it goes somewhere. A switch is only navigation if the page it names is
+    # on disk under the same rule `file_server` resolves URLs by.
+    assert resolve(dist, "/ar/404.html") is not None
+    assert resolve(dist, "/404.html") is not None
+
+
+def test_the_404_offers_every_route_the_site_actually_has(dist) -> None:
+    """The page's whole content is the list of pages, in both languages."""
+    english = (dist / "404.html").read_text(encoding="utf-8")
+    arabic = (dist / "ar" / "404.html").read_text(encoding="utf-8")
+    for route in build.PRIMARY:
+        assert f'<li><a href="{route}">' in english, route
+        assert f'<li><a href="{build.counterpart(route)}">' in arabic, route
+
+
+def test_a_route_added_to_the_site_cannot_go_missing_from_the_404(monkeypatch) -> None:
+    """So the list on the page is driven by the routes, not written out again.
+
+    Kept by hand it drifts, and the direction it drifts in is the one where the
+    site gains a page the 404 does not offer — on the one page whose entire job
+    is to name the pages that exist. A route with no line of its own now fails
+    the build asking for one, instead of vanishing from the list.
+    """
+    monkeypatch.setitem(build.PAGES, "/pricing/", ("Pricing", "Pricing — Qevik", "."))
+    monkeypatch.setattr(build, "PRIMARY", build.PRIMARY + ("/pricing/",))
+
+    with pytest.raises(KeyError):
+        build.not_found()
+
+    monkeypatch.setitem(build.NOT_FOUND_GLOSS, "/pricing/", "What it costs.")
+    offered = build.not_found()
+    assert '<li><a href="/pricing/">Pricing</a>' in offered, offered
+    assert "What it costs." in offered, offered
 
 
 # --- 3. the deploy that puts both of those on the host -----------------------
@@ -422,3 +501,68 @@ def test_a_build_leaves_the_asset_map_as_it_found_it(dist) -> None:
         if not name.startswith("favicon") and not (PUBLIC / "assets" / name).exists()
     )
     assert missing == [], f"a build leaked hashed asset names into shell(): {missing}"
+
+
+# --- 5. and a checkout that cannot build the site says which, not "it failed" -
+
+
+def test_the_build_refuses_whole_when_the_artwork_is_not_in_this_checkout(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """What the `dist` fixture's skip is derived from, asserted on the builder.
+
+    `apps/public/assets/` is covered by the blanket `assets/` rule in .gitignore,
+    so the stylesheet and the twenty-odd photographs are not in the repository
+    and a checkout is not guaranteed to have them. That is a deliberate decision
+    — `infra/deploy_public.sh` says so at the top — and its cost landed on the
+    wrong reader: the build refused, the fixture asserted on the refusal, and
+    every test that wanted a built site errored at once. Thirteen errors and no
+    line naming a file is indistinguishable from a broken site, and it was read
+    as one.
+
+    Two properties make the difference, and neither held before: the refusal
+    names *every* file it wants, so one name reads as a file that went missing
+    and the whole list reads as a working tree that never had them; and it comes
+    before `out` is emptied, so a run that cannot build the site does not also
+    destroy the build already sitting there.
+    """
+    monkeypatch.setattr(build, "ARTWORK", tmp_path / "assets")  # never created
+
+    out = tmp_path / "dist"
+    out.mkdir()
+    (out / "index.html").write_text("the previous build", encoding="utf-8")
+
+    assert build.main(["--out", str(out)]) == 1
+
+    refusal = capsys.readouterr().err
+    assert "site.css" in refusal, refusal
+    assert "og.png" in refusal, refusal
+    for data in build.SHOWCASE.values():
+        assert data["shot"] in refusal, f"{data['shot']} missing from: {refusal}"
+
+    assert (out / "index.html").read_text(encoding="utf-8") == "the previous build", (
+        "the build emptied the output directory before finding out it could not "
+        "write a new one")
+
+
+def test_artwork_that_is_here_but_short_a_file_fails_rather_than_skipping(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """The skip is narrow on purpose: absent directory, and nothing else.
+
+    A directory that exists and is missing a file is the drift the asset checks
+    are for — a SHOWCASE entry pointing at a thumbnail nobody copied, which
+    builds clean and renders a broken box. Skipping on "some file is missing"
+    would have swallowed exactly that. So the condition is the directory, and a
+    build with the directory present still has to satisfy every name in it.
+    """
+    artwork = tmp_path / "assets"
+    artwork.mkdir()
+    monkeypatch.setattr(build, "ARTWORK", artwork)
+
+    # The `dist` fixture skips on this being false, and here it is true — so a
+    # working tree in this state runs the build and reports what it finds.
+    assert build.ARTWORK.is_dir()
+
+    assert build.main(["--out", str(tmp_path / "dist")]) == 1
+    assert "site.css" in capsys.readouterr().err

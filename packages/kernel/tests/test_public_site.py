@@ -22,6 +22,7 @@ PUBLIC = Path(__file__).resolve().parents[3] / "apps" / "public"
 sys.path.insert(0, str(PUBLIC))
 
 from build import (  # noqa: E402
+    ARTWORK,
     BUILDERS,
     FORBIDDEN,
     NOINDEX,
@@ -36,6 +37,29 @@ from build import (  # noqa: E402
 @pytest.fixture(scope="module")
 def pages() -> dict[str, str]:
     return {path: shell(path, builder()) for path, (builder, _) in BUILDERS.items()}
+
+
+@pytest.fixture
+def artwork() -> None:
+    """For the two tests that read the image files rather than the HTML.
+
+    `apps/public/assets/` is covered by the blanket `assets/` rule in .gitignore
+    — see the note at the top of `infra/deploy_public.sh` — so it is not in the
+    repository and a checkout is not guaranteed to have it. Everything else in
+    this file asserts against strings and runs anywhere; these two cannot, and
+    a missing local prerequisite has to say so by name rather than report the
+    site as broken.
+
+    The directory being absent is the whole of the condition. A directory that
+    is here and short a file is the drift these two exist to catch, and still
+    fails.
+    """
+    if not ARTWORK.is_dir():
+        pytest.skip(
+            f"{ARTWORK} is not in this working tree. The artwork is covered by the "
+            "blanket `assets/` rule in .gitignore and is not in the repository — "
+            "see infra/deploy_public.sh."
+        )
 
 
 def text_of(html: str) -> str:
@@ -219,11 +243,11 @@ def _portfolio() -> dict[str, str]:
     return dict(re.findall(r'"([\w-]+)":\s*"([\w-]+)"', block))
 
 
-def test_every_showcase_entry_has_the_thumbnail_it_renders() -> None:
+def test_every_showcase_entry_has_the_thumbnail_it_renders(artwork) -> None:
     missing = [
         f"{key} -> {data['shot']}"
         for key, data in SHOWCASE.items()
-        if not (PUBLIC / "assets" / data["shot"]).exists()
+        if not (ARTWORK / data["shot"]).exists()
     ]
     assert missing == [], missing
 
@@ -271,7 +295,7 @@ def test_every_switcher_tab_is_written_in_both_languages() -> None:
     assert thin == [], thin
 
 
-def test_every_asset_a_page_references_exists(pages) -> None:
+def test_every_asset_a_page_references_exists(pages, artwork) -> None:
     """A page may only point at files that are actually there.
 
     `fingerprinted()` falls back to the bare filename for an asset it does not
@@ -279,14 +303,13 @@ def test_every_asset_a_page_references_exists(pages) -> None:
     and renders a broken box. Two did: the copy list was maintained by hand
     beside SHOWCASE and drifted the moment SHOWCASE grew.
     """
-    source = PUBLIC / "assets"
     missing = sorted(
         {
             name
             for html in pages.values()
             for name in re.findall(r"/assets/([\w.\-]+)", html)
             # Built at render time rather than copied from disk.
-            if not name.startswith("favicon") and not (source / name).exists()
+            if not name.startswith("favicon") and not (ARTWORK / name).exists()
         }
     )
     assert missing == [], missing
