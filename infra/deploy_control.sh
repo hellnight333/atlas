@@ -260,12 +260,33 @@ ssh_ "systemctl is-active $SERVICE"
 # Hard failure, not a warning. A deploy that exits zero having left the public
 # site on last week's pages is the failure this whole path exists to stop, and
 # the steps above have already been verified individually — what is lost by
-# failing here is a green tick, not a rollback.
+# failing here is a green tick, not the control plane that was shipped above it.
+#
+# No `--restore-config` in the handler below, and that is not the same as not
+# rolling back. Every way that script can fail *after* it has installed the
+# config now puts the previous one back before it returns — including each of
+# the origin assertions, which are the checks that can prove the new config
+# wrong while Caddy is happily running on it.
+#
+# Restoring from here instead would mean deciding, from an exit code, whether a
+# config was ever installed on this run. Most of those failures install nothing:
+# a build that refused, a transfer that did not land, a config that did not
+# validate. On those, `/etc/caddy/Caddyfile.previous` still holds whatever the
+# *last* deploy left there, and putting it back over a live config would restart
+# Caddy onto a stale config because a page failed to build. The script that took
+# the backup is the one that knows; this is not a second place to keep that
+# knowledge, for the same reason the pages and the config that names them are
+# shipped by one script and not two.
+#
+# The API check below is the exception and stays one: that failure is invisible
+# from inside `deploy_public.sh`, so the rollback for it has to be asked for.
 echo "==> publishing qevik.ai and the config that serves it"
 bash "$ROOT/infra/deploy_public.sh" "$TARGET" || {
   echo "FAILED: qevik.ai was not published, or the origin did not serve a page"
-  echo "        per URL afterwards. The kernel, the console and the workers are"
-  echo "        deployed and verified — that part of this run stands."
+  echo "        per URL afterwards. If a config had been installed, that script"
+  echo "        put the previous one back before it returned — see its output"
+  echo "        above for whether it had to. The kernel, the console and the"
+  echo "        workers are deployed and verified — that part of this run stands."
   exit 1
 }
 

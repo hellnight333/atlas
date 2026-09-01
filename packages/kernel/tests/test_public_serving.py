@@ -382,11 +382,12 @@ def test_the_config_it_replaces_is_kept_and_put_back_if_caddy_will_not_start() -
     beside it and restored rather than left for someone to notice.
 
     Every path that can leave a config live and wrong ends in the rollback: one
-    that will not move into place, one that installs and will not start, and —
-    reached from `deploy_control.sh`, which is the only place that can see it —
-    one that starts and stops routing the API. A config that does not validate
-    is deliberately *not* one of them: it was never installed, so there is
-    nothing live to put back and a needless Caddy restart is not free.
+    that will not move into place, one that installs and will not start, one
+    that starts and then serves the wrong thing (the test below), and — reached
+    from `deploy_control.sh`, which is the only place that can see it — one that
+    starts and stops routing the API. A config that does not validate is
+    deliberately *not* one of them: it was never installed, so there is nothing
+    live to put back and a needless Caddy restart is not free.
     """
     public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
     backs_up = public.index("cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous")
@@ -400,6 +401,97 @@ def test_the_config_it_replaces_is_kept_and_put_back_if_caddy_will_not_start() -
     assert "restore_config || exit $?" in public, (
         "`--restore-config` must report whether the rollback itself worked; "
         "deploy_control.sh branches on that")
+
+
+def verification_block() -> str:
+    """The part of `deploy_public.sh` that runs with the new config already live.
+
+    From the banner that opens the origin checks to the line that declares them
+    passed. Everything between the two runs after `/etc/caddy/Caddyfile` has
+    been replaced and Caddy restarted onto it — so every give-up in here is one
+    taken while production is serving a config this script has just disproved.
+    """
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    start = public.index('echo "==> what the origin answers now"')
+    end = public.index('echo "OK: qevik.ai serves a page per URL')
+    assert start < end
+    return public[start:end]
+
+
+def test_a_config_the_origin_checks_disprove_is_not_left_serving_production() -> None:
+    """The checks that catch the defect must not also be the ones that leave it up.
+
+    These are the assertions this whole script exists for, and they are the only
+    ones that run with the new config live: everything that refuses earlier
+    leaves the host untouched or already restored. So a bare `exit` here is the
+    worst of the failure modes — Caddy validated the config, started on it, and
+    answered the wrong thing, and the deploy hands back a red gate while
+    production keeps serving exactly what was just proven wrong. A red gate is
+    not a restored service.
+
+    Asserted as "no give-up in this region is bare" rather than as a token
+    count, because the failure this guards against is the *next* check added
+    here: one more `exit 14` under one more assertion, correct in isolation and
+    silently reintroducing the whole defect.
+    """
+    block = verification_block()
+
+    bare = re.findall(r"^\s*exit \d+\s*$", block, re.M)
+    assert bare == [], (
+        "these give up with the new config live and do not put the previous "
+        f"one back: {bare}")
+
+    codes = sorted(int(code) for code in re.findall(r"^\s*restore_and_exit (\d+)$",
+                                                    block, re.M))
+    assert codes == [9, 10, 11, 12, 13], (
+        f"the origin checks exit with {codes}; each of the five — no page of its "
+        "own, a miss that is not 404, the wrong 404 page, an English 404 under "
+        "/ar/, and no answer at all — has to restore")
+
+
+def test_the_rollback_the_origin_checks_take_keeps_the_code_that_failed() -> None:
+    """It rolls back, and it still says which question was answered wrongly.
+
+    Two things the next person needs and they are not the same one: that
+    production is back on the previous config, and *which* check failed. Losing
+    the second to gain the first would make every one of the five failures look
+    alike from `deploy_control.sh` and from the deploy gate's log.
+    """
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    body = public[public.index("restore_and_exit() {"):]
+    # The function's own closing brace: the nested one that ends the `||` group
+    # is indented, so it is not `\n}\n`.
+    body = body[: body.index("\n}\n")]
+    assert "restore_config" in body, (
+        "the origin checks' give-up does not put the previous config back")
+    assert 'exit "$1"' in body, (
+        "the rollback swallows which check failed; all five would read alike")
+
+
+def test_the_loops_deploy_does_not_roll_back_a_config_it_never_installed() -> None:
+    """The other half of that rule, and why the rollback lives where it does.
+
+    `deploy_control.sh` sees an exit code and nothing else. Most of the ways
+    `deploy_public.sh` fails install no config at all — a build that refused, a
+    transfer that did not land, a Caddyfile that did not validate — and on those
+    `/etc/caddy/Caddyfile.previous` still holds whatever the *last* deploy left
+    behind. A caller that restored on any non-zero would restart Caddy onto a
+    stale config because a page failed to build, which is a fresh outage caused
+    by a guard.
+
+    The script that took the backup is the one that knows it got past it. What
+    the caller must still ask for is the one failure that script cannot see: a
+    config that serves qevik.ai correctly and stops routing the API.
+    """
+    control = DEPLOY_CONTROL.read_text(encoding="utf-8")
+    publishes = control.index('bash "$ROOT/infra/deploy_public.sh" "$TARGET"')
+    handler = control[publishes : control.index("\n}\n", publishes)]
+    assert "--restore-config" not in handler, (
+        f"a blanket rollback on any failure of the publish step: {handler}")
+    assert '--restore-config "$TARGET"' in control[publishes:], (
+        "nothing puts the config back when the restarted Caddy stops routing "
+        "app.qevik.ai/api/*, which is the one failure deploy_public.sh cannot "
+        "see for itself")
 
 
 def test_the_deploy_accepts_the_build_this_repository_produces(dist) -> None:

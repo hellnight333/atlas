@@ -606,10 +606,52 @@ ssh "${SSH_OPTS[@]}" "$TARGET" "systemctl is-active --quiet caddy" || {
 # serves; an edge cache can still be answering for what it served before, and a
 # check that cannot tell those apart proves nothing about the deploy.
 #
+# And a failure below is not the same kind of failure as the ones above, which
+# is where that stops being a remark and becomes a rollback.
+#
+# Everything that refuses earlier leaves the host either untouched or already
+# put back: a build missing a page, a transfer that did not land, a config that
+# would not validate, a Caddy that would not start. From this line on the host
+# is *running* the config out of this repository, so a wrong answer to any
+# question below is proof that this config is the wrong one — and exiting on
+# that proof, and doing nothing else with it, hands the caller a red gate while
+# leaving production serving the configuration the deploy has just disproved.
+# The caller sees a failed deploy; a visitor sees the failure. A red gate is not
+# a restored service.
+#
+# So every give-up below goes through here rather than through `exit`. It
+# belongs in this script and not in its caller: `deploy_control.sh` runs this
+# unattended inside the development loop's deploy gate and can only act on an
+# exit code, and a caller that restored on any non-zero would restore on the
+# failures that installed nothing — where `/etc/caddy/Caddyfile.previous` is
+# whatever the *last* deploy left there, and putting that back over a live
+# config is a fresh outage caused by a build refusing. This script does not have
+# to guess. It took the backup itself, and it knows it got past it.
+#
+# "The origin answered nothing" is included on purpose. Caddy answered
+# `is-active` a moment ago, so a server that then serves nothing for qevik.ai is
+# a config that serves nothing; and if it is the link that died rather than the
+# site, the rollback needs that same link and will say so loudly. An unverified
+# config is not one to leave in production, for the same reason an unreadable
+# live config is not consent to install over it.
+#
+# The exit code stays whichever the check chose. *Which* question was answered
+# wrongly is what the next person needs; that it was rolled back is the line
+# above it.
+restore_and_exit() {
+  echo "        that config is live, and it is the one that answered. Putting" >&2
+  echo "        the previous one back." >&2
+  restore_config || {
+    echo "        AND the rollback failed. Caddy is holding a config nobody" >&2
+    echo "        chose; /etc/caddy/Caddyfile on the host needs a person." >&2
+  }
+  exit "$1"
+}
+
+echo "==> what the origin answers now"
 # `${2:-}` because `set -u` is on and most calls pass one argument; unquoted
 # because the caller's extra curl flags have to reach the remote shell as
 # separate words.
-echo "==> what the origin answers now"
 origin() {
   ssh_ "curl -sS --max-time 15 --resolve qevik.ai:443:127.0.0.1 ${2:-} 'https://qevik.ai$1'" 2>/dev/null || true
 }
@@ -632,18 +674,18 @@ echo "    GET qevik.ai/ar$miss -> $ar_code (404 expected)"
 # "the origin served the wrong page".
 [ -n "$services" ] || {
   echo "FAILED: the origin did not answer for qevik.ai/services/ at all." >&2
-  exit 13
+  restore_and_exit 13
 }
 # The measured defect: every URL served the homepage. Its own title is the
 # cheapest proof that /services/ is now serving its own page.
 printf '%s' "$services" | grep -q '<title>Services' || {
   echo "FAILED: qevik.ai/services/ is not serving its own page — the site is" >&2
   echo "        still being served as a single-page application." >&2
-  exit 9
+  restore_and_exit 9
 }
 [ "$miss_code" = "404" ] || {
   echo "FAILED: an unknown URL answered $miss_code, not 404." >&2
-  exit 10
+  restore_and_exit 10
 }
 # Not just the status. A rewrite to a page that is not on the host answers with
 # a bare file-server error, which is also a 404 — the exact failure that ships
@@ -651,7 +693,7 @@ printf '%s' "$services" | grep -q '<title>Services' || {
 printf '%s' "$miss_body" | grep -q 'That page is not here' || {
   echo "FAILED: the 404 status is right but the page is not the one this" >&2
   echo "        repository builds — /404.html is missing from the document root." >&2
-  exit 11
+  restore_and_exit 11
 }
 # The Arabic site is a second site, not a translation layer, and being dropped
 # into an English error page is where an Arabic visitor concludes otherwise.
@@ -659,7 +701,7 @@ printf '%s' "$miss_body" | grep -q 'That page is not here' || {
 # too, which is wanted here and is exactly why it gets misread later.
 if [ "$ar_code" != "404" ] || ! printf '%s' "$ar_body" | grep -q 'dir="rtl"'; then
   echo "FAILED: a wrong URL under /ar/ is not answered in Arabic ($ar_code)." >&2
-  exit 12
+  restore_and_exit 12
 fi
 echo "OK: qevik.ai serves a page per URL, and an unknown URL gets the 404 page."
 
