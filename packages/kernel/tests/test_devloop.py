@@ -477,8 +477,13 @@ def test_work_under_review_never_lands_on_main(tmp_path):
     """
     source = Path(INFRA / "devloop" / "driver.py").read_text()
     run_task = source[source.index("def run_task("):source.index("def _ship(")]
-    assert '"checkout", "-q", "-B", branch' in run_task, (
+    # Either way of getting onto the branch — created fresh, or resumed — as
+    # long as the task never builds on `main` itself.
+    assert ('"checkout", "-q", "-b", branch' in run_task
+            and '"checkout", "-q", branch' in run_task), (
         "a task builds on `main` rather than on its own branch")
+    assert '"-B", branch' not in run_task, (
+        "`-B` resets the branch to HEAD and would discard a parked task's work")
     ship = source[source.index("def _ship("):source.index("def _commit(")]
     assert '"merge", "--squash", branch' in ship, (
         "reviewed work does not land as one commit")
@@ -571,3 +576,27 @@ def test_a_task_that_ends_contested_leaves_main_untouched():
         "a contested task does not return to main, so its branch stays checked "
         "out and the next task builds on top of rejected work")
     assert "merge" not in section[:400]
+
+
+def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
+    """A parked task's review unit must be all of its work, and only its work.
+
+    Computed before the checkout, `base` was `main`'s tip while HEAD was a
+    branch that predated it — so `base..HEAD` presented every commit `main` had
+    gained meanwhile as though this task had deleted it, and the reviewer would
+    have been handed a diff reversing unrelated work. Caught by watching a real
+    resume log the wrong base.
+
+    `merge-base` answers it instead, and `main` is merged in first so the base
+    is current: every round the task ever produced is in the unit, including
+    rounds interrupted before anything reviewed them.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    assert '"merge-base", "main", "HEAD"' in run_task, (
+        "the review unit is not the branch's divergence from main")
+    assert run_task.index('"checkout", "-q", branch') < \
+        run_task.index('"merge-base", "main", "HEAD"'), \
+        "the base is computed before the branch is checked out"
+    assert '"merge", "-q", "--no-edit", "main"' in run_task, (
+        "a resumed branch is not brought up to main, so its base is stale")

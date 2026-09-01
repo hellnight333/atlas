@@ -171,7 +171,6 @@ class Driver:
             log("REFUSED", task=ident, why="working tree not clean",
                 files=len(dirty.splitlines()))
             return State.FAILED
-        base = head_sha(self.repo)
         # One branch per task, and `main` only when the reviewer is clean.
         #
         # The second proving run showed why. Each round commits, because the
@@ -185,10 +184,30 @@ class Driver:
         # the exact case a resumable queue exists to serve.
         if _git("rev-parse", "--verify", "--quiet", branch, cwd=self.repo)[0] == 0:
             _git("checkout", "-q", branch, cwd=self.repo)
+            # Bring `main` in first. Without it the branch is behind, and
+            # `base..HEAD` presents every commit `main` gained while the task
+            # was parked as though this task had *deleted* it — the reviewer
+            # would be handed a diff that reverses unrelated work.
+            merged, out = _git("merge", "-q", "--no-edit", "main", cwd=self.repo)
+            if merged != 0:
+                _git("merge", "--abort", cwd=self.repo)
+                _git("checkout", "-q", "main", cwd=self.repo)
+                self.q.move(ident, State.CONTESTED,
+                            reason=f"the parked branch will not take main: "
+                                   f"{out[:300]}")
+                log("CONTESTED", task=ident, why="branch conflicts with main")
+                return State.CONTESTED
             log("RESUMING", task=ident, branch=branch,
                 at=head_sha(self.repo)[:12])
         else:
             _git("checkout", "-q", "-b", branch, cwd=self.repo)
+
+        # Where this task's work begins, asked of git rather than remembered.
+        # For a fresh branch that is `main`'s tip; for a resumed one it is the
+        # point the branch and `main` share, so **every round the task has ever
+        # produced is in the review unit** — including rounds interrupted
+        # before anything reviewed them.
+        base = _git("merge-base", "main", "HEAD", cwd=self.repo)[1] or head_sha(self.repo)
         self.q.move(ident, State.BUILDING, reason=f"base {base[:12]} on {branch}",
                     base_sha=base)
         log("BUILDING", task=ident, title=task["title"][:60], base=base[:12])
