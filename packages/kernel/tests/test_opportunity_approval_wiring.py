@@ -40,6 +40,7 @@ from atlas_kernel.opportunity.outreach import (
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
 from atlas_kernel.opportunity.service import OpportunityService
 from atlas_kernel.opportunity.tenancy import ALL_TENANTS
+from atlas_kernel.outreach import unreviewed
 
 BARE_PAGE = "<html><body><p>Coming soon</p></body></html>"
 SEED_CSV = "name,website,email\nAl Noor Dental Clinic,https://alnoor.test,hello@alnoor.test\n"
@@ -121,6 +122,33 @@ class TestRealApprovalService:
         assert evidence, "the approval carries no evidence"
         assert all(item["observed"] for item in evidence)
         assert request.metadata[PROPOSAL_FINGERPRINT] == prepared.proposal.fingerprint
+
+    def test_requesting_approval_records_the_ask_on_the_message(self) -> None:
+        """A pending request has to be visible in the message record.
+
+        The review queue answers "has anybody been asked about this draft?" from
+        the row and nothing else — `AWAITING_APPROVAL` is the only status that
+        records the question having been put. A request that left the row at
+        `DRAFT` would be reported as a draft nobody has looked at, and the
+        obvious response to that report is a second request for the same
+        decision.
+
+        The `approval_requested` event is not a substitute. It names an approval
+        and an opportunity, never a message, so a business holding two drafts
+        cannot be told from it which one was asked about.
+        """
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        service.request_approval(prepared)
+
+        assert prepared.message.status is OutreachStatus.AWAITING_APPROVAL
+        # An unanswered question is not an answer: still nobody's decision, and
+        # the column that would name one stays empty.
+        assert prepared.message.approval_id is None
+        assert unreviewed.undecided(prepared.message)
+        assert unreviewed.classify(prepared.message).state == unreviewed.ASKED
 
     def test_a_human_approving_makes_the_message_sendable(self) -> None:
         runtime = create_runtime()
@@ -245,3 +273,21 @@ class TestDurableRun:
         )
         stored = [e for e in reloaded.list_events(tenant=ALL_TENANTS) if e.opportunity_id == opportunity.id]
         assert PipelineEventKind.SENT in [e.kind for e in stored]
+
+    def test_a_pending_request_is_stored_as_awaiting_approval(self) -> None:
+        """The queue reads the database, not the object the request was made
+        from. A status that moved only in memory would still show a pending
+        request as an untouched draft to everybody who asks the records."""
+        from atlas_kernel.opportunity.repository import OpportunityRepository
+
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        service.repository = OpportunityRepository()
+
+        business, _, prepared = _prepared(service)
+        service.request_approval(prepared)
+
+        stored = OpportunityRepository().messages_for(business.id)
+        row = next(m for m in stored if m.id == prepared.message.id)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL
+        assert unreviewed.classify(row).state == unreviewed.ASKED

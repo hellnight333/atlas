@@ -36,7 +36,16 @@ is answerable from the row is an invariant somebody has to hold up rather than a
 property of the column: every path that puts the question to a person has to
 record it here by moving the message to `AWAITING_APPROVAL`, and one that asks
 without writing it turns `NEVER_PUT_TO_A_PERSON` into a false statement about
-the records.
+the records. `OpportunityService.request_approval` is the only path that asks
+today; it moves the row, and `test_opportunity_approval_wiring.py` holds it
+there.
+
+The `approval_requested` event that same path records is *not* a second source
+for this. It names an approval and an opportunity, never a message, and a
+business holding a WhatsApp draft and an email draft is precisely the case where
+that distinction decides the answer — reading the event would mark both rows as
+asked when one of them was. The row is where the question is recorded, so the
+row is where it is read from.
 
 **Is there something in the record a reviewer would have to settle first?** Zero
 or more named conditions: the draft was replaced, it is addressed to nobody, the
@@ -77,9 +86,15 @@ NEVER_ASKED = "NEVER_PUT_TO_A_PERSON"
 #: person without writing it here makes the state above a false statement.
 ASKED = "ASKED_AND_UNANSWERED"
 
-#: A later message for the same business, channel and origin exists. This one
-#: was replaced before anybody read it, and deciding about it now would be
-#: deciding about words that are no longer the current ones.
+#: A **provably** later message for the same business, channel and origin
+#: exists. This one was replaced before anybody read it, and deciding about it
+#: now would be deciding about words that are no longer the current ones.
+#:
+#: Provably, because the claim is about time and only a recorded time can
+#: support it. Two rows written in the same instant, or either of them missing
+#: `created_at`, establish no order at all — and an undated draft is exactly the
+#: row this list exists for, so answering it with an invented ordering would put
+#: a fabricated reason on the one message nobody can otherwise account for.
 SUPERSEDED = "REPLACED_BY_A_LATER_DRAFT"
 
 #: `recipient` is empty. There is no address, so there is nothing to approve a
@@ -246,6 +261,22 @@ def _origin(message: Any) -> tuple[str, str, str, str]:
             str(_of(message, "proposal_id", "") or ""))
 
 
+def _replaces(candidate: Any, written: datetime | None) -> bool:
+    """Whether `candidate` is recorded as written after these words were.
+
+    Strictly after, and both moments have to exist. Sorting can always produce
+    an order — fall back to the id and there is a "last" message for every
+    origin — but an order is not a fact, and `REPLACED_BY_A_LATER_DRAFT` is a
+    statement about what the records say happened. Same instant, no timestamp on
+    either side, or a timestamp on only one: nothing was shown to have replaced
+    anything, so nothing is reported.
+    """
+    if candidate is None or written is None:
+        return False
+    at = _aware(_of(candidate, "created_at"))
+    return at is not None and at > written
+
+
 def _reachable(channel: str, recipient: str,
                channels: Mapping[str, Any] | None) -> bool | None:
     """Whether that channel could deliver to that address, or `None` if unknown.
@@ -396,6 +427,12 @@ def from_records(messages: Iterable[Any], *,
     just as moot as one replaced by another draft, and a reader given only the
     undecided rows cannot tell.
 
+    Supersession is read out of two recorded moments and never out of the sort
+    order. Sorting always yields a last message per origin — the key falls back
+    to the id — including for origins whose rows share an instant or carry no
+    timestamp at all, and reporting the other one as replaced would be an
+    ordering the records do not contain.
+
     `events` is each business's history, keyed by `business_id`. Handed whole
     and filtered here, so the caller fetching it does not have to know which
     kinds count as evidence or which window each message asks about.
@@ -424,9 +461,14 @@ def from_records(messages: Iterable[Any], *,
         key=lambda message: (_aware(_of(message, "created_at")) or _EPOCH,
                              str(_of(message, "id", "") or "")))
 
-    latest: dict[tuple[str, str, str, str], Any] = {}
+    # The newest *dated* message of each origin, which is the only thing that
+    # can be shown to have replaced anything. Undated rows are skipped rather
+    # than sorted to the front: they take part as messages to be reported, never
+    # as evidence that some other message came first.
+    newest: dict[tuple[str, str, str, str], Any] = {}
     for message in ordered:
-        latest[_origin(message)] = message
+        if _aware(_of(message, "created_at")) is not None:
+            newest[_origin(message)] = message
 
     found: list[Unreviewed] = []
     for message in ordered:
@@ -434,8 +476,9 @@ def from_records(messages: Iterable[Any], *,
             continue
         if wanted is not None and str(_of(message, "id", "")) not in wanted:
             continue
-        current = latest.get(_origin(message))
-        replaced = current if current is not None and current is not message else None
+        current = newest.get(_origin(message))
+        written = _aware(_of(message, "created_at"))
+        replaced = current if _replaces(current, written) else None
         business_id = str(_of(message, "business_id", "") or "")
         found.append(classify(
             message,

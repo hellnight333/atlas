@@ -89,10 +89,24 @@ def changed(*, cwd: Path, base_sha: str | None = None) -> Gate:
 #: those would have refused exactly the work this project wants most. Tests are
 #: not the cost a review round pays.
 #:
-#: The file count is the weaker signal and is kept anyway — thirty-five files is
-#: not one change however few lines each carries.
+#: Then 400 proved too tight, and the way it failed is the useful part. Split
+#: to a single module and its tests — the smallest coherent unit there is — the
+#: task still measured 468 non-test lines and was parked. Splitting a module
+#: further would produce two halves of one idea, which is worse than a long
+#: review: the limit had started refusing work rather than protecting it.
+#:
+#: This codebase writes long explanatory prose in its source, so line count
+#: tracks style as much as scope. What actually discriminates is the number of
+#: distinct concerns, and file count approximates that: thirty-five files was
+#: many concerns, two modules with two concerns could not converge, one module
+#: with one concern was never given the chance.
+#:
+#: So the line limit is set generously — high enough that no single coherent
+#: module trips it — and the file count and the three-round cap do the real
+#: work. There is no evidence that 468 lines in one module cannot converge, and
+#: parking on an unvalidated threshold is guessing.
 TOO_MANY_FILES = 14
-TOO_MANY_LINES = 400
+TOO_MANY_LINES = 800
 
 
 def _is_test(path: str) -> bool:

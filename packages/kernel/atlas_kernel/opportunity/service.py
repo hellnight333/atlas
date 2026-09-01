@@ -31,6 +31,7 @@ from .models import (
     Opportunity,
     OpportunityStage,
     OutreachMessage,
+    OutreachStatus,
     PipelineEventKind,
     Proposal,
 )
@@ -173,7 +174,26 @@ class OpportunityService:
         )
 
     def request_approval(self, prepared: PreparedOutreach, *, requested_by: str = "atlas"):
+        """Ask a person, and write on the message that they were asked.
+
+        The status move is not bookkeeping. ``AWAITING_APPROVAL`` is the only
+        thing in the message record that says the question was ever put, and the
+        review queue in ``outreach.unreviewed`` reads exactly that: a row still
+        at ``DRAFT`` is reported as one nobody has been asked about. Requesting
+        approval without writing it here would show a pending request as an
+        untouched draft and invite a second request for the same decision.
+
+        ``approval_id`` stays ``None`` deliberately. It names the decision, and
+        filling it in now would make an unanswered question read as an answer —
+        both to the send path and to the queue, which treats that column's
+        presence as somebody having acted.
+        """
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
+        prepared.message = prepared.message.model_copy(
+            update={"status": OutreachStatus.AWAITING_APPROVAL}
+        )
+        if self.repository is not None:
+            self.repository.save_message(prepared.message)
         self._record(
             prepared.business.id,
             PipelineEventKind.APPROVAL_REQUESTED,

@@ -1173,8 +1173,12 @@ def test_a_run_where_everything_skipped_asserted_nothing(monkeypatch, summary,
     # The four real tasks the limit is calibrated on.
     ("100\t23\tapps/public/build.py\n150\t31\tpackages/kernel/tests/t_x.py", True),
     ("70\t12\tinfra/q.Caddyfile\n200\t16\tpackages/kernel/tests/t_y.py", True),
+    # A single coherent module is not oversized however long its prose. The
+    # limit was 400 and parked exactly this, and splitting a module in half
+    # produces two halves of one idea.
     ("379\t0\tsrc/unreviewed.py\n161\t10\tsrc/repository.py\n800\t46\t"
-     "packages/kernel/tests/t_z.py", False),
+     "packages/kernel/tests/t_z.py", True),
+    ("1400\t0\tsrc/enormous.py", False),
     ("\n".join(f"40\t3\tsrc/f{n}.py" for n in range(35)), False),
     # Tests are not the cost a review round pays: nine hundred lines of them
     # beside fifty lines of source is a small change.

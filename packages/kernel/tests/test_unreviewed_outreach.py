@@ -199,6 +199,61 @@ def test_a_draft_replaced_by_one_that_was_later_approved_is_still_moot() -> None
     assert row.reason == unreviewed.SUPERSEDED
 
 
+def test_two_drafts_written_in_the_same_instant_replace_nothing() -> None:
+    """Same origin, same moment: the records establish no order, so neither row
+    may be told it was replaced. Sorting can always produce a last message — the
+    key falls back to the id — but a tiebreak is not a fact about time, and
+    `REPLACED_BY_A_LATER_DRAFT` is a claim about what happened."""
+    rows = unreviewed.from_records(
+        [message(id="msg-b", created_at=DRAFTED),
+         message(id="msg-a", created_at=DRAFTED)],
+        now=NOW)
+    assert [row.reason for row in rows] == [unreviewed.NEVER_ASKED] * 2
+    assert unreviewed.counts(rows)["superseded"] == 0
+
+
+def test_an_undated_draft_is_never_reported_as_replaced() -> None:
+    """The row this list exists for. Nothing is recorded about when it was
+    written, so nothing can be recorded about what came after it — and the trace
+    would have named a replacement written at no time at all."""
+    undated = SimpleNamespace(id="msg-undated", business_id="biz-1",
+                              status="draft", channel="whatsapp",
+                              recipient=MOBILE, subject="", body="",
+                              mission_id="", proposal_id="", created_at=None)
+    rows = {row.message_id: row for row in unreviewed.from_records(
+        [undated, message(id="msg-dated", created_at=LATER)], now=NOW)}
+    assert rows["msg-undated"].blocked_on == ()
+    assert rows["msg-dated"].blocked_on == ()
+
+
+def test_an_undated_draft_does_not_replace_a_dated_one() -> None:
+    """The other direction, and the one a sort gets wrong quietly: a row with no
+    timestamp sorts somewhere, and wherever it lands it must not retire a
+    message whose own timestamp is on file."""
+    undated = SimpleNamespace(id="msg-zzz", business_id="biz-1", status="draft",
+                              channel="whatsapp", recipient=MOBILE, subject="",
+                              body="", mission_id="", proposal_id="",
+                              created_at=None)
+    row = one_row([undated, message(id="msg-dated")], only=["msg-dated"])
+    assert row.blocked_on == ()
+
+
+def test_the_replacement_a_row_names_is_always_one_with_a_time() -> None:
+    """Whatever else is in the records for that origin. The trace states when
+    the replacement was written, and a trace with a blank where the moment goes
+    is the assertion this module refuses to make."""
+    undated = SimpleNamespace(id="msg-undated", business_id="biz-1",
+                              status="draft", channel="whatsapp",
+                              recipient=MOBILE, subject="", body="",
+                              mission_id="", proposal_id="", created_at=None)
+    row = one_row([message(id="msg-old"), message(id="msg-new", created_at=LATER),
+                   undated],
+                  only=["msg-old"])
+    assert row.reason == unreviewed.SUPERSEDED
+    assert "msg-new" in row.why
+    assert "2026-08-25" in row.why
+
+
 def test_a_draft_from_another_mission_is_not_a_replacement() -> None:
     """Two missions can each prepare an email to one business about two
     different published artefacts. Calling the older one replaced would retire
