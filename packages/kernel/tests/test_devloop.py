@@ -1106,3 +1106,30 @@ def test_which_builder_stops_are_judged_by_the_gates(reason, reaches_gates):
     # A successful run is never "stopped short" — it did not stop short.
     assert agents.stopped_short(
         agents.Outcome(ok=True, exit_code=0, stop_reason=reason)) is False
+
+
+def test_an_empty_diff_records_what_the_builder_said(tmp_path, monkeypatch):
+    """"nothing changed" is undiagnosable on its own.
+
+    A refusal, a crash, a boundary the builder did not phrase as one, and an
+    agent that simply did nothing all leave the same empty diff. The builder's
+    own words are the only thing that tells them apart afterwards.
+    """
+    import devloop.driver as drv
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="t", brief="b", origin="human")
+    task = q.claim(owner="d")
+
+    monkeypatch.setattr(drv, "_git", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(drv.agents, "build", lambda *a, **k: drv.agents.Outcome(
+        ok=True, exit_code=0, output="I could not find the builder module."))
+    monkeypatch.setattr(drv.gates, "changed", lambda **k: drv.gates.Gate(
+        "changed", False, "nothing was changed."))
+    monkeypatch.setattr(drv.agents, "stopped_short", lambda o: False)
+
+    driver = drv.Driver(q, drv.Limits(), repo=tmp_path)
+    assert driver.run_task(task) == State.FAILED
+    reasons = " ".join(t["reason"] for t in q.transitions(ident))
+    assert "could not find the builder module" in reasons, (
+        "the failure records that nothing changed and not why")

@@ -273,8 +273,15 @@ class Driver:
             self.q.move(ident, State.GATING, reason=f"round {round_no}")
             diff = gates.changed(cwd=self.repo)
             if not diff.passed:
-                self.q.move(ident, State.FAILED, reason=diff.detail)
-                log("FAILED", task=ident, why="nothing changed")
+                # What the builder said, kept with the failure. Without it
+                # "nothing changed" is undiagnosable: a refusal, a crash, a
+                # boundary it did not phrase as one, and an agent that simply
+                # did nothing all look identical afterwards.
+                said = " ".join((built.output or "").split())[-600:]
+                self.q.move(ident, State.FAILED,
+                            reason=f"{diff.detail} | builder said: {said}")
+                log("FAILED", task=ident, why="nothing changed",
+                    builder_said=said[-300:])
                 return State.FAILED
             # Narrowed to what the task touched. Measured: the full suite is
             # about eleven minutes a round against a two-minute review, so
