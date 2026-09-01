@@ -183,24 +183,73 @@ class OpportunityService:
         approval without writing it here would show a pending request as an
         untouched draft and invite a second request for the same decision.
 
-        ``approval_id`` stays ``None`` deliberately. It names the decision, and
-        filling it in now would make an unanswered question read as an answer —
-        both to the send path and to the queue, which treats that column's
-        presence as somebody having acted.
+        ``approval_id`` is written here too, and it names the question rather
+        than an answer. Without it the row records that *somebody was asked* and
+        nothing at all about *what they were asked*, so there is no way back
+        from a message to the request that settles it: the queue asserts an open
+        question and no reader can check the assertion. Nothing infers a
+        decision from this column — ``send`` re-derives the fingerprint,
+        ``record_decision`` reads the approval's own state, and
+        ``outreach.unreviewed`` reads the status and the three columns that mark
+        an act somebody took.
+
+        The answer has its own path. ``ApprovalService`` decides on its records
+        and never touches this one, so a request that is refused, cancelled or
+        left to expire has to be written back through ``record_decision`` or
+        this row goes on claiming an open question for good.
         """
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
         prepared.message = prepared.message.model_copy(
-            update={"status": OutreachStatus.AWAITING_APPROVAL}
+            update={
+                "status": OutreachStatus.AWAITING_APPROVAL,
+                "approval_id": request.id,
+            }
         )
         if self.repository is not None:
             self.repository.save_message(prepared.message)
         self._record(
             prepared.business.id,
             PipelineEventKind.APPROVAL_REQUESTED,
-            {"approval_id": request.id},
+            {"approval_id": request.id, "message_id": prepared.message.id},
             opportunity_id=prepared.opportunity.id,
         )
         return request
+
+    def record_decision(self, prepared: PreparedOutreach, approval) -> OutreachMessage:
+        """Write a terminal approval outcome back onto the message.
+
+        The counterpart to ``request_approval``, and the reason that method is
+        allowed to leave a claim on the row at all. ``AWAITING_APPROVAL`` states
+        that a person was asked and has not answered. ``ApprovalService`` moves
+        its own request record and knows nothing about outreach messages, so
+        every way an approval ends — a refusal through the approvals API, a
+        cancellation, ``expire_due`` sweeping a request nobody answered — leaves
+        that claim standing after it stopped being true. The review queue then
+        lists an answered request as one still waiting, and the obvious response
+        to that listing is to ask somebody the same question again.
+
+        ``APPROVED`` is refused rather than written, and that is not an omission.
+        Marking a message approved is ``gate.authorise``'s act because only
+        ``authorise`` re-derives the fingerprint and refuses words that moved
+        since a person read them; a method whose job is keeping a row honest
+        must not be a second way to authorise delivery. ``send`` is that path,
+        and an approved message stays ``AWAITING_APPROVAL`` until it runs.
+        """
+        marked = self.gate.reject(prepared.message, approval)
+        prepared.message = marked
+        if self.repository is not None:
+            self.repository.save_message(marked)
+        self._record(
+            prepared.business.id,
+            PipelineEventKind.REJECTED,
+            {
+                "approval_id": approval.id,
+                "approval_state": approval.state.value,
+                "detail": marked.detail,
+            },
+            opportunity_id=prepared.opportunity.id,
+        )
+        return marked
 
     # -- sending ----------------------------------------------------------
 

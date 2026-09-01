@@ -22,7 +22,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
+from ..approval.models import (
+    TERMINAL_APPROVAL_STATES,
+    ApprovalContext,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
 from ..approval.service import ApprovalService
 from .models import (
     Business,
@@ -38,6 +44,24 @@ PROPOSAL_FINGERPRINT = "proposal_fingerprint"
 #: What the policy engine sees. Named so a policy can require a second approver
 #: for outreach specifically, without this file knowing such a policy exists.
 OUTREACH_ACTION = "opportunity.outreach.send"
+
+#: Terminal approval states that foreclose the send, and what each one is
+#: recorded as on the message.
+#:
+#: Three entries, not one line of prose, because they are not the same event. A
+#: person refusing, a request being cancelled, and a request nobody answered
+#: before it expired all stop the send, but only the first is a decision
+#: somebody made — and a message detail reading "rejected by approver" on an
+#: expiry puts words in the mouth of a person who never spoke.
+#:
+#: ``APPROVED`` is deliberately absent. It is terminal for the approval and not
+#: for the message: marking a message approved is ``authorise``'s act, because
+#: only ``authorise`` re-derives the fingerprint first.
+FORECLOSED: dict[ApprovalState, str] = {
+    ApprovalState.REJECTED: "rejected by approver",
+    ApprovalState.CANCELLED: "the approval request was cancelled before anybody decided",
+    ApprovalState.EXPIRED: "the approval request expired with nobody having answered it",
+}
 
 
 class OutreachNotApproved(RuntimeError):
@@ -158,10 +182,33 @@ class OutreachGate:
         )
 
     def reject(self, message: OutreachMessage, approval: ApprovalRequest) -> OutreachMessage:
+        """Close the message against an approval that forecloses the send.
+
+        The counterpart to ``authorise``, and it takes the reason from the
+        approval's own state rather than asserting one. ``FORECLOSED`` says why
+        that distinction is worth three entries.
+
+        Refuses a request nobody has decided yet, because writing ``REJECTED``
+        on a pending approval would answer on the approver's behalf — the exact
+        thing this gate exists to prevent. Refuses an approved one too: the way
+        to record a yes is ``authorise``, which re-checks the fingerprint, and a
+        second door onto ``APPROVED`` that skips that check is a door onto
+        sending words nobody read.
+        """
+        if approval.state is ApprovalState.APPROVED:
+            raise OutreachNotApproved(
+                f"approval {approval.id} is approved; record that with authorise, "
+                "which re-checks the fingerprint, not with a refusal"
+            )
+        if approval.state not in TERMINAL_APPROVAL_STATES:
+            raise OutreachNotApproved(
+                f"approval {approval.id} is {approval.state.value}; nobody has decided "
+                "it, and closing the message now would answer for the approver"
+            )
         return message.model_copy(
             update={
                 "status": OutreachStatus.REJECTED,
                 "approval_id": approval.id,
-                "detail": "rejected by approver",
+                "detail": FORECLOSED[approval.state],
             }
         )

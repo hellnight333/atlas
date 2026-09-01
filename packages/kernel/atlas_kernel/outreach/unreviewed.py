@@ -40,6 +40,17 @@ the records. `OpportunityService.request_approval` is the only path that asks
 today; it moves the row, and `test_opportunity_approval_wiring.py` holds it
 there.
 
+The invariant has a second half, and it is the one that decays quietly. Asking
+is an event; being answered is a *later* event somewhere else. `ApprovalService`
+records refusals, cancellations and expiries against its own request and knows
+nothing about outreach messages, so a row moved to `AWAITING_APPROVAL` and never
+moved off it keeps asserting an open question long after the question was
+answered — and this queue then asks somebody to answer it again.
+`OpportunityService.record_decision` is the path that closes it, and the row
+carries `approval_id` so that a reader who doubts the claim can go and check the
+request the row names. Which is why that column is not read as a decision here:
+see `DECISION_COLUMNS`.
+
 *Whether* somebody was asked is answerable; *when* is not. Nothing timestamps
 the move, so the only moment any row carries is `created_at`, and every number
 here is measured from it and says so. Reporting the age of the words as the age
@@ -88,7 +99,9 @@ NEVER_ASKED = "NEVER_PUT_TO_A_PERSON"
 
 #: Somebody was asked and has not answered. `AWAITING_APPROVAL` is the only
 #: status that records the question having been put at all; a path that asks a
-#: person without writing it here makes the state above a false statement.
+#: person without writing it here makes the state above a false statement, and
+#: one that takes the answer without writing it here makes *this* one false.
+#: Both halves are somebody's to hold up — see the module docstring.
 ASKED = "ASKED_AND_UNANSWERED"
 
 #: A **provably** later message for the same business, channel and origin
@@ -143,12 +156,21 @@ UNDECIDED_STATUSES: tuple[str, ...] = ("draft", "awaiting_approval")
 #: one of them set means somebody acted on this message.
 #:
 #: Named here rather than spelled out inside `undecided` because the query that
-#: picks candidates out of the database has to narrow by the same four. It takes
-#: its limit before this module ever runs, so a row that only *looked* undecided
-#: would spend a place in the window and a genuinely undecided draft behind it
-#: would never be read at all. One list, applied in both places.
-DECISION_COLUMNS: tuple[str, ...] = ("approval_id", "approved_fingerprint",
-                                     "sent_at", "authorized_automated_at")
+#: picks candidates out of the database has to narrow by the same three. It
+#: takes its limit before this module ever runs, so a row that only *looked*
+#: undecided would spend a place in the window and a genuinely undecided draft
+#: behind it would never be read at all. One list, applied in both places.
+#:
+#: `approval_id` is **not** among them, and its absence is load-bearing. It
+#: names the request the message is bound to, which `request_approval` writes
+#: when it asks — before anybody has answered. Reading it as an act would hide
+#: every pending request from the queue this module exists to produce, which is
+#: the failure in the direction that matters: a draft somebody is waiting on
+#: silently absent from the list of drafts somebody is waiting on. What it is
+#: for is the other direction — a reader holding a row can look the request up
+#: and check the claim the status makes.
+DECISION_COLUMNS: tuple[str, ...] = ("approved_fingerprint", "sent_at",
+                                     "authorized_automated_at")
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -186,8 +208,9 @@ def _of(record: Any, name: str, default: Any = None) -> Any:
 def undecided(message: Any) -> bool:
     """Whether nobody has decided about this message.
 
-    Four independent signals, not one status column. A status is one edit away
-    from lying, and what is being protected here is a particular direction: an
+    Four independent signals — the status and the three columns in
+    `DECISION_COLUMNS` — not one status column. A status is one edit away from
+    lying, and what is being protected here is a particular direction: an
     approved message must never be listed as undecided, because listing it
     invites somebody to decide it a second time.
 
@@ -197,9 +220,9 @@ def undecided(message: Any) -> bool:
     person's to answer.
 
     Absence is read as falsiness rather than `is None`, which is the same test
-    for both kinds of column: the two text ones are absent when empty as well as
-    when null, and a `datetime` is never falsy, so a timestamp is caught exactly
-    when it is `None`.
+    for both kinds of column: the text one is absent when empty as well as when
+    null, and a `datetime` is never falsy, so a timestamp is caught exactly when
+    it is `None`.
     """
     status = str(_of(message, "status", "") or "")
     return (status in UNDECIDED_STATUSES
@@ -395,9 +418,19 @@ def classify(message: Any, *, business_name: str = "",
                    if written else
                    "It carries no moment at all — not when the words were "
                    "written, and not when anybody was asked.")
+        # Named so the claim is checkable. The status says nobody has answered,
+        # and that is only true while whoever took the answer wrote it back
+        # here. Pointing at the request that settles it turns a statement an
+        # operator has to trust into one they can go and verify.
+        asked_about = str(_of(message, "approval_id", "") or "")
+        names = (f"The request it is waiting on is {asked_about}; that record "
+                 "is where the answer would be."
+                 if asked_about else
+                 "The row names no approval request, so there is nothing to "
+                 "check the answer against.")
         said = ("atlas_outreach_messages.status is awaiting_approval — the "
-                "question was put to a person and not answered. When it was "
-                f"put is not recorded on the row. {carries}")
+                "question was put to a person and the row records no answer. "
+                f"When it was put is not recorded on the row. {carries} {names}")
     else:
         state = NEVER_ASKED
         said = (f"a draft since {written_at}, carrying no approval, no "

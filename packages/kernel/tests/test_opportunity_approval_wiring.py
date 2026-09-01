@@ -141,14 +141,19 @@ class TestRealApprovalService:
         service = _service(RecordingChannel(), runtime.approval_service)
         _, _, prepared = _prepared(service)
 
-        service.request_approval(prepared)
+        request = service.request_approval(prepared)
 
         assert prepared.message.status is OutreachStatus.AWAITING_APPROVAL
-        # An unanswered question is not an answer: still nobody's decision, and
-        # the column that would name one stays empty.
-        assert prepared.message.approval_id is None
+        # The row names the request it is waiting on, which is what makes the
+        # claim it makes checkable rather than something a reader must trust.
+        assert prepared.message.approval_id == request.id
+        # Naming the question is not answering it. A pending request stays in
+        # the queue, or the drafts somebody is waiting on are exactly the ones
+        # the list of drafts somebody is waiting on leaves out.
         assert unreviewed.undecided(prepared.message)
-        assert unreviewed.classify(prepared.message).state == unreviewed.ASKED
+        row = unreviewed.classify(prepared.message)
+        assert row.state == unreviewed.ASKED
+        assert request.id in row.traces[unreviewed.ASKED]
 
     def test_a_human_approving_makes_the_message_sendable(self) -> None:
         runtime = create_runtime()
@@ -201,6 +206,144 @@ class TestRealApprovalService:
 
         assert marked.status is OutreachStatus.REJECTED
         assert marked.approval_id == request.id
+
+
+class TestTheAnswerReachesTheMessage:
+    """`AWAITING_APPROVAL` is a claim that expires, and nothing expires it.
+
+    `ApprovalService` decides against its own request record and has never heard
+    of an outreach message. So every way an approval ends other than a completed
+    `send` — a refusal through the approvals API, a cancellation, `expire_due`
+    sweeping a request nobody answered — leaves the message asserting an open
+    question after the question was answered. The review queue reads that row
+    and asks somebody to decide a thing that was already decided.
+    """
+
+    @pytest.mark.parametrize(
+        "answer, expected_detail",
+        [
+            (lambda approvals, ident: approvals.reject(ident, actor="ayoub"),
+             "rejected by approver"),
+            (lambda approvals, ident: approvals.cancel(ident, actor="ayoub"),
+             "cancelled"),
+            (lambda approvals, ident: approvals.expire(ident), "expired"),
+        ],
+        ids=["rejected", "cancelled", "expired"],
+    )
+    def test_a_foreclosed_approval_closes_the_message(
+        self, answer, expected_detail
+    ) -> None:
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+        assert unreviewed.classify(prepared.message).state == unreviewed.ASKED
+
+        service.record_decision(prepared, answer(runtime.approval_service, request.id))
+
+        assert prepared.message.status is OutreachStatus.REJECTED
+        assert prepared.message.approval_id == request.id
+        # Which of the three, said out loud. A request that expired unanswered
+        # and one a person refused both stop the send, and recording the first
+        # as "rejected by approver" invents a decision nobody made.
+        assert expected_detail in (prepared.message.detail or "")
+        # And the queue stops listing it. This is the whole point: an answered
+        # request that goes on being reported as unanswered is an invitation to
+        # ask the same person the same question again.
+        assert not unreviewed.undecided(prepared.message)
+
+    def test_the_answer_is_recorded_on_the_timeline(self) -> None:
+        """A decision only the message row knows about is one the funnel cannot
+        count. `metrics.py` derives from events, not from current state."""
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+        service.record_decision(
+            prepared, runtime.approval_service.reject(request.id, actor="ayoub")
+        )
+
+        # Compared by value, like every other timeline assertion here.
+        # `BusinessEvent.kind` is a plain string on purpose — each factory adds
+        # kinds without editing the opportunity package — and the validator
+        # returns `value.strip()`, which is a new `str` and never the enum
+        # member. An `is` filter against `PipelineEventKind` therefore matches
+        # nothing at all, which is the direction that hides rather than fails:
+        # `assert not [...]` written that way would pass on any timeline.
+        recorded = [e for e in service.events if e.kind == PipelineEventKind.REJECTED]
+        assert len(recorded) == 1
+        assert recorded[0].detail["approval_id"] == request.id
+        assert recorded[0].detail["approval_state"] == "rejected"
+
+    def test_the_funnel_counts_that_rejection(self) -> None:
+        """The event exists so that a number moves, and the number is the test.
+
+        `build_report` groups the timeline by `kind` and reads
+        `PipelineEventKind.REJECTED` out of it, so an answer recorded under any
+        other name is one the funnel silently does not count — a refusal that
+        leaves the message closed and the report claiming nobody said no. This
+        asserts the whole path rather than the spelling of a constant.
+        """
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+        assert service.report().rejected == 0
+
+        service.record_decision(
+            prepared, runtime.approval_service.reject(request.id, actor="ayoub")
+        )
+
+        assert service.report().rejected == 1
+
+    def test_a_pending_request_cannot_be_closed(self) -> None:
+        """Closing an undecided request would answer for the approver, which is
+        the one thing this gate exists to make impossible."""
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+
+        with pytest.raises(OutreachNotApproved, match="nobody has decided"):
+            service.record_decision(prepared, request)
+        assert prepared.message.status is OutreachStatus.AWAITING_APPROVAL
+
+    def test_an_approval_is_not_recorded_here(self) -> None:
+        """A yes goes through `authorise`, which re-derives the fingerprint.
+
+        A second door onto `APPROVED` that skipped that check would be a way to
+        authorise delivery of words that moved after a person read them — and it
+        would arrive by way of a method whose stated job is bookkeeping.
+        """
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+
+        with pytest.raises(OutreachNotApproved, match="authorise"):
+            service.record_decision(prepared, approved)
+        assert prepared.message.approved_fingerprint is None
+        assert prepared.message.authorized_automated_at is None
+
+    def test_a_sent_message_never_reopens(self) -> None:
+        """The whole flow, ending where it should: nothing that completed is
+        offered back to the queue for a second decision."""
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+        sent = service.send(prepared, approved, EXAMPLE_PROFILE)
+
+        assert sent.status is OutreachStatus.SENT
+        assert not unreviewed.undecided(sent)
 
 
 class TestRefusalsLeaveATrace:

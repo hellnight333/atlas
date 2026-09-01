@@ -98,7 +98,24 @@ def test_a_message_awaiting_approval_is_asked_and_unanswered() -> None:
     row = one_row([message(status=OutreachStatus.AWAITING_APPROVAL)])
     assert row.state == unreviewed.ASKED
     assert row.reason == unreviewed.ASKED
-    assert "not answered" in row.why
+    assert "the row records no answer" in row.why
+
+
+def test_the_claim_is_about_the_row_and_not_about_the_approver() -> None:
+    """The row recording no answer is provable from the row. That nobody
+    answered is not.
+
+    The answer is taken elsewhere — `ApprovalService` decides against its own
+    request record — and reaches this row only because
+    `OpportunityService.record_decision` writes it back. That is somebody's
+    invariant to hold up rather than a property of the column, so what this
+    module states is what it can see, and it points at the request that holds
+    the rest.
+    """
+    row = one_row([message(status=OutreachStatus.AWAITING_APPROVAL,
+                           approval_id="apr-77")])
+    assert "the row records no answer" in row.why
+    assert "and not answered" not in row.why
 
 
 def test_that_it_was_asked_is_recorded_and_when_it_was_asked_is_not() -> None:
@@ -155,21 +172,50 @@ def test_a_rejected_message_is_a_decision_too() -> None:
 
 
 def test_a_status_that_says_draft_is_not_enough_on_its_own() -> None:
-    """Four signals, not one column. A status is one edit away from lying, and
-    the direction that matters here is an approval reappearing as a draft.
+    """Four signals — the status and three columns — not one column. A status is
+    one edit away from lying, and the direction that matters here is an approval
+    reappearing as a draft.
 
     Driven by `DECISION_COLUMNS` rather than a list written out again, because
     the query that feeds this queue narrows by the same names and a signal added
     to one place and not the other is the defect that constant exists to close.
     """
-    carried = {"approval_id": "manual-abc123",
-               "approved_fingerprint": "b" * 64,
+    carried = {"approved_fingerprint": "b" * 64,
                "sent_at": NOW,
                "authorized_automated_at": NOW}
     assert set(carried) == set(unreviewed.DECISION_COLUMNS), (
         "a decision signal is not exercised here")
     for column, value in carried.items():
         assert unreviewed.undecided(message(**{column: value})) is False, column
+
+
+def test_a_message_bound_to_a_pending_request_is_still_waiting() -> None:
+    """`approval_id` names the question, not an answer.
+
+    `OpportunityService.request_approval` writes it when it *asks*, so reading
+    it as an act somebody took would drop every pending request out of the queue
+    — the drafts a person is actually waiting on would be exactly the ones the
+    list of drafts a person is waiting on left out. It is here so a reader can
+    go and check the claim the status makes.
+    """
+    asked = message(status=OutreachStatus.AWAITING_APPROVAL,
+                    approval_id="apr-77")
+    assert unreviewed.undecided(asked) is True
+
+    row = one_row([asked])
+    assert row.state == unreviewed.ASKED
+    assert "apr-77" in row.why
+
+
+def test_an_asked_row_naming_no_request_says_so() -> None:
+    """Rather than implying there is somewhere to check. A row whose status says
+    a question was put but that names no request is one whose claim nobody can
+    verify, and saying "the answer is over there" about a record that does not
+    exist is worse than admitting the gap."""
+    row = one_row([message(status=OutreachStatus.AWAITING_APPROVAL,
+                           approval_id=None)])
+    assert row.state == unreviewed.ASKED
+    assert "names no approval request" in row.why
 
 
 # --- why each one is still sitting there -----------------------------------
