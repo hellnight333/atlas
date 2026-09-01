@@ -112,3 +112,15 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-0f8d6a74729c`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-f81e4bf36fe4 -->
+## Contested — Drafted outreach that has never been reviewed
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:1893-1895` [major] Apply the limit after identifying undecided messages
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:1912-1914` [major] Batch evidence-change lookups for the queue
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:1930-1932` [major] Apply the limit to messages, not businesses
+
+- **Driver task:** `t-f81e4bf36fe4`
+- **Review unit:** `59b97edbc08b..`
