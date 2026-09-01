@@ -520,26 +520,70 @@ def test_a_round_that_never_reviewed_can_never_land(q):
         "a task nothing reviewed reported itself clean")
 
 
-def test_a_round_the_reviewer_objected_to_can_never_land(q):
+def test_a_commit_the_reviewer_objected_to_can_never_land(q):
     ident = q.add(title="t", brief="b", origin="human")
-    q.move(ident, State.REVIEWING, review_rounds=1)
-    q.record_findings(ident, round=1, sha="a", findings=[
+    q.move(ident, State.REVIEWING, head_sha="aaa", review_rounds=1)
+    q.record_review(ident, round=1, sha="aaa", verdict="DEFECTS_FOUND",
+                    findings=1)
+    q.record_findings(ident, round=1, sha="aaa", findings=[
         {"severity": "blocking", "file": "f.py", "claim": "c",
          "why_it_matters": "w", "failure_scenario": "s"}])
     assert q.review_was_clean(ident) is False
 
-    # Negative control: the same task lands once a later round comes back with
-    # nothing blocking, so the refusal above is the finding and not a gate
-    # that refuses everything.
-    q.move(ident, State.REVIEWING, review_rounds=2)
+    # Negative control: a later commit reviewed clean does land, so the refusal
+    # above is the finding and not a gate that refuses everything.
+    q.move(ident, State.REVIEWING, head_sha="bbb", review_rounds=2)
+    q.record_review(ident, round=2, sha="bbb", verdict="CLEAN", findings=0)
     assert q.review_was_clean(ident) is True
+
+
+def test_a_reopened_task_does_not_inherit_the_old_runs_objections(q):
+    """The defect this cost a run to find.
+
+    Rounds restart when a task is reopened. Keyed on round number, a clean
+    review at round 2 of the new run was refused because round 2 of the *old*
+    run had raised a major finding — against a different commit entirely. It
+    failed in the safe direction and was still wrong.
+    """
+    ident = q.add(title="t", brief="b", origin="human")
+    q.move(ident, State.REVIEWING, head_sha="old", review_rounds=2)
+    q.record_review(ident, round=2, sha="old", verdict="DEFECTS_FOUND",
+                    findings=1)
+    q.record_findings(ident, round=2, sha="old", findings=[
+        {"severity": "major", "file": "f.py", "claim": "an old objection",
+         "why_it_matters": "w", "failure_scenario": "s"}])
+
+    q.move(ident, State.QUEUED, reason="reopened")
+    q.move(ident, State.REVIEWING, head_sha="new", review_rounds=2)
+    q.record_review(ident, round=2, sha="new", verdict="CLEAN", findings=0)
+    assert q.review_was_clean(ident) is True, (
+        "a clean review was refused because an earlier run objected at the "
+        "same round number")
+
+
+def test_a_head_nobody_reviewed_can_never_land(q):
+    """A clean review records no findings, so their absence proves nothing.
+
+    Without a record that a review of *this commit* ran, "no findings" and
+    "nobody looked" are the same thing — and the second must never land.
+    """
+    ident = q.add(title="t", brief="b", origin="human")
+    q.move(ident, State.REVIEWING, head_sha="reviewed", review_rounds=1)
+    q.record_review(ident, round=1, sha="reviewed", verdict="CLEAN", findings=0)
+    assert q.review_was_clean(ident) is True
+
+    # The builder pushed another commit; nothing has reviewed it.
+    q.move(ident, State.REVIEWING, head_sha="unreviewed", review_rounds=1)
+    assert q.review_was_clean(ident) is False
 
 
 def test_a_minor_finding_does_not_hold_a_task_but_a_major_one_does(q):
     for severity, expected in (("minor", True), ("major", False),
                                ("blocking", False)):
         ident = q.add(title=f"t-{severity}", brief="b", origin="human")
-        q.move(ident, State.REVIEWING, review_rounds=1)
+        q.move(ident, State.REVIEWING, head_sha="a", review_rounds=1)
+        q.record_review(ident, round=1, sha="a", verdict="DEFECTS_FOUND",
+                        findings=1)
         q.record_findings(ident, round=1, sha="a", findings=[
             {"severity": severity, "file": "f.py", "claim": "c",
              "why_it_matters": "w", "failure_scenario": "s"}])

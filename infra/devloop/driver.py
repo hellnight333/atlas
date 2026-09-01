@@ -326,6 +326,12 @@ class Driver:
                 return self._infra(ident, untouched.detail)
 
             found = reviewed.data.get("findings") or []
+            # The review itself, then its findings. A clean review records no
+            # findings, so without the first the landing gate cannot tell "the
+            # reviewer looked and found nothing" from "nobody looked".
+            self.q.record_review(ident, round=round_no, sha=sha,
+                                 verdict=str(reviewed.data.get("verdict", "")),
+                                 findings=len(found))
             self.q.record_findings(ident, round=round_no, sha=sha,
                                    findings=found)
             must = agents.blocking(found)
