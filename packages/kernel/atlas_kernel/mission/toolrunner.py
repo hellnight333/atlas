@@ -179,8 +179,20 @@ def permitted_urls(recipe: Recipe, *, targets: list[str] | None = None
     return declared
 
 
+#: How many sites one nightly pass takes. Named rather than typed twice,
+#: because it is not only a bound on politeness: with a rotation that orders
+#: least-recently-verified first, this number and the size of the population
+#: are together the cadence — 359 sites at 40 a night is a nine-night sweep,
+#: which is why most observations are older than a week and why that is the
+#: schedule rather than a fault. `repository.audit_backlog` reports the cadence
+#: from this constant, so the report cannot describe a pass that is not the one
+#: running.
+NIGHTLY_SITE_LIMIT = 40
+
+
 def targets_map_for(recipe: Recipe, *, repository: object,
-                    tenant: str | None = None, limit: int = 40) -> dict:
+                    tenant: str | None = None,
+                    limit: int = NIGHTLY_SITE_LIMIT) -> dict:
     """The addresses this recipe will fetch, and which business owns each.
 
     One call, so the set that is fetched and the set that can be attributed are
@@ -190,6 +202,10 @@ def targets_map_for(recipe: Recipe, *, repository: object,
     Bounded. A verification recipe over a market that grows to ten thousand
     businesses would otherwise fetch ten thousand sites in one mission, which is
     neither polite to them nor recoverable for us.
+
+    The bound is also the cadence: it is `NIGHTLY_SITE_LIMIT` sites a night out
+    of however many are recorded, and how long that takes to come back round is
+    what `audit_backlog` reports.
     """
     if recipe.targets_from != "business_websites" or repository is None:
         return {}
@@ -199,7 +215,8 @@ def targets_map_for(recipe: Recipe, *, repository: object,
 
 
 def targets_for(recipe: Recipe, *, repository: object,
-                tenant: str | None = None, limit: int = 40) -> list[str]:
+                tenant: str | None = None,
+                limit: int = NIGHTLY_SITE_LIMIT) -> list[str]:
     """Just the addresses, for a caller that does not need the owners."""
     return list(targets_map_for(recipe, repository=repository, tenant=tenant,
                                 limit=limit))

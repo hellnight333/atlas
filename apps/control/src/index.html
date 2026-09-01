@@ -1579,19 +1579,72 @@ async function opportunities() {
  * so the cadence is drawn as a measurement and never as a claim about the
  * schedule.
  */
-function freshness(f) {
+function freshness(f, b) {
   if (!f || !f.with_observations) return '';
   const stale = f.older_than_a_week;
+  /* Whether that age is a queue position or a fault. Most of the population
+     observed more than a week ago reads as an emergency and is a rotation of
+     forty sites a night taking nine nights to come round, so the pill is only
+     drawn as a problem when the cadence does not account for it. Without the
+     backlog the old warning tone stands: an unexplained number must not become
+     a calm one because a second endpoint failed to answer. */
+  const explained = b && b.the_cadence_explains_the_age;
   return `<p class="note" style="margin-top:.6rem">
     <strong>${esc(String(f.fresh_within_two_days))}</strong> observed in the
     last two days, ${esc(String(f.fresh_within_a_week))} within a week,
-    ${stale ? pill(String(stale) + ' older than a week', 'warn')
+    ${stale ? pill(String(stale) + ' older than a week', explained ? '' : 'warn')
             : pill('none older than a week', 'ok')},
     ${esc(String(f.never_observed))} never observed.
     Newest ${when(f.newest)}, oldest ${when(f.oldest)}.</p>
+  ${backlog(b)}
   <p class="note">A site that answered is not a site that was read:
     <code>website_verified</code> records the turn and carries no
     observations.</p>`;
+}
+
+/* Why those observations are old: the cadence, or something wrong.
+ *
+ * Freshness says how old and cannot say why, and the difference is whether
+ * anybody needs to do anything tonight. Forty sites a night, least recently
+ * verified first, sweeps 359 of them in nine nights — so most of the
+ * population is necessarily older than a week, and that is reported rather
+ * than fixed. The two ways it is a fault are still drawn as faults: a pass
+ * that has stopped, and a rotation that comes round inside a week and leaves
+ * sites stale anyway, which is what re-reading the alphabetically first forty
+ * did while succeeding every night.
+ */
+function backlog(b) {
+  if (!b || !b.sites) return '';
+  const sweep = `${esc(String(b.sites))} sites at ${esc(String(b.per_night))} a
+    night is a ${esc(String(b.nights_for_a_full_sweep))}-night sweep`;
+  /* The rotation promises every site a turn; it cannot promise a reading. A
+     server that refused, timed out or returned something that is not HTML is
+     deliberately not re-observed, and telling an operator to wait for the
+     sweep would be a promise nothing will keep. */
+  const stuck = !b.waiting_will_not_clear_these ? '' : `
+    <p class="note">${pill(String(b.unread_after_a_turn) + ' will not clear by waiting',
+                           'warn')}
+      already had a turn since their last reading and were not re-observed.
+      Their reach is the finding, not the cadence.</p>`;
+  if (b.the_cadence_explains_the_age) {
+    /* Nothing is stale, so there is nothing to explain. The line above already
+       says so in green, and an explanation of an absent problem is noise. */
+    if (!b.older_than_a_week) return '';
+    return `<p class="note">${pill('the cadence explains this', 'ok')}
+      ${sweep}, so an observation older than a week is a queue position rather
+      than a stall. Last read ${when(b.last_observation)}.</p>${stuck}`;
+  }
+  return `<p class="note">${pill('the cadence does not explain this', 'bad')}
+    ${sweep}. ${b.the_pass_ran_without_observing
+      ? `Sites took their turn ${when(b.last_turn)} and none was read — a turn
+         is not an observation, and this is the shape the twelve-day staleness
+         had.`
+      : b.the_pass_is_running
+      ? `The pass is running and reaching these sites would take less than a
+         week, so it is not reaching them.`
+      : `Nothing has been observed ${b.last_observation
+          ? 'since ' + when(b.last_observation) : 'at all'}: the pass has
+         stopped, and the age is a stall rather than a backlog.`}</p>${stuck}`;
 }
 
 async function discoveries() {
@@ -1624,7 +1677,7 @@ async function discoveries() {
         evidence about and does not, for a reason that was never theirs. The
         nightly verification revisits them; this number should reach zero on
         its own.</p>` : ''}
-      ${freshness(c.freshness)}
+      ${freshness(c.freshness, c.backlog)}
       <p class="note">${esc(c.note || '')}</p></div>`;
 
   if (!found) {

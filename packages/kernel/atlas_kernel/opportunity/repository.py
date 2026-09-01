@@ -117,6 +117,15 @@ OUTREACH_EVENT = "outreach_approved_for_manual_send"
 #: marks it — a second spelling would silently stop the rotation, and the run
 #: would still report success.
 VERIFIED_EVENT = "website_verified"
+
+#: The timeline entry that carries what was actually read off a page. Not the
+#: one above: a site can take its turn, answer, and still be observed by
+#: nothing, which is the shape the twelve-day staleness had.
+OBSERVED_EVENT = "website_audited"
+
+#: The most sites one read of the rotation may return however large a limit it
+#: is handed. A bound on a table that grows, not a statement about cadence.
+ROTATION_CEILING = 200
 from .models import (
     OPPORTUNITY_FACTORY,
     Business,
@@ -143,6 +152,17 @@ from .tenancy import (
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def rotation_size(limit: int) -> int:
+    """How many sites one read of the rotation actually returns.
+
+    Shared by the query and by the backlog report, so the cadence an operator
+    is shown is the cadence that runs. Reporting forty a night while the query
+    had clamped to something else is the kind of disagreement nobody finds by
+    reading either half.
+    """
+    return max(1, min(int(limit), ROTATION_CEILING))
 
 
 def _decoded(value: object) -> object:
@@ -888,7 +908,7 @@ class OpportunityRepository:
                 WITH latest AS (
                     SELECT DISTINCT ON (business_id) business_id, at,
                            detail->>'read_by' AS read_by
-                    FROM atlas_business_events WHERE kind = 'website_audited'
+                    FROM atlas_business_events WHERE kind = :observed
                     ORDER BY business_id, at DESC)
                 SELECT
                   (SELECT count(*) FROM atlas_businesses
@@ -899,7 +919,7 @@ class OpportunityRepository:
                   (SELECT count(*) FROM latest WHERE coalesce(read_by, '') <> '') read_by_recorded,
                   (SELECT max(at) FROM latest) newest,
                   (SELECT min(at) FROM latest) oldest
-                """)).mappings().first()
+                """), {"observed": OBSERVED_EVENT}).mappings().first()
         with_site = int(row["with_a_website"] or 0)
         have = int(row["with_observations"] or 0)
         return {
@@ -919,6 +939,103 @@ class OpportunityRepository:
                      "had its turn and whether it answered; it carries no "
                      "observations and must never be read as a fresh audit."),
         }
+
+    def audit_backlog(self) -> dict:
+        """Why those observations are old: a queue position, or a stall.
+
+        `audit_freshness` says *how* old, which is the number that raised this
+        and cannot answer it. Most of the population carrying observations
+        older than a week reads as an emergency and, at 359 sites and forty a
+        night, is simply a nine-night sweep doing exactly what it was built to
+        do. Nothing said so, so the cadence looked like a fault every night.
+
+        So this is deliberately a **report and not a change**. Fetching more
+        sites a night would make the number smaller and would be a decision
+        about somebody else's bandwidth, taken to make a screen look better.
+        The cadence is stated instead, and stated with the two things that
+        would make it a fault rather than a queue:
+
+        * `the_pass_is_running`, measured from the observation the pass writes
+          — never from `website_verified`, which refreshed nightly for twelve
+          days while nothing was being read; and
+        * `the_cadence_explains_the_age`, which is false when the rotation
+          sweeps everything inside a week and sites are stale anyway. That is
+          the alphabetical-forty bug, which succeeded nightly while never
+          fetching 319 of the sites.
+
+        And `unread_after_a_turn`, which is the measured answer to whether the
+        refresh path reaches these sites at all. The ordering promises every
+        site a turn; it cannot promise a *reading*. A server that refused, timed
+        out, returned something that is not HTML or was cut off mid-body takes
+        its turn and is deliberately not re-observed, because auditing what came
+        back would put an invented absence in front of a business. Those sites
+        cycle for ever, and this counts them rather than inferring from an
+        `ORDER BY` that they will come good.
+
+        `older_than_a_week` is **read from `audit_freshness`**, not recomputed.
+        Two queries written to the same intent is how two numbers standing next
+        to each other on one screen come to disagree, and the number here has
+        to be the number beside it.
+        """
+        from ..mission.toolrunner import NIGHTLY_SITE_LIMIT
+        from .coverage import backlog
+
+        with SessionLocal() as session:
+            row = session.execute(
+                text("""
+                WITH observed AS (
+                    SELECT DISTINCT ON (business_id) business_id, at
+                    FROM atlas_business_events WHERE kind = :observed
+                    ORDER BY business_id, at DESC),
+                turned AS (
+                    SELECT business_id, max(at) AS at
+                    FROM atlas_business_events WHERE kind = :verified
+                    GROUP BY business_id)
+                SELECT
+                  (SELECT count(DISTINCT website) FROM atlas_businesses
+                    WHERE website IS NOT NULL AND website <> '') AS sites,
+                  (SELECT max(at) FROM observed) AS last_observation,
+                  (SELECT max(at) FROM turned) AS last_turn,
+                  -- The rotation came back round and the reading did not
+                  -- refresh. `8 days` is `audit_freshness`'s own week, so this
+                  -- is a subset of the number it reports and not a second
+                  -- opinion about what stale means.
+                  (SELECT count(*) FROM observed
+                     JOIN turned ON turned.business_id = observed.business_id
+                    WHERE observed.at <= now() - interval '8 days'
+                      AND turned.at > observed.at) AS unread_after_a_turn
+                """), {"observed": OBSERVED_EVENT,
+                       "verified": VERIFIED_EVENT}).mappings().first()
+
+        def _nights(at) -> float | None:
+            """Nights since a moment, or `None` when there is no moment.
+
+            `None` is not a large number. Nothing has ever been observed is a
+            different fact from an observation that has gone stale, and a
+            reader that renders them the same way reports a system that never
+            started as one that stopped.
+            """
+            if at is None:
+                return None
+            moment = at if at.tzinfo else at.replace(tzinfo=UTC)
+            return max(0.0, round(
+                (datetime.now(UTC) - moment).total_seconds() / 86400.0, 2))
+
+        return backlog(
+            # Distinct addresses: the rotation de-duplicates by website, so two
+            # businesses sharing one is a single night's work. That is why this
+            # is not `audit_freshness`'s `with_a_website`, which counts
+            # businesses because the age it reports is per business.
+            sites=int(row["sites"] or 0),
+            older_than_a_week=self.audit_freshness()["older_than_a_week"],
+            per_night=rotation_size(NIGHTLY_SITE_LIMIT),
+            nights_since_an_observation=_nights(row["last_observation"]),
+            nights_since_a_turn=_nights(row["last_turn"]),
+            unread_after_a_turn=int(row["unread_after_a_turn"] or 0),
+            last_observation=(row["last_observation"].isoformat()
+                              if row["last_observation"] else ""),
+            last_turn=(row["last_turn"].isoformat()
+                       if row["last_turn"] else "")).summary()
 
     def evidence_changes_since(self, business_id: str, since) -> list[dict]:
         """What a later reading found different, after some moment.
@@ -992,9 +1109,9 @@ class OpportunityRepository:
             latest = session.execute(
                 text("""
                 SELECT DISTINCT ON (business_id) business_id, detail
-                FROM atlas_business_events WHERE kind = 'website_audited'
+                FROM atlas_business_events WHERE kind = :observed
                 ORDER BY business_id, at DESC
-                """)).mappings().all()
+                """), {"observed": OBSERVED_EVENT}).mappings().all()
             with_site = session.execute(
                 text("SELECT count(*) FROM atlas_businesses "
                      "WHERE website IS NOT NULL AND website <> ''")).scalar()
@@ -1592,7 +1709,7 @@ class OpportunityRepository:
                 ORDER BY seen.last_at ASC NULLS FIRST, site.first_seen_at
                 LIMIT :limit
                 """),
-                {"limit": max(1, min(int(limit), 200)),
+                {"limit": rotation_size(limit),
                  "verified": VERIFIED_EVENT},
             ).mappings().all()
         found: dict[str, Business] = {}

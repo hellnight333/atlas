@@ -75,7 +75,7 @@ sandbox.globalThis = sandbox;
 const context = vm.createContext(sandbox);
 /* Appended to the same script so the epilogue shares its lexical scope — the
  * only way to reach a top-level `const` from outside. */
-const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard, deliveryCard, wireReview, outreachCard, API };";
+const PROBE = ";globalThis.__under_test = { stageOf, whyItEnded, cost, STAGE, originOf, originChoice, discoveryLine, opportunityCard, deliveryCard, wireReview, outreachCard, freshness, backlog, API };";
 try {
   new vm.Script(SOURCE + PROBE, { filename: 'index.html' }).runInContext(context);
 } catch (err) {
@@ -91,7 +91,7 @@ function check(name, ok, detail = '') {
 }
 const { stageOf, whyItEnded, cost, STAGE, originOf, originChoice,
         discoveryLine, opportunityCard, deliveryCard,
-        wireReview, outreachCard } = sandbox.__under_test || {};
+        wireReview, outreachCard, freshness, backlog } = sandbox.__under_test || {};
 
 if (typeof stageOf !== 'function' || typeof whyItEnded !== 'function'
     || typeof cost !== 'function' || typeof originOf !== 'function'
@@ -256,6 +256,72 @@ const missingFlag = discoveryLine({ name: 'X', source: 'g',
                                     state: 'PROVEN_NEW_TO_SOURCE' });
 check('a row with no flag is treated as the weaker claim',
       /new to qevik/i.test(missingFlag.word), missingFlag.word);
+
+/* ---- the age of an observation: a queue position or a fault ------------- */
+
+/* Most of the population observed more than a week ago reads as an emergency
+ * and is a nine-night rotation doing what it was built to do. The console has
+ * to draw that difference, and it has to keep drawing the fault as a fault. */
+const STALE = { with_observations: 359, fresh_within_two_days: 40,
+                fresh_within_a_week: 320, older_than_a_week: 39,
+                never_observed: 0, newest: '', oldest: '' };
+const SWEEP = { sites: 359, per_night: 40, nights_for_a_full_sweep: 9,
+                older_than_a_week: 39, the_pass_is_running: true,
+                the_pass_ran_without_observing: false,
+                the_cadence_explains_the_age: true, last_observation: '',
+                last_turn: '' };
+
+const queued = freshness(STALE, SWEEP);
+check('an age the cadence explains says so', /cadence explains this/.test(queued));
+check('...and shows the arithmetic that explains it',
+      /359 sites at 40 a\s+night is a 9-night sweep/.test(queued));
+check('...and is not drawn as a warning',
+      !/pill warn/.test(queued),
+      'a queue position drawn as a fault teaches an operator to ignore faults');
+
+const stopped = freshness(STALE, { ...SWEEP, the_pass_is_running: false,
+                                   the_cadence_explains_the_age: false,
+                                   last_observation: '2026-08-19T05:00:00+00:00' });
+check('a pass that has stopped is not explained away',
+      /does not explain this/.test(stopped) && /pill bad/.test(stopped));
+check('...and is named as a stall rather than a backlog',
+      /stall rather than a backlog/.test(stopped));
+
+const blind = freshness(STALE, { ...SWEEP, the_pass_is_running: false,
+                                 the_pass_ran_without_observing: true,
+                                 the_cadence_explains_the_age: false });
+check('a pass that takes its turn without observing is named',
+      /a turn\s+is not an observation/.test(blind));
+
+const skipping = freshness(STALE, { ...SWEEP, sites: 80,
+                                    nights_for_a_full_sweep: 2,
+                                    the_cadence_explains_the_age: false });
+check('a rotation that sweeps inside a week and leaves sites stale is a fault',
+      /it is not reaching them/.test(skipping) && /pill bad/.test(skipping));
+
+/* The backlog is a second read and can fail on its own. When it does, the
+ * number it would have explained must keep its warning rather than quietly
+ * becoming calm. */
+const unexplained = freshness(STALE, null);
+check('a missing backlog leaves the age warned about, not reassured',
+      /pill warn/.test(unexplained) && !/cadence explains/.test(unexplained));
+check('an empty population renders nothing rather than dividing by it',
+      backlog({ sites: 0, per_night: 40 }) === '');
+check('an explanation of an absent problem is not printed',
+      backlog({ ...SWEEP, older_than_a_week: 0 }) === '');
+
+/* The rotation promises a turn, not a reading. Sites it has already come back
+ * round to and still could not read must not be described as a queue. */
+const stuck = freshness(STALE, { ...SWEEP, unread_after_a_turn: 6,
+                                 waiting_will_not_clear_these: true });
+check('sites the sweep has already reached are not called a queue position',
+      /6 will not clear by waiting/.test(stuck));
+check('...and the finding is named as reach rather than cadence',
+      /reach is the finding, not the cadence/.test(stuck));
+check('...while the cadence still explains the rest',
+      /cadence explains this/.test(stuck));
+check('none of them is not drawn at all',
+      !/will not clear by waiting/.test(queued));
 
 /* ---- opportunityCard: four parts, and an honest worth ------------------ */
 

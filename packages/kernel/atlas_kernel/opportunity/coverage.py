@@ -23,6 +23,9 @@ it is **whose failure it was**:
 Read-only, derived from the timeline. Nothing here re-audits: the nightly
 verification already revisits these, and duplicating it to produce a number
 would spend somebody else's bandwidth to make a report look complete.
+
+`Backlog` answers the question freshness raises and cannot settle on its own:
+whether an old observation is a queue position or a pass that stopped.
 """
 
 from __future__ import annotations
@@ -187,5 +190,187 @@ def reachable(*, businesses: int, with_email: int, with_phone: int,
                         by_phone=with_phone, by_neither=with_neither)
 
 
-__all__ = ["LEGACY_OUR_FAILURE", "OUR_FAILURE_FIELD", "Coverage",
-           "Reachability", "measure", "ours", "reachable"]
+#: How many nights may pass before "nightly" stops describing what happened.
+#: One missed night is a missed night; two is a pass that stopped, and the
+#: difference is the whole distinction between a backlog draining and a
+#: schedule nobody noticed had gone quiet.
+A_STOPPED_PASS = 2.0
+
+#: What `audit_freshness` counts as within a week: **eight** days, not seven.
+#: A pass that runs at 05:00 reads a site at 05:00, and seven days later that
+#: reading is seven days and a minute old — stale by an hour of arithmetic and
+#: by nothing else. So the rotation gets eight nights to come back round, and
+#: the backlog arithmetic has to use the same eight or the two numbers beside
+#: each other on one screen disagree about what a week is.
+A_WEEK_IN_NIGHTS = 8
+
+
+@dataclass(frozen=True)
+class Backlog:
+    """Why an observation is old: a queue position, or a pass that stopped.
+
+    "Most businesses carry observations older than a week" is either alarming
+    or exactly what the schedule produces, and the freshness surface could not
+    say which. The nightly rotation takes `per_night` sites, least recently
+    verified first, so a population of `sites` is swept in
+    `nights_for_a_full_sweep` nights. When that is longer than the week
+    freshness measures against, the majority **must** be older than a week: the
+    cadence is the cause, and the answer is to make it visible rather than to
+    change it. 359 sites at 40 a night is nine nights, and nine is more than a
+    week — nothing is wrong, and nothing said so.
+
+    What this must never print over is the opposite failure, which this
+    repository has already shipped once: the pass reaching sites without
+    observing them, so `website_verified` refreshed every night for twelve days
+    while `website_audited` stood still. `the_pass_is_running` is therefore
+    measured from the observation the pass *produces*, never from the turn it
+    took — a fresh turn with no observation beside it makes this false, and
+    says so under its own name.
+    """
+
+    #: Distinct websites in the rotation. Distinct, because the rotation
+    #: de-duplicates by address: two businesses sharing a website are one fetch
+    #: and therefore one night's work, not two.
+    sites: int
+    #: Read from `audit_freshness`, never recomputed. Two queries with the same
+    #: intent is how two numbers on one screen come to disagree.
+    older_than_a_week: int
+    #: How many sites one night of the pass takes. The rotation's own bound.
+    per_night: int
+    #: Nights since the last `website_audited`. `None` when there has never
+    #: been one — which is not an old pass, it is no pass.
+    nights_since_an_observation: float | None = None
+    #: Nights since the last `website_verified`: a site having had its turn,
+    #: whether or not anything was read from it.
+    nights_since_a_turn: float | None = None
+    #: Stale sites the rotation has **already come back round to** and still
+    #: could not re-observe. The measured answer to "does the refresh path
+    #: reach them", as opposed to the ordering's promise that it will.
+    #:
+    #: Named for what was not read rather than for what stayed stale, because
+    #: the console renders this field and refuses any name beginning
+    #: `stale_after`: that is the shape of a worker-health threshold
+    #: (`stale_after_seconds`), and a surface that computes staleness from one
+    #: is the failure that guard exists to stop. This computes nothing — it is
+    #: a count the timeline already settled — but a guard worth having is worth
+    #: not arguing with over a name.
+    unread_after_a_turn: int = 0
+    last_observation: str = ""
+    last_turn: str = ""
+
+    @property
+    def nights_for_a_full_sweep(self) -> int:
+        """How long the rotation takes to come back round to any one site."""
+        if self.sites <= 0 or self.per_night <= 0:
+            return 0
+        return -(-self.sites // self.per_night)
+
+    @property
+    def the_pass_is_running(self) -> bool:
+        """Whether observations are still being written. Measured, not declared.
+
+        A recurrence saying "nightly" is a declaration; this is the timeline.
+        And it reads the *observation*, because the record that refreshed
+        nightly while nothing was being read was the other one.
+        """
+        since = self.nights_since_an_observation
+        return since is not None and since <= A_STOPPED_PASS
+
+    @property
+    def the_pass_ran_without_observing(self) -> bool:
+        """The twelve-day failure, as one boolean.
+
+        Sites took their turn last night and none of them was read. Every
+        number on the freshness surface would look alive; the evidence behind
+        the commercial decisions would be a fortnight old.
+        """
+        turn = self.nights_since_a_turn
+        return (turn is not None and turn <= A_STOPPED_PASS
+                and not self.the_pass_is_running)
+
+    @property
+    def waiting_will_not_clear_these(self) -> bool:
+        """Whether some of the age is beyond the rotation's power to fix.
+
+        The ordering promises every site a turn; it cannot promise a reading.
+        A site whose server refused, timed out, returned something that is not
+        HTML, or was cut off mid-body takes its turn and is deliberately not
+        re-observed — auditing what came back would put an invented absence in
+        front of a business. Those sites cycle for ever, and telling an
+        operator to wait for the sweep would be a promise nothing will keep.
+
+        Kept out of `the_cadence_explains_the_age` on purpose: this is a
+        finding about reach, which `Coverage` already counts and names as ours
+        or theirs. Two numbers about the same sites saying it twice would make
+        the more urgent one harder to see.
+        """
+        return self.unread_after_a_turn > 0
+
+    @property
+    def the_cadence_explains_the_age(self) -> bool:
+        """Whether the schedule accounts for the age, or something is wrong.
+
+        False in the two cases worth waking somebody for: the pass has stopped,
+        so the age is a stall; or the rotation sweeps everything inside a week
+        and sites are stale anyway, so the pass is running and not reaching
+        them — which is precisely what the alphabetical-forty bug did while
+        succeeding nightly.
+        """
+        if not self.older_than_a_week:
+            return True
+        return (self.the_pass_is_running
+                and self.nights_for_a_full_sweep > A_WEEK_IN_NIGHTS)
+
+    def summary(self) -> dict:
+        return {
+            "sites": self.sites,
+            "older_than_a_week": self.older_than_a_week,
+            "per_night": self.per_night,
+            "nights_for_a_full_sweep": self.nights_for_a_full_sweep,
+            "the_pass_is_running": self.the_pass_is_running,
+            "the_pass_ran_without_observing": self.the_pass_ran_without_observing,
+            "the_cadence_explains_the_age": self.the_cadence_explains_the_age,
+            "unread_after_a_turn": self.unread_after_a_turn,
+            "waiting_will_not_clear_these": self.waiting_will_not_clear_these,
+            "nights_since_an_observation": self.nights_since_an_observation,
+            "nights_since_a_turn": self.nights_since_a_turn,
+            "last_observation": self.last_observation,
+            "last_turn": self.last_turn,
+            "note": (f"The pass takes {self.per_night} sites a night, least "
+                     f"recently verified first, so {self.sites} sites are swept "
+                     f"in {self.nights_for_a_full_sweep} nights. "
+                     + ("Observations older than a week are that queue, not a "
+                        "stall, and the cadence is reported rather than changed."
+                        if self.the_cadence_explains_the_age else
+                        "That does not account for the age on the timeline: "
+                        "either the pass has stopped or it is not reaching "
+                        "these sites.")
+                     + (f" {self.unread_after_a_turn} of them have already had "
+                        "a turn since their last reading and were not "
+                        "re-observed, so waiting for the sweep will not clear "
+                        "those — their reach is the finding, not the cadence."
+                        if self.waiting_will_not_clear_these else "")),
+        }
+
+
+def backlog(*, sites: int, older_than_a_week: int, per_night: int,
+            nights_since_an_observation: float | None = None,
+            nights_since_a_turn: float | None = None,
+            unread_after_a_turn: int = 0,
+            last_observation: str = "", last_turn: str = "") -> Backlog:
+    """The backlog, from counts and two timestamps the repository has."""
+    return Backlog(
+        sites=max(0, sites), older_than_a_week=max(0, older_than_a_week),
+        per_night=per_night,
+        nights_since_an_observation=nights_since_an_observation,
+        nights_since_a_turn=nights_since_a_turn,
+        # Never more than the population it is a subset of: a count larger
+        # than the number it explains part of is a reader people stop trusting.
+        unread_after_a_turn=min(max(0, unread_after_a_turn),
+                                max(0, older_than_a_week)),
+        last_observation=last_observation, last_turn=last_turn)
+
+
+__all__ = ["A_STOPPED_PASS", "A_WEEK_IN_NIGHTS", "LEGACY_OUR_FAILURE",
+           "OUR_FAILURE_FIELD", "Backlog", "Coverage", "Reachability",
+           "backlog", "measure", "ours", "reachable"]

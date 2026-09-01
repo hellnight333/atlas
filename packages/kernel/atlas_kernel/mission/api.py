@@ -755,11 +755,19 @@ def build_router() -> APIRouter:
         the nightly pass refreshed findings and left the observations behind
         every health check standing at 2026-08-19, and nothing said so.
 
+        And the backlog beside freshness, for the same reason again. Freshness
+        says most of the population was observed more than a week ago, which
+        reads as an emergency and is a rotation of forty sites a night taking
+        nine nights to come round. The cadence is reported rather than changed:
+        fetching more a night to make a number smaller would be a decision
+        about other people's bandwidth taken to improve a screen.
+
         **Declared above `/{mission_id}`**, like every sibling here.
         """
         memory = _opportunities(request)
         found = memory.audit_coverage()
         found["freshness"] = memory.audit_freshness()
+        found["backlog"] = memory.audit_backlog()
         return found
 
     @router.get("/inbound")

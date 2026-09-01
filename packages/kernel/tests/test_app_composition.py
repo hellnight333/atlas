@@ -438,6 +438,17 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "our failure and theirs are drawn the same way")
     assert source.count("${coverageBlock}") == 2, (
         "coverage is not rendered on both branches of the discovery view")
+    # Most of the population observed more than a week ago reads as an
+    # emergency and is a rotation of forty sites a night coming round in nine.
+    # Freshness without that arithmetic beside it is a number an operator can
+    # only read as a fault.
+    assert "c.backlog" in source, (
+        "the age of an observation is shown with nothing that says whether it "
+        "is a queue position or a stall")
+    assert "the cadence explains this" in source and \
+           "the cadence does not explain this" in source, (
+        "the console draws the cadence without drawing the two cases where it "
+        "is not the explanation, so a stopped pass would read as a backlog")
     # One prospect, answered from the models that own each fact. The screen it
     # replaced printed `JSON.stringify(roadmap || research)` into a `<pre>`,
     # which is a structural answer to a commercial question.
