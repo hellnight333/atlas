@@ -171,12 +171,19 @@ def test_an_unexpected_failure_is_not_dressed_as_a_designed_page(public) -> None
 
 def test_the_deploy_validates_the_config_before_restarting_caddy() -> None:
     """A malformed Caddyfile has taken this server down once already, and the
-    admin API is off so `reload` is not available. Validate, then restart."""
+    admin API is off so `reload` is not available. Validate, then restart.
+
+    Validated at the path it is staged at rather than the live one, because it
+    is now validated *before* it is installed — so there is no moment in which
+    `/etc/caddy/Caddyfile` holds a config no binary has accepted. `--adapter`
+    goes with that: Caddy infers the adapter from the file name, and the staged
+    copy is not called `Caddyfile` yet.
+    """
     deploy = (REPO / "infra" / "deploy_public.sh").read_text(encoding="utf-8")
-    assert "caddy validate --config /etc/caddy/Caddyfile" in deploy
+    validates = "caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile.incoming"
+    assert validates in deploy
     assert 'echo "==> restarting Caddy"' in deploy
-    assert (deploy.index("caddy validate --config /etc/caddy/Caddyfile")
-            < deploy.index('echo "==> restarting Caddy"'))
+    assert deploy.index(validates) < deploy.index('echo "==> restarting Caddy"')
 
 
 # --- 2. the artefact that config serves --------------------------------------
@@ -312,10 +319,14 @@ def test_one_script_ships_the_pages_and_the_config_that_names_them() -> None:
     one, the pages and the config that rewrites to them were installed by two
     different scripts — and the second was never run.
     """
+    # Matched without the closing quote: the config is copied to a staging path
+    # beside the live one now, so the destination reads `…/Caddyfile.incoming"`.
+    # What this is looking for is a script that sends a Caddyfile to that host
+    # at all, whatever it lands on.
     installers = sorted(
         path.name
         for path in sorted((REPO / "infra").glob("*.sh"))
-        if '"$TARGET:/etc/caddy/Caddyfile"' in path.read_text(encoding="utf-8")
+        if '"$TARGET:/etc/caddy/Caddyfile' in path.read_text(encoding="utf-8")
     )
     assert installers == ["deploy_public.sh"], (
         "the config that serves /srv/qevik-public must be installed by the same "
@@ -335,7 +346,7 @@ def test_the_site_is_shipped_before_the_config_that_names_its_pages() -> None:
     """
     public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
     ships = public.index("rsync -az --partial")
-    installs = public.index('"$TARGET:/etc/caddy/Caddyfile"')
+    installs = public.index('"$TARGET:/etc/caddy/Caddyfile')
     # The banner rather than `systemctl restart caddy`: the rollback path calls
     # that too, above, and matching it would compare against the wrong restart.
     restarts = public.index('echo "==> restarting Caddy"')
@@ -347,16 +358,27 @@ def test_the_config_it_replaces_is_kept_and_put_back_if_caddy_will_not_start() -
     """This file fronts four hostnames. A config that validates and then fails
     to start takes down the marketing site, the console, the customer sites and
     the operator's fallback door at once — so the one being replaced is kept
-    beside it and restored rather than left for someone to notice."""
+    beside it and restored rather than left for someone to notice.
+
+    Every path that can leave a config live and wrong ends in the rollback: one
+    that will not move into place, one that installs and will not start, and —
+    reached from `deploy_control.sh`, which is the only place that can see it —
+    one that starts and stops routing the API. A config that does not validate
+    is deliberately *not* one of them: it was never installed, so there is
+    nothing live to put back and a needless Caddy restart is not free.
+    """
     public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
     backs_up = public.index("cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous")
-    installs = public.index('"$TARGET:/etc/caddy/Caddyfile"')
+    installs = public.index('"$TARGET:/etc/caddy/Caddyfile')
     assert backs_up < installs, "the config is overwritten before it is kept"
     assert "systemctl is-active --quiet caddy" in public, (
         "`systemctl restart` succeeds on a unit that then exits")
-    assert public.count("restore_config") >= 3, (
-        "the rollback must run for a config that does not validate and for one "
-        "that validates and does not come up")
+    assert public.count("restore_config || true") >= 2, (
+        "the rollback must run for a config that will not move into place and "
+        "for one that installs and does not come up")
+    assert "restore_config || exit $?" in public, (
+        "`--restore-config` must report whether the rollback itself worked; "
+        "deploy_control.sh branches on that")
 
 
 def test_the_deploy_accepts_the_build_this_repository_produces(dist) -> None:

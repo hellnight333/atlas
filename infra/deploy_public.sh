@@ -4,6 +4,11 @@
 #   bash infra/deploy_public.sh [user@host]  build, ship, install, verify
 #   bash infra/deploy_public.sh --check DIR  verify a built directory against the
 #                                            Caddyfile and exit; touches no host
+#   bash infra/deploy_public.sh --restore-config [user@host]
+#                                            put the config this script kept
+#                                            back and restart Caddy on it; ships
+#                                            nothing. For the one check this
+#                                            script cannot make — see below.
 #
 # This script exists because the web server config and the files it serves were
 # deployed by two different mechanisms, and only one of them was in this
@@ -113,6 +118,26 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
+# `--restore-config [user@host]`: put the kept config back and nothing else.
+#
+# `deploy_control.sh` calls this when the one check only it can make fails —
+# whether `app.qevik.ai/api/*` still reaches the control plane through the Caddy
+# this script just restarted. That failure is invisible from here: a config can
+# serve every page of qevik.ai correctly and still stop routing the API, and
+# every check below would pass while production had no API.
+#
+# The rollback lives in the script that took the backup rather than being
+# written out a second time over there. One place knows where the backup is and
+# one place knows Caddy must be `reset-failed` before it is restarted — the same
+# reason the pages and the config that names them are shipped by one script.
+#
+# Config only. The new pages stay at the document root, which is safe in this
+# direction and not the other: the previous config resolves them (it rewrote
+# everything to the homepage regardless), so the marketing site degrades to what
+# it was doing last week while the API comes back.
+MODE=""
+if [ "${1:-}" = "--restore-config" ]; then MODE=restore; shift; fi
+
 TARGET="${1:-root@2.28.62.83}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=4 \
           -o IdentitiesOnly=yes -i "$KEY")
@@ -141,6 +166,52 @@ ssh_() {
     sleep $(( try * 3 ))
   done
 }
+
+# --- the rollback ------------------------------------------------------------
+#
+# Defined here rather than beside the install below because `--restore-config`
+# runs it and nothing else. Three callers, all of them a config that is live and
+# should not be: one that would not move into place, one that would not start,
+# and — from `deploy_control.sh` — one that started and stopped routing the API.
+#
+# Returns non-zero when the rollback itself failed, which is a different and
+# much louder thing than the deploy failing: it means Caddy is holding a config
+# nobody chose and no script here can take it back.
+restore_config() {
+  echo "==> putting the previous config back and restarting" >&2
+  # Retried, and `cp` names the missing backup itself if there is none. The
+  # existence check is deliberately not asked first as its own question: a
+  # dropped link on that question would abandon a rollback that was going to
+  # work, and this is not the path on which to be clever about which non-zero
+  # means what.
+  ssh_ "cp -a /etc/caddy/Caddyfile.previous /etc/caddy/Caddyfile" >&2 || {
+    echo "  the previous config could NOT be put back. Caddy is holding whatever" >&2
+    echo "  it was last given and /etc/caddy/Caddyfile needs a person." >&2
+    return 1
+  }
+  # `reset-failed` first, and inside the retried command rather than beside it.
+  # This runs when Caddy has just refused to start, so its start counter is
+  # already ticking; without this a retried rollback can trip StartLimitBurst
+  # and leave the unit dead with a config that would have worked. Four workers
+  # were lost to exactly that once.
+  ssh_ "systemctl reset-failed caddy 2>/dev/null; systemctl restart caddy" >&2 || true
+  # A rollback that leaves the unit dead is not a rollback, and reporting it as
+  # one is how the next person spends the outage reading application logs.
+  # One attempt, like the same question on the deploy path: "the unit is not
+  # active" is an answer about Caddy, not a dropped link.
+  ssh "${SSH_OPTS[@]}" "$TARGET" "systemctl is-active --quiet caddy" || {
+    echo "  the previous config is back on disk and Caddy did not start on it" >&2
+    echo "  either. All four hostnames are down; this needs a person." >&2
+    return 2
+  }
+  echo "    the previous config is back and Caddy is running on it" >&2
+  return 0
+}
+
+if [ "$MODE" = restore ]; then
+  restore_config || exit $?
+  exit 0
+fi
 
 # --- build
 
@@ -237,33 +308,82 @@ ssh_ "if [ -d '$DOCROOT.incoming' ]; then \
 echo "==> keeping the config now in place, so a bad one can be undone"
 ssh_ "[ -f /etc/caddy/Caddyfile ] && cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous || true"
 
-restore_config() {
-  echo "==> putting the previous config back and restarting" >&2
-  # `reset-failed` first. This runs when Caddy has just refused to start, so its
-  # start counter is already ticking; without this a retried rollback can trip
-  # StartLimitBurst and leave the unit dead with a config that would have
-  # worked. Four workers were lost to exactly that once.
-  ssh_ "if [ -f /etc/caddy/Caddyfile.previous ]; then \
-      cp -a /etc/caddy/Caddyfile.previous /etc/caddy/Caddyfile; \
-      systemctl reset-failed caddy 2>/dev/null; \
-      systemctl restart caddy; \
-    else echo 'no previous config to restore' >&2; fi" >&2 || true
+echo "==> staging $(basename "$CADDYFILE") beside /etc/caddy/Caddyfile"
+# Beside the live file, never onto it.
+#
+# `scp` opens the destination and truncates it before the first byte arrives,
+# and this link drops roughly one attempt in five — so a copy straight to
+# `/etc/caddy/Caddyfile` can leave a half-written config on disk while the
+# transfer reports failure. Caddy goes on serving what it already has in memory,
+# so the deploy would say "it is still serving its previous configuration" and
+# be right, until the next restart or reboot. Then all four hostnames go.
+#
+# A truncated Caddyfile is worse than a broken one, because a cut that happens
+# to land after a site block closes is still *valid*: Caddy starts clean and the
+# hostnames past the cut have simply stopped existing.
+#
+# Staged inside /etc/caddy so the move below is a rename within one filesystem,
+# and so a Caddyfile `import` of a relative path would resolve from the same
+# directory it will resolve from once installed.
+#
+# Retried, unlike the copy this replaces: a dropped link onto a scratch path is
+# a dropped link and nothing more, and leaving the one un-retried transfer in a
+# script that documents a one-in-five drop rate inside an unattended gate means
+# a working host reported broken.
+scp_config() {
+  local try
+  for try in 1 2 3; do
+    if scp "${SSH_OPTS[@]}" -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile.incoming"; then
+      return 0
+    fi
+    [ "$try" = 3 ] && return 1
+    echo "    (link dropped; retry $try)" >&2
+    sleep $(( try * 3 ))
+  done
 }
-
-echo "==> installing $(basename "$CADDYFILE") as /etc/caddy/Caddyfile"
-scp "${SSH_OPTS[@]}" -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile" || {
-  echo "REFUSED: the Caddyfile could not be copied to the host; it is still" >&2
-  echo "  serving its previous configuration. The pages above did land." >&2
+scp_config || {
+  echo "REFUSED: the Caddyfile could not be copied to the host. Nothing was" >&2
+  echo "  installed — /etc/caddy/Caddyfile was never opened, so the host is" >&2
+  echo "  still serving its previous configuration and still has it on disk." >&2
+  echo "  The pages above did land." >&2
+  ssh_ "rm -f /etc/caddy/Caddyfile.incoming" >&2 || true
   exit 6
 }
 
-# Validate on the host, with the host's binary. A config that parses here and
-# not there — an `expression` matcher an older Caddy rejects, say — takes down
-# all four hostnames, not just this one.
-ssh "${SSH_OPTS[@]}" "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" || {
-  echo "REFUSED: the Caddyfile did not validate on the host; nothing was restarted." >&2
-  restore_config
+# Validate the copy that is about to be installed, before it is installed, with
+# the host's own binary. A config that parses here and not there — an
+# `expression` matcher an older Caddy rejects, say — takes down all four
+# hostnames, not just this one.
+#
+# `--adapter caddyfile` because Caddy infers the adapter from the file name and
+# this file is not called `Caddyfile` yet; without it the staged copy is read as
+# JSON and every valid config fails to validate.
+ssh "${SSH_OPTS[@]}" "$TARGET" \
+  "caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile.incoming" || {
+  echo "REFUSED: the Caddyfile did not validate on the host. It was not" >&2
+  echo "  installed and nothing was restarted; the live config is untouched." >&2
+  ssh_ "rm -f /etc/caddy/Caddyfile.incoming" >&2 || true
   exit 4
+}
+
+# Now, and only now. A rename within /etc/caddy, so /etc/caddy/Caddyfile is
+# either the whole previous config or the whole new one and never a fragment of
+# either — and the new one has already been validated by the binary that is
+# about to read it.
+#
+# `chmod` first because the installed file inherits the staged file's mode, and
+# the mode of the copy in this repository is not something the host should
+# depend on.
+echo "==> installing it as /etc/caddy/Caddyfile"
+ssh_ "chmod 644 /etc/caddy/Caddyfile.incoming && \
+  mv /etc/caddy/Caddyfile.incoming /etc/caddy/Caddyfile" || {
+  echo "REFUSED: the validated config could not be moved into place." >&2
+  # The rename either happened or it did not, but a link dropped after it
+  # happened looks identical from here — and that state is a new config on disk
+  # under an old config in memory, which is the exact thing this staging exists
+  # to prevent. Put the previous one back so disk and memory agree either way.
+  restore_config || true
+  exit 6
 }
 
 # `restart`, not `reload`. Caddy's admin API on :2019 is disabled on this host,
@@ -287,7 +407,7 @@ ssh "${SSH_OPTS[@]}" "$TARGET" "systemctl restart caddy" || true
 ssh "${SSH_OPTS[@]}" "$TARGET" "systemctl is-active --quiet caddy" || {
   echo "FAILED: Caddy did not come up with the new config." >&2
   ssh "${SSH_OPTS[@]}" "$TARGET" "journalctl -u caddy -n 30 --no-pager" >&2 || true
-  restore_config
+  restore_config || true
   exit 5
 }
 

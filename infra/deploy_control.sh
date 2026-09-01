@@ -274,12 +274,46 @@ bash "$ROOT/infra/deploy_public.sh" "$TARGET" || {
 # rather than through Cloudflare, whether app.qevik.ai still answers as itself:
 # a config that serves qevik.ai perfectly and 404s the API is not a good deploy.
 echo "==> checking the control plane still answers through the restarted Caddy"
-CONSOLE_TYPE="$(ssh_ "curl -sS --max-time 15 --resolve app.qevik.ai:443:127.0.0.1 -o /dev/null -w '%{content_type}' https://app.qevik.ai/api/health" || echo none)"
+console_type() {
+  ssh_ "curl -sS --max-time 15 --resolve app.qevik.ai:443:127.0.0.1 -o /dev/null -w '%{content_type}' https://app.qevik.ai/api/health" || echo none
+}
+CONSOLE_TYPE="$(console_type)"
 echo "    GET app.qevik.ai/api/health -> $CONSOLE_TYPE"
 case "$CONSOLE_TYPE" in
   application/json*) ;;
   *) echo "FAILED: app.qevik.ai/api/* no longer reaches the control plane"
      echo "        after the Caddy restart (content-type: $CONSOLE_TYPE)."
+     # Put the config back rather than exiting on a known-broken one.
+     #
+     # Every other rollback in this file restores what it replaced; this branch
+     # used to be the exception, and it is the branch that catches the one
+     # failure nothing else can see. The config validated, Caddy started, and
+     # every check `deploy_public.sh` makes passed — so nothing there rolled
+     # anything back, and returning non-zero from here left production with a
+     # config that serves the marketing site and no API. A red gate is not a
+     # restored service.
+     #
+     # Through `deploy_public.sh --restore-config`, because that is the script
+     # that took the backup: the path to it and the `reset-failed` a restart on
+     # this host needs are written down once, over there.
+     echo "==> putting the previous Caddy config back"
+     if ! bash "$ROOT/infra/deploy_public.sh" --restore-config "$TARGET"; then
+       echo "        AND the rollback failed. Caddy is serving a config nobody"
+       echo "        chose; /etc/caddy/Caddyfile on the host needs a person."
+       exit 1
+     fi
+     # Ask again, because "we rolled back" and "the API answers" are different
+     # claims and only the second one is the one anybody cares about. It also
+     # separates the two causes: if it still does not answer, the Caddyfile was
+     # never what broke it and the next person should not go reading configs.
+     RESTORED="$(console_type)"
+     echo "    GET app.qevik.ai/api/health -> $RESTORED (on the previous config)"
+     case "$RESTORED" in
+       application/json*)
+         echo "        the API answers again; the new Caddyfile was the cause." ;;
+       *) echo "        the API still does not answer on the previous config, so"
+          echo "        the Caddyfile is not what broke it." ;;
+     esac
      exit 1 ;;
 esac
 
