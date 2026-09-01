@@ -656,3 +656,25 @@ def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
     assert calls["checked_out"], (
         "a resumed task was refused for its own uncommitted work")
     assert not any("not clean" in t["reason"] for t in q.transitions(ident))
+
+
+def test_the_review_cannot_touch_the_tree_being_built():
+    """Configured read-only was not read-only.
+
+    `codex exec review` has no `--sandbox` flag and did not honour
+    `-c sandbox_mode="read-only"`: with it set, a real review edited
+    `.qevik/CAPABILITY_LEDGER.md` in the working tree on two consecutive runs,
+    and `clean_tree` stopped the round both times. A flag says what was asked
+    for; a separate checkout says what is possible.
+    """
+    import inspect
+
+    source = inspect.getsource(agents.review)
+    assert "worktree" in source and "mkdtemp" in source, (
+        "the reviewer runs in the tree being built, where it can write")
+    # It must run *there*, not in the repository it was given.
+    call = source[source.index('"codex", "exec", "review"'):][:400]
+    assert "cwd=tree" in call, "the reviewer was pointed at the working tree"
+    # And the worktree must go even when the review fails.
+    assert "finally:" in source[:source.index('"codex", "exec", "review"')] or \
+        "finally:" in source, "a failed review leaks a worktree"
