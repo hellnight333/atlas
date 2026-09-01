@@ -762,12 +762,19 @@ def build_router() -> APIRouter:
         fetching more a night to make a number smaller would be a decision
         about other people's bandwidth taken to improve a screen.
 
+        **One freshness read, handed to both.** The backlog explains a number
+        the response also prints, so reading it twice would let one response
+        carry two answers to "how many are older than a week" — an audit
+        recorded between the two reads is all it would take, and a screen caught
+        contradicting itself is one nobody believes again.
+
         **Declared above `/{mission_id}`**, like every sibling here.
         """
         memory = _opportunities(request)
         found = memory.audit_coverage()
-        found["freshness"] = memory.audit_freshness()
-        found["backlog"] = memory.audit_backlog()
+        freshness = memory.audit_freshness()
+        found["freshness"] = freshness
+        found["backlog"] = memory.audit_backlog(freshness=freshness)
         return found
 
     @router.get("/inbound")

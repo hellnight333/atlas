@@ -230,18 +230,24 @@ class Backlog:
 
     #: Distinct websites in the rotation. Distinct, because the rotation
     #: de-duplicates by address: two businesses sharing a website are one fetch
-    #: and therefore one night's work, not two.
+    #: and therefore one night's work, not two. And only addresses it can
+    #: actually fetch — a `mailto:` value it will never visit is not a night's
+    #: work either, and counting it would report a sweep slower than the one
+    #: that runs.
     sites: int
     #: Read from `audit_freshness`, never recomputed. Two queries with the same
     #: intent is how two numbers on one screen come to disagree.
     older_than_a_week: int
     #: How many sites one night of the pass takes. The rotation's own bound.
     per_night: int
-    #: Nights since the last `website_audited`. `None` when there has never
-    #: been one — which is not an old pass, it is no pass.
+    #: Nights since the last `website_audited` **the scheduled pass itself
+    #: wrote**. `None` when there has never been one — which is not an old pass,
+    #: it is no pass. Whose reading it was matters as much as when: three other
+    #: things append that kind, one of them a correction that reads nothing, and
+    #: any of them would otherwise certify a stalled pass as alive.
     nights_since_an_observation: float | None = None
-    #: Nights since the last `website_verified`: a site having had its turn,
-    #: whether or not anything was read from it.
+    #: Nights since the pass's last `website_verified`: a site having had its
+    #: turn, whether or not anything was read from it.
     nights_since_a_turn: float | None = None
     #: Stale sites the rotation has **already come back round to** and still
     #: could not re-observe. The measured answer to "does the refresh path
@@ -271,7 +277,9 @@ class Backlog:
 
         A recurrence saying "nightly" is a declaration; this is the timeline.
         And it reads the *observation*, because the record that refreshed
-        nightly while nothing was being read was the other one.
+        nightly while nothing was being read was the other one — and only the
+        pass's own observations, because a hand-run correction stamped now would
+        otherwise answer this question on the pass's behalf.
         """
         since = self.nights_since_an_observation
         return since is not None and since <= A_STOPPED_PASS

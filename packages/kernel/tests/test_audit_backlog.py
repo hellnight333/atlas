@@ -13,14 +13,21 @@ which it is *not* explained and somebody does need to act:
 
 * the pass has stopped, measured from the observation it writes — never from
   `website_verified`, which refreshed nightly for twelve days while nothing
-  was being read; and
+  was being read, and never from another writer's `website_audited` either: a
+  hand-run reconcile appends a row stamped now that read nothing, and letting
+  it answer for the pass rebuilds the same blind spot; and
 * the rotation comes round inside a week and sites are stale anyway, which is
   what re-reading the alphabetically first forty did while succeeding nightly.
+
+And the arithmetic is over the population the pass can actually fetch, at the
+throughput it actually achieves — a `mailto:` row is never a night's work, and
+until the scheme filter moved into the query it could still spend one.
 
 The pure arithmetic is tested pure, because every boolean above has to hold for
 populations this database will never contain. The database tests assert the
 things only the database can settle: that the two numbers standing beside each
-other on one screen are the same number, and that a turn is not an observation.
+other on one screen are the same number, that a turn is not an observation, and
+that whose reading it was decides whether it counts as the pass being alive.
 """
 
 from __future__ import annotations
@@ -43,6 +50,8 @@ from atlas_kernel.opportunity.coverage import A_WEEK_IN_NIGHTS, backlog
 from atlas_kernel.opportunity.models import Business, BusinessEvent
 from atlas_kernel.opportunity.repository import (
     OBSERVED_EVENT,
+    PASS_OBSERVATION,
+    PASS_TURN,
     ROTATION_CEILING,
     VERIFIED_EVENT,
     OpportunityRepository,
@@ -75,6 +84,33 @@ def _business(repo: OpportunityRepository, website: str = "") -> Business:
         name="Al Waha Dental", geography="United Arab Emirates",
         website=website or f"https://{uuid4().hex}.backlog.test",
         sources=["seed"]))
+
+
+def _unfetchable(repo: OpportunityRepository, website: str,
+                 first_seen_at: datetime | None = None) -> Business:
+    """A recorded address the rotation will never hand to a fetcher.
+
+    Real: sources report `mailto:` values and bare hostnames, and
+    `businesses_by_website` has always refused them rather than guessing a
+    scheme in front of an address somebody typed by hand.
+    """
+    return repo.save_business(Business(
+        name="Al Waha Dental", geography="United Arab Emirates",
+        website=website, sources=["seed"],
+        **({"first_seen_at": first_seen_at} if first_seen_at else {})))
+
+
+def _a_reading_the_pass_wrote(business: Business) -> BusinessEvent:
+    """What the nightly pass records, built by the pass's own writer.
+
+    `read_by` is the mark: `toolrunner` sets it to `recipe:<id>/http-fetch` for
+    every page it actually fetched, and nothing else that appends this kind
+    sets it at all. Constructed through `audit_event` rather than by hand so a
+    change to what the pass records fails this rather than passing it.
+    """
+    return audit_event(business.id,
+                       {"url": business.website or "", "findings": []},
+                       read_by="recipe:verify-recorded-websites/http-fetch")
 
 
 def _clean(*business_ids: str) -> None:
@@ -258,6 +294,30 @@ def test_the_observation_kind_is_the_one_the_pass_writes():
     assert VERIFIED_EVENT != OBSERVED_EVENT
 
 
+def test_the_pass_signs_the_rows_the_health_reading_looks_for():
+    """`PASS_OBSERVATION` and `PASS_TURN`, against the writer's own literals.
+
+    Three other things append `website_audited` and one appends
+    `website_verified`, so "is the nightly pass alive" is answered by narrowing
+    to the rows the pass signs: `read_by` on the reading, `recipe:` on the turn.
+    A pass that stopped signing them would report itself stopped — a false alarm
+    is the safe direction and still a bug, and nothing else in the suite
+    compares the predicates against the code that has to satisfy them.
+    """
+    pass_source = Path("packages/kernel/atlas_kernel/mission/toolrunner.py"
+                       ).read_text(encoding="utf-8")
+    assert 'read_by = f"recipe:{self._recipe.id}/http-fetch"' in pass_source, (
+        "the pass no longer signs its readings, so PASS_OBSERVATION matches "
+        "nothing and the console reports a healthy pass as stopped")
+    assert 'actor=f"recipe:{self._recipe.id}"' in pass_source, (
+        "the pass no longer signs its turns, so PASS_TURN matches nothing")
+    assert "recipe:" in PASS_OBSERVATION and "read_by" in PASS_OBSERVATION
+    assert "corrects" in PASS_OBSERVATION, (
+        "a correction copies `read_by` forward from the reading it corrects, "
+        "so `recipe:` alone lets a row that read nothing certify the pass")
+    assert "recipe:" in PASS_TURN
+
+
 def test_the_backlog_is_reported_where_freshness_already_is():
     """Structural, and asserted through the route rather than a comment.
 
@@ -279,6 +339,53 @@ def test_the_backlog_is_reported_where_freshness_already_is():
     assert "audit_backlog" in calls["coverage"], (
         "the backlog is not surfaced where the operator sees freshness, so "
         "the number that alarms them still has no explanation beside it")
+
+
+def test_the_route_reads_freshness_once_and_hands_it_to_the_backlog():
+    """One response may not carry two answers to the same question.
+
+    The backlog explains `older_than_a_week`, and the response prints that
+    number twice. Read twice, an audit recorded between the two reads is enough
+    to make the explanation refer to a number the page is not showing — and a
+    screen caught contradicting itself is one nobody believes again.
+
+    Asserted on the call rather than on the docstring: this is a property of
+    how the route is wired, and a comment saying so is not the wiring.
+    """
+    tree = ast.parse(Path("packages/kernel/atlas_kernel/mission/api.py")
+                     .read_text(encoding="utf-8"))
+    route = next(node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef) and node.name == "coverage")
+    backlog_calls = [node for node in ast.walk(route)
+                     if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Attribute)
+                     and node.func.attr == "audit_backlog"]
+    assert len(backlog_calls) == 1
+    passed = {kw.arg for kw in backlog_calls[0].keywords}
+    assert "freshness" in passed, (
+        "the route lets the backlog read freshness for itself, so the two "
+        "counts in one response come from two moments and can disagree")
+
+    freshness_calls = [node for node in ast.walk(route)
+                       if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "audit_freshness"]
+    assert len(freshness_calls) == 1, (
+        "freshness is read more than once while assembling one response")
+
+
+def test_the_backlog_can_be_handed_the_freshness_the_caller_already_read(repo):
+    """And uses it, rather than reading its own and reporting that.
+
+    A caller that has already read freshness is the only one that can promise
+    the two numbers match, so being handed one has to actually decide the
+    answer. Handed a figure no query would produce, the report must carry it.
+    """
+    handed = repo.audit_backlog(freshness={"older_than_a_week": 4242})
+    assert handed["older_than_a_week"] == 4242
+    # And on its own it still reads one, so the standalone call is unchanged.
+    assert repo.audit_backlog()["older_than_a_week"] == \
+           repo.audit_freshness()["older_than_a_week"]
 
 
 def test_no_field_here_is_a_name_the_console_refuses_to_render():
@@ -378,9 +485,7 @@ def test_a_turn_moves_the_turn_and_never_the_observation(repo):
         assert turned["nights_since_a_turn"] is not None
         assert turned["nights_since_a_turn"] <= 0.01
 
-        repo.record_event(BusinessEvent(
-            business_id=business.id, kind=OBSERVED_EVENT, actor="test",
-            detail={"url": business.website, "counts": {}}))
+        repo.record_event(_a_reading_the_pass_wrote(business))
         observed = repo.audit_backlog()
         assert observed["nights_since_an_observation"] is not None
         assert observed["nights_since_an_observation"] <= 0.01
@@ -388,6 +493,138 @@ def test_a_turn_moves_the_turn_and_never_the_observation(repo):
         assert not observed["the_pass_ran_without_observing"]
     finally:
         _clean(business.id)
+
+
+def test_only_the_passs_own_readings_say_the_pass_is_running(repo):
+    """Whose reading it was, not only how recent it is.
+
+    Four things write `website_audited`. `infra/reconcile_audits.py` appends a
+    correction stamped *now* and says on the row that it read nothing new;
+    `infra/import_audits.py` replays a file. Measuring the pass's health from
+    `max(at)` over all of them means one hand-run reconcile certifies a stalled
+    nightly pass as healthy — the twelve-day blind spot rebuilt under a
+    different actor, with the console then explaining the age away as cadence.
+
+    Both shapes are built through the writers' own code paths, so this fails if
+    either of them changes what it records rather than only when this reader
+    does.
+    """
+    business = _business(repo)
+    try:
+        before = repo.audit_backlog()
+
+        # A correction: `read_by` copied forward from the reading it corrects,
+        # so the only thing distinguishing it is that it says what it is.
+        reading = _a_reading_the_pass_wrote(business)
+        repo.record_event(reading.model_copy(update={
+            "actor": "reconcile_audits.py",
+            "detail": {**reading.detail,
+                       "corrects": {"withdrew": ["booking"],
+                                    "because": "read a different way"}}}))
+        corrected = repo.audit_backlog()
+        assert corrected["last_observation"] == before["last_observation"], (
+            "a correction that read nothing moved the clock that says whether "
+            "the pass is reading anything")
+
+        # An import: the pass's actor, and no `read_by` because no page was
+        # fetched for it here.
+        repo.record_event(audit_event(
+            business.id, {"url": business.website, "findings": []}))
+        imported = repo.audit_backlog()
+        assert imported["last_observation"] == before["last_observation"], (
+            "a replayed audit file made the nightly pass look alive")
+
+        # And the pass's own reading does move it, so the filter above is
+        # narrowing rather than excluding everything. A fresh one: the timeline
+        # is keyed on the event id, and re-recording the row the correction was
+        # copied from would insert nothing.
+        repo.record_event(_a_reading_the_pass_wrote(business))
+        ran = repo.audit_backlog()
+        assert ran["last_observation"] != before["last_observation"]
+        assert ran["the_pass_is_running"]
+    finally:
+        _clean(business.id)
+
+
+def test_only_the_passs_own_turns_count_as_the_rotation_coming_round(repo):
+    """`infra/verify_weak_web_presence.py` writes turns as `probe`.
+
+    A hand-run probe is not the rotation, and letting it answer for the
+    rotation would report the twelve-day shape — turns without readings — from
+    a run that was never the nightly pass.
+    """
+    business = _business(repo)
+    try:
+        before = repo.audit_backlog()
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=VERIFIED_EVENT, actor="probe",
+            detail={"answered": True}))
+        assert repo.audit_backlog()["last_turn"] == before["last_turn"], (
+            "a hand-run probe counted as the nightly rotation taking a turn")
+
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=VERIFIED_EVENT,
+            actor="recipe:verify-recorded-websites",
+            detail={"answered": True}))
+        assert repo.audit_backlog()["last_turn"] != before["last_turn"]
+    finally:
+        _clean(business.id)
+
+
+def test_the_population_is_the_one_the_rotation_can_actually_fetch(repo):
+    """An address the pass will never visit is not a night's work.
+
+    `businesses_by_website` drops anything without an `http(s)` scheme, so a
+    `mailto:` or a bare hostname is recorded evidence and never a fetch.
+    Counting them in `sites` divides a population that is never visited by a
+    throughput that never visits it, and the sweep it reports is longer than
+    the one that runs — which is the direction that quietly explains away an
+    age nothing is fixing.
+    """
+    reachable = _business(repo)
+    unfetchable = _unfetchable(repo, f"mailto:{uuid4().hex}@backlog.test")
+    schemeless = _unfetchable(repo, f"{uuid4().hex}.backlog.test")
+    try:
+        with_all_three = repo.audit_backlog()["sites"]
+        _clean(unfetchable.id, schemeless.id)
+        assert repo.audit_backlog()["sites"] == with_all_three, (
+            "an address the pass cannot hand to a fetcher was counted as a "
+            "night's work")
+        # And the one it can is still in the population, so this narrows the
+        # count rather than emptying it.
+        _clean(reachable.id)
+        assert repo.audit_backlog()["sites"] == with_all_three - 1
+    finally:
+        _clean(reachable.id, unfetchable.id, schemeless.id)
+
+
+def test_a_night_is_spent_on_sites_the_pass_can_fetch(repo):
+    """The scheme filter runs before the limit, not after it.
+
+    The filter used to run in Python over rows the `LIMIT` had already chosen,
+    so a night's forty could come back as thirty-one addresses — a throughput
+    nobody could see, and one the backlog report would then have described as
+    forty. Here the rotation is asked for two while four rows sit at the head of
+    the queue, the two unfetchable ones first: it used to return nothing.
+    """
+    # Never verified, so `NULLS FIRST` puts all four at the head of the queue,
+    # and a first_seen_at older than anything else in the suite fixes their
+    # order within it. Nothing about the assertion then depends on which other
+    # fixtures happen to be in the database.
+    head = datetime(1970, 1, 2, tzinfo=UTC)
+    unfetchable = [_unfetchable(repo, f"mailto:{uuid4().hex}@backlog.test",
+                                first_seen_at=head) for _ in range(2)]
+    fetchable = [repo.save_business(Business(
+        name="Al Waha Dental", geography="United Arab Emirates",
+        website=f"https://{uuid4().hex}.backlog.test", sources=["seed"],
+        first_seen_at=head + timedelta(seconds=1))) for _ in range(2)]
+    try:
+        found = repo.businesses_by_website(limit=2)
+        assert len(found) == 2, (
+            "the night's budget was spent on rows the fetcher is never given")
+        assert set(found) == {b.website for b in fetchable}
+    finally:
+        _clean(*[b.id for b in unfetchable + fetchable])
 
 
 def test_a_site_the_sweep_reached_and_could_not_read_is_counted(repo):

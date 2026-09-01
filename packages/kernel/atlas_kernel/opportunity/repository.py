@@ -123,6 +123,48 @@ VERIFIED_EVENT = "website_verified"
 #: nothing, which is the shape the twelve-day staleness had.
 OBSERVED_EVENT = "website_audited"
 
+#: Which `website_audited` rows are the **scheduled pass's own readings**, as a
+#: predicate over the event row.
+#:
+#: Four things write that kind, and only one of them is the nightly pass:
+#: `infra/import_audits.py` replays a file, `infra/audit_discovered.py` is
+#: hand-run, and `infra/reconcile_audits.py` appends a correction stamped *now*
+#: while stating in the row itself that nothing new was read. Measuring "is the
+#: pass alive" from `max(at)` over all four means one hand-run reconcile makes a
+#: stalled pass look healthy — the twelve-day blind spot rebuilt under a
+#: different actor, and the one thing this whole surface exists to stop.
+#:
+#: Only the pass records `read_by`, and only ever as `recipe:<id>/...`. A
+#: correction copies that value forward with the reading it is correcting, so it
+#: is excluded by the `corrects` key it adds — the one mark on the row that says
+#: no page was fetched for it.
+#:
+#: Parenthesised, because it is interpolated into a `WHERE` somebody will one
+#: day widen with an `OR`, and a two-clause predicate that loses half of itself
+#: to precedence fails by reporting a stalled pass as healthy.
+PASS_OBSERVATION = ("(detail->>'read_by' ~ '^recipe:' "
+                    "AND detail->'corrects' IS NULL)")
+
+#: Which `website_verified` rows are the pass's own turns. Same reason:
+#: `infra/verify_weak_web_presence.py` writes this kind as `probe`, and a
+#: hand-run probe is not the rotation coming round.
+PASS_TURN = "actor ~ '^recipe:'"
+
+#: The addresses the rotation can actually hand to a fetcher.
+#:
+#: `businesses_by_website` has always dropped a scheme-less or `mailto:` value —
+#: guessing `https://` in front of an address a directory typed by hand is how a
+#: fetch reaches a host nobody recorded. It dropped them *after* the `LIMIT`,
+#: which made the real throughput something less than forty a night, and the
+#: population counted beside it included sites the pass will never visit. Both
+#: halves now use this, so the cadence reported is arithmetic over the sites the
+#: pass actually rotates through.
+#:
+#: A regular expression rather than `LIKE 'http%'` on purpose: a literal `%` in
+#: a `text()` construct is escaped differently by paramstyle, and this predicate
+#: is interpolated into several statements.
+FETCHABLE_WEBSITE = "website ~ '^https?://'"
+
 #: The most sites one read of the rotation may return however large a limit it
 #: is handed. A bound on a table that grows, not a statement about cadence.
 ROTATION_CEILING = 200
@@ -903,23 +945,33 @@ class OpportunityRepository:
         fortnight old.
         """
         with SessionLocal() as session:
-            row = session.execute(
-                text("""
-                WITH latest AS (
-                    SELECT DISTINCT ON (business_id) business_id, at,
-                           detail->>'read_by' AS read_by
-                    FROM atlas_business_events WHERE kind = :observed
-                    ORDER BY business_id, at DESC)
-                SELECT
-                  (SELECT count(*) FROM atlas_businesses
-                    WHERE website IS NOT NULL AND website <> '') with_a_website,
-                  (SELECT count(*) FROM latest) with_observations,
-                  (SELECT count(*) FROM latest WHERE at > now() - interval '2 days') last_two_days,
-                  (SELECT count(*) FROM latest WHERE at > now() - interval '8 days') last_week,
-                  (SELECT count(*) FROM latest WHERE coalesce(read_by, '') <> '') read_by_recorded,
-                  (SELECT max(at) FROM latest) newest,
-                  (SELECT min(at) FROM latest) oldest
-                """), {"observed": OBSERVED_EVENT}).mappings().first()
+            return self._freshness(session)
+
+    def _freshness(self, session) -> dict:
+        """`audit_freshness`, on a session somebody else opened.
+
+        Split out so `audit_backlog` can read this **inside its own
+        transaction** rather than in a second one afterwards. The two numbers
+        stand next to each other on one screen, and an audit recorded between
+        two reads is enough to make them contradict each other there.
+        """
+        row = session.execute(
+            text("""
+            WITH latest AS (
+                SELECT DISTINCT ON (business_id) business_id, at,
+                       detail->>'read_by' AS read_by
+                FROM atlas_business_events WHERE kind = :observed
+                ORDER BY business_id, at DESC)
+            SELECT
+              (SELECT count(*) FROM atlas_businesses
+                WHERE website IS NOT NULL AND website <> '') with_a_website,
+              (SELECT count(*) FROM latest) with_observations,
+              (SELECT count(*) FROM latest WHERE at > now() - interval '2 days') last_two_days,
+              (SELECT count(*) FROM latest WHERE at > now() - interval '8 days') last_week,
+              (SELECT count(*) FROM latest WHERE coalesce(read_by, '') <> '') read_by_recorded,
+              (SELECT max(at) FROM latest) newest,
+              (SELECT min(at) FROM latest) oldest
+            """), {"observed": OBSERVED_EVENT}).mappings().first()
         with_site = int(row["with_a_website"] or 0)
         have = int(row["with_observations"] or 0)
         return {
@@ -940,7 +992,7 @@ class OpportunityRepository:
                      "observations and must never be read as a fresh audit."),
         }
 
-    def audit_backlog(self) -> dict:
+    def audit_backlog(self, *, freshness: dict | None = None) -> dict:
         """Why those observations are old: a queue position, or a stall.
 
         `audit_freshness` says *how* old, which is the number that raised this
@@ -957,7 +1009,12 @@ class OpportunityRepository:
 
         * `the_pass_is_running`, measured from the observation the pass writes
           — never from `website_verified`, which refreshed nightly for twelve
-          days while nothing was being read; and
+          days while nothing was being read, and never from *anyone else's*
+          `website_audited` either. `PASS_OBSERVATION` narrows this to the
+          scheduled pass's own readings, because a hand-run
+          `infra/reconcile_audits.py` appends a row stamped now while stating
+          on the row that it read nothing, and counting it here would let one
+          correction certify a stalled pass as healthy; and
         * `the_cadence_explains_the_age`, which is false when the rotation
           sweeps everything inside a week and sites are stale anyway. That is
           the alphabetical-forty bug, which succeeded nightly while never
@@ -975,14 +1032,23 @@ class OpportunityRepository:
         `older_than_a_week` is **read from `audit_freshness`**, not recomputed.
         Two queries written to the same intent is how two numbers standing next
         to each other on one screen come to disagree, and the number here has
-        to be the number beside it.
+        to be the number beside it. `freshness` is how the caller hands over the
+        result it has already read — `/coverage` renders both, and reading them
+        twice is how the same screen came to be able to contradict itself. When
+        it is not given, freshness is read **inside this transaction**, so the
+        pair is still one snapshot rather than two.
         """
         from ..mission.toolrunner import NIGHTLY_SITE_LIMIT
         from .coverage import backlog
 
         with SessionLocal() as session:
+            # One snapshot for every number below. Under READ COMMITTED each
+            # statement would see its own, and an audit recorded between them is
+            # enough to report a subset larger than the set it belongs to.
+            session.connection(
+                execution_options={"isolation_level": "REPEATABLE READ"})
             row = session.execute(
-                text("""
+                text(f"""
                 WITH observed AS (
                     SELECT DISTINCT ON (business_id) business_id, at
                     FROM atlas_business_events WHERE kind = :observed
@@ -992,20 +1058,36 @@ class OpportunityRepository:
                     FROM atlas_business_events WHERE kind = :verified
                     GROUP BY business_id)
                 SELECT
+                  -- The population the rotation can actually fetch. A
+                  -- scheme-less or `mailto:` value is dropped before the pass
+                  -- sees it, and counting it here would divide a population
+                  -- that is never visited by a throughput that never visits it.
                   (SELECT count(DISTINCT website) FROM atlas_businesses
-                    WHERE website IS NOT NULL AND website <> '') AS sites,
-                  (SELECT max(at) FROM observed) AS last_observation,
-                  (SELECT max(at) FROM turned) AS last_turn,
+                    WHERE website IS NOT NULL AND {FETCHABLE_WEBSITE}) AS sites,
+                  -- The pass's own last reading, and its own last turn. Not
+                  -- `max(at)` over every writer of these kinds: a hand-run
+                  -- reconcile or probe would then answer "is the nightly pass
+                  -- alive" on the pass's behalf.
+                  (SELECT max(at) FROM atlas_business_events
+                    WHERE kind = :observed AND {PASS_OBSERVATION})
+                    AS last_observation,
+                  (SELECT max(at) FROM atlas_business_events
+                    WHERE kind = :verified AND {PASS_TURN}) AS last_turn,
                   -- The rotation came back round and the reading did not
                   -- refresh. `8 days` is `audit_freshness`'s own week, so this
                   -- is a subset of the number it reports and not a second
-                  -- opinion about what stale means.
+                  -- opinion about what stale means. Unfiltered on purpose,
+                  -- unlike the two above: this has to stay a subset of the
+                  -- sites freshness calls stale, and freshness counts a reading
+                  -- as a reading whoever recorded it.
                   (SELECT count(*) FROM observed
                      JOIN turned ON turned.business_id = observed.business_id
                     WHERE observed.at <= now() - interval '8 days'
                       AND turned.at > observed.at) AS unread_after_a_turn
                 """), {"observed": OBSERVED_EVENT,
                        "verified": VERIFIED_EVENT}).mappings().first()
+            if freshness is None:
+                freshness = self._freshness(session)
 
         def _nights(at) -> float | None:
             """Nights since a moment, or `None` when there is no moment.
@@ -1027,7 +1109,7 @@ class OpportunityRepository:
             # is not `audit_freshness`'s `with_a_website`, which counts
             # businesses because the age it reports is per business.
             sites=int(row["sites"] or 0),
-            older_than_a_week=self.audit_freshness()["older_than_a_week"],
+            older_than_a_week=int(freshness["older_than_a_week"]),
             per_night=rotation_size(NIGHTLY_SITE_LIMIT),
             nights_since_an_observation=_nights(row["last_observation"]),
             nights_since_a_turn=_nights(row["last_turn"]),
@@ -1690,14 +1772,20 @@ class OpportunityRepository:
         for every site a verification pass **attempted** — not only for the ones
         that answered. A site that refuses robots or times out has still had its
         turn, and leaving it unmarked would let it hold up the queue for ever.
+
+        **`FETCHABLE_WEBSITE` is applied in SQL, before the `LIMIT`.** The
+        scheme check below is older than the query and used to be the only one,
+        which meant a night's forty could be spent on `mailto:` rows and come
+        back as thirty-one addresses — a throughput nobody could see and one the
+        backlog report would then have described as forty.
         """
         with SessionLocal() as session:
             rows = session.execute(
-                text("""
+                text(f"""
                 SELECT site.* FROM (
                     SELECT DISTINCT ON (website) *
                     FROM atlas_businesses
-                    WHERE website IS NOT NULL AND website <> ''
+                    WHERE website IS NOT NULL AND {FETCHABLE_WEBSITE}
                     ORDER BY website, first_seen_at
                 ) AS site
                 LEFT JOIN (
@@ -1719,6 +1807,11 @@ class OpportunityRepository:
             # not something the fetcher may be handed. Dropped here rather than
             # normalised: guessing `https://` in front of an address a directory
             # typed by hand is how a fetch reaches a host nobody recorded.
+            #
+            # `FETCHABLE_WEBSITE` has already excluded these in SQL. Kept anyway:
+            # this is the guard that decides what reaches a fetcher, and it
+            # should not depend on a `WHERE` clause several screens away staying
+            # correct.
             if not website.startswith(("http://", "https://")):
                 continue
             found[website] = self._business_from_row(row)
