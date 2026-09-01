@@ -910,3 +910,65 @@ def test_a_decision_is_answerable_from_the_console_alone():
     # control the API would refuse is never drawn.
     assert "accepts.includes('choose')" in detail
     assert "data-respond=\"choose\"" in detail and "data-choice=" in detail
+
+
+def test_the_round_gate_runs_only_what_the_task_touched(tmp_path, monkeypatch):
+    """Measured: the full suite is ~14.6 minutes against a ~2 minute review.
+
+    Running all of it every round spent roughly a third of each cycle
+    re-proving code the task never went near. Narrowed, the same gate takes
+    about three seconds. This narrows the loop, not the evidence — `_ship`
+    still runs the whole suite before anything deploys.
+    """
+    import devloop.driver as drv
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = tmp_path
+    monkeypatch.setattr(
+        drv.Driver, "_touched",
+        lambda self: ["packages/kernel/atlas_kernel/opportunity/coverage.py",
+                      "packages/kernel/tests/test_audit_backlog.py"])
+    selector = driver._selector()
+    assert "coverage" in selector and "audit_backlog" in selector
+
+    # Nothing recognisable changed: the whole suite, not a selector that
+    # matches nothing and passes silently.
+    monkeypatch.setattr(drv.Driver, "_touched", lambda self: ["__init__.py"])
+    assert driver._selector() == ""
+
+
+def test_the_full_suite_still_runs_before_anything_deploys():
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    ship = source[source.index("def _ship("):source.index("def _selector(")]
+    assert "gates.tests(cwd=self.repo)" in ship, (
+        "the deploy path runs a narrowed suite; a narrow gate is not enough to "
+        "put code on a live host")
+
+
+def test_finding_paths_are_relative_to_the_tree_that_was_reviewed():
+    """A blocking finding the reviewer raised against the loop's own change.
+
+    Codex prints absolute paths. Once the review moved into an isolated
+    checkout those pointed under the temporary tree, and relativising them
+    against the repository left every finding naming a file nobody can open.
+    """
+    parsed = agents.parse_review(
+        "Summary.\n\nReview comment:\n\n"
+        "- [P1] A thing — /tmp/devloop-review-x/review/packages/kernel/a.py:3-3\n"
+        "  because z\n",
+        repo=Path("/tmp/devloop-review-x/review"))
+    assert parsed["findings"][0]["file"].startswith("packages/kernel/a.py")
+
+    # Negative control: a path outside the reviewed tree is left alone rather
+    # than mangled into a relative path meaning something else.
+    other = agents.parse_review(
+        "Summary.\n\nReview comment:\n\n- [P1] X — /elsewhere/b.py:1-1\n  why\n",
+        repo=Path("/tmp/devloop-review-x/review"))
+    assert other["findings"][0]["file"] == "/elsewhere/b.py:1-1"
+
+
+def test_the_review_reads_findings_against_the_isolated_tree():
+    """Guard against restoring an older copy of this file and losing the fix."""
+    source = Path(INFRA / "devloop" / "agents.py").read_text()
+    assert "parse_review(message, repo=tree)" in source, (
+        "findings are relativised against the wrong tree")

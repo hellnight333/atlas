@@ -440,7 +440,12 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
                        detail="the reviewer produced no review message")
 
     out_file.write_text(message)
-    parsed = parse_review(message, repo=cwd)
+    # Against the tree the reviewer actually read, not the repository it came
+    # from. Codex prints absolute paths; relativising them against `cwd` left
+    # every finding naming a file under the temporary checkout that nobody can
+    # open. Raised by the reviewer, about itself, in output where the broken
+    # paths were visible.
+    parsed = parse_review(message, repo=tree)
     if parsed is None:
         return Outcome(ok=False, exit_code=code, output=message[:2000],
                        infrastructure_failure=True,

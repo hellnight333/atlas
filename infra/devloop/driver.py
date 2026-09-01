@@ -276,8 +276,15 @@ class Driver:
                 self.q.move(ident, State.FAILED, reason=diff.detail)
                 log("FAILED", task=ident, why="nothing changed")
                 return State.FAILED
+            # Narrowed to what the task touched. Measured: the full suite is
+            # about eleven minutes a round against a two-minute review, so
+            # running all of it every round spent roughly a third of each cycle
+            # re-proving code the task never went near. `_ship` still runs the
+            # whole suite before anything deploys, which is where that
+            # guarantee belongs — this narrows the loop, not the evidence.
             suite = gates.tests(cwd=self.repo,
-                                selector=task.get("test_selector") or "")
+                                selector=task.get("test_selector")
+                                or self._selector())
             log("GATING", task=ident, round=round_no,
                 gates=gates.summarise([diff, suite]))
             if suite.unmeasured:
@@ -464,6 +471,22 @@ class Driver:
                    "Co-Authored-By: Claude Opus 5 (1M context) "
                    "<noreply@anthropic.com>")
         _git("commit", "-q", "-m", message, cwd=self.repo)
+
+    def _selector(self) -> str:
+        """A `-k` expression covering the modules this task changed.
+
+        Built from the changed paths rather than guessed. Empty when nothing
+        recognisable changed, and empty means the whole suite — the safe
+        direction, since a selector matching nothing would pass silently.
+        """
+        names = set()
+        for path in self._touched():
+            stem = Path(path).stem
+            if stem.startswith("test_"):
+                stem = stem[len("test_"):]
+            if stem and stem not in ("__init__", "conftest"):
+                names.add(stem)
+        return " or ".join(sorted(names))
 
     def _touched(self) -> list[str]:
         """Paths this task changed, from git rather than from an agent's word.
