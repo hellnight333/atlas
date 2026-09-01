@@ -145,7 +145,10 @@ def test_an_unreachable_control_plane_leaves_a_task_parked(monkeypatch, q):
 def test_a_boundary_only_becomes_a_request_when_it_names_one():
     """An agent that is merely uncertain may not manufacture a human request."""
     assert boundary.classify("SMTP credential required") == "credential"
-    assert boundary.classify("this needs a product decision") == "decision"
+    # A product decision arrives as a QUESTION: the agent knows what stopped
+    # it, not what the options are, and a decision with no options can never
+    # be answered.
+    assert boundary.classify("this needs a product decision") == "question"
     assert boundary.classify("DNS records must exist") == "provisioning"
     # Anything else is a question: it accepts free text and authorises nothing.
     assert boundary.classify("I am unsure which name reads better") == "question"
@@ -180,13 +183,16 @@ def test_the_reviewer_is_never_told_what_the_builder_did():
     # Structural, not merely disciplined: `codex exec review --base` and a
     # positional prompt are mutually exclusive, so the CLI itself refuses an
     # invocation that carried the builder's account of the change.
-    assert '"--base", base_sha' in source
+    assert '"--base", prepared' in source, (
+        "the review is not run against a base commit in the isolated repo")
 
 
 def test_the_reviewer_runs_on_an_immutable_git_range():
     source = Path(INFRA / "devloop" / "agents.py").read_text()
     call = source[source.index('"codex", "exec", "review"'):][:300]
-    assert '"--base", base_sha' in call, "the review unit is not a git range"
+    # `prepared` is the base commit inside the isolated repository — still a
+    # git range, and one the reviewer cannot see behind.
+    assert '"--base", prepared' in call, "the review unit is not a git range"
     assert '"--json"' in call, "the review is not read as structured events"
 
 
@@ -749,3 +755,139 @@ def test_untracked_files_are_staged_too(tmp_path):
     driver = drv.Driver.__new__(drv.Driver)
     driver.repo = repo
     assert "test_new_thing.py" in driver._touched()
+
+
+# ================================================== reviewer isolation
+#
+# The CLI flag is not the boundary. `codex exec review` has no `--sandbox`, and
+# `-c sandbox_mode="read-only"` was set while a real review wrote to the
+# working tree. What follows tests the property instead of the request.
+
+
+def _repo_with_two_commits(tmp_path):
+    """A repository with a base commit and a task commit, plus private state."""
+    import subprocess
+
+    repo = tmp_path / "origin"
+    (repo / ".qevik").mkdir(parents=True)
+    (repo / "src").mkdir()
+    for argv in (["git", "init", "-q", "-b", "main"],
+                 ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "src" / "app.py").write_text("def f():\n    return 1\n")
+    (repo / ".qevik" / "SESSION_LOG.md").write_text(
+        "The builder changed f() to return 2 because the ledger said so.\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+    (repo / "src" / "app.py").write_text("def f():\n    return 2\n")
+    (repo / "unrelated_uncommitted.py").write_text("secret = 'do not read me'\n")
+    subprocess.run(["git", "add", "src/app.py"], cwd=repo, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "task"], cwd=repo, check=True,
+                   capture_output=True)
+    return repo, base
+
+
+def test_the_reviewer_sees_the_base_and_the_task_diff_and_nothing_else(tmp_path):
+    """Everything it must not see, checked one at a time."""
+    repo, base = _repo_with_two_commits(tmp_path)
+    into = tmp_path / "review"
+    prepared, why = agents.isolate(repo, base_sha=base, into=into)
+    assert prepared, why
+
+    # The change is there, both sides of it.
+    assert (into / "src" / "app.py").read_text() == "def f():\n    return 2\n"
+
+    # The builder's own account of the change is not. This is the one that
+    # matters: a reviewer that reads it is no longer reviewing the code.
+    assert not (into / ".qevik").exists(), (
+        "the reviewer can read the builder's session log, which is exactly the "
+        "report it must never be given")
+
+    # Uncommitted work belonging to nobody in particular is not.
+    assert not (into / "unrelated_uncommitted.py").exists()
+
+    # No history before the base, so no other task's commits are reachable.
+    import subprocess
+    history = subprocess.run(["git", "log", "--oneline"], cwd=into,
+                             capture_output=True, text=True).stdout.strip()
+    assert len(history.splitlines()) == 2, history
+    # No remote, so nothing can be fetched back.
+    remotes = subprocess.run(["git", "remote"], cwd=into, capture_output=True,
+                             text=True).stdout.strip()
+    assert remotes == "", f"the review repository has a remote: {remotes!r}"
+    branches = subprocess.run(["git", "branch", "-a"], cwd=into,
+                              capture_output=True, text=True).stdout
+    assert "main" not in branches, branches
+
+
+def test_a_reviewer_that_writes_cannot_reach_the_task_branch_or_main(tmp_path):
+    """The negative control.
+
+    A reviewer given the isolated repository writes to it — deletes a file,
+    edits another, commits. The origin repository must be untouched: same HEAD,
+    same tree, same working files.
+    """
+    import subprocess
+
+    repo, base = _repo_with_two_commits(tmp_path)
+    before_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                                 capture_output=True, text=True).stdout.strip()
+    before_tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=repo,
+                                 capture_output=True, text=True).stdout.strip()
+    before_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo,
+                                   capture_output=True, text=True).stdout
+
+    into = tmp_path / "review"
+    prepared, why = agents.isolate(repo, base_sha=base, into=into)
+    assert prepared, why
+
+    # A hostile reviewer, doing the worst it could do in its own checkout.
+    (into / "src" / "app.py").write_text("def f():\n    return 999\n")
+    (into / "src" / "planted.py").write_text("# reviewer was here\n")
+    subprocess.run(["git", "add", "-A"], cwd=into, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=r@r", "-c", "user.name=r",
+                    "commit", "-qm", "reviewer edit"], cwd=into,
+                   capture_output=True)
+
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == before_head
+    assert subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == before_tree
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=repo,
+                          capture_output=True, text=True).stdout == before_status
+    assert (repo / "src" / "app.py").read_text() == "def f():\n    return 2\n"
+    assert not (repo / "src" / "planted.py").exists(), (
+        "the reviewer planted a file in the repository being reviewed")
+
+
+def test_the_review_checkout_is_destroyed_even_when_the_review_fails(monkeypatch,
+                                                                     tmp_path):
+    """A failed review must not leave the reviewer's writes on disk."""
+    repo, base = _repo_with_two_commits(tmp_path)
+    seen = {}
+
+    def explode(argv, *, cwd, timeout, env=None):
+        seen["cwd"] = Path(cwd)
+        assert (Path(cwd) / "src" / "app.py").exists(), "not the isolated repo"
+        return 124, "boom", True
+
+    monkeypatch.setattr(agents, "_run", explode)
+    out = agents.review(cwd=repo, base_sha=base,
+                        out_file=tmp_path / "o.json", timeout=5)
+    assert out.infrastructure_failure is True
+    assert not seen["cwd"].exists(), "the review checkout outlived the review"
+
+
+def test_the_driver_always_returns_to_main():
+    """Three infrastructure commits were made onto a task branch because a
+    failed run left it checked out and nobody looked."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    loop = source[source.index("    def loop("):source.index("    def replenish(")]
+    assert '"checkout", "-q", "main"' in loop, (
+        "a run can end with a task branch checked out")
+    assert "finally:" in loop and loop.index("finally:") < loop.index('"checkout", "-q", "main"')

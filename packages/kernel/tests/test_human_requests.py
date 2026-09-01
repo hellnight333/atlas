@@ -124,8 +124,11 @@ def test_a_decision_must_choose_an_option_it_actually_offered():
         kind=ActionKind.DECISION, subject="tenant allowance",
         title="What allowance does Qevik's own tenant have?",
         why="C-27 and C-28 wait on it.",
-        options=[{"key": "unlimited", "label": "Unlimited"},
-                 {"key": "metered", "label": "Metered like a customer"}],
+        options=[{"key": "unlimited", "label": "Unlimited",
+                  "what_changes": "Qevik's own tenant is never metered."},
+                 {"key": "metered", "label": "Metered like a customer",
+                  "what_changes": "Qevik's tenant spends from a quota like "
+                                  "any other."}],
         created_by="test")
     try:
         with pytest.raises(NotAcceptable, match="not one of this decision"):
@@ -234,3 +237,117 @@ def test_resolution_is_what_the_driver_reads():
         assert human.is_resolved("human-question-nothing-at-all") is False
     finally:
         _clean(ident)
+
+
+# ================================================ the decision state machine
+#
+# A decision is the one request kind whose answer becomes a rule. Everything
+# here exists so that a rule can only be made deliberately.
+
+
+@pytest.mark.parametrize("options,why", [
+    ([], "none at all can never be answered"),
+    ([{"key": "a", "label": "A", "what_changes": "x"}], "one option is not a decision"),
+    ([{"key": "a", "label": "A", "what_changes": "x"},
+      {"key": "a", "label": "B", "what_changes": "y"}], "duplicate keys"),
+    ([{"key": "a", "label": "", "what_changes": "x"},
+      {"key": "b", "label": "B", "what_changes": "y"}], "an option with no label"),
+    ([{"key": "a", "label": "A", "what_changes": ""},
+      {"key": "b", "label": "B", "what_changes": "y"}], "an option that says nothing"),
+])
+def test_a_decision_must_be_answerable_before_it_is_asked(options, why):
+    with pytest.raises(NotAcceptable):
+        human.raise_request(kind=ActionKind.DECISION, subject=f"bad-{why}",
+                            title="Which way?", why="w", options=options,
+                            created_by="test")
+
+
+def test_a_well_formed_decision_is_accepted_and_answerable():
+    """The negative control for all of the above."""
+    ident = human.raise_request(
+        kind=ActionKind.DECISION, subject="well-formed-probe",
+        title="Which way?", why="w",
+        options=[{"key": "left", "label": "Go left", "what_changes": "a"},
+                 {"key": "right", "label": "Go right", "what_changes": "b"}],
+        created_by="test")
+    try:
+        got = human.answer(ident, response=ResponseKind.CHOOSE, actor="ayoub",
+                           chosen="right")
+        assert got["state"] == RequestState.ANSWERED.value
+    finally:
+        _clean(ident)
+
+
+def test_prose_on_a_decision_never_becomes_the_answer():
+    """Thinking aloud must not become an architectural rule.
+
+    `CONTEXT` is how somebody adds reasoning to a decision. It must leave the
+    decision open: the structured choice is the answer, and the prose beside it
+    is supporting material.
+    """
+    ident = human.raise_request(
+        kind=ActionKind.DECISION, subject="prose-probe",
+        title="Which way?", why="w",
+        options=[{"key": "left", "label": "Go left", "what_changes": "a"},
+                 {"key": "right", "label": "Go right", "what_changes": "b"}],
+        created_by="test")
+    try:
+        got = human.answer(ident, response=ResponseKind.CONTEXT, actor="ayoub",
+                           body="I think right is probably better, do that.")
+        assert got["state"] == RequestState.WAITING_FOR_INPUT.value, (
+            "prose closed a decision")
+        assert human.is_resolved(ident) is False, (
+            "an unanswered decision reported itself resolved, so the blocked "
+            "task would have resumed on a rule nobody made")
+        # And the reasoning is kept, beside the still-open question.
+        assert "probably better" in human.get(ident)["responses"][-1]["body"]
+
+        # Negative control: the structured choice does resolve it.
+        human.answer(ident, response=ResponseKind.CHOOSE, actor="ayoub",
+                     chosen="right")
+        assert human.is_resolved(ident) is True
+    finally:
+        _clean(ident)
+
+
+def test_answering_one_decision_frees_only_its_own_blocked_tasks():
+    """A decision unblocks what it was blocking, and nothing else."""
+    import sys
+    import tempfile
+    from pathlib import Path as _Path
+
+    sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "infra"))
+    from devloop.queue import Queue, State
+
+    answered = human.raise_request(
+        kind=ActionKind.DECISION, subject="frees-only-its-own",
+        title="Which way?", why="w",
+        options=[{"key": "a", "label": "A", "what_changes": "x"},
+                 {"key": "b", "label": "B", "what_changes": "y"}],
+        created_by="test")
+    other = human.raise_request(
+        kind=ActionKind.QUESTION, subject="a-different-boundary",
+        title="Something else", why="w", created_by="test")
+    q = Queue(_Path(tempfile.mkdtemp()) / "s.db")
+    try:
+        mine = [q.add(title=f"m{n}", brief="b", origin="human") for n in range(2)]
+        theirs = q.add(title="t", brief="b", origin="human")
+        for ident, request in [(mine[0], answered), (mine[1], answered),
+                               (theirs, other)]:
+            q.claim(owner="d")
+            q.park(ident, request_id=request, stage=State.BUILDING, sha="x",
+                   reason="parked")
+
+        human.answer(answered, response=ResponseKind.CHOOSE, actor="ayoub",
+                     chosen="a")
+        for ident in mine:
+            assert human.is_resolved(answered) is True
+            q.release(ident, because="answered")
+        assert all(q.get(i)["state"] == State.QUEUED for i in mine)
+        assert q.get(theirs)["state"] == State.WAITING_FOR_HUMAN, (
+            "answering one decision freed a task waiting on a different one")
+        assert human.is_resolved(other) is False
+    finally:
+        q.close()
+        _clean(answered)
+        _clean(other)

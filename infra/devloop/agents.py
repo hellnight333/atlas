@@ -249,6 +249,64 @@ _FINDING = re.compile(
 _SEVERITY = {"P1": "blocking", "P2": "major", "P3": "minor"}
 
 
+#: Withheld from the reviewer at both commits.
+#:
+#: `.qevik/` is execution memory: `SESSION_LOG.md` narrates what the builder
+#: did and `DECISION_QUEUE.md` carries earlier findings. Showing a reviewer the
+#: author's account of a change is the one thing that stops it reviewing, and
+#: it would arrive silently, as just another tracked file.
+WITHHELD: tuple[str, ...] = (".qevik",)
+
+
+def isolate(repo: Path, *, base_sha: str, into: Path) -> tuple[str, str]:
+    """Build the repository the reviewer sees. Base, task diff, nothing else.
+
+    Returns `(base_commit_in_the_new_repo, "")` or `("", why)`.
+
+    Two commits, one branch, no remote, no earlier history, no other task's
+    work, and no `.qevik` at either commit. The reviewer diffs the second
+    against the first; there is no path from here to the builder's working
+    tree, to an uncommitted file, or to anything the loop knows about itself.
+    """
+    into.mkdir(parents=True, exist_ok=True)
+    signed = ("-c", "user.email=review@devloop", "-c", "user.name=devloop")
+    started, why = _git_in(into, "init", "-q", "-b", "review")
+    if started != 0:
+        return "", why
+
+    base_here = ""
+    for label, sha in (("base", base_sha), ("task", "HEAD")):
+        # `git archive` writes the tree at that commit and nothing about how it
+        # came to be, so the new repository never learns the old one's history.
+        bundle = into / "tree.tar"
+        wrote, why = _git_in(repo, "archive", "--format=tar",
+                             f"--output={bundle}", sha)
+        if wrote != 0:
+            return "", f"could not read {label}: {why}"
+        for existing in into.iterdir():
+            if existing.name in (".git", "tree.tar"):
+                continue
+            if existing.is_dir():
+                shutil.rmtree(existing, ignore_errors=True)
+            else:
+                existing.unlink()
+        unpacked = subprocess.run(["tar", "-xf", str(bundle)], cwd=str(into),
+                                  capture_output=True, text=True)
+        bundle.unlink(missing_ok=True)
+        if unpacked.returncode != 0:
+            return "", f"could not unpack {label}: {unpacked.stderr[:200]}"
+        for withheld in WITHHELD:
+            shutil.rmtree(into / withheld, ignore_errors=True)
+        _git_in(into, "add", "-A")
+        made, why = _git_in(into, *signed, "commit", "-q", "--allow-empty",
+                            "-m", label)
+        if made != 0:
+            return "", f"could not commit {label}: {why}"
+        if label == "base":
+            base_here = _git_in(into, "rev-parse", "HEAD")[1]
+    return base_here, ""
+
+
 def parse_review(text: str, *, repo: Path) -> dict | None:
     """Turn one review message into findings. `None` when it cannot be read.
 
@@ -322,31 +380,40 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
     """
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # The review runs in a throwaway worktree, not in the tree being built.
+    # The reviewer is handed a repository built for it: **the base commit, the
+    # task diff, and nothing else.**
     #
-    # `codex exec review` has no `--sandbox` flag and does not honour
-    # `-c sandbox_mode="read-only"` — set, a real review still edited
-    # `.qevik/CAPABILITY_LEDGER.md` in the working tree, twice, and the
-    # `clean_tree` gate stopped the round both times. So read-only is made
-    # structural: the reviewer is given its own checkout of the same commits,
-    # and whatever it writes there goes when the worktree does.
+    # A `git worktree` was not enough, for a reason that matters more than
+    # write access. It carries every tracked file — including
+    # `.qevik/SESSION_LOG.md`, which is the builder's own narrative of what it
+    # just did. A reviewer that can read that is no longer blind, and blindness
+    # is the entire reason this reviewer finds anything. It also carries the
+    # repository's whole history and every other task's branch.
     #
-    # The same isolation the mission engine uses, for the same reason.
+    # And the CLI flag is not a boundary: `codex exec review` has no
+    # `--sandbox`, and `-c sandbox_mode="read-only"` was set while a real
+    # review still wrote to the working tree. Isolation has to be a property of
+    # what the reviewer is given, not of what it was asked to do.
+    #
+    # So: a fresh repository, two commits, one branch, no remote, no history
+    # before the base, and no `.qevik` at either commit. Whatever the reviewer
+    # writes is destroyed with it, and it can reach nothing that was not put
+    # there on purpose.
     scratch = Path(tempfile.mkdtemp(prefix="devloop-review-"))
-    tree = scratch / "wt"
-    made, why = _git_in(cwd, "worktree", "add", "--detach", str(tree), "HEAD")
-    if made != 0:
-        shutil.rmtree(scratch, ignore_errors=True)
-        return Outcome(ok=False, exit_code=made, output=why,
-                       infrastructure_failure=True,
-                       detail=f"could not isolate the review: {why[:200]}")
+    tree = scratch / "review"
     try:
+        prepared, why = isolate(cwd, base_sha=base_sha, into=tree)
+        if not prepared:
+            return Outcome(ok=False, exit_code=1, output=why,
+                           infrastructure_failure=True,
+                           detail=f"could not isolate the review: {why[:200]}")
         code, out, timed_out = _run(
-            ["codex", "exec", "review", "--base", base_sha, "--json",
+            ["codex", "exec", "review", "--base", prepared, "--json",
              "-c", f"model_reasoning_effort={effort}"],
             cwd=tree, timeout=timeout)
     finally:
-        _git_in(cwd, "worktree", "remove", "--force", str(tree))
+        # Nothing the reviewer did survives. The path is kept only so
+        # `parse_review` can relativise the absolute paths it printed.
         shutil.rmtree(scratch, ignore_errors=True)
     if timed_out or code == 127:
         return Outcome(ok=False, exit_code=code, output=out,
@@ -411,6 +478,6 @@ def blocking(findings: list[dict]) -> list[dict]:
     return [f for f in findings if f.get("severity") in ("blocking", "major")]
 
 
-__all__ = ["COMPLETION_LIKE_STOPS", "Outcome", "REVIEW_EFFORT", "blocking",
-           "build", "builder_prompt", "fix", "parse_review", "review",
+__all__ = ["Outcome", "REVIEW_EFFORT", "WITHHELD", "blocking", "build",
+           "builder_prompt", "fix", "isolate", "parse_review", "review",
            "reviewer_prompt", "stopped_short"]

@@ -564,6 +564,15 @@ class Driver:
         except Stopped:
             because = "stopped by signal"
         finally:
+            # Back to `main`, always. The driver used to leave its task branch
+            # checked out whenever a run ended badly, and three infrastructure
+            # commits were made onto a task branch by somebody who did not
+            # re-check — including the fix for the very bug those runs were
+            # chasing. `main` never had it.
+            on = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)[1]
+            if on != "main":
+                _git("checkout", "-q", "main", cwd=self.repo)
+                log("RETURNED_TO_MAIN", was=on)
             self.q.finish_run(run_id, because=because)
             projection.write(self.repo, self.q)
             log("RUN_END", run=run_id, completed=completed, because=because)

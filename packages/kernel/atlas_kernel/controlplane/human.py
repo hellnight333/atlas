@@ -223,6 +223,32 @@ def raise_request(*, kind: ActionKind, subject: str, title: str, why: str,
     retry adds nothing the second time, which is what stops one blocker
     becoming forty rows nobody reads.
     """
+    if kind is ActionKind.DECISION:
+        # The options are what make a decision answerable at all. Checked here
+        # rather than discovered by the person trying to reply to something
+        # that accepts nothing — which is what happened the first time the
+        # driver parked a real boundary as a decision.
+        keys = [str(o.get("key") or "").strip() for o in (options or [])]
+        stated = [k for k in keys if k]
+        if len(stated) < 2:
+            raise NotAcceptable(
+                "a decision must offer at least two options with distinct "
+                "keys. One option is not a decision, and none at all can never "
+                "be answered — raise a QUESTION instead, which takes an answer "
+                "in the person's own words.")
+        if len(set(stated)) != len(stated):
+            raise NotAcceptable(
+                "two of this decision's options share a key, so an answer "
+                "would not say which was chosen.")
+        for option in options or []:
+            if not str(option.get("label") or "").strip():
+                raise NotAcceptable(
+                    "every option needs a label somebody can read. A key is "
+                    "for the machine; the person choosing sees the label.")
+            if not str(option.get("what_changes") or "").strip():
+                raise NotAcceptable(
+                    "every option must say what changes if it is chosen. "
+                    "Choosing between names is not deciding.")
     if kind is ActionKind.CREDENTIAL and (evidence or {}).get("value"):
         raise NotAcceptable(
             "a credential value must never be written to a human request. The "
@@ -342,6 +368,12 @@ def _state_for(kind: ActionKind, response: ResponseKind, *,
     if response is ResponseKind.DEFER:
         return RequestState.DEFERRED
     if response is ResponseKind.CONTEXT:
+        return RequestState.WAITING_FOR_INPUT
+    if kind is ActionKind.DECISION and response is not ResponseKind.CHOOSE:
+        # Only a stated choice answers a decision. Anything else leaves it
+        # open, because a decision's answer becomes a rule and a rule must be
+        # made deliberately — never inferred from prose somebody typed while
+        # thinking aloud.
         return RequestState.WAITING_FOR_INPUT
     if response is ResponseKind.CANCEL:
         return RequestState.CANCELLED
