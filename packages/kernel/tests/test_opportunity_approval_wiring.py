@@ -262,11 +262,16 @@ class TestRefusalsLeaveATrace:
 class TestTheMessageFollowsTheDecision:
     """The row says what the records say, at every point the decision moves.
 
-    One property, stated four ways: **the message never claims an open question
-    that has been answered, and never claims an answer nobody gave.** A row
-    stuck at `AWAITING_APPROVAL` after a person decided puts the same stranger
-    back in the review queue, and the obvious response to that listing is to ask
+    One property: **the message never claims an open question that has been
+    answered, and never claims an answer nobody gave.** A row stuck at
+    `AWAITING_APPROVAL` after a person decided puts the same stranger back in
+    the review queue, and the obvious response to that listing is to ask
     somebody a second time about words they already refused.
+
+    The same property read backwards is why asking is guarded too: a second
+    `request_approval` on a row that has already been answered would put the
+    claim back on a message that carries an answer, which is the same lie
+    written from the other end.
     """
 
     def test_asking_is_recorded_on_the_message_and_not_only_on_the_timeline(self) -> None:
@@ -467,6 +472,92 @@ class TestTheMessageFollowsTheDecision:
         assert stored.approval_id == request.id
         assert stored.approved_fingerprint == prepared.proposal.fingerprint
 
+    def test_a_sent_message_cannot_be_put_back_to_awaiting_by_asking_again(self) -> None:
+        """The write in `request_approval` is unconditional, and a
+        `PreparedOutreach` is reusable — so a second call would move a delivered
+        row back to `AWAITING_APPROVAL` while `sent_at` stayed where it was: a
+        row reporting an open question and a completed send at once."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+        service.send(prepared, approved, EXAMPLE_PROFILE)
+
+        with pytest.raises(OutreachNotApproved, match="already records what was decided"):
+            service.request_approval(prepared)
+
+        stored = _stored(prepared.message.id, business.id)
+        assert stored.status is OutreachStatus.SENT
+        assert stored.sent_at is not None
+        assert stored.approval_id == request.id
+
+    def test_a_refused_send_is_not_reopened_by_asking_again(self) -> None:
+        """Same guard, from the exit that leaves the row `SUPPRESSED`. A person
+        said yes, a guard said no, and neither of those is an open question."""
+        runtime = create_runtime()
+        service = _durable(runtime, suppression=SuppressionList(["hello@alnoor.test"]))
+        business, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+        with pytest.raises(OutreachRefused):
+            service.send(prepared, approved, EXAMPLE_PROFILE)
+
+        with pytest.raises(OutreachNotApproved, match="already records what was decided"):
+            service.request_approval(prepared)
+
+        assert _stored(prepared.message.id, business.id).status is OutreachStatus.SUPPRESSED
+
+    def test_a_rejected_message_is_not_reopened_by_asking_again(self) -> None:
+        """A refusal written back by `record_decision` is an answer. Re-asking
+        would offer the same stranger's words to a second person as though the
+        first had never spoken."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        service.record_decision(runtime.approval_service.reject(request.id, actor="ayoub"))
+        prepared.message = _stored(prepared.message.id, business.id)
+
+        with pytest.raises(OutreachNotApproved, match="already records what was decided"):
+            service.request_approval(prepared)
+
+        assert _stored(prepared.message.id, business.id).status is OutreachStatus.REJECTED
+
+    def test_a_message_already_awaiting_an_answer_is_not_asked_about_twice(self) -> None:
+        """The other half: re-asking a row that names a pending request abandons
+        that request — still open, and now with nothing pointing at it — and
+        puts the same words to a second person."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        first = service.request_approval(prepared)
+        before = len(runtime.approval_service.list_pending())
+
+        with pytest.raises(OutreachNotApproved, match="already raised under approval"):
+            service.request_approval(prepared)
+
+        assert len(runtime.approval_service.list_pending()) == before
+        assert _stored(prepared.message.id, business.id).approval_id == first.id
+
+    def test_settling_the_question_is_what_makes_asking_again_possible(self) -> None:
+        """The guard must not be a dead end. A cancelled request is closed by
+        `record_decision`, and the next question is asked about fresh words —
+        which is what `prepare` produces."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, opportunity, prepared = _prepared(service)
+        first = service.request_approval(prepared)
+        service.record_decision(runtime.approval_service.cancel(first.id, actor="ayoub"))
+
+        again = service.prepare(business, opportunity, EXAMPLE_PROFILE)
+        second = service.request_approval(again)
+
+        assert second.id != first.id
+        assert again.message.id != prepared.message.id
+        assert _stored(again.message.id, business.id).status is OutreachStatus.AWAITING_APPROVAL
+        assert _stored(prepared.message.id, business.id).status is OutreachStatus.REJECTED
+
     def test_a_delivered_message_is_persisted_as_sent_rather_than_awaiting(self) -> None:
         runtime = create_runtime()
         service = _durable(runtime)
@@ -488,12 +579,16 @@ class TestARejectionBelongsToOneMessage:
     it, while the message somebody actually refused stays in the queue."""
 
     def test_refusing_one_request_does_not_close_a_message_raised_under_another(self) -> None:
+        """Two requests exist about the same words — the second raised straight
+        through the gate, because `request_approval` will not put a message that
+        already names one to a second person. The row stays bound to the first,
+        and the second one's refusal is not an answer about it."""
         runtime = create_runtime()
         service = _durable(runtime)
         _, _, prepared = _prepared(service)
         first = service.request_approval(prepared)
         bound_to_first = prepared.message
-        second = service.request_approval(prepared)
+        second = service.gate.request(prepared.outcome)
         assert bound_to_first.approval_id == first.id != second.id
 
         refused_second = runtime.approval_service.reject(second.id, actor="ayoub")
@@ -503,8 +598,7 @@ class TestARejectionBelongsToOneMessage:
 
     def test_another_businesss_refusal_does_not_close_this_draft(self) -> None:
         """The row names no request — every draft written before the question is
-        put — so the only link available is what the approval recorded about the
-        artefact it asked about."""
+        put — so the only link available is the message the approval names."""
         runtime = create_runtime()
         mine = _service(RecordingChannel(), runtime.approval_service)
         theirs = _service(RecordingChannel(), runtime.approval_service, seed=OTHER_CSV)
@@ -519,29 +613,58 @@ class TestARejectionBelongsToOneMessage:
         refused = runtime.approval_service.reject(request.id, actor="ayoub")
 
         assert ours.message.approval_id is None
-        with pytest.raises(OutreachNotApproved, match="business_id"):
+        with pytest.raises(OutreachNotApproved, match="was raised about message"):
             mine.gate.reject(ours.message, refused)
 
     def test_a_refusal_about_another_channel_does_not_close_this_one(self) -> None:
-        """A business holds a WhatsApp draft beside an email draft. Business and
-        proposal alone do not separate them, which is why all four bound fields
-        are checked."""
+        """A business holds a WhatsApp draft beside an email draft. They are two
+        rows, and the request names the one it was raised about."""
         runtime = create_runtime()
         service = _service(RecordingChannel(), runtime.approval_service)
         _, _, prepared = _prepared(service)
-        request = service.request_approval(prepared)
-        elsewhere = runtime.approval_service.reject(request.id, actor="ayoub").model_copy(
-            update={"metadata": {**request.metadata, "channel": "whatsapp"}}
+        sibling = prepared.message.model_copy(
+            update={"id": "whatsapp-draft", "channel": "whatsapp", "approval_id": None}
         )
-        draft = prepared.message.model_copy(update={"approval_id": None})
+        request = service.request_approval(prepared)
+        refused = runtime.approval_service.reject(request.id, actor="ayoub")
 
-        with pytest.raises(OutreachNotApproved, match="channel"):
-            service.gate.reject(draft, elsewhere)
+        with pytest.raises(OutreachNotApproved, match="was raised about message"):
+            service.gate.reject(sibling, refused)
 
-    def test_an_approval_recording_nothing_about_the_artefact_is_refused(self) -> None:
-        """Silence is not agreement. An approval that names no business, no
-        proposal, no recipient and no channel cannot be shown to be about these
-        words, and stamping it on anyway is how the wrong row gets closed."""
+    def test_a_second_draft_of_the_same_words_is_not_closed_by_the_first_refusal(self) -> None:
+        """The case four descriptive fields cannot separate.
+
+        A draft rewritten after a typo keeps its business, its proposal, its
+        recipient *and* its channel — all four equal, two live rows, different
+        ids and different words. Binding on the description would accept a
+        refusal raised about one of them for the other, which is the wrong-row
+        closure the guard exists to prevent.
+        """
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        rewritten = prepared.message.model_copy(
+            update={
+                "id": "rewritten-after-a-typo",
+                "body": prepared.message.body + "\n\nP.S. corrected.",
+                "approval_id": None,
+            }
+        )
+        request = service.request_approval(prepared)
+        refused = runtime.approval_service.reject(request.id, actor="ayoub")
+
+        assert rewritten.business_id == prepared.message.business_id
+        assert rewritten.proposal_id == prepared.message.proposal_id
+        assert rewritten.recipient == prepared.message.recipient
+        assert rewritten.channel == prepared.message.channel
+
+        with pytest.raises(OutreachNotApproved, match="was raised about message"):
+            service.gate.reject(rewritten, refused)
+
+    def test_an_approval_naming_no_message_is_refused(self) -> None:
+        """Silence is not agreement. An approval that names no message cannot be
+        shown to be about this row, and stamping it on anyway is how the wrong
+        row gets closed."""
         runtime = create_runtime()
         service = _service(RecordingChannel(), runtime.approval_service)
         _, _, prepared = _prepared(service)
@@ -567,10 +690,10 @@ class TestARejectionBelongsToOneMessage:
         assert marked.status is OutreachStatus.REJECTED
         assert marked.approval_id == request.id
 
-    def test_a_draft_naming_no_request_is_closed_by_the_matching_approval(self) -> None:
-        """The fallback path has to work, not only refuse. A row drafted before
-        the question was put still has to be closable by the request that was
-        raised about exactly those words."""
+    def test_a_draft_naming_no_request_is_closed_by_the_approval_that_names_it(self) -> None:
+        """The second binding has to work, not only refuse. A copy of the row
+        taken before the question was put carries no `approval_id`, and the
+        request still knows which row it was raised about."""
         runtime = create_runtime()
         service = _service(RecordingChannel(), runtime.approval_service)
         _, _, prepared = _prepared(service)

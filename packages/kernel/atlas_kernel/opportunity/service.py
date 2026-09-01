@@ -76,6 +76,22 @@ DECIDED_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _undecided(message: OutreachMessage) -> bool:
+    """Whether the row still records an open question and nothing more.
+
+    The same four signals ``outreach.unreviewed.undecided`` reads, and the same
+    reason for reading four rather than one: a status is a single edit away from
+    lying, and the direction that destroys history is the one where a message
+    somebody acted on is treated as one nobody has touched.
+
+    Read in both directions here. ``record_decision`` may only close a row that
+    is still open; ``request_approval`` may only ask about one.
+    """
+    return message.status in OPEN_STATUSES and not any(
+        getattr(message, column) for column in DECIDED_COLUMNS
+    )
+
+
 @dataclass
 class PreparedOutreach:
     """Everything needed for a human to decide, and nothing sent yet."""
@@ -199,6 +215,7 @@ class OpportunityService:
             findings=opportunity.findings,
             channel=message.channel,
             recipient=message.recipient,
+            message_id=message.id,
         )
         return PreparedOutreach(
             business=business,
@@ -234,7 +251,34 @@ class OpportunityService:
         that is refused, cancelled or left to expire has to come back through
         ``record_decision`` or this row goes on claiming an open question after
         that stopped being true.
+
+        Asked about **once**, and the two guards below are what hold that. A
+        ``PreparedOutreach`` is reusable and mutable, so a second call is one
+        stray loop away, and the write is unconditional: it would move a sent,
+        suppressed, failed or refused row back to ``AWAITING_APPROVAL`` while
+        leaving ``sent_at`` and ``approved_fingerprint`` where they are — a row
+        that reports an open question and a completed send at once, and a
+        history no reader can reconstruct. Asking again about a row that already
+        names a *pending* request is the other half: it abandons that request,
+        still open and now unreachable from any message, and puts the same words
+        to a second person. Neither is repaired by re-asking, so neither is
+        allowed. New words are a new question, and ``prepare`` is what makes one.
         """
+        if not _undecided(prepared.message):
+            raise OutreachNotApproved(
+                f"message {prepared.message.id} is {prepared.message.status.value} "
+                "and already records what was decided about it; asking again would "
+                "move it back to awaiting a question somebody already answered. "
+                "Prepare the words afresh — a new question is a new message"
+            )
+        if prepared.message.approval_id:
+            raise OutreachNotApproved(
+                f"message {prepared.message.id} was already raised under approval "
+                f"{prepared.message.approval_id}; a second request would leave that "
+                "one open with nothing pointing at it and put the same words to two "
+                "people. Settle it first — record_decision closes it"
+            )
+
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
         prepared.message = prepared.message.model_copy(
             update={
@@ -279,6 +323,27 @@ class OpportunityService:
         because only ``authorise`` re-derives the fingerprint and refuses words
         that moved since a person read them. A method whose job is keeping a row
         honest must not become a second door onto sending.
+
+        **Nothing in production calls this yet, and nothing can.** The refusal
+        endpoints — ``POST /approvals/{id}/reject`` and ``/cancel`` in
+        ``api.py``, ``/approvals/{id}/decide`` in ``customer/api.py`` — settle
+        the request and stop there. That is not a hole under this method, it is
+        the same hole under ``request_approval``: no production module builds an
+        ``OpportunityService``, so no outreach approval is ever created, no row
+        ever reaches ``AWAITING_APPROVAL``, and there is no stranded row for a
+        refusal to leave behind. (The customer endpoint could not decide one in
+        any case — it demands a ``tenant_id`` in the approval's metadata and
+        ``gate.request`` writes none.)
+
+        The two halves have to be wired in the same change, and neither can be
+        wired from this file. Whoever gives the pipeline a production entry point
+        owns both: the surface that calls ``request_approval`` to put the
+        question, and the approval transition — an ``ApprovalRejected`` /
+        ``ApprovalCancelled`` / ``ApprovalExpired`` subscriber is the seam,
+        though the event bus has no production subscriber today — that calls this
+        to write the answer back. Wiring only this half would put the opportunity
+        factory behind the kernel's approval service to close rows nothing
+        produces, which inverts the dependency and buys nothing.
         """
         if approval.state not in FORECLOSED:
             raise OutreachNotApproved(
@@ -330,11 +395,7 @@ class OpportunityService:
         if not business_id:
             return None
         for message in self.repository.messages_for(business_id):
-            if message.approval_id != approval.id:
-                continue
-            if message.status in OPEN_STATUSES and not any(
-                getattr(message, column) for column in DECIDED_COLUMNS
-            ):
+            if message.approval_id == approval.id and _undecided(message):
                 return message
         return None
 

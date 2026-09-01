@@ -18,9 +18,10 @@ particular thing and a standing permission to contact someone.
 **Both directions bind.** ``authorise`` proves the approval describes the
 message through the fingerprint. ``reject`` has no fingerprint to work with — a
 refusal says nothing about a body of text — so it proves the same thing through
-``BOUND_FIELDS``, or through the ``approval_id`` the message already carries.
-An unbound rejection would close somebody else's message with a decision nobody
-took about it, and leave the refused one looking like an open question.
+an identifier: the ``approval_id`` the message carries, or the ``message_id``
+the approval carries. An unbound rejection would close somebody else's message
+with a decision nobody took about it, and leave the refused one looking like an
+open question.
 """
 
 from __future__ import annotations
@@ -70,13 +71,19 @@ FORECLOSED: dict[ApprovalState, str] = {
     ApprovalState.EXPIRED: "the approval request expired with nobody having answered it",
 }
 
-#: What ``request`` records about the artefact it asked about, under the same
-#: names the message carries. Together they identify one message: the same
-#: company, the same words, the same address, the same channel.
+#: Which message ``request`` was raised about, recorded on the approval.
 #:
-#: Read by ``reject`` when a message does not already name its request, which is
-#: every row drafted before ``request_approval`` began writing one.
-BOUND_FIELDS: tuple[str, ...] = ("business_id", "proposal_id", "recipient", "channel")
+#: The mirror of the ``approval_id`` ``request_approval`` writes onto the row,
+#: and it exists because the two ends can be out of step. A caller holding a
+#: stale copy of a row — read before the question was put, or reconstructed from
+#: a draft file — has no ``approval_id`` on it, and then this is the only thing
+#: that says which row the refusal closes.
+#:
+#: An identifier and never a description. The business, the proposal, the
+#: recipient and the channel are all recorded too, but as context for whoever
+#: reads the approval; ``reject`` does not bind on them, because all four can be
+#: equal on two different rows. ``_must_describe`` has the argument.
+BOUND_MESSAGE = "message_id"
 
 
 class OutreachNotApproved(RuntimeError):
@@ -97,6 +104,14 @@ class OutreachOutcome:
     findings: list[Finding]
     channel: str
     recipient: str
+    #: The row these words were written to. Not part of what a person is asked —
+    #: nobody approves a database id — but recorded on the request so a refusal
+    #: that arrives later can be shown to be about *this* row and no other.
+    #:
+    #: Empty is a real value and the safe one: an outcome assembled without a
+    #: stored message asks the same question, and the refusal it earns can only
+    #: close a row that names the request back.
+    message_id: str = ""
 
     @property
     def fingerprint(self) -> str:
@@ -143,6 +158,7 @@ class OutreachGate:
             context=context,
             metadata={
                 PROPOSAL_FINGERPRINT: outcome.fingerprint,
+                BOUND_MESSAGE: outcome.message_id,
                 "business_id": outcome.business.id,
                 "proposal_id": outcome.proposal.id,
                 "recipient": outcome.recipient,
@@ -248,13 +264,25 @@ class OutreachGate:
         open question — so the same person is asked again about words they have
         already said no to.
 
-        Two ways to establish it, most specific first. ``approval_id`` is the
-        message's own record of which question it was raised under, written by
-        ``request_approval``, and it settles the matter on its own. A row
-        drafted before that — or by a tool that never asked anybody — names no
-        request, and then the only link available is what ``request`` recorded
-        about the artefact: ``BOUND_FIELDS``, all of them, because business and
-        proposal alone do not separate the WhatsApp draft from the email.
+        Two ways to establish it, and both are **identifiers**. ``approval_id``
+        is the message's own record of which question it was raised under,
+        written by ``request_approval``. ``BOUND_MESSAGE`` is the same link
+        written from the other end, and it covers the case the first cannot: a
+        caller holding a copy of the row from before the question was put has no
+        ``approval_id`` on it, and the request still knows which row it named.
+        Either one settles the matter alone, because each names exactly one
+        thing. Absent both, the answer is no.
+
+        What is deliberately **not** a link is a description of the artefact.
+        Business, proposal, recipient and channel were read here once, on the
+        theory that four fields together pick out one message. They do not. A
+        draft rewritten after a typo keeps its business, its proposal, its
+        recipient and its channel, and differs only in its id and its words — so
+        two live rows can carry an identical four, and a refusal raised about one
+        of them would be accepted for the other. That is the wrong-row closure
+        this guard exists to prevent, arrived at through the guard itself. The
+        four are still recorded on the approval, where they tell a reader what
+        was asked about; they are not evidence of which row was asked about.
         """
         named = message.approval_id
         if named:
@@ -266,21 +294,16 @@ class OutreachGate:
                 )
             return
 
-        recorded = {field: approval.metadata.get(field) for field in BOUND_FIELDS}
-        missing = sorted(field for field, value in recorded.items() if not value)
-        if missing:
+        raised_about = str(approval.metadata.get(BOUND_MESSAGE) or "")
+        if not raised_about:
             raise OutreachNotApproved(
                 f"message {message.id} names no approval and approval {approval.id} "
-                f"records no {', '.join(missing)}; nothing ties the two together, and "
-                "a refusal has no fingerprint that could"
+                "names no message; nothing ties the two together, and a refusal has "
+                "no fingerprint that could"
             )
-
-        differing = sorted(
-            field for field, value in recorded.items() if value != getattr(message, field)
-        )
-        if differing:
+        if raised_about != message.id:
             raise OutreachNotApproved(
-                f"approval {approval.id} was raised about a different "
-                f"{', '.join(differing)} than message {message.id} carries; it does "
-                "not describe these words"
+                f"approval {approval.id} was raised about message {raised_about}, "
+                f"not {message.id}; refusing one request does not close a message "
+                "somebody asked about separately"
             )
