@@ -14,6 +14,13 @@ exact facts*". Re-run a detector, edit a paragraph, change the offer, and the
 fingerprint moves — at which point the send is refused rather than quietly
 delivering something no human read. That is the difference between consent to a
 particular thing and a standing permission to contact someone.
+
+**Both directions bind.** ``authorise`` proves the approval describes the
+message through the fingerprint. ``reject`` has no fingerprint to work with — a
+refusal says nothing about a body of text — so it proves the same thing through
+``BOUND_FIELDS``, or through the ``approval_id`` the message already carries.
+An unbound rejection would close somebody else's message with a decision nobody
+took about it, and leave the refused one looking like an open question.
 """
 
 from __future__ import annotations
@@ -22,7 +29,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
+from ..approval.models import (
+    TERMINAL_APPROVAL_STATES,
+    ApprovalContext,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
 from ..approval.service import ApprovalService
 from .models import (
     Business,
@@ -38,6 +51,32 @@ PROPOSAL_FINGERPRINT = "proposal_fingerprint"
 #: What the policy engine sees. Named so a policy can require a second approver
 #: for outreach specifically, without this file knowing such a policy exists.
 OUTREACH_ACTION = "opportunity.outreach.send"
+
+#: Terminal approval states that foreclose the send, and what each one is
+#: recorded as on the message.
+#:
+#: Three entries rather than one line of prose, because they are not the same
+#: event. A person refusing, a request being cancelled, and a request nobody
+#: answered before it expired all stop the send, but only the first is a
+#: decision somebody took — and a message detail reading "rejected by approver"
+#: on an expiry puts words in the mouth of a person who never spoke.
+#:
+#: ``APPROVED`` is deliberately absent. It is terminal for the approval and not
+#: for the message: marking a message approved is ``authorise``'s act, because
+#: only ``authorise`` re-derives the fingerprint first.
+FORECLOSED: dict[ApprovalState, str] = {
+    ApprovalState.REJECTED: "rejected by approver",
+    ApprovalState.CANCELLED: "the approval request was cancelled before anybody decided",
+    ApprovalState.EXPIRED: "the approval request expired with nobody having answered it",
+}
+
+#: What ``request`` records about the artefact it asked about, under the same
+#: names the message carries. Together they identify one message: the same
+#: company, the same words, the same address, the same channel.
+#:
+#: Read by ``reject`` when a message does not already name its request, which is
+#: every row drafted before ``request_approval`` began writing one.
+BOUND_FIELDS: tuple[str, ...] = ("business_id", "proposal_id", "recipient", "channel")
 
 
 class OutreachNotApproved(RuntimeError):
@@ -158,10 +197,90 @@ class OutreachGate:
         )
 
     def reject(self, message: OutreachMessage, approval: ApprovalRequest) -> OutreachMessage:
+        """Close the message against an approval that forecloses the send.
+
+        The counterpart to ``authorise``, and it takes the reason from the
+        approval's own state rather than asserting one. ``FORECLOSED`` says why
+        that distinction is worth three entries.
+
+        Refuses a request nobody has decided yet, because writing ``REJECTED``
+        on a pending approval would answer on the approver's behalf — the exact
+        thing this gate exists to prevent. Refuses an approved one too: the way
+        to record a yes is ``authorise``, which re-checks the fingerprint, and a
+        second door onto ``APPROVED`` that skips that check is a door onto
+        sending words nobody read.
+        """
+        if approval.state is ApprovalState.APPROVED:
+            raise OutreachNotApproved(
+                f"approval {approval.id} is approved; record that with authorise, "
+                "which re-checks the fingerprint, not with a refusal"
+            )
+        if approval.state not in TERMINAL_APPROVAL_STATES:
+            raise OutreachNotApproved(
+                f"approval {approval.id} is {approval.state.value}; nobody has decided "
+                "it, and closing the message now would answer for the approver"
+            )
+
+        self._must_describe(message, approval)
+
         return message.model_copy(
             update={
                 "status": OutreachStatus.REJECTED,
                 "approval_id": approval.id,
-                "detail": "rejected by approver",
+                "detail": FORECLOSED[approval.state],
             }
         )
+
+    @staticmethod
+    def _must_describe(message: OutreachMessage, approval: ApprovalRequest) -> None:
+        """Refuse an approval that cannot be shown to be about *these* words.
+
+        ``authorise`` gets this check for nothing: it re-derives the proposal
+        fingerprint and refuses a mismatch. A refusal has no fingerprint to
+        compare against — nothing about a refused request describes a body of
+        text — so the binding has to be established directly, or ``reject``
+        stamps whichever approval it is handed onto whichever message it is
+        handed and closes the wrong row.
+
+        Closing the wrong row is not a small error. The message it closes leaves
+        the review queue carrying a decision nobody took about it, and the
+        message somebody actually refused stays in the queue looking like an
+        open question — so the same person is asked again about words they have
+        already said no to.
+
+        Two ways to establish it, most specific first. ``approval_id`` is the
+        message's own record of which question it was raised under, written by
+        ``request_approval``, and it settles the matter on its own. A row
+        drafted before that — or by a tool that never asked anybody — names no
+        request, and then the only link available is what ``request`` recorded
+        about the artefact: ``BOUND_FIELDS``, all of them, because business and
+        proposal alone do not separate the WhatsApp draft from the email.
+        """
+        named = message.approval_id
+        if named:
+            if named != approval.id:
+                raise OutreachNotApproved(
+                    f"message {message.id} was raised under approval {named}, not "
+                    f"{approval.id}; refusing one request does not close a message "
+                    "somebody asked about separately"
+                )
+            return
+
+        recorded = {field: approval.metadata.get(field) for field in BOUND_FIELDS}
+        missing = sorted(field for field, value in recorded.items() if not value)
+        if missing:
+            raise OutreachNotApproved(
+                f"message {message.id} names no approval and approval {approval.id} "
+                f"records no {', '.join(missing)}; nothing ties the two together, and "
+                "a refusal has no fingerprint that could"
+            )
+
+        differing = sorted(
+            field for field, value in recorded.items() if value != getattr(message, field)
+        )
+        if differing:
+            raise OutreachNotApproved(
+                f"approval {approval.id} was raised about a different "
+                f"{', '.join(differing)} than message {message.id} carries; it does "
+                "not describe these words"
+            )
