@@ -8,19 +8,36 @@ it, and a hand-built ``ApprovalRequest`` would prove nothing about the wiring.
 
 Also covers the two paths that only appear when something goes wrong: a refused
 send must leave a trace, and a rejection must not leave a sendable message.
+
+And it covers the wiring in both directions, which is the part that decays
+quietly. Asking has to *claim* the message before the question exists, or two
+workers each create one and whichever loses the write is a live approval nothing
+points at. Answering has to reach the row through the path production takes —
+the customer endpoint calls `ApprovalService.reject` and nothing else — and has
+to land only while the message is still open, or a send recorded in between is
+replaced by a refusal that was decided against a state which no longer exists.
+
+Both races are exercised with a worker that read the row before somebody else
+wrote it, because that is what the race *is*. A test that re-reads at the moment
+of writing proves the check and says nothing about the guard.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from atlas_kernel import db
-from atlas_kernel.approval.models import ApprovalScope, ApprovalState
+from atlas_kernel.approval.models import ApprovalContext, ApprovalScope, ApprovalState
 from atlas_kernel.composition_root import create_runtime
 from atlas_kernel.opportunity.detectors.base import DetectorRegistry
 from atlas_kernel.opportunity.detectors.website import WebsiteDetector
 from atlas_kernel.opportunity.gate import (
+    BOUND_MESSAGE,
+    FORECLOSED,
     OUTREACH_ACTION,
     PROPOSAL_FINGERPRINT,
     OutreachGate,
@@ -28,6 +45,7 @@ from atlas_kernel.opportunity.gate import (
 )
 from atlas_kernel.opportunity.models import (
     Business,
+    OutreachMessage,
     OutreachStatus,
     PipelineEventKind,
 )
@@ -38,6 +56,7 @@ from atlas_kernel.opportunity.outreach import (
     SuppressionList,
 )
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
+from atlas_kernel.opportunity.repository import OpportunityRepository
 from atlas_kernel.opportunity.service import OpportunityService
 from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 
@@ -70,6 +89,18 @@ def _service(channel: RecordingChannel, approvals, **kwargs) -> OpportunityServi
     )
 
 
+def _durable(approvals, channel: RecordingChannel | None = None, **kwargs):
+    """A service whose messages survive the call, which is what a race needs.
+
+    Without a repository there is no row for two workers to contend over, so
+    every property below would pass on a service that stored nothing.
+    """
+    repository = OpportunityRepository()
+    service = _service(channel or RecordingChannel(), approvals, **kwargs)
+    service.repository = repository
+    return service, repository
+
+
 def _prepared(service: OpportunityService):
     opportunity = service.scan(EXAMPLE_PROFILE, limit=1)[0]
     business = Business(
@@ -80,6 +111,50 @@ def _prepared(service: OpportunityService):
         email="hello@alnoor.test",
     )
     return business, opportunity, service.prepare(business, opportunity, EXAMPLE_PROFILE)
+
+
+def _stored(repository: OpportunityRepository, message) -> OutreachMessage | None:
+    """The row itself, found by id.
+
+    By id and never by "the newest for this business": the seed list resolves to
+    one permanent `Business`, so every run of this module adds another message to
+    the same company and a positional read would assert about somebody else's.
+    """
+    for row in repository.messages_for(message.business_id):
+        if row.id == message.id:
+            return row
+    return None
+
+
+def _questions_about(approvals, message_id: str) -> list:
+    return [
+        request
+        for request in approvals.list_pending()
+        if request.metadata.get(BOUND_MESSAGE) == message_id
+    ]
+
+
+class _AsksFromAStaleRead(OpportunityService):
+    """A second worker whose read of the message predates the first one's claim.
+
+    Overriding the read is how an interleaving is written down. Both workers pass
+    the same checks against the same draft — which is the situation — and what
+    has to hold is that only one of them ever creates a question.
+    """
+
+    def _as_persisted(self, message):
+        return self.snapshot
+
+
+class _ClosesFromAStaleRead(OpportunityService):
+    """A worker whose read of the message predates a send recorded elsewhere.
+
+    Same shape, the other direction: the refusal was decided against a row that
+    was still open, and by the time it is written the message has gone out.
+    """
+
+    def _message_asked_about(self, approval):
+        return self.snapshot
 
 
 class TestRealApprovalService:
@@ -220,16 +295,327 @@ class TestRefusalsLeaveATrace:
         assert PipelineEventKind.SEND_FAILED in [event.kind for event in service.events]
 
 
+class TestAskingClaimsTheMessage:
+    """One draft, one question, and the row says so.
+
+    `request_approval` used to create the request and leave the message at
+    `DRAFT`, which `outreach.unreviewed` reports as a draft nobody has been asked
+    about — and the obvious response to that listing is to ask a second person.
+    """
+
+    def test_asking_moves_the_row_and_names_the_request_on_it(self) -> None:
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        assert _stored(repository, prepared.message).status is OutreachStatus.DRAFT
+
+        request = service.request_approval(prepared)
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL
+        assert row.approval_id == request.id
+        assert request.metadata[BOUND_MESSAGE] == row.id, (
+            "the approval must name the row it was raised about, or a refusal "
+            "arriving later has nothing to bind to"
+        )
+
+    def test_two_workers_on_one_draft_raise_exactly_one_question(self) -> None:
+        """The claim is taken before the approval exists, so the loser never
+        creates one.
+
+        Asking first and claiming afterwards lets both workers pass their checks
+        and both call the approval service; whichever loses the write is then a
+        pending request with nothing pointing at it, which no later pass can find
+        and no person can clear.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        draft = _stored(repository, prepared.message)
+
+        first = service.request_approval(prepared)
+
+        second = _AsksFromAStaleRead(
+            detectors=service.detectors, gate=service.gate, outreach=service.outreach
+        )
+        second.repository = repository
+        second.snapshot = draft
+
+        with pytest.raises(OutreachNotApproved, match="no longer the draft"):
+            second.request_approval(replace(prepared, message=draft))
+
+        assert [q.id for q in _questions_about(runtime.approval_service, draft.id)] == [
+            first.id
+        ], "the second worker created a question nobody can reach from the message"
+        assert _stored(repository, draft).approval_id == first.id
+
+    def test_a_message_that_already_records_a_decision_is_not_asked_about_again(
+        self,
+    ) -> None:
+        """`infra/approve_send.py` writes these rows too, and an operator runs it
+        out of this process. Asking again would move a decision they took back to
+        awaiting a question they already answered."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        repository.save_message(
+            prepared.message.model_copy(
+                update={
+                    "status": OutreachStatus.APPROVED_FOR_MANUAL_SEND,
+                    "approved_fingerprint": prepared.proposal.fingerprint,
+                }
+            )
+        )
+
+        with pytest.raises(OutreachNotApproved, match="already records"):
+            service.request_approval(prepared)
+
+        assert not _questions_about(runtime.approval_service, prepared.message.id)
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.APPROVED_FOR_MANUAL_SEND
+        assert row.approved_fingerprint == prepared.proposal.fingerprint
+
+    def test_a_message_already_under_a_request_is_not_put_to_a_second_person(
+        self,
+    ) -> None:
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        first = service.request_approval(prepared)
+
+        with pytest.raises(OutreachNotApproved, match="already raised under approval"):
+            service.request_approval(prepared)
+
+        assert [q.id for q in _questions_about(runtime.approval_service, prepared.message.id)] == [
+            first.id
+        ]
+
+
+class TestTheAnswerReachesTheMessage:
+    """The other half, and the one that decays quietly.
+
+    Nothing decides an outreach approval by calling into this package: the
+    customer endpoint calls `ApprovalService.reject` directly and stops there. So
+    the write-back is exercised here the same way — through the approval service
+    — and never by calling `record_decision`, which would prove only that the
+    method works.
+    """
+
+    def test_the_service_watches_the_approvals_it_asks_through(self) -> None:
+        runtime = create_runtime()
+        service, _ = _durable(runtime.approval_service)
+        assert service.watching
+
+    def test_an_approval_service_with_no_bus_is_reported_as_unwatched(self) -> None:
+        """Honest rather than optimistic. Most doubles in these tests have no
+        bus, and a service that claimed to be watching one would make every
+        write-back look wired."""
+        assert not _service(RecordingChannel(), None).watching
+
+    def test_a_refusal_through_the_approval_service_closes_the_message(self) -> None:
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+
+        runtime.approval_service.reject(request.id, actor="ayoub", comment="not this one")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED
+        assert row.approval_id == request.id
+        assert row.detail == FORECLOSED[ApprovalState.REJECTED]
+
+    def test_a_cancelled_request_is_not_recorded_as_a_person_refusing(self) -> None:
+        """A cancellation and a refusal both stop the send and only one is a
+        decision somebody took. "rejected by approver" on a cancellation puts
+        words in the mouth of a person who never spoke."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+
+        runtime.approval_service.cancel(request.id, actor="ayoub", comment="withdrawn")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED
+        assert row.detail == FORECLOSED[ApprovalState.CANCELLED]
+        assert row.detail != FORECLOSED[ApprovalState.REJECTED]
+
+    def test_an_approval_elsewhere_in_atlas_does_not_reach_an_outreach_message(
+        self,
+    ) -> None:
+        """The bus carries every approval in Atlas. A media publication being
+        refused must not arrive at a write-back that would go looking for a
+        message it never named."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+
+        unrelated = runtime.approval_service.create_request(
+            title="Publish a video",
+            context=ApprovalContext(action="media.publish", requested_by="atlas"),
+            metadata={"business_id": prepared.message.business_id},
+        )
+        runtime.approval_service.reject(unrelated.id, actor="ayoub")
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL
+        assert row.approval_id == request.id
+
+    def test_a_refusal_never_overwrites_a_send_recorded_in_between(self) -> None:
+        """The whole point of the guard. The refusal was decided against a row
+        that was open; by the time it is written the message has gone out, and an
+        unconditional save would leave Qevik with no record that it contacted a
+        stranger."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        asked = _stored(repository, prepared.message)
+
+        moment = datetime.now(UTC)
+        repository.save_message(
+            asked.model_copy(
+                update={
+                    "status": OutreachStatus.SENT,
+                    "sent_at": moment,
+                    "provider_message_id": "provider-1",
+                }
+            )
+        )
+        rejected = runtime.approval_service.reject(request.id, actor="ayoub")
+
+        stale = _ClosesFromAStaleRead(
+            detectors=service.detectors, gate=service.gate, outreach=service.outreach
+        )
+        stale.repository = repository
+        stale.snapshot = asked
+
+        assert stale.record_decision(rejected) is None
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.SENT
+        assert row.provider_message_id == "provider-1"
+        assert row.sent_at is not None
+        assert PipelineEventKind.REJECTED not in [event.kind for event in stale.events], (
+            "a refusal that landed nowhere must not be reported on the timeline as "
+            "though it had"
+        )
+
+    def test_a_message_that_already_went_out_is_passed_over(self) -> None:
+        """The same protection one step earlier, through the ordinary path: a row
+        recording a send is not a row with an open question on it."""
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        asked = _stored(repository, prepared.message)
+        repository.save_message(
+            asked.model_copy(
+                update={"status": OutreachStatus.SENT, "sent_at": datetime.now(UTC)}
+            )
+        )
+
+        rejected = runtime.approval_service.reject(request.id, actor="ayoub")
+
+        assert service.record_decision(rejected) is None
+        assert _stored(repository, prepared.message).status is OutreachStatus.SENT
+
+    def test_a_suppressed_send_closes_the_row_rather_than_leaving_it_awaiting(
+        self,
+    ) -> None:
+        """A person said yes and a guard said no anyway. The question is answered
+        either way, and a row left at `AWAITING_APPROVAL` goes on telling the
+        review queue that somebody still owes a decision they have given."""
+        runtime = create_runtime()
+        service, repository = _durable(
+            runtime.approval_service,
+            suppression=SuppressionList(["hello@alnoor.test"]),
+        )
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+
+        with pytest.raises(OutreachRefused, match="suppression list"):
+            service.send(prepared, approved, EXAMPLE_PROFILE)
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.SUPPRESSED
+        assert row.approval_id == request.id
+        assert row.approved_fingerprint == prepared.proposal.fingerprint, (
+            "the refusal must keep what the approval established, or it reads as a "
+            "row nobody ever decided"
+        )
+
+
+class TestARefusalMustBeAboutTheseWords:
+    """`authorise` proves the approval describes the message by re-deriving the
+    fingerprint. A refusal has no fingerprint, so it has to bind on an identifier
+    — and on nothing weaker."""
+
+    def test_matching_business_proposal_recipient_and_channel_do_not_bind(self) -> None:
+        """The four together look like they pick out one message and they do not:
+        `infra/outreach_drafts.py` writes a WhatsApp draft and an email draft from
+        one proposal, and a draft rewritten after a typo keeps all four. Accepting
+        them would close the wrong row and leave the refused one in the queue."""
+        runtime = create_runtime()
+        service, _ = _durable(runtime.approval_service)
+        business, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        rejected = runtime.approval_service.reject(request.id, actor="ayoub")
+
+        twin = OutreachMessage(
+            proposal_id=prepared.proposal.id,
+            business_id=business.id,
+            channel=prepared.message.channel,
+            recipient=prepared.message.recipient,
+            subject=prepared.proposal.subject,
+            body=prepared.proposal.body,
+        )
+
+        with pytest.raises(OutreachNotApproved, match="was raised about message"):
+            service.gate.reject(twin, rejected)
+
+    def test_a_question_nobody_has_answered_cannot_close_a_message(self) -> None:
+        runtime = create_runtime()
+        service, _ = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+
+        with pytest.raises(OutreachNotApproved, match="nobody has decided"):
+            service.gate.reject(prepared.message, request)
+
+    def test_an_approved_request_is_not_recorded_as_a_refusal(self) -> None:
+        """The only door onto `APPROVED` is `authorise`, because it is the only
+        one that re-derives the fingerprint first."""
+        runtime = create_runtime()
+        service, _ = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+        approved = runtime.approval_service.approve(request.id, actor="ayoub")
+
+        with pytest.raises(OutreachNotApproved, match="record that with authorise"):
+            service.gate.reject(prepared.message, approved)
+
+    def test_an_unforeclosed_approval_writes_nothing_back(self) -> None:
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        request = service.request_approval(prepared)
+
+        with pytest.raises(OutreachNotApproved, match="has not foreclosed"):
+            service.record_decision(request)
+
+        assert _stored(repository, prepared.message).status is OutreachStatus.AWAITING_APPROVAL
+
+
 class TestDurableRun:
     def test_a_run_with_a_repository_survives_the_process(self) -> None:
         """Without persistence the funnel resets and the cooldown forgets who
         has been contacted — which is a no-spam guarantee, not a nicety."""
-        from atlas_kernel.opportunity.repository import OpportunityRepository
-
         runtime = create_runtime()
-        repository = OpportunityRepository()
-        service = _service(RecordingChannel(), runtime.approval_service)
-        service.repository = repository
+        service, _ = _durable(runtime.approval_service)
 
         business, opportunity, prepared = _prepared(service)
         request = service.request_approval(prepared)
