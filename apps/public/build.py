@@ -333,6 +333,28 @@ for _path in PRIMARY:
     _ar = "/ar/" if _path == "/" else "/ar" + _path
     PAGES[_ar] = (copy_ar.NAV[_path], *copy_ar.META[_path])
 
+#: Pages that are built and served but are not part of the site.
+#:
+#: The 404 page is a real page — same shell, same header, same footer, same
+#: phone number — because the alternative is a bare server error on a site whose
+#: whole argument is that it checks its own work. But it is not information
+#: architecture: it is kept out of the sitemap, out of the navigation, out of the
+#: hreflang pairs and marked `noindex`, because a search result reading "Page not
+#: found" is worse than no result at all.
+#:
+#: It is a `.html` file rather than a `/404/` directory on purpose. Caddy's
+#: `handle_errors` rewrites to a path and serves it; the page must exist at
+#: exactly the path the web server names.
+NOINDEX = ("/404.html", "/ar/404.html")
+
+PAGES["/404.html"] = (
+    "Not found",
+    "Page not found — Qevik",
+    "That address does not exist on qevik.ai. Here is everything the site has, "
+    "and a direct line to a person if you cannot find what you came for.",
+)
+PAGES["/ar/404.html"] = ("غير موجودة", *copy_ar.META["/404.html"])
+
 
 def counterpart(path: str) -> str:
     """The same page in the other language."""
@@ -558,7 +580,11 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
     # Arabic counterpart, so it must not advertise one — an hreflang pointing at
     # a 404 is worse than none, and a language switch that breaks is the first
     # thing an Arabic-speaking visitor tests.
-    bilingual = path in PRIMARY or arabic
+    #
+    # The 404 pages are excluded even though both languages have one: hreflang
+    # is a statement to a search engine about pages it should index, and these
+    # are the two pages it must not.
+    bilingual = (path in PRIMARY or arabic) and path not in NOINDEX
     if bilingual:
         en_href = f"{SITE}{other if arabic else path}"
         ar_href = f"{SITE}{path if arabic else other}"
@@ -584,6 +610,13 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
         links.append(f'<a href="{item}"{mark}>{PAGES[item][0]}</a>')
     nav = "".join(links)
 
+    # The web server answers this page with a 404 status, which is what a
+    # crawler acts on. The meta tag is the belt to that braces: it also covers
+    # the case of somebody reaching /404.html directly, where the status is 200.
+    robots_meta = (
+        '\n<meta name="robots" content="noindex">' if path in NOINDEX else ""
+    )
+
     year = TODAY[:4]
 
     return f"""<!doctype html>
@@ -593,7 +626,7 @@ def shell(path: str, body: str, *, og_type: str = "website", extra_head: str = "
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{description}">
-<link rel="canonical" href="{canonical}">
+<link rel="canonical" href="{canonical}">{robots_meta}
 {alternates}
 <meta property="og:type" content="{og_type}">
 <meta property="og:url" content="{canonical}">
@@ -1197,6 +1230,86 @@ def contact() -> str:
 """
 
 
+#: What the 404 page offers instead. The five primary routes, each with the one
+#: line that tells someone whether it is the page they meant — a bare list of
+#: nav labels is the same dead end in a different font.
+NOT_FOUND_LINKS = (
+    ("/", "Home", "What Qevik builds, who it is for, and how the process works."),
+    ("/services/", "Services", "Websites, applications, storefronts and automation — and their limits."),
+    ("/work/", "Work", "Live samples you can open and use right now."),
+    ("/about/", "About", "Who builds it, and the licensed company behind the brand."),
+    ("/contact/", "Contact", "WhatsApp and a phone number that reach a person directly."),
+)
+
+
+def not_found() -> str:
+    """The page a wrong address gets.
+
+    Built here, from the same shell as every other page, rather than left to the
+    web server — so it carries the navigation, the phone number and the
+    operating-entity line, and somebody who mistyped a URL is one tap from the
+    page they wanted instead of looking at a stack trace.
+
+    Short on purpose. Whoever is reading it wanted something else, so the useful
+    content is the list of places they might have meant.
+    """
+    items = "".join(
+        f'<li><a href="{href}">{label}</a> — {gloss}</li>'
+        for href, label, gloss in NOT_FOUND_LINKS
+    )
+    return f"""
+<section class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">404</p>
+    <h1>That page is not here</h1>
+    <p class="lead">The address you opened does not exist on this site. It was either mistyped,
+      or it is a link from somewhere pointing at a page we never had.</p>
+    <div class="cta-row">
+      <a class="btn primary" href="/">Go to the home page</a>
+      <a class="btn" href="/work/">See the work</a>
+      <a class="btn ghost" href="https://wa.me/{PHONE_WA}" rel="noopener">Ask on WhatsApp</a>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap narrow">
+    <h2>Everything on this site</h2>
+    <ul class="ticks plain">{items}</ul>
+    <p class="micro">Still not it? Call <a href="tel:{PHONE_TEL}">{PHONE_DISPLAY}</a> or send a
+      <a href="https://wa.me/{PHONE_WA}" rel="noopener">WhatsApp</a> and you will get the right
+      link back from a person.</p>
+  </div>
+</section>
+"""
+
+
+def ar_not_found() -> str:
+    c = copy_ar.NOT_FOUND
+    items = "".join(
+        f'<li><a href="{href}">{label}</a> — {gloss}</li>' for href, label, gloss in c["items"]
+    )
+    return f"""
+<section class="page-head"><div class="wrap">
+  <p class="eyebrow">{c["eyebrow"]}</p>
+  <h1>{c["h1"]}</h1>
+  <p class="lead">{c["lead"]}</p>
+  <div class="cta-row">
+    <a class="btn primary" href="/ar/">{c["cta_home"]}</a>
+    <a class="btn" href="/ar/work/">{c["cta_work"]}</a>
+    <a class="btn ghost" href="https://wa.me/{PHONE_WA}" rel="noopener">{c["cta_wa"]}</a>
+  </div>
+</div></section>
+
+<section class="band"><div class="wrap narrow">
+  <h2>{c["list_h"]}</h2>
+  <ul class="ticks plain">{items}</ul>
+  <p class="micro">{c["note"]}
+     <a href="tel:{PHONE_TEL}" dir="ltr">{PHONE_DISPLAY}</a></p>
+</div></section>
+"""
+
+
 def organization_schema() -> str:
     """One JSON-LD block, on the home page only.
 
@@ -1493,6 +1606,8 @@ BUILDERS = {
     "/ar/work/": (ar_work, ""),
     "/ar/about/": (ar_about, ""),
     "/ar/contact/": (ar_contact, ""),
+    "/404.html": (not_found, ""),
+    "/ar/404.html": (ar_not_found, ""),
 }
 
 
@@ -1511,6 +1626,7 @@ def sitemap() -> str:
         f"  <url><loc>{SITE}{p}</loc><lastmod>{TODAY}</lastmod>"
         f"<priority>{'1.0' if p == '/' else '0.8'}</priority></url>"
         for p in PAGES
+        if p not in NOINDEX
     )
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}\n</urlset>\n'
 
@@ -1598,7 +1714,16 @@ def main(argv: list[str] | None = None) -> int:
         # Every /assets/ URL the page actually emits, so a reference to a file
         # the build never copied fails here instead of on the live site.
         referenced |= {m for m in re.findall(r"/assets/([\w.\-]+)", html)}
-        target = out / path.strip("/") / "index.html" if path != "/" else out / "index.html"
+        # A path ending in "/" is a directory whose index.html the web server
+        # resolves; anything else is a file that must land at exactly the path
+        # the server names — /404.html is rewritten to by `handle_errors`, so a
+        # directory called "404.html" would 404 the 404.
+        if path == "/":
+            target = out / "index.html"
+        elif path.endswith("/"):
+            target = out / path.strip("/") / "index.html"
+        else:
+            target = out / path.lstrip("/")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(html, encoding="utf-8")
         print(f"  {path:<12} {len(html):>6} bytes")

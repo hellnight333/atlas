@@ -56,12 +56,77 @@
 }
 
 # --- public marketing site --------------------------------------------------
+#
+# This site is NOT a single-page application and must never be served as one.
+# `apps/public/build.py` writes one directory per page — services/index.html,
+# work/apex/index.html, ar/contact/index.html — plus a sitemap listing every
+# one of them.
+#
+# It was served as one. `try_files {path} /index.html` is the SPA fallback, and
+# `try_files` tests for a *file*: a request for `/services/` is a directory, so
+# it missed every candidate and was rewritten to the homepage. Measured on the
+# live site 2026-09-01 — `/services/` returned 25,331 bytes titled "Qevik —
+# digital products built around your business" while
+# `/srv/qevik-public/services/index.html` was a real 7,362-byte page titled
+# "Services — Qevik". The same for /about/, /contact/, /work/, all seven case
+# studies and the entire Arabic site, and `/nonsense-does-not-exist/` answered
+# HTTP 200 with the homepage. Every navigation link on the site was broken,
+# ~60 KB of written content was unreachable, and the sitemap advertised a dozen
+# URLs that served identical bytes.
+#
+# The fix is to stop rewriting rather than to write a cleverer rewrite:
+# `file_server` resolves a directory to its own `index.html` unaided, and
+# returns a real 404 for what is not there. The `sites.qevik.ai` block below has
+# always relied on exactly that — it is how `/slug/ar/` resolves there.
 qevik.ai {
 	import le
 	import security
 	root * /srv/qevik-public
-	try_files {path} /index.html
 	file_server
+
+	# A URL that is not a page here is a 404, not a 200 carrying the homepage.
+	# The page served is built by the same builder as every other page, so it
+	# arrives with the site's header, navigation, phone number and
+	# operating-entity footer instead of as a bare server error.
+	handle_errors {
+		# The Arabic site is a whole second site under /ar/. Someone who
+		# mistypes a URL there must not be answered in English, left-to-right.
+		#
+		# The expressions are backtick-quoted so each is a single Caddyfile
+		# argument. Unquoted they are three, which older `expression` matchers
+		# reject outright — and a config that fails to parse takes the whole
+		# server down, not just this block.
+		@ar_404 {
+			expression `{err.status_code} == 404`
+			path /ar/*
+		}
+		@404 expression `{err.status_code} == 404`
+
+		handle @ar_404 {
+			rewrite * /ar/404.html
+			# `status` is not optional here. Without it `file_server` answers
+			# 200 and the error page is indexed as a real page — the same lie
+			# the SPA fallback was telling. Needs Caddy >= 2.7; the deploy runs
+			# `caddy validate` before restarting, so an older binary refuses
+			# loudly rather than serving a soft 404.
+			file_server {
+				status 404
+			}
+		}
+		handle @404 {
+			rewrite * /404.html
+			file_server {
+				status 404
+			}
+		}
+		handle {
+			# Anything other than a missing page is unexpected on a directory
+			# of static files. Answer plainly rather than dressing an unknown
+			# failure up as a page somebody designed.
+			respond "{err.status_code} {err.status_text}" {err.status_code}
+		}
+	}
+
 	log {
 		format console
 	}

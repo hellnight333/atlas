@@ -49,6 +49,41 @@ Nothing in §1–§6 of the product direction can be built on top of this: there
 no point designing HOW IT WORKS, FEATURES, INTEGRATIONS or PRICING pages while
 the server cannot serve a second page.
 
+### Status — fixed in the repository, not yet on the host
+
+`infra/qevik-production.Caddyfile` — the file `infra/deploy_console.sh` copies to
+`/etc/caddy/Caddyfile` — no longer carries the SPA fallback. The `qevik.ai` block
+is now `root` + `file_server`, which resolves a directory to its own
+`index.html`, plus a `handle_errors` block that serves a real 404 page with a 404
+status (and the Arabic one under `/ar/`). `apps/public/build.py` builds
+`/404.html` and `/ar/404.html` from the same shell as every other page; both are
+`noindex` and neither is in the sitemap.
+
+There was a third way to be broken, and it was the live one: **nothing in this
+repository had ever written to `/srv/qevik-public`.** `deploy_console.sh` copied
+the Caddyfile and restarted Caddy; the public site had reached the host by some
+other route entirely. Installing the fixed config on its own would have pointed
+`handle_errors` at two files the host has never had, and every unknown URL would
+have answered with a bare file-server error while the deploy exited zero — the
+same shape of failure as the original defect.
+
+So `infra/deploy_public.sh` now builds the site and ships it to the document root
+the Caddyfile declares, refusing if the build is missing any path that Caddyfile
+rewrites to; `deploy_console.sh` runs it **before** installing the config, and
+afterwards asserts at the origin — not through Cloudflare — that `/services/`
+serves its own page, that an unknown URL answers 404 with the built page, and
+that an unknown URL under `/ar/` answers in Arabic.
+
+Guarded by `packages/kernel/tests/test_public_serving.py`, which asserts the
+config is the one that serves a page per URL, that the built artefact satisfies
+it, and that the deploy carries both to the host together — any one of the three
+alone passed while the site was broken.
+
+**The measurements above still describe the live site.** This becomes true in
+production when `infra/deploy_console.sh` runs: the site is published, the
+Caddyfile reaches the host and Caddy is restarted (restart, not reload: the
+admin API is off). Until then §1 remains the state of qevik.ai.
+
 ## 2. What the site actually says today
 
 One page, 1,569 visible words, eight sections: *What Qevik is · Who it is for ·

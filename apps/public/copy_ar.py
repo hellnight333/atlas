@@ -54,6 +54,15 @@ META = {
         "تواصل معنا — Qevik",
         "تحدّث مباشرة مع أيوب سليماني على واتساب أو هاتفياً بخصوص مشروعك الرقمي في دبي.",
     ),
+    # The Arabic site is a second site, not a translation layer over the first,
+    # so a wrong address inside /ar/ is answered in Arabic and right-to-left.
+    # Being dropped into an English error page is the point at which an Arabic
+    # visitor concludes the Arabic site was an afterthought.
+    "/404.html": (
+        "الصفحة غير موجودة — Qevik",
+        "هذا العنوان غير موجود على qevik.ai. في هذه الصفحة كل ما يحتويه الموقع، "
+        "وطريقة مباشرة للوصول إلى إنسان إذا لم تجد ما جئت من أجله.",
+    ),
 }
 
 #: Small strings reused across pages.
@@ -260,4 +269,26 @@ CONTACT = {
     "where_h": "أين نحن",
     "email_note": "لا يوجد بريد إلكتروني معلن بعد — لن نضع عنواناً لا يصل إلى أحد. "
                   "واتساب والهاتف يصلان مباشرة.",
+}
+
+#: The 404 page. Short on purpose: whoever is reading it wanted something else,
+#: so the useful content is the list of places they might have meant and a way
+#: to reach a person, not an apology.
+NOT_FOUND = {
+    "eyebrow": "٤٠٤",
+    "h1": "هذه الصفحة غير موجودة",
+    "lead": "العنوان الذي فتحته لا وجود له على هذا الموقع. ربما كُتب بشكل خاطئ، أو "
+            "جاء من رابط يشير إلى صفحة لم تكن لدينا يوماً.",
+    "cta_home": "العودة إلى الرئيسية",
+    "cta_work": "شاهد أعمالنا",
+    "cta_wa": "اسأل على واتساب",
+    "list_h": "كل ما في هذا الموقع",
+    "items": (
+        ("/ar/", "الرئيسية", "ما تبنيه Qevik، ولمن، وكيف تعمل العملية."),
+        ("/ar/services/", "الخدمات", "المواقع والتطبيقات والمتاجر والأتمتة، وحدودها."),
+        ("/ar/work/", "أعمالنا", "نماذج حيّة تفتحها وتستخدمها الآن."),
+        ("/ar/about/", "من نحن", "من يبني، والشركة المرخّصة التي تقف خلف العلامة."),
+        ("/ar/contact/", "تواصل معنا", "واتساب وهاتف يصلان إلى شخص مباشرة."),
+    ),
+    "note": "ما زلت لا تجد ما تبحث عنه؟ اتصل بنا أو راسلنا على واتساب وسنرسل لك الرابط الصحيح.",
 }

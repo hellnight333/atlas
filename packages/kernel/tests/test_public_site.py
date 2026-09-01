@@ -21,7 +21,16 @@ import pytest
 PUBLIC = Path(__file__).resolve().parents[3] / "apps" / "public"
 sys.path.insert(0, str(PUBLIC))
 
-from build import BUILDERS, FORBIDDEN, PAGES, check, robots, shell, sitemap  # noqa: E402
+from build import (  # noqa: E402
+    BUILDERS,
+    FORBIDDEN,
+    NOINDEX,
+    PAGES,
+    check,
+    robots,
+    shell,
+    sitemap,
+)
 
 
 @pytest.fixture(scope="module")
@@ -149,8 +158,21 @@ def test_the_only_statistics_are_the_audit_and_they_are_anonymous(pages) -> None
 
 
 def test_every_page_in_the_sitemap_exists_and_vice_versa() -> None:
+    """Minus the error pages, which are built and served but never advertised."""
     listed = set(re.findall(r"<loc>https://qevik\.ai(/[^<]*)</loc>", sitemap()))
-    assert listed == set(PAGES), "sitemap and PAGES disagree"
+    assert listed == set(PAGES) - set(NOINDEX), "sitemap and PAGES disagree"
+
+
+def test_the_error_pages_are_built_from_the_same_shell_as_the_rest(pages) -> None:
+    """A 404 is the page most likely to be somebody's first sight of the site.
+
+    It is built here rather than left to the web server so it arrives with the
+    navigation, the phone number and the operating-entity line — see
+    `test_public_serving.py` for the serving half of the same fix.
+    """
+    for path in NOINDEX:
+        assert path in pages, f"{path} was not built"
+        assert '<meta name="robots" content="noindex">' in pages[path], path
 
 
 def test_robots_allows_the_site_and_points_at_the_sitemap() -> None:

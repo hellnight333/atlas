@@ -6,7 +6,7 @@ here and nothing runs it.
 | App | Status | Evidence |
 |---|---|---|
 | `control` | **live** | The Qevik operator console at app.qevik.ai. Shipped by `infra/deploy_control.sh` and `infra/deploy_console.sh` to `/srv/qevik-control`, served by Caddy over TLS. |
-| `public` | **live** | The public site and published samples. |
+| `public` | **live** | qevik.ai. Built by `apps/public/build.py` and shipped by `infra/deploy_public.sh` to `/srv/qevik-public`, which `infra/deploy_console.sh` runs before it installs the Caddyfile that serves it. |
 | `samples` | **live** | Portfolio samples, frozen at 13 — see `00_PROJECT_STATE.md`. |
 | `desktop` | **parked** | Tauri shell, last touched 2026-08-04. No deploy path ships it. Zero references to Qevik or to any control-plane endpoint in its source. Its packaging tests still pass in the gate. |
 | `web` | **parked** | Next.js surface, last touched 2026-07-31. Same: no deploy path, no Qevik wiring. |
