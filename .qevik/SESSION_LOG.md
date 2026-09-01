@@ -443,3 +443,56 @@ not. That distinction is better than the one it replaced.
 ### Next
 Overnight mode is not safe yet — see the report. The first thing to fix is the
 turn limit, which is what both runs actually died on.
+
+## Cleaning main, and what four more real runs found
+
+### Main integrity
+
+`t-9c7566206741` had three commits on `main` that never came back clean —
+`aeb19c1` and `d99e639`, which the reviewer raised two and three blocking
+findings against, and the round-three portion of `199117e`, which nothing
+reviewed. Established from `git log` over the range rather than assumed: the
+task's five files were touched by nothing else since its base, so the revert is
+exact. The work is preserved on `devloop/t-9c7566206741`.
+
+Main protection is now structural in two places. Staging is explicit — `git
+add -A` is what absorbed another task's edits — and `_ship` re-reads the stored
+findings for the round that actually ran, refusing to merge without a clean
+one, **including when nothing reviewed the task at all**.
+
+### The slice ran three full rounds and ended CONTESTED
+
+Build → gate → review → fix → gate → review → fix → gate → review, three
+rounds, two blocking findings still standing. `main` is untouched. That is the
+guard working, and it is not a completed slice: **no task has yet been carried
+to DONE, deployed and production-verified by the loop.**
+
+### Four defects, all found by running it
+
+- **The first changed file lost its first character.** `git status --porcelain`
+  is column-aligned and `_git` strips the combined output, removing the leading
+  space from the first line only. `.qevik/CAPABILITY_LEDGER.md` became
+  `qevik/CAPABILITY_LEDGER.md`, git could not stage a path that does not exist,
+  and the file stayed dirty through the commit — which `clean_tree` reported as
+  the reviewer writing to the tree. **Three runs were spent isolating a
+  reviewer that had never touched anything.** The gate was right; the
+  conclusion drawn from it was wrong.
+- **`sandbox_mode="read-only"` is not honoured** by `codex exec review`. The
+  review worktree stays regardless: a reviewer that cannot reach the tree is
+  worth having even when it was not the culprit.
+- **The review unit was computed before the checkout**, so a resumed branch was
+  diffed against a `main` it predated — presenting unrelated commits as
+  deletions. `merge-base` answers it, after merging `main` in.
+- **A DECISION with no options can never be answered.** Refused at creation
+  now, and the driver raises a QUESTION when it cannot enumerate the choices —
+  which is what an agent stopped at a boundary actually knows.
+
+The reviewer also raised a blocking finding against the loop's own worktree
+change: finding paths pointed into the temporary checkout. Fixed.
+
+### The human boundary is proven
+
+A parked task, a question in the one inbox, a casual approval refused because a
+question does not accept one, an answer in the owner's own words, and the task
+runnable again — with nothing copied by hand. See the report; the flow is
+`scratchpad/human_proof.py`.
