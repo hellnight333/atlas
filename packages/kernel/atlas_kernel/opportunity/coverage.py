@@ -25,7 +25,8 @@ verification already revisits these, and duplicating it to produce a number
 would spend somebody else's bandwidth to make a report look complete.
 
 `Backlog` answers the question freshness raises and cannot settle on its own:
-whether an old observation is a queue position or a pass that stopped.
+whether an old observation is a queue position, a pass that stopped, or a
+record the rotation is never going to reach at all.
 """
 
 from __future__ import annotations
@@ -261,6 +262,23 @@ class Backlog:
     #: a count the timeline already settled — but a guard worth having is worth
     #: not arguing with over a name.
     unread_after_a_turn: int = 0
+    #: Stale records the rotation will never **select**, so it can never even
+    #: fail to read them. The other half of the same question, and the half the
+    #: ordering hides completely: the count above is at least evidence of a
+    #: turn, and these have no turn to be evidence of.
+    #:
+    #: Two things put a business here. One night's work is one *address*, so the
+    #: rotation de-duplicates by website and only the earliest business recorded
+    #: against an address is ever fetched — a second business on the same
+    #: website is never visited again after whatever first observed it. And an
+    #: address the fetcher is never handed — no scheme, `mailto:`, or removed
+    #: since the reading was taken — is not in the rotation at all.
+    #:
+    #: Both keep an observation for ever, both count in `older_than_a_week`, and
+    #: without this they read as queue positions in a sweep that will never
+    #: reach them. That is the one sentence this surface exists to stop being
+    #: said: wait, and it will come good.
+    never_in_the_rotation: int = 0
     last_observation: str = ""
     last_turn: str = ""
 
@@ -297,22 +315,37 @@ class Backlog:
                 and not self.the_pass_is_running)
 
     @property
+    def beyond_the_rotations_reach(self) -> int:
+        """Stale records the sweep cannot clear, however it fails to reach them.
+
+        The two counts are disjoint by construction — one is a business the
+        rotation selected and could not read, the other is a business it will
+        never select — so they add rather than overlap, and the sum is the
+        number an operator actually needs: how much of the age is not a queue.
+        """
+        return self.unread_after_a_turn + self.never_in_the_rotation
+
+    @property
     def waiting_will_not_clear_these(self) -> bool:
         """Whether some of the age is beyond the rotation's power to fix.
 
-        The ordering promises every site a turn; it cannot promise a reading.
+        The ordering promises every site a turn; it cannot promise a reading,
+        and it never promised anything at all to a site it does not hold.
+
         A site whose server refused, timed out, returned something that is not
         HTML, or was cut off mid-body takes its turn and is deliberately not
         re-observed — auditing what came back would put an invented absence in
-        front of a business. Those sites cycle for ever, and telling an
-        operator to wait for the sweep would be a promise nothing will keep.
+        front of a business. A business whose address another business already
+        holds, or whose address the fetcher is never handed, is not visited even
+        that far. Both cycle for ever, and telling an operator to wait for the
+        sweep would be a promise nothing will keep.
 
         Kept out of `the_cadence_explains_the_age` on purpose: this is a
         finding about reach, which `Coverage` already counts and names as ours
         or theirs. Two numbers about the same sites saying it twice would make
         the more urgent one harder to see.
         """
-        return self.unread_after_a_turn > 0
+        return self.beyond_the_rotations_reach > 0
 
     @property
     def the_cadence_explains_the_age(self) -> bool:
@@ -339,6 +372,8 @@ class Backlog:
             "the_pass_ran_without_observing": self.the_pass_ran_without_observing,
             "the_cadence_explains_the_age": self.the_cadence_explains_the_age,
             "unread_after_a_turn": self.unread_after_a_turn,
+            "never_in_the_rotation": self.never_in_the_rotation,
+            "beyond_the_rotations_reach": self.beyond_the_rotations_reach,
             "waiting_will_not_clear_these": self.waiting_will_not_clear_these,
             "nights_since_an_observation": self.nights_since_an_observation,
             "nights_since_a_turn": self.nights_since_a_turn,
@@ -353,10 +388,15 @@ class Backlog:
                         "That does not account for the age on the timeline: "
                         "either the pass has stopped or it is not reaching "
                         "these sites.")
-                     + (f" {self.unread_after_a_turn} of them have already had "
-                        "a turn since their last reading and were not "
-                        "re-observed, so waiting for the sweep will not clear "
-                        "those — their reach is the finding, not the cadence."
+                     + (f" {self.beyond_the_rotations_reach} of them are "
+                        "beyond the rotation's reach, so waiting for the sweep "
+                        "will not clear those — their reach is the finding, "
+                        f"not the cadence: {self.unread_after_a_turn} have "
+                        "already had a turn since their last reading and were "
+                        f"not re-observed, and {self.never_in_the_rotation} "
+                        "are not in the rotation at all, because the address "
+                        "is one it cannot fetch or one another business "
+                        "already holds."
                         if self.waiting_will_not_clear_these else "")),
         }
 
@@ -364,18 +404,23 @@ class Backlog:
 def backlog(*, sites: int, older_than_a_week: int, per_night: int,
             nights_since_an_observation: float | None = None,
             nights_since_a_turn: float | None = None,
-            unread_after_a_turn: int = 0,
+            unread_after_a_turn: int = 0, never_in_the_rotation: int = 0,
             last_observation: str = "", last_turn: str = "") -> Backlog:
     """The backlog, from counts and two timestamps the repository has."""
+    # Never more than the population they are subsets of, and never more than
+    # it between them: a part larger than its whole is a reader people stop
+    # trusting, and the two are read from one query and clamped as one number
+    # because they are shown added together.
+    stale = max(0, older_than_a_week)
+    unread = min(max(0, unread_after_a_turn), stale)
     return Backlog(
-        sites=max(0, sites), older_than_a_week=max(0, older_than_a_week),
+        sites=max(0, sites), older_than_a_week=stale,
         per_night=per_night,
         nights_since_an_observation=nights_since_an_observation,
         nights_since_a_turn=nights_since_a_turn,
-        # Never more than the population it is a subset of: a count larger
-        # than the number it explains part of is a reader people stop trusting.
-        unread_after_a_turn=min(max(0, unread_after_a_turn),
-                                max(0, older_than_a_week)),
+        unread_after_a_turn=unread,
+        never_in_the_rotation=min(max(0, never_in_the_rotation),
+                                  stale - unread),
         last_observation=last_observation, last_turn=last_turn)
 
 

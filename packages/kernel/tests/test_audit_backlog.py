@@ -26,8 +26,10 @@ until the scheme filter moved into the query it could still spend one.
 The pure arithmetic is tested pure, because every boolean above has to hold for
 populations this database will never contain. The database tests assert the
 things only the database can settle: that the two numbers standing beside each
-other on one screen are the same number, that a turn is not an observation, and
-that whose reading it was decides whether it counts as the pass being alive.
+other on one screen are the same number, that a turn is not an observation,
+that whose reading it was decides whether it counts as the pass being alive, and
+that a record the rotation does not contain is reported as unreachable rather
+than as a turn that is coming.
 """
 
 from __future__ import annotations
@@ -233,6 +235,54 @@ def test_a_turn_the_rotation_already_gave_is_not_a_queue_position():
     # handed: a subset bigger than its set is a reader people stop believing.
     assert backlog(**{**POPULATION, "older_than_a_week": 5,
                       "unread_after_a_turn": 900}).unread_after_a_turn == 5
+
+
+def test_a_record_the_rotation_will_never_select_is_not_a_queue_position():
+    """The other half of "does the refresh path reach them", and the worse half.
+
+    A turn that produced no reading is at least evidence of a turn. These have
+    none and never will: one night's work is one *address*, so only the earliest
+    business recorded against a website is ever fetched, and an address the
+    fetcher is never handed is not in the sweep at all. Both keep an observation
+    for ever, both count in `older_than_a_week`, and the ordering says of every
+    stale record alike that its turn is coming.
+    """
+    plain = backlog(**POPULATION)
+    assert plain.never_in_the_rotation == 0
+    assert plain.beyond_the_rotations_reach == 0
+    assert not plain.waiting_will_not_clear_these
+
+    orphaned = backlog(**{**POPULATION, "never_in_the_rotation": 7})
+    assert orphaned.waiting_will_not_clear_these, (
+        "a record no turn is ever coming to was left inside the queue, which "
+        "is the one sentence this surface exists to stop being said")
+    assert orphaned.beyond_the_rotations_reach == 7
+    assert "not in the rotation at all" in orphaned.summary()["note"]
+    # A finding about reach, like the count beside it, and kept out of the
+    # cadence verdict for the same reason: `Coverage` already names reach.
+    assert orphaned.the_cadence_explains_the_age
+
+    # Disjoint in the query, so they add rather than overlap.
+    both = backlog(**{**POPULATION, "unread_after_a_turn": 6,
+                      "never_in_the_rotation": 4})
+    assert both.beyond_the_rotations_reach == 10
+    assert "6 have already had a turn" in both.summary()["note"]
+    assert "4 are not in the rotation" in both.summary()["note"]
+
+    # And never more than the population between them: two parts that sum to
+    # more than their whole is the same broken reader, arrived at by addition.
+    crowded = backlog(**{**POPULATION, "older_than_a_week": 5,
+                         "unread_after_a_turn": 4,
+                         "never_in_the_rotation": 900})
+    assert crowded.beyond_the_rotations_reach == 5
+    assert crowded.never_in_the_rotation == 1
+
+    # And it is genuinely on the page, beside the count it is added to.
+    console = Path("apps/control/src/index.html").read_text(encoding="utf-8")
+    assert "b.never_in_the_rotation" in console and \
+           "b.beyond_the_rotations_reach" in console, (
+        "records the sweep will never select are counted and never shown, so "
+        "an operator is told to wait for a turn that is not coming")
 
 
 def test_never_observed_is_not_an_old_observation():
@@ -670,6 +720,110 @@ def test_a_site_the_sweep_reached_and_could_not_read_is_counted(repo):
                before["unread_after_a_turn"]
     finally:
         _clean(business.id)
+
+
+def test_a_second_business_on_one_address_is_never_reached_again(repo):
+    """The rotation fetches an address, and only one business holds it.
+
+    Two businesses on one website is a single night's work, which is why
+    `sites` counts addresses — and it means the *other* business is fetched by
+    nothing. It is never turned, so it can never be a turn that read nothing;
+    it simply keeps whatever observation it has for ever while the ordering
+    says its turn is coming.
+
+    Asserted against the rotation's own answer rather than against a second
+    opinion about which of the two it holds: the count and the query read one
+    definition, and this fails if they ever stop doing so.
+    """
+    shared = f"https://{uuid4().hex}.shared.test"
+    # A first_seen_at older than anything else in the suite, so the pair sits
+    # at the head of the never-verified queue and which of them the rotation
+    # holds does not depend on the order the tests happened to run in.
+    head = datetime(1970, 1, 5, tzinfo=UTC)
+    held = repo.save_business(Business(
+        name="Al Waha Dental", geography="United Arab Emirates",
+        website=shared, sources=["seed"], first_seen_at=head))
+    orphaned = repo.save_business(Business(
+        name="Al Waha Dental", geography="United Arab Emirates",
+        website=shared, sources=["seed"],
+        first_seen_at=head + timedelta(days=1)))
+    try:
+        before = repo.audit_backlog()
+        stale = datetime.now(UTC) - timedelta(days=30)
+        for business in (held, orphaned):
+            repo.record_event(BusinessEvent(
+                business_id=business.id, kind=OBSERVED_EVENT, actor="test",
+                detail={"url": shared, "counts": {}}, at=stale))
+
+        rotation = repo.businesses_by_website(limit=ROTATION_CEILING)
+        assert shared in rotation, (
+            "the address is not in the rotation at all; this test is asserting "
+            "against a queue that does not contain what it is about")
+        assert rotation[shared].id == held.id
+
+        found = repo.audit_backlog()
+        assert found["never_in_the_rotation"] == \
+               before["never_in_the_rotation"] + 1, (
+            "the business the rotation does not hold was counted as a queue "
+            "position in a sweep that will never fetch it")
+        assert found["unread_after_a_turn"] == before["unread_after_a_turn"], (
+            "a business that has never been turned was counted as a turn that "
+            "produced no reading")
+        assert found["waiting_will_not_clear_these"]
+        # And the one the rotation does hold is a queue position, so this
+        # narrows to the unreachable half rather than condemning both.
+        assert found["never_in_the_rotation"] < found["older_than_a_week"]
+    finally:
+        _clean(held.id, orphaned.id)
+
+
+def test_an_address_the_fetcher_is_never_handed_keeps_its_reading_for_ever(repo):
+    """`mailto:` and scheme-less values are recorded evidence, never a fetch.
+
+    They are already kept out of `sites`, so the cadence is arithmetic over the
+    population the pass rotates through. That leaves the other half unsaid: a
+    reading taken against one of these — by the browser pass, or by an import —
+    is stale for ever, counts in `older_than_a_week`, and no night will ever
+    come round to it.
+
+    A fresh one is counted by neither, because there is nothing to explain
+    about a record that is not old.
+    """
+    stuck = _unfetchable(repo, f"mailto:{uuid4().hex}@backlog.test")
+    recent = _unfetchable(repo, f"{uuid4().hex}.backlog.test")
+    try:
+        before = repo.audit_backlog()
+        repo.record_event(BusinessEvent(
+            business_id=stuck.id, kind=OBSERVED_EVENT, actor="test",
+            detail={"url": stuck.website, "counts": {}},
+            at=datetime.now(UTC) - timedelta(days=30)))
+        repo.record_event(BusinessEvent(
+            business_id=recent.id, kind=OBSERVED_EVENT, actor="test",
+            detail={"url": recent.website, "counts": {}}))
+
+        found = repo.audit_backlog()
+        assert found["never_in_the_rotation"] == \
+               before["never_in_the_rotation"] + 1, (
+            "an address no night will ever visit was reported as a queue "
+            "position, or a reading that is not old was reported as stuck")
+
+        # A hand-run probe can still write a turn against one of these. It is
+        # counted once, under the name that says why waiting will not help:
+        # there is no rotation for the turn to have come from.
+        repo.record_event(BusinessEvent(
+            business_id=stuck.id, kind=VERIFIED_EVENT, actor="probe",
+            detail={"answered": False, "error": "timed out"}))
+        turned = repo.audit_backlog()
+        assert turned["never_in_the_rotation"] == \
+               found["never_in_the_rotation"]
+        assert turned["unread_after_a_turn"] == found["unread_after_a_turn"], (
+            "the same record was counted twice — once as reached and unread "
+            "and once as never reached — so the two add to more than the age "
+            "they explain")
+        assert turned["beyond_the_rotations_reach"] <= \
+               turned["older_than_a_week"]
+    finally:
+        _clean(stuck.id, recent.id)
 
 
 def test_the_rotation_counts_addresses_because_that_is_what_it_fetches(repo):

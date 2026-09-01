@@ -165,6 +165,26 @@ PASS_TURN = "actor ~ '^recipe:'"
 #: is interpolated into several statements.
 FETCHABLE_WEBSITE = "website ~ '^https?://'"
 
+#: The businesses the nightly rotation can ever select, as a subquery.
+#:
+#: One night's work is one *address*, so the rotation de-duplicates by website
+#: and the business that holds an address is the earliest one recorded against
+#: it. Every other business on that address is therefore never fetched again —
+#: not slowly, never — and so is every business whose address the fetcher is
+#: never handed. Both keep whatever observation they have for ever while the
+#: ordering says, of every stale record alike, that its turn is coming.
+#:
+#: Declared once and used by both the rotation and the report that counts what
+#: the rotation cannot reach. Two spellings of "which businesses are in the
+#: sweep" is how a report comes to describe a sweep that is not the one running,
+#: and this one exists precisely to say when a record will never be reached.
+ROTATION_MEMBERS = f"""
+    SELECT DISTINCT ON (website) id
+    FROM atlas_businesses
+    WHERE website IS NOT NULL AND {FETCHABLE_WEBSITE}
+    ORDER BY website, first_seen_at
+"""
+
 #: The most sites one read of the rotation may return however large a limit it
 #: is handed. A bound on a table that grows, not a statement about cadence.
 ROTATION_CEILING = 200
@@ -1020,14 +1040,26 @@ class OpportunityRepository:
           the alphabetical-forty bug, which succeeded nightly while never
           fetching 319 of the sites.
 
-        And `unread_after_a_turn`, which is the measured answer to whether the
-        refresh path reaches these sites at all. The ordering promises every
-        site a turn; it cannot promise a *reading*. A server that refused, timed
-        out, returned something that is not HTML or was cut off mid-body takes
-        its turn and is deliberately not re-observed, because auditing what came
-        back would put an invented absence in front of a business. Those sites
-        cycle for ever, and this counts them rather than inferring from an
-        `ORDER BY` that they will come good.
+        And two counts that are the measured answer to whether the refresh path
+        reaches these records at all, because an `ORDER BY` promising every site
+        a turn is not evidence that any of them came good:
+
+        * `unread_after_a_turn` — the rotation came back round and could not
+          read. A server that refused, timed out, returned something that is not
+          HTML or was cut off mid-body takes its turn and is deliberately not
+          re-observed, because auditing what came back would put an invented
+          absence in front of a business. Those sites cycle for ever.
+        * `never_in_the_rotation` — no turn is ever coming. One night's work is
+          one *address*, so only the earliest business recorded against a
+          website is ever fetched, and a business the fetcher is never handed
+          (no scheme, `mailto:`, website removed since the reading) is not in the
+          sweep at all. Both keep their observation for ever while every number
+          beside them says the queue is moving.
+
+        They are disjoint in the query — the first is restricted to the
+        rotation's members — so `beyond_the_rotations_reach` adds them, and
+        `ROTATION_MEMBERS` is the same subquery `businesses_by_website` selects
+        from, so "in the rotation" here means what it means there.
 
         `older_than_a_week` is **read from `audit_freshness`**, not recomputed.
         Two queries written to the same intent is how two numbers standing next
@@ -1056,14 +1088,16 @@ class OpportunityRepository:
                 turned AS (
                     SELECT business_id, max(at) AS at
                     FROM atlas_business_events WHERE kind = :verified
-                    GROUP BY business_id)
+                    GROUP BY business_id),
+                rotation AS ({ROTATION_MEMBERS})
                 SELECT
-                  -- The population the rotation can actually fetch. A
-                  -- scheme-less or `mailto:` value is dropped before the pass
-                  -- sees it, and counting it here would divide a population
-                  -- that is never visited by a throughput that never visits it.
-                  (SELECT count(DISTINCT website) FROM atlas_businesses
-                    WHERE website IS NOT NULL AND {FETCHABLE_WEBSITE}) AS sites,
+                  -- The population the rotation can actually fetch, counted as
+                  -- the rotation's own membership rather than as a second
+                  -- opinion about it. A scheme-less or `mailto:` value is
+                  -- dropped before the pass sees it, and counting it here would
+                  -- divide a population that is never visited by a throughput
+                  -- that never visits it.
+                  (SELECT count(*) FROM rotation) AS sites,
                   -- The pass's own last reading, and its own last turn. Not
                   -- `max(at)` over every writer of these kinds: a hand-run
                   -- reconcile or probe would then answer "is the nightly pass
@@ -1076,14 +1110,27 @@ class OpportunityRepository:
                   -- The rotation came back round and the reading did not
                   -- refresh. `8 days` is `audit_freshness`'s own week, so this
                   -- is a subset of the number it reports and not a second
-                  -- opinion about what stale means. Unfiltered on purpose,
+                  -- opinion about what stale means. Unfiltered on the writer,
                   -- unlike the two above: this has to stay a subset of the
                   -- sites freshness calls stale, and freshness counts a reading
-                  -- as a reading whoever recorded it.
+                  -- as a reading whoever recorded it. Restricted to the
+                  -- rotation's own members so it cannot overlap the count
+                  -- below, which is the same question answered the other way.
                   (SELECT count(*) FROM observed
                      JOIN turned ON turned.business_id = observed.business_id
                     WHERE observed.at <= now() - interval '8 days'
-                      AND turned.at > observed.at) AS unread_after_a_turn
+                      AND turned.at > observed.at
+                      AND observed.business_id IN (SELECT id FROM rotation))
+                    AS unread_after_a_turn,
+                  -- And the ones no turn will ever come to: a business the
+                  -- rotation cannot select is not behind the sweep, it is
+                  -- outside it. The ordering says its turn is coming; nothing
+                  -- else says it never will, and it is the same stale record on
+                  -- the same screen either way.
+                  (SELECT count(*) FROM observed
+                    WHERE observed.at <= now() - interval '8 days'
+                      AND observed.business_id NOT IN (SELECT id FROM rotation))
+                    AS never_in_the_rotation
                 """), {"observed": OBSERVED_EVENT,
                        "verified": VERIFIED_EVENT}).mappings().first()
             if freshness is None:
@@ -1114,6 +1161,7 @@ class OpportunityRepository:
             nights_since_an_observation=_nights(row["last_observation"]),
             nights_since_a_turn=_nights(row["last_turn"]),
             unread_after_a_turn=int(row["unread_after_a_turn"] or 0),
+            never_in_the_rotation=int(row["never_in_the_rotation"] or 0),
             last_observation=(row["last_observation"].isoformat()
                               if row["last_observation"] else ""),
             last_turn=(row["last_turn"].isoformat()
@@ -1778,16 +1826,18 @@ class OpportunityRepository:
         which meant a night's forty could be spent on `mailto:` rows and come
         back as thirty-one addresses — a throughput nobody could see and one the
         backlog report would then have described as forty.
+
+        **Which businesses those are is `ROTATION_MEMBERS`**, so `audit_backlog`
+        can count the ones this will never select without writing its own
+        opinion of what the rotation contains. A business excluded here is not
+        slow; it is unreachable, and the report has to be able to say so in the
+        same words this query means.
         """
         with SessionLocal() as session:
             rows = session.execute(
                 text(f"""
-                SELECT site.* FROM (
-                    SELECT DISTINCT ON (website) *
-                    FROM atlas_businesses
-                    WHERE website IS NOT NULL AND {FETCHABLE_WEBSITE}
-                    ORDER BY website, first_seen_at
-                ) AS site
+                SELECT site.* FROM atlas_businesses AS site
+                JOIN ({ROTATION_MEMBERS}) AS member ON member.id = site.id
                 LEFT JOIN (
                     SELECT business_id, max(at) AS last_at
                     FROM atlas_business_events

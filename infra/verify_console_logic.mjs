@@ -310,18 +310,42 @@ check('an empty population renders nothing rather than dividing by it',
 check('an explanation of an absent problem is not printed',
       backlog({ ...SWEEP, older_than_a_week: 0 }) === '');
 
-/* The rotation promises a turn, not a reading. Sites it has already come back
- * round to and still could not read must not be described as a queue. */
+/* The rotation promises a turn, not a reading, and promises nothing at all to
+ * a record it does not hold. Neither kind may be described as a queue. */
 const stuck = freshness(STALE, { ...SWEEP, unread_after_a_turn: 6,
+                                 never_in_the_rotation: 4,
+                                 beyond_the_rotations_reach: 10,
                                  waiting_will_not_clear_these: true });
-check('sites the sweep has already reached are not called a queue position',
-      /6 will not clear by waiting/.test(stuck));
+check('records the sweep will never clear are not called a queue position',
+      /10 will not clear by waiting/.test(stuck));
+check('...and the two ways it fails to reach them are separated',
+      /6 had a turn since their last reading/.test(stuck)
+      && /4 are not in the rotation at all/.test(stuck));
 check('...and the finding is named as reach rather than cadence',
       /reach is the finding, not the cadence/.test(stuck));
 check('...while the cadence still explains the rest',
       /cadence explains this/.test(stuck));
 check('none of them is not drawn at all',
       !/will not clear by waiting/.test(queued));
+
+/* A record the rotation does not contain is unreachable on its own, without a
+ * single failed reading beside it — the shape a second business on one address
+ * leaves, and the one an `ORDER BY` describes as a turn that is coming. */
+const orphaned = freshness(STALE, { ...SWEEP, unread_after_a_turn: 0,
+                                    never_in_the_rotation: 3,
+                                    beyond_the_rotations_reach: 3,
+                                    waiting_will_not_clear_these: true });
+check('a record outside the rotation is drawn as unreachable on its own',
+      /3 will not clear by waiting/.test(orphaned)
+      && /3 are not in the rotation at all/.test(orphaned));
+check('...without a clause counting the failures it did not have',
+      !/0 had a turn/.test(orphaned),
+      'a zero in front of the number that matters is noise on an operator\'s '
+      + 'screen');
+check('a flag with no count behind it is not drawn as a warning',
+      backlog({ ...SWEEP, waiting_will_not_clear_these: true })
+        .indexOf('will not clear by waiting') === -1,
+      'an operator cannot act on or check a warning that names no number');
 
 /* ---- opportunityCard: four parts, and an honest worth ------------------ */
 

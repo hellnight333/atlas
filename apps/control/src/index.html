@@ -1611,21 +1611,37 @@ function freshness(f, b) {
  * than fixed. The two ways it is a fault are still drawn as faults: a pass
  * that has stopped, and a rotation that comes round inside a week and leaves
  * sites stale anyway, which is what re-reading the alphabetically first forty
- * did while succeeding every night.
+ * did while succeeding every night. And beside the cadence, the records no
+ * amount of waiting clears: the ones the sweep reached and could not read, and
+ * the ones it does not contain.
  */
 function backlog(b) {
   if (!b || !b.sites) return '';
   const sweep = `${esc(String(b.sites))} sites at ${esc(String(b.per_night))} a
     night is a ${esc(String(b.nights_for_a_full_sweep))}-night sweep`;
-  /* The rotation promises every site a turn; it cannot promise a reading. A
-     server that refused, timed out or returned something that is not HTML is
-     deliberately not re-observed, and telling an operator to wait for the
-     sweep would be a promise nothing will keep. */
-  const stuck = !b.waiting_will_not_clear_these ? '' : `
-    <p class="note">${pill(String(b.unread_after_a_turn) + ' will not clear by waiting',
-                           'warn')}
-      already had a turn since their last reading and were not re-observed.
-      Their reach is the finding, not the cadence.</p>`;
+  /* The rotation promises every site a turn; it cannot promise a reading, and
+     it promised nothing at all to a site it does not hold. A server that
+     refused or served something that is not HTML is deliberately not
+     re-observed; a business whose address another business already holds, or
+     whose address the fetcher is never handed, is not visited even that far.
+     Telling an operator to wait for the sweep would be a promise nothing keeps,
+     so both are named, and each only when there is one of it. */
+  const reach = [
+    b.unread_after_a_turn
+      ? `${esc(String(b.unread_after_a_turn))} had a turn since their last `
+        + 'reading and were not re-observed'
+      : '',
+    b.never_in_the_rotation
+      ? `${esc(String(b.never_in_the_rotation))} are not in the rotation at `
+        + 'all: an address it cannot fetch, or one another business holds it'
+      : '',
+  ].filter(Boolean).join(', and ');
+  /* And nothing at all without a count to name: a flag with no number behind
+     it is a warning an operator cannot act on or check. */
+  const stuck = !b.waiting_will_not_clear_these || !reach ? '' : `
+    <p class="note">${pill(String(b.beyond_the_rotations_reach)
+                           + ' will not clear by waiting', 'warn')}
+      — ${reach}. Their reach is the finding, not the cadence.</p>`;
   if (b.the_cadence_explains_the_age) {
     /* Nothing is stale, so there is nothing to explain. The line above already
        says so in green, and an explanation of an absent problem is noise. */
