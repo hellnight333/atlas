@@ -177,6 +177,19 @@ CREATE TABLE IF NOT EXISTS transitions (
     at          TEXT NOT NULL
 );
 
+-- Every review that ran, whatever it concluded. A clean review records no
+-- findings, so without this there is no evidence it happened — and "no
+-- findings" would be indistinguishable from "never reviewed".
+CREATE TABLE IF NOT EXISTS reviews (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id         TEXT NOT NULL,
+    round           INTEGER NOT NULL,
+    reviewed_sha    TEXT NOT NULL,
+    verdict         TEXT NOT NULL,
+    findings        INTEGER NOT NULL DEFAULT 0,
+    at              TEXT NOT NULL
+);
+
 -- What the reviewer said, per round, kept whether or not it was acted on.
 CREATE TABLE IF NOT EXISTS findings (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,6 +435,15 @@ class Queue:
 
     # -- findings ---------------------------------------------------------
 
+    def record_review(self, task_id: str, *, round: int, sha: str,
+                      verdict: str, findings: int) -> None:
+        """That a review of this commit happened, whatever it concluded."""
+        with self._write() as db:
+            db.execute(
+                "INSERT INTO reviews (task_id, round, reviewed_sha, verdict,"
+                " findings, at) VALUES (?,?,?,?,?,?)",
+                (task_id, round, sha, verdict, findings, _now()))
+
     def record_findings(self, task_id: str, *, round: int, sha: str,
                         findings: list[dict]) -> None:
         with self._write() as db:
@@ -436,32 +458,39 @@ class Queue:
                      redact(one.get("failure_scenario", "")), sha, _now()))
 
     def review_was_clean(self, task_id: str) -> bool:
-        """Whether the newest recorded review left nothing blocking.
+        """Whether the commit about to land was reviewed and left nothing blocking.
 
-        The check that stands between reviewed work and `main`. It reads the
-        stored findings rather than a flag somebody set, so a task can only
-        land on the strength of a review that actually happened and actually
-        came back clean.
+        Keyed on the **reviewed commit**, not the round number. Rounds restart
+        when a task is reopened, and the first version counted findings by
+        round — so a reopened task inherited its earlier run's objections and a
+        genuinely clean review was refused. It failed in the safe direction and
+        was still wrong.
 
-        **False when no review is recorded at all.** An unreviewed task is not
-        a clean one, and defaulting the other way is precisely how a round that
-        never reached the reviewer ends up on `main`.
+        A commit that no review examined is not clean. That is the case this
+        exists for: an unreviewed head must never reach `main`, and defaulting
+        the other way is how a round that never reached the reviewer lands.
         """
-        rounds = self._db.execute(
-            "SELECT review_rounds FROM tasks WHERE id = ?",
-            (task_id,)).fetchone()
-        if rounds is None or not rounds["review_rounds"]:
+        row = self._db.execute(
+            "SELECT head_sha FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or not row["head_sha"]:
             return False
-        # The round that actually ran, not the newest round that produced
-        # findings. A clean review records none, so `max(round)` would stay at
-        # the last round that objected and a task could never land after
-        # fixing anything — which is the wrong answer in the safe direction,
-        # and still the wrong answer.
-        current = int(rounds["review_rounds"])
+        examined = self._db.execute(
+            "SELECT count(*) AS n FROM findings"
+            " WHERE task_id = ? AND reviewed_sha = ?",
+            (task_id, row["head_sha"])).fetchone()
+        reviewed = self._db.execute(
+            "SELECT count(*) AS n FROM reviews"
+            " WHERE task_id = ? AND reviewed_sha = ?",
+            (task_id, row["head_sha"])).fetchone()
+        if not int(reviewed["n"]):
+            # No review of this exact commit is recorded. Findings alone cannot
+            # prove one happened: a clean review records none.
+            return False
         blocking = self._db.execute(
-            "SELECT count(*) AS n FROM findings WHERE task_id = ? AND round = ?"
-            " AND severity IN ('blocking','major')",
-            (task_id, current)).fetchone()
+            "SELECT count(*) AS n FROM findings"
+            " WHERE task_id = ? AND reviewed_sha = ?"
+            "   AND severity IN ('blocking','major')",
+            (task_id, row["head_sha"])).fetchone()
         return int(blocking["n"]) == 0
 
     def findings(self, task_id: str, *, round: int | None = None) -> list[dict]:
