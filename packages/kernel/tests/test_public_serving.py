@@ -807,6 +807,95 @@ def test_the_loops_deploy_counts_the_site_builder_among_what_it_ships() -> None:
     assert "apps/public/" in declared.group(1).split(), declared.group(1)
 
 
+def public_paths_git_can_see() -> list[str]:
+    """Everything under `apps/public/` that `deploy_control.sh`'s guard sees.
+
+    The same two sets that guard iterates — tracked files and untracked files
+    that are not ignored — because the question here is about exactly the files
+    it can be asked about. Paths still in the index but gone from disk are
+    dropped: a pending deletion is not a file anybody can change.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-co", "--exclude-standard", "apps/public"],
+        cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    return sorted(p for p in listed if (REPO / p).is_file())
+
+
+def test_the_public_prefix_covers_only_files_the_build_reads() -> None:
+    """The other direction of the guard above, and the one that fails quietly.
+
+    `SHIPPED_PREFIXES` names a whole directory, and nothing under
+    `apps/public/` is copied to the host — it is an *input* to a build whose
+    *output* is shipped. So the prefix is only honest while every file git can
+    see under it is a build input. A file there that the build never reads is
+    called shipped by the guard, passes the deploy, and changes nothing in
+    production: the exact "reported success, sent nothing" failure the guard was
+    added to stop, wearing the guard's own badge.
+
+    It was already untrue. `apps/public/index.html` was the hand-written
+    homepage from before `build.py` existed; the builder writes its own
+    `index.html` into the output and never opens that one. Editing it would have
+    passed this guard and deployed nothing.
+    """
+    source = (PUBLIC / "build.py").read_text(encoding="utf-8")
+    # Local modules the builder imports — `copy_ar` is one, and is a build input
+    # every bit as much as the builder. Names that are not files in this
+    # directory (`re`, `shutil`, …) simply never match a listed path.
+    imported = {f"{name}.py" for name in re.findall(r"^(?:import|from) (\w+)",
+                                                    source, re.M)}
+    strays = []
+    for path in public_paths_git_can_see():
+        rel = path[len("apps/public/"):]
+        if rel == "build.py" or rel in imported or rel.startswith("assets/"):
+            continue
+        strays.append(path)
+    assert strays == [], (
+        "deploy_control.sh calls all of apps/public/ shipped, and build.py "
+        f"reads none of these — a change to one deploys nothing: {strays}")
+
+
+def test_every_asset_the_site_is_built_from_is_carried_by_the_repository() -> None:
+    """A deploy that only one working tree can run is not a deploy.
+
+    `deploy_control.sh` builds and publishes qevik.ai on every run now, and
+    `build.py` refuses by name for a missing asset. So while the artwork was not
+    in the repository, a control-plane deploy from a clean checkout — or from
+    any machine but the one laptop that had it — would fail at that build,
+    having already shipped the kernel and restarted the workers. A kernel deploy
+    turned into a failure by a screenshot nobody could fetch.
+
+    It was not in the repository: the blanket `assets/` rule in .gitignore
+    covered `apps/public/assets/`, so the stylesheet and every screenshot on the
+    site existed in exactly one place and not in git.
+
+    Asserted as "git does not ignore these" rather than "git tracks these"
+    because the deploy answers the second question itself: it refuses on an
+    unclean tree, so an un-ignored asset is either committed or nothing
+    deploys. Ignored, it is invisible to both checks — which is how it got here.
+
+    `--no-index`, and that is the whole test. `git check-ignore` skips paths
+    that are in the index and calls them un-ignored, so once these are committed
+    the check would pass on the strength of their being committed — including
+    the day someone puts the blanket rule back and the next clean checkout has
+    no artwork again. `--no-index` asks the rules instead of the index.
+    """
+    assets = sorted(p for p in (PUBLIC / "assets").iterdir() if p.is_file())
+    assert assets, "apps/public/assets/ is empty; qevik.ai cannot be built"
+    asked = subprocess.run(
+        ["git", "check-ignore", "--no-index", "--stdin"],
+        input="".join(f"{p.relative_to(REPO)}\n" for p in assets),
+        cwd=REPO, capture_output=True, text=True)
+    # 0 some path is ignored, 1 none is. Anything else — a flag this git does
+    # not have, a repository it cannot read — is an unasked question, and an
+    # unasked question here reads as an empty answer and passes.
+    assert asked.returncode in (0, 1), (
+        f"git could not be asked which of these are ignored: {asked.stderr}")
+    ignored = asked.stdout.split()
+    assert ignored == [], (
+        "qevik.ai is built from these and .gitignore excludes them, so a clean "
+        f"checkout cannot build the site and its deploy fails: {ignored}")
+
+
 def test_the_public_site_is_published_after_the_control_plane_is_up() -> None:
     """Order, for the same reason the pages go before the config.
 

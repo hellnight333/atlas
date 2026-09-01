@@ -82,6 +82,14 @@ rsync_() {
 # here now and did not before, and the difference matters in both directions: an
 # unlisted prefix that is shipped refuses every deploy the moment the builder is
 # edited, and a listed prefix that is not shipped is this guard lying.
+#
+# That prefix is a whole directory, and it is only true because every file git
+# can see under it is an input to that build: `build.py`, the `copy_ar` module
+# it imports, and `assets/`, which it copies by name. It stopped being true
+# once: `apps/public/index.html` was the hand-written homepage from before the
+# builder existed, nothing read it, and while it sat there this guard called an
+# edit to it shipped and the deploy reported success having changed nothing on
+# qevik.ai. It is gone, and a test keeps the directory to build inputs.
 SHIPPED_PREFIXES="packages/kernel/atlas_kernel/ infra/ apps/control/src/ apps/public/"
 UNSHIPPED=""
 for f in $(git -C "$ROOT" ls-files -mo --exclude-standard 2>/dev/null); do

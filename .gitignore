@@ -98,6 +98,15 @@ assets/
 !website/assets/
 !website/assets/**
 
+# qevik.ai's artwork, for the same reason and one more: `infra/deploy_public.sh`
+# builds this directory on every control-plane deploy, and `build.py` refuses by
+# name for a missing asset. While the blanket `assets/` rule covered it, the
+# stylesheet and every screenshot on the site lived on one laptop and nowhere
+# else — so the site could not be rebuilt from a clean checkout, and a deploy
+# from one would fail at the build having already shipped the kernel.
+!apps/public/assets/
+!apps/public/assets/**
+
 # Source code, not generated media. The blanket `assets/` rule above silently
 # excluded apps/desktop/src/features/assets/, so router.tsx imported a screen
 # that was never committed and a clean checkout could not compile.

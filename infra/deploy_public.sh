@@ -40,9 +40,14 @@
 # rather than written down a second time. A rewrite target added there without a
 # page behind it fails here, on the operator's machine, instead of on qevik.ai.
 #
-# Note: `apps/public/assets/` is covered by the blanket `assets/` rule in
-# .gitignore, so the artwork is not in the repository and this must be run from
-# a working tree that has it. The build refuses by name for anything missing.
+# `apps/public/assets/` is in the repository, and it had to be put there for
+# this to be run from `deploy_control.sh`. The blanket `assets/` rule in
+# .gitignore had covered it, so the stylesheet and every screenshot on the site
+# existed on one laptop and nowhere else: a clean checkout could not build the
+# site at all, and once the control-plane deploy started calling this
+# unconditionally, a deploy from one would fail here — at the build — having
+# already shipped the kernel. .gitignore now excepts it, the way it already
+# excepted `website/assets/` and the desktop icons, for the same reason.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
