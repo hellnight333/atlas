@@ -466,7 +466,20 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
 #: that the repository is consistent and never that the brief was carried out,
 #: and the reviewer is deliberately blind to the brief. Treating those as
 #: acceptable is how half-finished work reaches DONE and a deploy.
-COMPLETION_LIKE_STOPS = frozenset({"error_max_turns"})
+#: Stops that may still hold finished work, so the gates judge them rather than
+#: the exit code.
+#:
+#: `error_max_turns` — the builder ran out of turns, possibly after finishing.
+#: `success` — the agent completed its turn normally and the process exited
+#: non-zero anyway. That happened on a resumed task whose work was already
+#: done: nothing left to build, subtype `success`, exit 1, and the run was
+#: recorded as a failed build. The agent's own account and the exit code
+#: disagreed, and when they disagree the diff and the tests decide.
+#:
+#: Everything else — a crash, a refusal, a harness error — still fails the run
+#: without reaching the gates, because a builder that died mid-edit has not
+#: carried out the task and nothing downstream can tell that from finished work.
+COMPLETION_LIKE_STOPS = frozenset({"error_max_turns", "success"})
 
 
 def stopped_short(outcome: Outcome) -> bool:

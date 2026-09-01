@@ -1082,3 +1082,27 @@ def test_no_gate_decides_by_searching_for_a_word_in_output():
     assert not offenders, (
         f"a gate decides by substring search: {offenders}. "
         '"PROVED" in "NOT PROVED" is True.')
+
+
+@pytest.mark.parametrize("reason,reaches_gates", [
+    ("error_max_turns", True),
+    ("success", True),
+    ("error_during_execution", False),
+    ("", False),
+])
+def test_which_builder_stops_are_judged_by_the_gates(reason, reaches_gates):
+    """A resumed task with nothing left to build stopped with subtype
+    `success` and exit 1, and was recorded as a failed build — discarding a
+    branch that already held finished, reviewed work.
+
+    When the agent's own account and the exit code disagree, the diff and the
+    tests decide. A crash still fails without reaching them: a builder that
+    died mid-edit has not carried out the task, and nothing downstream can tell
+    that from finished work.
+    """
+    out = agents.Outcome(ok=False, exit_code=1, output="", stop_reason=reason)
+    assert agents.stopped_short(out) is reaches_gates
+
+    # A successful run is never "stopped short" — it did not stop short.
+    assert agents.stopped_short(
+        agents.Outcome(ok=True, exit_code=0, stop_reason=reason)) is False
