@@ -312,6 +312,17 @@ class Driver:
                     return self._infra(ident, fixed.detail)
                 continue
 
+            # Too large to finish, before a reviewer spends rounds proving it.
+            bounded = gates.size(cwd=self.repo, base_sha=base)
+            if not bounded.passed and not bounded.unmeasured:
+                self.q.move(ident, State.CONTESTED,
+                            reason=f"oversized: {bounded.detail}",
+                            head_sha=head_sha(self.repo))
+                projection.park_oversized(self.repo, task, bounded.detail)
+                log("OVERSIZED", task=ident, detail=bounded.detail[:160])
+                _git("checkout", "-q", "main", cwd=self.repo)
+                return State.CONTESTED
+
             # -- the immutable review unit --------------------------------
             # Committed *before* review so the diff cannot move under the
             # reviewer, and so a finding names a sha somebody can check out.

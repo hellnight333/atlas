@@ -37,3 +37,38 @@ real.
 - Stripe — C-29. Payment Links need no key; the adapter is deliberately unbuilt.
 
 Move a row up when the capability that needs it exists.
+
+<!-- human-action:public-assets -->
+## HA-008 — qevik.ai cannot be rebuilt: its artwork is not in the repository
+
+**Open.** Raise in app.qevik.ai as a DECISION with three options as soon as the
+control plane is reachable — the SSH link is currently degrading (HTTPS answers
+200, TCP/22 connects, the banner exchange times out), so this file is the record
+until then.
+
+Every route on qevik.ai serves the homepage and no URL returns 404. The fix is
+written and reviewed — `infra/qevik-production.Caddyfile` and the 404 page in
+`apps/public/build.py`, landed as `f1171ef` and `5b20f59`.
+
+It cannot be applied. The config rewrites unknown URLs to `/404.html`, and
+building that page needs `apps/public/assets/` — 12 photographs and 2 icons a
+blanket `assets/` rule at `.gitignore:85` keeps out of the repository. Without
+them the site does not build, the page is not produced, and
+`deploy_public.sh --check` correctly refuses to install a config pointing at a
+file that will not exist.
+
+The images are on the host at `/srv/qevik-public/assets/`.
+
+**The options, each reversible:**
+
+- **track** — except `apps/public/assets/` from the ignore rule and commit the
+  14 files. Any checkout can then build and verify the site. About half a
+  megabyte.
+- **fetch** — pull them from the host at build time. No binaries in git, but a
+  build then needs host access, and the tests that skip today keep skipping
+  anywhere else.
+- **elsewhere** — an object store or another location you name. Needs the
+  location, and a credential if it is private.
+
+**Nothing is deployed, no image is invented, and the ignore rule is not touched
+without an answer.** Two completed tasks are waiting on this.

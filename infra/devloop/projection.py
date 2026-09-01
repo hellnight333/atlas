@@ -135,6 +135,26 @@ def park_boundary(repo: Path, task: dict, boundary: str) -> str:
     return marker
 
 
+def park_oversized(repo: Path, task: dict, detail: str) -> str:
+    """A task drawn too wide to finish. Not a defect in the work.
+
+    Recorded where a person can split it, because splitting is a judgement
+    about where the real boundary lies and the loop should not guess at one.
+    """
+    marker = f"<!-- devloop:oversized:{task['id']} -->"
+    block = (
+        f"{marker}\n"
+        f"## Too large for one run — {redact(task['title'])}\n\n"
+        f"{detail}\n\n"
+        f"The work is on `devloop/{task['id']}` and is not lost. Split it at a "
+        f"real boundary — frontend from backend, configuration from "
+        f"application code, data model from integration, build assets from "
+        f"runtime logic — and enqueue the pieces.\n\n"
+        f"- **What it was asked to do:** {redact(task['brief'])[:400]}\n")
+    _append_once(repo / ".qevik" / "DECISION_QUEUE.md", marker, block)
+    return marker
+
+
 def park_contested(repo: Path, task: dict, findings: list[dict]) -> str:
     """A disagreement three rounds could not settle is a person's to read."""
     marker = f"<!-- devloop:contested:{task['id']} -->"

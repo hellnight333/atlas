@@ -1159,3 +1159,44 @@ def test_a_run_where_everything_skipped_asserted_nothing(monkeypatch, summary,
     g = gates.tests(cwd=Path("."))
     assert g.passed is passes
     assert g.unmeasured is unmeasured
+
+
+# ================================================= task size, enforced
+#
+# A 38-file, 1,863-insertion task ran three times over about two hours and
+# never landed. Split at real boundaries, the same work landed in 25 and 20
+# minutes — the second clean on its first review. Size is checked by the
+# driver, not left to the builder's judgement.
+
+
+@pytest.mark.parametrize("numstat,bounded", [
+    ("1\t2\tone.py", True),
+    ("\n".join(f"1\t1\tf{n}.py" for n in range(20)), False),
+    ("900\t100\tbig.py", False),
+    ("-\t-\timage.png\n3\t1\tcode.py", True),          # binary counts as a file
+    ("\n".join(f"1\t1\tf{n}.py" for n in range(14)), True),   # exactly the limit
+])
+def test_a_task_too_large_to_finish_is_stopped_before_review(monkeypatch,
+                                                             numstat, bounded):
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, numstat, False))
+    assert gates.size(cwd=Path("."), base_sha="x").passed is bounded
+
+
+def test_an_unreadable_diff_is_unmeasured_not_oversized(monkeypatch):
+    """A repository git cannot read has not shown the change is too large."""
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (128, "not a repo", False))
+    g = gates.size(cwd=Path("."), base_sha="x")
+    assert g.passed is False and g.unmeasured is True
+
+
+def test_the_driver_checks_size_before_it_asks_for_a_review():
+    """Ordering is the point: a reviewer should not spend rounds discovering
+    that a change is too large to converge on."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    assert "gates.size(" in run_task, "size is never checked"
+    assert run_task.index("gates.size(") < run_task.index("agents.review("), (
+        "the review runs before the size check, so an oversized change still "
+        "costs a review round")
+    # And an oversized task is parked for a person to split, not silently failed.
+    assert "park_oversized" in run_task

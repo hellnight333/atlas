@@ -75,6 +75,55 @@ def changed(*, cwd: Path, base_sha: str | None = None) -> Gate:
     return Gate("changed", True, out.strip().splitlines()[-1][:200])
 
 
+#: What one bounded loop run can actually carry, measured rather than guessed.
+#:
+#: A 38-file, 1,863-insertion task ran three times over about two hours and
+#: never landed: each round the reviewer found something new in a different
+#: part of it, and three rounds were never going to converge on a change that
+#: large. Split at real boundaries — the 404 page alone, then the web-server
+#: config alone — the same work landed in 25 and 20 minutes, the second clean
+#: on its first review.
+#:
+#: Generous on purpose. This is not a style limit; it is the point past which a
+#: review cannot be thorough and a fix round cannot be focused.
+TOO_MANY_FILES = 14
+TOO_MANY_LINES = 700
+
+
+def size(*, cwd: Path, base_sha: str) -> Gate:
+    """Whether this change is small enough for one bounded run to finish.
+
+    Checked against the diff rather than the brief, because a task's real size
+    is only known once it is written — the routing task was scoped as one
+    config change and arrived as thirty-eight files.
+
+    Failing here is not a defect in the work. It means the task was drawn too
+    wide, and the driver requeues it to be split rather than spending three
+    review rounds discovering the same thing.
+    """
+    code, out, _ = _sh(["git", "diff", "--numstat", f"{base_sha}..HEAD"],
+                       cwd=cwd, timeout=60)
+    if code != 0:
+        return Gate("size", False, f"git failed: {out[:200]}", unmeasured=True)
+    files = added = removed = 0
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        files += 1
+        # A binary file reports "-"; it counts as a file and no lines.
+        added += int(parts[0]) if parts[0].isdigit() else 0
+        removed += int(parts[1]) if parts[1].isdigit() else 0
+    changed = added + removed
+    if files > TOO_MANY_FILES or changed > TOO_MANY_LINES:
+        return Gate("size", False,
+                    f"{files} files and {changed} lines is more than one run "
+                    f"can review and converge on (limits: {TOO_MANY_FILES} "
+                    f"files, {TOO_MANY_LINES} lines). Split it at a real "
+                    f"boundary rather than spending rounds on it.")
+    return Gate("size", True, f"{files} file(s), {changed} line(s)")
+
+
 def clean_tree(*, cwd: Path) -> Gate:
     """The reviewer wrote nothing.
 
