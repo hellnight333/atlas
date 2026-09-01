@@ -1851,6 +1851,69 @@ class OpportunityRepository:
             session.commit()
             return result.rowcount or 0
 
+    def unreviewed_outreach(self, *, limit: int = 100,
+                            tenant: TenantId | None = None) -> list:
+        """TENANT_SCOPED. Drafted messages nobody has decided about, and why.
+
+        Reads; it decides nothing. Nothing here approves, rejects, sends or
+        removes a row, and the reason it may not is that a list of undecided
+        things is the most tempting place in the system to add a control that
+        decides them all at once.
+
+        **The status filter here only narrows; `unreviewed.undecided` decides.**
+        Two definitions of "nobody has decided" is how an approved message
+        eventually appears in a queue inviting somebody to approve it again, so
+        the SQL picks candidate businesses cheaply and the module makes the
+        actual judgement on four independent signals.
+
+        **Every message for those businesses is read, not only the undecided
+        ones.** Supersession is only answerable that way: a draft replaced by a
+        message that was later approved is exactly as moot as one replaced by
+        another draft, and a fold given the undecided rows alone cannot tell.
+
+        Scoped through `atlas_businesses`, like contact history:
+        `atlas_outreach_messages` carries no tenant of its own, and the company
+        a message is about is what says whose work it is. One tenant reading
+        another's undecided outreach would be the same disclosure a shared
+        cooldown would be. A message about a business with **no** tenant is
+        invisible here too — `tenancy.owns` says a row owned by nobody is
+        returned to nobody, and the operator console reads with `ALL_TENANTS`
+        when it needs the residue.
+        """
+        from ..outreach import unreviewed as reader
+
+        tenant = _require_tenant(tenant, method="unreviewed_outreach")
+        where, params = _tenant_predicate(tenant, alias="b")
+        with SessionLocal() as session:
+            businesses = [row[0] for row in session.execute(
+                text(f"""
+                SELECT DISTINCT m.business_id
+                FROM atlas_outreach_messages m
+                JOIN atlas_businesses b ON b.id = m.business_id
+                WHERE m.status = ANY(:statuses) AND {where}
+                ORDER BY m.business_id
+                LIMIT :limit
+                """),
+                {**params, "statuses": list(reader.UNDECIDED_STATUSES),
+                 "limit": max(1, min(int(limit), 1000))}).all()]
+            if not businesses:
+                return []
+            rows = session.execute(
+                text("SELECT * FROM atlas_outreach_messages"
+                     " WHERE business_id = ANY(:ids) ORDER BY created_at, id"),
+                {"ids": businesses}).mappings().all()
+            names = {row[0]: row[1] for row in session.execute(
+                text("SELECT id, name FROM atlas_businesses WHERE id = ANY(:ids)"),
+                {"ids": businesses}).all()}
+
+        messages = [OutreachMessage(**dict(row)) for row in rows]
+        # Only for the rows that are actually undecided: each is a query, and
+        # asking it about a message somebody already decided buys nothing.
+        changes = {message.id: self.evidence_changes_since(
+                       message.business_id, message.created_at)
+                   for message in messages if reader.undecided(message)}
+        return reader.from_records(messages, names=names, changes=changes)
+
     def record_event(self, event: BusinessEvent) -> BusinessEvent:
         """Append to a business's permanent history.
 

@@ -2331,11 +2331,12 @@ views.publications = async () => {
   /* A completed check survives the re-render that displays it. Without this
      the button fetches results, re-renders, and the re-render throws them away
      by asking again without `check` — a control that appears to do nothing. */
-  const [queue, fresh] = await Promise.all([
+  const [queue, fresh, drafted] = await Promise.all([
     API.get('/api/missions/awaiting-publication').catch(() => null),
     state.checkedPublications
       ? Promise.resolve(state.checkedPublications)
       : API.get('/api/missions/published').catch(() => null),
+    API.get('/api/missions/outreach-unreviewed').catch(() => null),
   ]);
   const live = fresh;
   const c = (live && live.counts) || {};
@@ -2377,6 +2378,9 @@ views.publications = async () => {
     <div class="rows">${(live.published || []).map(row).join('')
       || empty('Nothing has been published yet.')}</div>
     <p class="note">${esc(live.note || '')}</p>`}
+
+  ${drafted === null ? fail('the drafted outreach could not be read')
+    : unreviewedOutreach(drafted)}
 
   <div class="card" style="margin-top:1rem"><p class="note"><strong>READY_TO_PUBLISH
     is not PUBLISHED.</strong> Approval permits a publication; it does not
@@ -2458,6 +2462,43 @@ function awaitingPublication(rows) {
         the artefact &rarr;</a></p>
     </div>`).join('')}
   </div>`;
+}
+
+/* Drafted outreach nobody has decided about, beside the demo addresses those
+ * messages carry. It belongs on this page for that reason: a demo is published
+ * so a message can point at it, and a demo with no decision behind its message
+ * is the half of that pair nothing else on screen shows.
+ *
+ * Read-only, and there is deliberately no control here. Approving is a decision
+ * about one message bound to one fingerprint; a button on a list of eleven is
+ * how eleven strangers get written to by one click. The reason on each row is
+ * the kernel's own wording — this page must not have a second opinion about why
+ * something is undecided. */
+function unreviewedOutreach(found) {
+  const rows = found.unreviewed || [];
+  const n = found.counts || {};
+  if (!rows.length) {
+    return `<div class="card" style="margin-top:1rem"><h3>Drafted, never decided</h3>
+      <p class="note">No draft is waiting. Every message on file has been
+      decided about, one way or the other.</p></div>`;
+  }
+  return `<h3 style="margin:1.5rem 0 .4rem">Drafted, never decided
+    <span class="note">${esc(String(n.total || rows.length))}</span></h3>
+  <p class="note" style="margin-bottom:.6rem">${esc(String(n.never_asked || 0))}
+    were never put to anybody; ${esc(String(n.asked || 0))} were asked and are
+    unanswered.</p>
+  <div class="rows">${rows.map((r) => `<div class="row"><div class="body">
+    <div class="title">${esc(r.business_name || r.business_id || '—')}
+      ${pill(r.channel || 'no channel', '')}
+      ${pill(r.reason || 'no reason recorded', 'warn')}</div>
+    <div class="meta">${esc(r.why || '')}</div>
+    <div class="meta">drafted ${when(r.drafted_at)} ·
+      ${esc(String(r.waiting_days || 0))} day(s) undecided${r.recipient
+        ? ' · ' + esc(r.recipient) : ''}</div>
+    ${(r.blocked_on || []).slice(1).map((b) => `<div class="meta">${esc(b)}:
+      ${esc((r.traces || {})[b] || '')}</div>`).join('')}
+  </div></div>`).join('')}</div>
+  <p class="note">${esc(found.note || '')}</p>`;
 }
 
 views.measurements = async () => `

@@ -853,6 +853,42 @@ def build_router() -> APIRouter:
                      "being down."),
         }
 
+    @router.get("/outreach-unreviewed")
+    def outreach_unreviewed(request: Request, limit: int = 100,
+                            tenant: TenantId = Depends(current_tenant),
+                            _: User = Depends(requires(Scope.READ))) -> dict:
+        """Drafted messages nobody has decided about, each with why.
+
+        **Declared above `/{mission_id}`**, like every sibling here: a path
+        parameter matches a literal segment happily, and this route registered
+        after it would be served as a mission called `outreach-unreviewed` — a
+        404 that reads as "nothing is waiting", which is the one answer this
+        endpoint must never give by accident.
+
+        `GET` and `READ` only, and that is the design rather than a first
+        instalment. Seeing why a draft is undecided is not deciding it, and a
+        list of undecided messages is the most tempting place in this system to
+        grow a control that decides all of them at once. Approving remains the
+        mission approval route, one message at a time, bound to a fingerprint.
+
+        The reasons come from the kernel, already worded. Nothing downstream
+        re-derives them: two answers to "why has nobody decided this" is two
+        answers, and the one on screen would be the untested one.
+        """
+        from ..outreach import unreviewed as reader
+
+        rows = _opportunities(request).unreviewed_outreach(
+            limit=limit, tenant=tenant)
+        return {
+            "unreviewed": [row.summary() for row in rows],
+            "counts": reader.counts(rows),
+            "note": ("Listing a draft is not asking anybody about it. Nothing "
+                     "here approves, sends or removes anything, and a message "
+                     "somebody already decided about is not in this list. "
+                     "Scoped to this account's tenant, so it is what is "
+                     "waiting on you rather than everything on file."),
+        }
+
     @router.get("/{mission_id}")
     def detail(mission_id: str, request: Request,
                tenant: TenantId = Depends(current_tenant),

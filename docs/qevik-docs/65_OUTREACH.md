@@ -107,6 +107,74 @@ taken or forgotten.
 
 ---
 
+## Why a draft is still a draft
+
+Writing the words is deliberately not asking anybody about them: every row
+`outreach_drafts.py` writes stays at `DRAFT` rather than `AWAITING_APPROVAL`,
+so composing text never reads as a request for a decision. The cost of that is
+a pile of drafts nobody has decided about, and until now no record anywhere of
+*why* any particular one was still sitting there.
+
+`atlas_kernel/outreach/unreviewed.py` answers it per row, from the records and
+never by guessing. It reads, and it can do nothing else — no approve, no send,
+no delete, structurally, because a list of undecided things is the most
+tempting place in this system to grow a control that decides all of them at
+once.
+
+Two questions, kept apart, because a reader needs both:
+
+**Has anyone been asked?** Always one of two, from the row itself:
+
+| State | Means |
+|---|---|
+| `NEVER_PUT_TO_A_PERSON` | still a draft, no approval, no fingerprint, no authorisation |
+| `ASKED_AND_UNANSWERED` | `AWAITING_APPROVAL` — the only status that records the question being put |
+
+**Is there something in the record a reviewer would have to settle first?** Zero
+or more, most decisive first:
+
+| Condition | Read from |
+|---|---|
+| `REPLACED_BY_A_LATER_DRAFT` | a later message for the same business, channel **and origin** |
+| `ADDRESSED_TO_NOBODY` | `recipient` is empty — `outreach_drafts.py` writes every email row this way |
+| `THE_CHANNEL_CANNOT_REACH_IT` | the channel's own `can_reach` refuses the address |
+| `EVIDENCE_MOVED_AFTER_IT_WAS_WRITTEN` | `business_reevaluated` changes dated after the draft |
+
+Each carries the record it was read from, so a person can follow every
+statement back to a row rather than trust a sentence saying the records were
+consulted.
+
+**A decision is never listed as undecided.** Four independent signals decide
+that, not the status column: the two messages approved by hand on 2026-08-19
+carry `approved_fingerprint`, so they stay out. What becomes of them is DQ-008
+and belongs to a person.
+
+**"The channel cannot send today" is not one of the reasons.** Reviewing is
+deciding whether these words may go to this business; sending is a separate act
+behind its own authorisation, and folding a missing SMTP credential in here
+would tell an operator that a decision they *can* take is blocked on one they
+cannot.
+
+Read it at `GET /api/missions/outreach-unreviewed` — `GET` and `READ` only —
+and on the Publications screen in app.qevik.ai, under **Drafted, never
+decided**. The screen prints the kernel's wording and has no control on it.
+
+The four conditions were not invented for the code. Each is something the
+written record already says about the drafts that exist:
+`73_FIRST_COMMERCIAL_TEST.md` holds Dubai Sky Clinic and Klinika back because
+both are landline-only, which is `THE_CHANNEL_CANNOT_REACH_IT`; the email rows
+`outreach_drafts.py` writes carry an empty recipient because no discovered
+business held an address when they were composed (HA-008, DQ-007), which is
+`ADDRESSED_TO_NOBODY`; and the shape of the Kings problem — a live re-check
+contradicting what the words claim — is `EVIDENCE_MOVED_AFTER_IT_WAS_WRITTEN`,
+though that particular message is approved and so belongs to DQ-008 rather than
+to this list. All of it was recorded by hand, in documents, where nothing could
+read it per draft. What is new is that the
+answer is now read from the rows themselves, per draft, and does not depend on
+somebody having written a paragraph about it.
+
+---
+
 ## What a draft may say
 
 Assembled from that prospect's dossier, then checked before being written. A
@@ -148,9 +216,21 @@ Every email carries the placeholder disclosure, and a test asserts it:
 |---|---|
 | Drafts written | 5 (Kings, Malabar, Dubai Sky, TopDent, Klinika) |
 | Status | `DRAFT` / `DRAFT_NOT_SENT` |
-| Approved | 0 |
+| Approved | 0 **as of 2026-08-19** — see below |
 | Sent | 0 |
 | Channels connected | none |
+
+**The approved count is stale, and this line is not the place to correct it.**
+`.qevik/DECISION_QUEUE.md` DQ-008 records two messages approved by hand on
+2026-08-19 that carry `approved_fingerprint` and have never been sent, and
+`.qevik/PRODUCTION_EVIDENCE.md` E-34 measured them in production on 2026-08-31.
+Whether those two are withdrawn, re-approved or left where they are is DQ-008
+and belongs to a person; the reader described above simply keeps them out of the
+undecided list, because they are decisions somebody took.
+
+For what is actually on file at any moment, read
+`GET /api/missions/outreach-unreviewed` rather than this table. A count written
+into a document is true on the day it is written.
 
 Regenerate with `infra/outreach_drafts.py`. It has no send capability; sending
 requires an approved, separate step that does not yet exist.
