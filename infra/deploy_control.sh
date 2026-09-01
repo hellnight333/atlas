@@ -97,6 +97,26 @@ if [ -n "$UNSHIPPED" ]; then
   exit 1
 fi
 
+# Never ship what nobody reviewed.
+#
+# This script copies the working tree. The development loop builds on a
+# `devloop/<task>` branch and only merges to `main` after a clean review, so a
+# deploy run while a task branch is checked out would put unreviewed work —
+# possibly work a reviewer has already objected to — on the live host. The loop
+# deploys from `_ship`, on `main`, after the full suite.
+branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+if [ "$branch" != "main" ]; then
+  echo "refusing to deploy from '$branch'." >&2
+  echo "  Only 'main' holds reviewed work. A devloop/* branch is mid-review." >&2
+  exit 2
+fi
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  echo "refusing to deploy with uncommitted changes:" >&2
+  git -C "$ROOT" status --short >&2
+  echo "  Commit them or put them away; what ships must be what was gated." >&2
+  exit 2
+fi
+
 echo "==> checking access to $TARGET"
 ssh_ true || { echo "REFUSED: no SSH access to $TARGET"; exit 1; }
 

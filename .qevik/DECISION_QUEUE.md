@@ -100,3 +100,15 @@ production population is the second, so a bound would turn it red.
 
 Blocks devloop task `t-9c7566206741`, which is parked and resumes on the
 answer. The loop continues with independent work meanwhile.
+
+<!-- devloop:contested:t-0f8d6a74729c -->
+## Contested — A mission that did its work is recorded as failed, with no cause
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/mission/toolrunner.py:1213-1213` [major] Count only sightings actually stored
+  - `packages/kernel/atlas_kernel/mission/toolrunner.py:1479-1481` [major] Honor the contactability write result
+  - `packages/kernel/atlas_kernel/mission/worker.py:303-303` [major] Preserve live-output data when implementation crashes
+
+- **Driver task:** `t-0f8d6a74729c`
+- **Review unit:** `..`
