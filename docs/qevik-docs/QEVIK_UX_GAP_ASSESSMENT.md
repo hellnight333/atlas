@@ -101,6 +101,35 @@ it, that the deploy carries both to the host together, and that the script named
 in `gates.py` is the one that does it — reading that name out of the gate rather
 than repeating it. Any one of the four alone passed while the site was broken.
 
+### What that deploy must not take away
+
+Installing the fix replaces `/etc/caddy/Caddyfile` in full, and that file is the
+whole web server: `qevik.ai`, the operator console at `app.qevik.ai`, every
+customer site at `sites.qevik.ai`, and the fallback door on the bare IP. Anything
+the host serves that is not also in `infra/qevik-production.Caddyfile` stops
+being served at the restart — silently, with a zero exit, and unseen by every
+check the deploy makes afterwards, all of which ask about `qevik.ai`.
+
+Two mechanisms in `infra/` produce exactly that. `enable_domain.sh` puts a
+customer domain in `/etc/caddy/sites.d/` and relies on an `import` in the live
+config to pull it in; `secure_8443.sh` rewrites the `:8443` block's address in
+place to take that port off the public internet. Neither is in the repository's
+copy of the config.
+
+So `deploy_public.sh` now reads the config the host is running **before it
+touches anything**, compares the set of site addresses and top-level imports
+against the one it is about to install, and refuses if the host serves something
+this config does not — naming it. This is deliberately stricter than the same
+question about the document root, which is reported and not refused: a host-only
+file 404s one URL and might have been left by anyone, while a host-only site
+block takes a whole hostname off the air and every site block on a server is
+deliberate. `bash infra/deploy_public.sh --check-config <file>` asks it of a
+file, without a host.
+
+If that refusal fires, it is a real finding and it needs a person: the block on
+the host has to be copied into `infra/qevik-production.Caddyfile` before the
+deploy can proceed.
+
 **The measurements above still describe the live site**, and will until a deploy
 runs. Applying this needs the host: it is the loop's `deployed` gate, or an
 operator running `bash infra/deploy_public.sh` with the SSH key. No claim of

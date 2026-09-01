@@ -4,6 +4,11 @@
 #   bash infra/deploy_public.sh [user@host]  build, ship, install, verify
 #   bash infra/deploy_public.sh --check DIR  verify a built directory against the
 #                                            Caddyfile and exit; touches no host
+#   bash infra/deploy_public.sh --check-config FILE
+#                                            say what the Caddyfile in FILE
+#                                            serves that this repository's does
+#                                            not, and exit non-zero if there is
+#                                            anything; touches no host
 #   bash infra/deploy_public.sh --restore-config [user@host]
 #                                            put the config this script kept
 #                                            back and restart Caddy on it; ships
@@ -118,6 +123,142 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
+# --- and what installing this config would stop the host serving -------------
+#
+# `/etc/caddy/Caddyfile` is replaced wholesale further down, and that file is
+# the whole web server: four hostnames, one of them the operator's console and
+# one of them every customer site. Anything the host serves that is not also in
+# this repository's copy is gone at the restart — silently, with a zero exit,
+# and invisible to every check below, all of which ask about qevik.ai.
+#
+# Two ways that is not hypothetical, both of them written down in this
+# directory: `infra/enable_domain.sh` puts a customer domain in
+# `/etc/caddy/sites.d/` and relies on an `import` in the live config to pull it
+# in, and `infra/secure_8443.sh` rewrites the `:8443` block's address in place
+# to take that port off the public internet. Neither is in
+# `infra/qevik-production.Caddyfile`; a deploy that does not look would revert
+# the second and drop the first.
+#
+# Refused rather than reported, which is the opposite of what the same question
+# about the document root does further down — and the difference is the point.
+# A host-only *file* under the document root 404s one URL and might have been
+# left there by anybody; a host-only *site block* takes a whole hostname off the
+# air, and every site block on a server is deliberate. There is nothing to guess
+# about, so there is nothing to weigh: the config in this repository is either
+# the whole config or it is not safe to install.
+
+#: What a Caddyfile answers for: each site address it declares, and each
+#: top-level `import`, which is a hostname this file cannot see.
+#:
+#: By brace depth, for the same reason `site_block` above is: a site address is
+#: a line ending in `{` at depth zero, and every `handle`, `log` and
+#: `file_server` block inside one ends in `{` too. Comments are stripped first
+#: so a brace inside prose — this file's own header quotes `try_files {path}` —
+#: is not counted as structure. Snippet definitions `(name) {` are declarations
+#: rather than addresses and are skipped.
+#:
+#: Sorted under `LC_ALL=C`, and that matters. `comm` compares bytes, while
+#: `sort` in a UTF-8 locale collates and ignores punctuation at the primary
+#: level — so `site :80` and `site app.qevik.ai` can come out in an order `comm`
+#: considers unsorted, and an unsorted input to `comm` does not error, it
+#: answers wrongly. Both have to mean the same thing by "in order".
+serves() {
+  awk '
+    { line = $0; sub(/(^|[ \t])#.*/, "", line) }
+    depth == 0 && line ~ /^[ \t]*import[ \t]/ {
+      n = split(line, w, /[ \t]+/)
+      for (i = 1; i <= n; i++) if (w[i] == "import") { print "import " w[i + 1]; break }
+    }
+    # Bracket expressions throughout, never `\{`: a brace is an interval
+    # operator in POSIX ERE and gawk warns on `\{` as an unknown escape. See
+    # the longer note in `site_block`.
+    depth == 0 && line ~ /[{][ \t]*$/ {
+      head = line
+      sub(/[ \t]*[{][ \t]*$/, "", head)
+      # One block may be addressed by several names, comma-separated.
+      gsub(/,/, " ", head)
+      n = split(head, w, /[ \t]+/)
+      for (i = 1; i <= n; i++)
+        if (w[i] != "" && substr(w[i], 1, 1) != "(") print "site " w[i]
+    }
+    { depth += gsub(/[{]/, "{", line); depth -= gsub(/[}]/, "}", line) }
+  ' "$1" | LC_ALL=C sort -u
+}
+
+#: `$1` is the config the host is running now. Non-zero if installing
+#: `$CADDYFILE` over it would stop something being served.
+check_config_against_live() {
+  local live="$1" now new dropped added
+  now="$(serves "$live")"
+  new="$(serves "$CADDYFILE")"
+
+  # The reader, checked against something already known. `site_block` above
+  # found a `qevik.ai {` block in this same file — that is how `$DOCROOT` was
+  # read — so `serves` must see it too. If it does not, the answer below is
+  # about this function and not about the host, and a refusal that names the
+  # wrong culprit is worse than no refusal: this deploy is the only thing that
+  # applies the fix, and it must not be blocked by a misread it does not admit
+  # to.
+  #
+  # Matched on the whole string rather than through `grep -q`: with `pipefail`
+  # on, `grep -q` closing the pipe early can make `printf` fail with EPIPE and
+  # the pipeline report non-zero on a line it did find.
+  case $'\n'"$new"$'\n' in
+    *$'\n'"site qevik.ai"$'\n'*) ;;
+    *)
+      echo "REFUSED: this script cannot read its own $(basename "$CADDYFILE") —" >&2
+      echo "  no 'qevik.ai' among the addresses it found, though the block is" >&2
+      echo "  there. That is a defect in serves(), not a change on the host." >&2
+      echo "  Nothing was deployed." >&2
+      return 1 ;;
+  esac
+
+  # A read that produced no site at all is not a host with no sites; it is a
+  # file this could not parse, or a transfer that was cut. Either way what the
+  # install would drop is unknown, and unknown is not a pass.
+  [ -n "$now" ] || {
+    echo "REFUSED: no site address could be read from the config now on the" >&2
+    echo "  host ($live). What installing this one would stop serving is" >&2
+    echo "  therefore unknown. Nothing was deployed." >&2
+    return 1
+  }
+
+  echo "    the config to install serves:"
+  printf '%s\n' "$new" | sed 's/^/        /'
+
+  dropped="$(comm -23 <(printf '%s\n' "$now") <(printf '%s\n' "$new"))"
+  added="$(comm -13 <(printf '%s\n' "$now") <(printf '%s\n' "$new"))"
+  if [ -n "$added" ]; then
+    echo "    and adds, which is the direction this deploy is for:"
+    printf '%s\n' "$added" | sed 's/^/        /'
+  fi
+
+  if [ -n "$dropped" ]; then
+    echo >&2
+    echo "REFUSED: the host's /etc/caddy/Caddyfile serves this, and the config" >&2
+    echo "  about to replace it does not:" >&2
+    printf '%s\n' "$dropped" | sed 's/^/        /' >&2
+    echo >&2
+    echo "  Installing it would take those off the air at the next Caddy" >&2
+    echo "  restart, and nothing in this deploy would notice — every check it" >&2
+    echo "  makes afterwards asks about qevik.ai." >&2
+    echo >&2
+    echo "  Something was added on the host and never written down here. Copy" >&2
+    echo "  the block into $(basename "$CADDYFILE") and run this again." >&2
+    echo "  Nothing was deployed." >&2
+    return 1
+  fi
+  echo "    nothing the host serves today would stop being served"
+  return 0
+}
+
+if [ "${1:-}" = "--check-config" ]; then
+  [ -n "${2:-}" ] || { echo "usage: $0 --check-config <live-caddyfile>" >&2; exit 64; }
+  [ -f "${2}" ] || { echo "REFUSED: no such file: $2" >&2; exit 1; }
+  check_config_against_live "$2" || exit 7
+  exit 0
+fi
+
 # `--restore-config [user@host]`: put the kept config back and nothing else.
 #
 # `deploy_control.sh` calls this when the one check only it can make fails —
@@ -161,6 +302,33 @@ ssh_() {
   local try
   for try in 1 2 3; do
     if ssh "${SSH_OPTS[@]}" "$TARGET" "$@"; then return 0; fi
+    [ "$try" = 3 ] && return 1
+    echo "    (link dropped; retry $try)" >&2
+    sleep $(( try * 3 ))
+  done
+}
+
+# Fetch the config the host is running now, into `$LIVE_CONFIG`.
+#
+# Not through `ssh_`: that returns the first attempt that works, and a caller
+# redirecting its stdout to a file would have the failed attempts' partial
+# output in front of the good one. Each attempt here truncates the file itself,
+# so what is left is one whole read or nothing.
+#
+# Three answers, and they are different: 0 the file was read, 3 the host has no
+# such file, anything else the link failed. A partial read cannot masquerade as
+# a small config — `cat` over ssh reports non-zero unless the remote command
+# finished and the channel closed cleanly.
+read_live_config() {
+  local try status
+  for try in 1 2 3; do
+    if ssh "${SSH_OPTS[@]}" "$TARGET" \
+         "[ -f /etc/caddy/Caddyfile ] || exit 3; cat /etc/caddy/Caddyfile" \
+         > "$LIVE_CONFIG" 2>/dev/null
+    then return 0
+    else status=$?
+    fi
+    [ "$status" = 3 ] && return 3
     [ "$try" = 3 ] && return 1
     echo "    (link dropped; retry $try)" >&2
     sleep $(( try * 3 ))
@@ -238,6 +406,23 @@ ssh_ true 2>/dev/null || {
   echo "REFUSED: no SSH access to $TARGET. Nothing was deployed." >&2
   exit 2
 }
+
+# Before anything on the host is touched, so a refusal here leaves it exactly as
+# it was — including the pages, which are cheap to send again and not cheap to
+# have half-swapped under a config this is about to decline to install. See the
+# note on `check_config_against_live` for why this one refuses.
+echo "==> what the host's config serves, against what this one would"
+LIVE_CONFIG="$WORK/live.Caddyfile"
+LIVE_STATUS=0
+read_live_config || LIVE_STATUS=$?
+case "$LIVE_STATUS" in
+  0) check_config_against_live "$LIVE_CONFIG" || exit 7 ;;
+  3) echo "    the host has no /etc/caddy/Caddyfile, so this drops nothing" ;;
+  *) echo "REFUSED: the config now on the host could not be read, so what" >&2
+     echo "  installing this one would stop serving is unknown. Nothing was" >&2
+     echo "  deployed." >&2
+     exit 8 ;;
+esac
 
 echo "==> copying the site to $DOCROOT"
 ssh_ "rm -rf '$DOCROOT.incoming' && mkdir -p '$DOCROOT.incoming'"

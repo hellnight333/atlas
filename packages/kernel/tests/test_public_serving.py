@@ -25,12 +25,14 @@ rather than only in `test_public_site.py`. Four parts, and all four are needed:
 2. The **built artefact** actually satisfies that config: every URL the sitemap
    advertises has its own file with its own title, and the 404 page the config
    names exists at exactly the path it names.
-3. The **deploy** carries both to the host together. This was the third way to
-   be broken and it was live: the config named `/404.html` and `/ar/404.html`
-   inside `/srv/qevik-public`, and nothing in this repository had ever written
-   to that directory. Rolling out §1 alone would have pointed `handle_errors` at
-   files the host does not have, so an unknown URL would answer with a bare
-   file-server error — while the deploy exited zero.
+3. The **deploy** carries both to the host together, and carries nothing away.
+   This was the third way to be broken and it was live: the config named
+   `/404.html` and `/ar/404.html` inside `/srv/qevik-public`, and nothing in
+   this repository had ever written to that directory. Rolling out §1 alone
+   would have pointed `handle_errors` at files the host does not have, so an
+   unknown URL would answer with a bare file-server error — while the deploy
+   exited zero. The same file is also the *whole* web server, so §3b asks the
+   other half of the question: what does installing it stop the host serving?
 4. The deploy **that anything actually runs** is that deploy. This is the fourth
    way, and it is the one that let §1–§3 be committed, reviewed, tested and
    marked production-verified while every URL on qevik.ai still served the
@@ -302,6 +304,25 @@ def preflight(dist: Path, caddyfile: Path | None = None):
     )
 
 
+def check_config(live: Path, caddyfile: Path | None = None):
+    """`deploy_public.sh --check-config` — what installing this repository's
+    config over `live` would stop the host serving, asked without a host.
+
+    The deploy replaces `/etc/caddy/Caddyfile` wholesale, and that file is four
+    hostnames including the console and every customer site. Driving the script
+    rather than reading it, for the same reason `preflight` does.
+    """
+    env = dict(os.environ)
+    if caddyfile is not None:
+        env["QEVIK_CADDYFILE"] = str(caddyfile)
+    return subprocess.run(
+        ["bash", str(DEPLOY_PUBLIC), "--check-config", str(live)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 def caddyfile_with(root: str, rewrites: tuple[str, ...]) -> str:
     """A minimal production-shaped config, for asking what the check reads."""
     handlers = "\n".join(
@@ -429,6 +450,138 @@ def test_the_deploy_reads_what_to_check_from_the_config_rather_than_repeating_it
     assert "/gone.html" in result.stderr, result.stderr
     # And the document root it would have shipped to comes from the same read.
     assert "/srv/somewhere-else" in result.stdout, result.stdout
+
+
+# --- 3b. and does not carry away what it did not know the host was serving ---
+#
+# The fix for this task installs a whole `/etc/caddy/Caddyfile` from this
+# repository, and that file is the entire web server: qevik.ai, the operator's
+# console at app.qevik.ai, every customer site at sites.qevik.ai, and the
+# fallback door on the bare IP. Anything the host serves that this copy does not
+# declare stops being served at the restart — silently, with a zero exit, and
+# unseen by every check the deploy makes afterwards, all of which ask about
+# qevik.ai.
+#
+# Two host-side mechanisms in this same directory produce exactly that:
+# `enable_domain.sh` puts a customer domain in `/etc/caddy/sites.d/` behind an
+# `import`, and `secure_8443.sh` rewrites the `:8443` block's address in place to
+# take that port off the public internet. Neither is in
+# `infra/qevik-production.Caddyfile`.
+
+
+def test_the_check_reads_site_addresses_and_not_the_blocks_inside_them() -> None:
+    """What "what the host serves" means, pinned.
+
+    A Caddyfile nests: `handle_errors` inside a site, `handle` inside that,
+    `log`, `tls` and `file_server` blocks throughout — every one of them a line
+    ending in `{`. A reader that took those for addresses would compare two
+    lists of directives and find them equal, which is a check that cannot fail.
+
+    Comparing the config against itself is also the negative control for the
+    refusals below: without this, they could be a check that refuses everything,
+    which is a deploy that never runs.
+    """
+    result = check_config(CADDYFILE)
+    assert result.returncode == 0, result.stderr
+    listed = set(re.findall(r"^\s+site (\S+)$", result.stdout, re.M))
+    # Hard-coded deliberately: a hostname appearing or disappearing here is a
+    # change to what this server answers for, and is worth an edit to a test.
+    assert listed == {
+        "qevik.ai",
+        "www.qevik.ai",
+        "app.qevik.ai",
+        "sites.qevik.ai",
+        "https://2.28.62.83:8443",
+        ":80",
+    }, result.stdout
+
+
+def test_a_config_that_stops_serving_a_hostname_the_host_serves_is_refused(
+    tmp_path,
+) -> None:
+    """A customer domain added on the host and never written down here.
+
+    Not reported, the way a host-only file under the document root is: that
+    404s one URL and might have been left by anybody, while this takes a whole
+    hostname off the air and every site block on a server is deliberate.
+    """
+    live = tmp_path / "Caddyfile"
+    live.write_text(
+        CADDYFILE.read_text(encoding="utf-8")
+        + "\ncustomer.example.com {\n\troot * /srv/sites/customer/current\n"
+        "\tfile_server\n}\n",
+        encoding="utf-8",
+    )
+
+    result = check_config(live)
+    assert result.returncode != 0, (
+        f"the deploy would have taken customer.example.com off the air: "
+        f"{result.stdout}")
+    assert "customer.example.com" in result.stderr, result.stderr
+
+
+def test_a_hostname_reached_through_an_import_is_not_silently_dropped(
+    tmp_path,
+) -> None:
+    """`enable_domain.sh` writes the block into `/etc/caddy/sites.d/` and never
+    touches the Caddyfile except through the `import` that pulls it in. The
+    hostname is therefore invisible in the live file, and only the `import` line
+    says it is there at all."""
+    live = tmp_path / "Caddyfile"
+    live.write_text(
+        CADDYFILE.read_text(encoding="utf-8")
+        + "\nimport /etc/caddy/sites.d/*.caddy\n",
+        encoding="utf-8",
+    )
+
+    result = check_config(live)
+    assert result.returncode != 0, result.stdout
+    assert "/etc/caddy/sites.d/*.caddy" in result.stderr, result.stderr
+
+
+def test_a_config_that_only_adds_hostnames_is_not_refused(tmp_path) -> None:
+    """The other negative control, and the one that matters most: this deploy
+    exists to replace exactly this config, so refusing it would be a guard that
+    blocks the fix it was written to protect."""
+    live = tmp_path / "Caddyfile"
+    live.write_text(
+        "qevik.ai {\n\troot * /srv/qevik-public\n"
+        "\ttry_files {path} /index.html\n\tfile_server\n}\n",
+        encoding="utf-8",
+    )
+
+    result = check_config(live)
+    assert result.returncode == 0, result.stderr
+    assert "app.qevik.ai" in result.stdout, result.stdout
+
+
+def test_a_live_config_that_reads_as_no_sites_at_all_is_not_taken_for_consent(
+    tmp_path,
+) -> None:
+    """A cut transfer and a host serving nothing look identical from here, and
+    only one of them is safe to install over. Unmeasured is not a pass."""
+    live = tmp_path / "Caddyfile"
+    live.write_text("# a truncated read, or a file this cannot parse\n",
+                    encoding="utf-8")
+
+    result = check_config(live)
+    assert result.returncode != 0, result.stdout
+
+
+def test_the_deploy_asks_what_it_would_stop_serving_before_it_touches_the_host() -> None:
+    """Order again, and this one is stricter than the others: the refusal has to
+    come before the pages are copied, not merely before the config is installed.
+    A deploy that swaps the document root and then declines to install the
+    config that resolves it has changed production and fixed nothing."""
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    asks = public.index("read_live_config || LIVE_STATUS=$?")
+    ships = public.index("rsync -az --partial")
+    installs = public.index('"$TARGET:/etc/caddy/Caddyfile')
+    assert asks < ships < installs, (
+        "the host is modified before anything asks what this config would stop "
+        "serving")
+    assert "check_config_against_live \"$LIVE_CONFIG\" || exit 7" in public, (
+        "the comparison is made and its answer is not acted on")
 
 
 def test_the_deploy_verifies_the_live_404_instead_of_reporting_success(dist) -> None:
