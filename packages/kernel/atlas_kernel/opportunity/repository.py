@@ -34,6 +34,34 @@ class UnknownSignal(Exception):
 class NotApprovable(Exception):
     """This opportunity cannot be approved, and why."""
 
+
+class StaleMessage(Exception):
+    """The message is not in the state the caller read, so nothing was written.
+
+    Raised only by a ``save_message`` that named an expectation, and it means
+    the guard did its job: between that caller's read and its write, something
+    else recorded a send, an approval or a suppression, and the save would have
+    replaced it with a decision taken against a state that no longer exists.
+
+    Carries what was expected and what is actually there, because "refused" on
+    its own is not enough to decide what to do next — a caller that meant to
+    approve a draft and finds it ``sent`` is in a different situation from one
+    that finds it ``suppressed``.
+    """
+
+    def __init__(self, message_id: str, expected: str, found: str | None) -> None:
+        self.message_id = message_id
+        self.expected = expected
+        #: ``None`` when there is no such row at all. Not the same as a row in
+        #: another state, and never reported as one.
+        self.found = found
+        super().__init__(
+            f"{message_id} is {found!r}, not the {expected!r} it was read as; "
+            "nothing was written"
+            if found is not None
+            else f"there is no message {message_id!r} to update; nothing was written"
+        )
+
 #: The timeline entry that records a person approving one opportunity.
 #:
 #: On the shared business timeline rather than in a column of its own, because
@@ -125,6 +153,7 @@ from .models import (
     Finding,
     Opportunity,
     OutreachMessage,
+    OutreachStatus,
     Proposal,
     ProposalClaim,
 )
@@ -1764,7 +1793,46 @@ class OpportunityRepository:
         payload["claims"] = [ProposalClaim(**c) for c in _decoded(payload["claims"])]
         return Proposal(**payload)
 
-    def save_message(self, message: OutreachMessage) -> OutreachMessage:
+    def save_message(self, message: OutreachMessage, *,
+                     expecting: OutreachStatus | str | None = None
+                     ) -> OutreachMessage:
+        """Store one outreach message. Returns the message that was written.
+
+        `expecting` names the status the caller believes the row is in — the
+        one it read before deciding anything — and the update then carries
+        `AND status = :expecting`, so it applies **only while that is still
+        true**. Without it this is exactly the unconditional upsert it has
+        always been, which is the path every existing caller is on.
+
+        The race it closes is not hypothetical. Every caller that reads a
+        message, decides something from its status and writes it back is a
+        check-then-write: between the read and the write another worker can
+        record a send, an approval or a suppression, and an unconditional
+        `ON CONFLICT (id) DO UPDATE` replaces that with a decision taken
+        against a state which no longer exists. There is no version column and
+        there need not be one — the status *is* what such a caller decided on,
+        so naming it is the whole guard.
+
+        The comparison is **in the statement that writes**, not in Python
+        before it. A check in Python is the race rather than a defence against
+        it: it would widen the same window it claims to close.
+
+        A refused write raises `StaleMessage` rather than returning something
+        falsy. A caller that ignores a returned flag carries on as though its
+        send, approval or suppression had been recorded, and a system that
+        believes it wrote what somebody else overwrote is worse off than one
+        that simply raced. The exception names the status actually found, so
+        the caller can say why it stopped.
+
+        With an expectation this updates an existing row and never creates
+        one: an expectation about a row's current status presupposes the row,
+        and inserting would manufacture the state the caller claimed to have
+        read. The columns it writes are exactly those the unconditional upsert
+        updates on conflict, so this is the same write, guarded.
+        """
+        payload = {**message.model_dump(), "status": message.status.value}
+        if expecting is not None:
+            return self._save_message_expecting(message, payload, expecting)
         with SessionLocal() as session:
             session.execute(
                 text("""
@@ -1786,8 +1854,54 @@ class OpportunityRepository:
                     sent_at = EXCLUDED.sent_at,
                     authorized_automated_at = EXCLUDED.authorized_automated_at
                 """),
-                {**message.model_dump(), "status": message.status.value},
+                payload,
             )
+            session.commit()
+        return message
+
+    def _save_message_expecting(self, message: OutreachMessage, payload: dict,
+                                expecting: OutreachStatus | str
+                                ) -> OutreachMessage:
+        """The guarded half of `save_message`. See its docstring for why."""
+        expected = (expecting.value if isinstance(expecting, OutreachStatus)
+                    else str(expecting).strip())
+        known = {status.value for status in OutreachStatus}
+        if expected not in known:
+            # Refusing here rather than letting the predicate match nothing. A
+            # misspelled expectation would otherwise be refused for ever, and
+            # look exactly like losing every race.
+            raise ValueError(
+                f"{expected!r} is not an outreach status, so no row can be in "
+                f"it and every save naming it would be refused. Known: "
+                f"{', '.join(sorted(known))}.")
+        guarded = {key: payload[key] for key in (
+            "id", "status", "approval_id", "approved_fingerprint",
+            "provider_message_id", "detail", "sent_at",
+            "authorized_automated_at")}
+        with SessionLocal() as session:
+            done = session.execute(
+                text("""
+                UPDATE atlas_outreach_messages SET
+                    status = :status,
+                    approval_id = :approval_id,
+                    approved_fingerprint = :approved_fingerprint,
+                    provider_message_id = :provider_message_id,
+                    detail = :detail,
+                    sent_at = :sent_at,
+                    authorized_automated_at = :authorized_automated_at
+                WHERE id = :id AND status = :expected
+                """),
+                {**guarded, "expected": expected})
+            if not done.rowcount:
+                # Read only to say *what* it lost to. The guarantee is the
+                # predicate above, which has already run and already refused;
+                # this cannot widen anything, and a refusal that cannot name
+                # the state it found is one nobody can act on.
+                found = session.execute(
+                    text("SELECT status FROM atlas_outreach_messages "
+                         "WHERE id = :id"), {"id": message.id}).scalar()
+                session.rollback()
+                raise StaleMessage(message.id, expected, found)
             session.commit()
         return message
 
