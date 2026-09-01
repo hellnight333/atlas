@@ -40,6 +40,11 @@ the records. `OpportunityService.request_approval` is the only path that asks
 today; it moves the row, and `test_opportunity_approval_wiring.py` holds it
 there.
 
+*Whether* somebody was asked is answerable; *when* is not. Nothing timestamps
+the move, so the only moment any row carries is `created_at`, and every number
+here is measured from it and says so. Reporting the age of the words as the age
+of the request would make up a fact about a person out of one about a message.
+
 The `approval_requested` event that same path records is *not* a second source
 for this. It names an approval and an opportunity, never a message, and a
 business holding a WhatsApp draft and an email draft is precisely the case where
@@ -116,6 +121,18 @@ EVIDENCE_MOVED = "EVIDENCE_MOVED_AFTER_IT_WAS_WRITTEN"
 #: of it; an unaddressed one cannot be decided about at all; only then does a
 #: claim whose evidence has moved become the most useful thing to say.
 LADDER: tuple[str, ...] = (SUPERSEDED, NO_RECIPIENT, UNREACHABLE, EVIDENCE_MOVED)
+
+#: What each condition is called in the tally.
+#:
+#: Paired with the condition rather than written out again inside `counts`,
+#: because the failure it guards against is silent: a fifth condition added to
+#: `LADDER` would be named on every row that has it and missing from every
+#: total, and a tally that quietly omits a reason is worse than no tally — an
+#: operator reads it as "none of those", not as "not counted".
+COUNT_KEYS: dict[str, str] = {SUPERSEDED: "superseded",
+                              NO_RECIPIENT: "addressed_to_nobody",
+                              UNREACHABLE: "unreachable",
+                              EVIDENCE_MOVED: "evidence_moved"}
 
 #: Statuses that mean nobody has decided. Everything else — approved, rejected,
 #: suppressed, sent, failed — is a decision somebody took, and this module has
@@ -207,7 +224,11 @@ class Unreviewed:
     subject: str
     #: When the words were written, from `created_at`.
     drafted_at: str
-    #: Whole days it has sat undecided. Zero is a real answer, not a missing one.
+    #: Whole days since the words were written, which is how long nobody has
+    #: decided about them. Zero is a real answer, not a missing one.
+    #:
+    #: Never how long an *ask* has waited, even on an `ASKED` row: no column
+    #: records when the question was put, so there is no such number to give.
     waiting_days: int
     #: `NEVER_ASKED` or `ASKED`. Always one of them.
     state: str
@@ -300,7 +321,8 @@ def _registry() -> Mapping[str, Any]:
 
 
 def _moved_since(written: datetime | None, events: Sequence[Any]) -> list[dict]:
-    """Findings about the business recorded after these words were written.
+    """Findings about the business recorded after these words were written,
+    oldest first.
 
     Two filters, and both belong here rather than in whatever fetched the
     events. The first is the window: a reevaluation recorded in the same instant
@@ -312,13 +334,20 @@ def _moved_since(written: datetime | None, events: Sequence[Any]) -> list[dict]:
     would train an operator to ignore the flag. A caller handing over a
     business's history should not have to know that, so this reads it from the
     vocabulary that defines it.
+
+    Ordered here, by the moment rather than by the rendered text, so that the
+    caller can name the latest one without re-deriving it. Events arrive with
+    whatever offset they were written in — Dubai's `+04:00` beside the control
+    plane's `+00:00` — and sorting the ISO strings orders those by their offset
+    instead of by when they happened, which would report a change from the day
+    before as the most recent thing anybody found.
     """
     from ..mission.reevaluation import ABOUT_THE_BUSINESS, COMPARED
 
     if written is None:
         return []
     about_business = {change.value for change in ABOUT_THE_BUSINESS}
-    found: list[dict] = []
+    found: list[tuple[datetime, dict]] = []
     for event in events:
         if str(_of(event, "kind", "") or "") != COMPARED:
             continue
@@ -327,11 +356,12 @@ def _moved_since(written: datetime | None, events: Sequence[Any]) -> list[dict]:
             continue
         detail = _of(event, "detail") or {}
         changes = (detail.get("changes") if isinstance(detail, Mapping) else None) or []
-        found.extend({**change, "at": at.isoformat()}
+        found.extend((at, {**change, "at": at.isoformat()})
                      for change in changes
                      if isinstance(change, Mapping)
                      and str(change.get("change") or "") in about_business)
-    return found
+    found.sort(key=lambda pair: pair[0])
+    return [change for _, change in found]
 
 
 def classify(message: Any, *, business_name: str = "",
@@ -355,8 +385,19 @@ def classify(message: Any, *, business_name: str = "",
     written_at = _iso(written) or "a time that was not recorded"
     if status == "awaiting_approval":
         state = ASKED
-        said = (f"awaiting_approval since {written_at} — put to a person "
-                f"{waiting} day(s) ago and not answered")
+        # `created_at` is when the words were written, and it is the only moment
+        # the row carries. The status records *that* the question was put and
+        # nothing records *when*, so dating the ask from it would be an
+        # invention about a person: a draft that sat a month and was raised
+        # yesterday would read as somebody ignoring a request for a month.
+        carries = (f"The one moment it carries is {written_at}, when the words "
+                   f"were written, {waiting} day(s) ago."
+                   if written else
+                   "It carries no moment at all — not when the words were "
+                   "written, and not when anybody was asked.")
+        said = ("atlas_outreach_messages.status is awaiting_approval — the "
+                "question was put to a person and not answered. When it was "
+                f"put is not recorded on the row. {carries}")
     else:
         state = NEVER_ASKED
         said = (f"a draft since {written_at}, carrying no approval, no "
@@ -390,7 +431,7 @@ def classify(message: Any, *, business_name: str = "",
 
     moved = _moved_since(written, events)
     if moved:
-        latest = max(str(change.get("at", "")) for change in moved)
+        latest = str(moved[-1].get("at", ""))
         blocked.append(EVIDENCE_MOVED)
         traces[EVIDENCE_MOVED] = (
             f"{len(moved)} change(s) about the business were recorded after "
@@ -474,7 +515,11 @@ def from_records(messages: Iterable[Any], *,
     for message in ordered:
         if not undecided(message):
             continue
-        if wanted is not None and str(_of(message, "id", "")) not in wanted:
+        # Matched against the id the row is *reported* under, absence read the
+        # same way here as there. A row whose id never arrived reports `""`, and
+        # a filter that turned that into `"None"` would make the one identifier
+        # a caller was handed unusable for asking about it again.
+        if wanted is not None and str(_of(message, "id", "") or "") not in wanted:
             continue
         current = newest.get(_origin(message))
         written = _aware(_of(message, "created_at"))
@@ -499,13 +544,15 @@ def counts(rows: Sequence[Unreviewed]) -> dict:
 
     Counted in messages, like everything else here, and `total` is therefore the
     length of the list a caller was handed rather than a number of companies.
+
+    The conditions are tallied straight off `COUNT_KEYS`, so every name a row can
+    carry has a total and no name can be counted twice. A row with three
+    conditions adds one to each of the three: these are not slices of `total`
+    and do not sum to it.
     """
-    return {"total": len(rows),
-            "never_asked": sum(1 for row in rows if row.state == NEVER_ASKED),
-            "asked": sum(1 for row in rows if row.state == ASKED),
-            "superseded": sum(1 for row in rows if SUPERSEDED in row.blocked_on),
-            "addressed_to_nobody": sum(
-                1 for row in rows if NO_RECIPIENT in row.blocked_on),
-            "unreachable": sum(1 for row in rows if UNREACHABLE in row.blocked_on),
-            "evidence_moved": sum(
-                1 for row in rows if EVIDENCE_MOVED in row.blocked_on)}
+    tally = {"total": len(rows),
+             "never_asked": sum(1 for row in rows if row.state == NEVER_ASKED),
+             "asked": sum(1 for row in rows if row.state == ASKED)}
+    for condition, key in COUNT_KEYS.items():
+        tally[key] = sum(1 for row in rows if condition in row.blocked_on)
+    return tally

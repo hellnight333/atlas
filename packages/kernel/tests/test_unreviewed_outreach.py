@@ -23,7 +23,7 @@ they are rows the caller cannot tell it was given.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,6 +42,10 @@ NOW = datetime(2026, 9, 1, 13, 35, tzinfo=UTC)
 #: A number sixteen of the twenty audited clinics publish. WhatsApp refuses it.
 LANDLINE = "043951010"
 MOBILE = "0501029104"
+
+#: The two offsets these records actually arrive in: the clinics are in Dubai
+#: and the control plane writes UTC.
+DUBAI = timezone(timedelta(hours=4))
 
 
 def message(**overrides) -> OutreachMessage:
@@ -95,6 +99,39 @@ def test_a_message_awaiting_approval_is_asked_and_unanswered() -> None:
     assert row.state == unreviewed.ASKED
     assert row.reason == unreviewed.ASKED
     assert "not answered" in row.why
+
+
+def test_that_it_was_asked_is_recorded_and_when_it_was_asked_is_not() -> None:
+    """The row carries one moment, and it is not the moment somebody was asked.
+
+    A draft can sit for weeks and be raised with a person yesterday; `status`
+    moves, `created_at` does not. Reporting the age of the words as the age of
+    the ask would tell an operator they had ignored a request for thirteen days
+    when they first saw it this morning — a statement about a person, made up
+    out of a timestamp about a message.
+    """
+    row = one_row([message(status=OutreachStatus.AWAITING_APPROVAL)])
+    assert "When it was put is not recorded" in row.why
+    assert "when the words were written, 13 day(s) ago" in row.why
+    assert "put to a person 13 day(s) ago" not in row.why
+    # The only moment quoted is the one the row actually carries.
+    assert row.drafted_at in row.why
+    assert row.waiting_days == 13
+
+
+def test_an_undated_row_that_was_asked_about_quotes_no_moment_at_all() -> None:
+    """With no `created_at` there is nothing to measure from, and a row that has
+    been put to somebody is no exception: `0 day(s) ago` beside "a time that was
+    not recorded" would read as today."""
+    undated = SimpleNamespace(id="msg-1", business_id="biz-1",
+                              status="awaiting_approval", channel="whatsapp",
+                              recipient=MOBILE, subject="", body="",
+                              mission_id="", proposal_id="", created_at=None)
+    row = one_row([undated])
+    assert row.state == unreviewed.ASKED
+    assert "no moment at all" in row.why
+    assert "day(s) ago" not in row.why
+    assert row.waiting_days == 0
 
 
 def test_an_approved_message_is_never_listed() -> None:
@@ -332,6 +369,27 @@ def test_a_reevaluation_with_no_detail_at_all_says_nothing() -> None:
     assert row.blocked_on == ()
 
 
+def test_the_latest_change_is_the_latest_moment_not_the_largest_string() -> None:
+    """Events arrive in whatever offset they were written in.
+
+    `2026-08-26T02:00:00+04:00` is an hour *earlier* than
+    `2026-08-25T23:00:00+00:00` and the larger of the two as text, so ordering
+    the rendered strings sorts these by their offset rather than by when they
+    happened. Naming the Dubai one as the most recent thing anybody found would
+    date the moving ground a day after it moved, in the one sentence a reviewer
+    is meant to check back against the record.
+    """
+    row = one_row([message()], events={"biz-1": [
+        reevaluated(datetime(2026, 8, 25, 23, 0, tzinfo=UTC),
+                    Change.DISAPPEARED),
+        reevaluated(datetime(2026, 8, 26, 2, 0, tzinfo=DUBAI),
+                    Change.CONTRADICTED)]})
+    assert row.reason == unreviewed.EVIDENCE_MOVED
+    assert "2 change(s)" in row.why
+    assert "2026-08-25T23:00:00+00:00" in row.why
+    assert "+04:00" not in row.why
+
+
 # --- how several conditions are reported together ---------------------------
 
 def test_the_headline_reason_is_the_most_decisive_and_the_rest_survive() -> None:
@@ -413,6 +471,29 @@ def test_the_tally_breaks_down_by_name() -> None:
         "addressed_to_nobody": 1, "unreachable": 1, "evidence_moved": 0}
 
 
+def test_every_named_condition_has_a_total() -> None:
+    """A tally that omits a reason reads as "none of those", not as "not
+    counted". Pairing the keys with the ladder is what stops a fifth condition
+    from being named on rows and missing from every total."""
+    assert tuple(unreviewed.COUNT_KEYS) == unreviewed.LADDER
+    assert set(unreviewed.counts([])) == {
+        "total", "never_asked", "asked", *unreviewed.COUNT_KEYS.values()}
+
+
+def test_a_row_with_several_conditions_is_counted_under_each() -> None:
+    """The condition totals are not slices of `total` and do not sum to it. One
+    draft addressed to nobody whose evidence also moved is one row and two
+    things to settle."""
+    rows = unreviewed.from_records(
+        [message(channel="email", recipient="")],
+        events={"biz-1": [reevaluated(LATER, Change.DISAPPEARED)]}, now=NOW)
+    assert rows[0].blocked_on == (unreviewed.NO_RECIPIENT,
+                                  unreviewed.EVIDENCE_MOVED)
+    assert unreviewed.counts(rows) == {
+        "total": 1, "never_asked": 1, "asked": 0, "superseded": 0,
+        "addressed_to_nobody": 1, "unreachable": 0, "evidence_moved": 1}
+
+
 # --- the unit is a message, and so is any window ---------------------------
 
 
@@ -487,6 +568,28 @@ def test_only_never_invents_a_row() -> None:
                       status=OutreachStatus.APPROVED_FOR_MANUAL_SEND)
     assert unreviewed.from_records(
         [decided], only=["msg-decided", "msg-imaginary"], now=NOW) == []
+
+
+def test_the_id_a_row_reports_is_the_id_only_accepts_back() -> None:
+    """`only` is how a caller asks again about rows it was handed, so the
+    identifier a row carries and the identifier the filter matches have to be
+    the same string — including when there is no identifier at all.
+
+    A row whose `id` never arrived reports `""`, and that is the only handle
+    anybody has on it. A filter that read the same absence as `"None"` would
+    make exactly the draft this list exists for the one draft nobody can ask
+    about a second time.
+    """
+    idless = SimpleNamespace(id=None, business_id="biz-1", status="draft",
+                             channel="whatsapp", recipient=MOBILE, subject="",
+                             body="", mission_id="", proposal_id="",
+                             created_at=DRAFTED)
+    records = [idless, message(id="msg-2")]
+    handed = [row.message_id for row in unreviewed.from_records(records, now=NOW)]
+    assert handed == ["", "msg-2"]
+
+    asked_again = unreviewed.from_records(records, only=handed, now=NOW)
+    assert [row.message_id for row in asked_again] == handed
 
 
 def test_no_only_at_all_still_reports_everything_undecided() -> None:
