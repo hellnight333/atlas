@@ -577,7 +577,19 @@ class Driver:
                 if freed:
                     log("UNPARKED", tasks=freed)
 
-                task = self.q.claim(owner=self.owner)
+                # Asked once per turn of the loop, not per task: the answer
+                # is about the link, not about any one piece of work.
+                link = gates.host_reachable()
+                if not link.passed:
+                    log("HOST_UNREACHABLE", detail=link.detail[:120])
+
+                task = self.q.claim(owner=self.owner,
+                                    host_reachable=link.passed)
+                if task is None and not link.passed:
+                    because = ("the control plane is unreachable and every "
+                               "remaining task needs it to deploy or to be "
+                               "verified in production")
+                    break
                 if task is None:
                     found = self.replenish()
                     if not found:

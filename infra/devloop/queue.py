@@ -316,7 +316,7 @@ class Queue:
                  "queue", _now()))
         return ident
 
-    def claim(self, *, owner: str) -> dict | None:
+    def claim(self, *, owner: str, host_reachable: bool = True) -> dict | None:
         """Take the highest-priority runnable task, atomically.
 
         Runnable means QUEUED, **or** in flight with an expired lease — a task
@@ -325,11 +325,25 @@ class Queue:
         exists, and the queue never advances past it.
         """
         with self._write() as db:
+            # A task that must deploy or be verified in production cannot
+            # finish while the control plane is unreachable. Skipped rather
+            # than started and failed forty minutes later at its deploy gate.
+            # Built in pieces rather than by concatenating a format string:
+            # `%` binds tighter than `+`, so appending a clause before the
+            # substitution silently formatted the wrong fragment.
+            in_flight = ",".join("?" * len(State.IN_FLIGHT))
+            runnable = (
+                f"SELECT * FROM tasks WHERE (state = ?"
+                f" OR (state IN ({in_flight}) AND lease_expires_at IS NOT NULL"
+                f" AND lease_expires_at < ?))")
+            if not host_reachable:
+                # A task that must deploy or be verified in production cannot
+                # finish while the control plane is unreachable. Skipped rather
+                # than started and failed at its deploy gate forty minutes on.
+                runnable += " AND requires_deploy = 0 AND requires_prod_check = 0"
+            runnable += " ORDER BY priority DESC, created_at LIMIT 1"
             row = db.execute(
-                "SELECT * FROM tasks WHERE state = ? OR (state IN"
-                " (%s) AND lease_expires_at IS NOT NULL AND lease_expires_at < ?)"
-                " ORDER BY priority DESC, created_at LIMIT 1"
-                % ",".join("?" * len(State.IN_FLIGHT)),
+                runnable,
                 (State.QUEUED, *sorted(State.IN_FLIGHT), _now())).fetchone()
             # WAITING_FOR_HUMAN is absent from IN_FLIGHT on purpose: a parked
             # task has no lease to expire, so it can never be reclaimed by a

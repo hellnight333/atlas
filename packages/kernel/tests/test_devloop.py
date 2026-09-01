@@ -1200,3 +1200,52 @@ def test_the_driver_checks_size_before_it_asks_for_a_review():
         "costs a review round")
     # And an oversized task is parked for a person to split, not silently failed.
     assert "park_oversized" in run_task
+
+
+# ===================================== work the loop can actually finish
+#
+# The link to the control plane drops for long stretches — TCP connects and the
+# SSH banner exchange times out. A task that must deploy or be verified in
+# production cannot finish while that lasts, and starting one costs a full
+# build before its deploy gate discovers the same thing.
+
+
+def test_work_needing_the_host_is_skipped_while_the_host_is_unreachable(q):
+    needs_host = q.add(title="deploys", brief="b", origin="human",
+                       priority=90, requires_deploy=True)
+    repo_only = q.add(title="repository only", brief="b", origin="human",
+                      priority=50)
+
+    taken = q.claim(owner="d", host_reachable=False)
+    assert taken["id"] == repo_only, (
+        "a task that cannot finish was started, and priority was allowed to "
+        "override whether it could finish at all")
+
+    q.move(taken["id"], State.QUEUED, reason="probe")
+    assert q.claim(owner="d", host_reachable=True)["id"] == needs_host
+
+
+def test_the_loop_stops_when_every_remaining_task_needs_an_unreachable_host(q):
+    q.add(title="deploys", brief="b", origin="human", requires_deploy=True)
+    q.add(title="verifies", brief="b", origin="human", requires_prod_check=True)
+    assert q.claim(owner="d", host_reachable=False) is None
+
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    loop = source[source.index("    def loop("):source.index("    def replenish(")]
+    assert "host_reachable" in loop, "the loop never asks whether the host is up"
+    assert loop.index("gates.host_reachable()") < loop.index("self.q.claim("), (
+        "the host is checked after a task is claimed, so an unrunnable task is "
+        "still started")
+    assert "unreachable" in loop, (
+        "the run ends without saying the host was the reason")
+
+
+def test_an_unreachable_host_is_unmeasured_not_a_failure(monkeypatch):
+    """It says nothing about the work.
+
+    Recorded as unmeasured so a task is never requeued with a reason that
+    blames a change for the network.
+    """
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (255, "timed out", True))
+    g = gates.host_reachable()
+    assert g.passed is False and g.unmeasured is True

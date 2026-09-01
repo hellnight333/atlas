@@ -238,6 +238,33 @@ def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
                 out.strip().splitlines()[-1][:300] if out.strip() else "no output")
 
 
+def host_reachable(*, timeout: int = 40) -> Gate:
+    """Whether the control plane can be reached at all.
+
+    Asked before a task starts rather than discovered by its deploy gate forty
+    minutes later. The link to this host drops for long stretches — TCP
+    connects and the SSH banner exchange times out — and a task that needs the
+    host cannot finish while that lasts.
+
+    An unreachable host is `unmeasured`, never a failure of the work: it says
+    nothing about the change, and treating it as one would requeue good work
+    with a misleading reason.
+    """
+    key = Path.home() / ".ssh" / "naml_hetzner"
+    if not key.exists():
+        return Gate("host", False, "no key to reach the host", unmeasured=True)
+    code, out, timed_out = _sh(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+         "-o", "ConnectionAttempts=2", "-i", str(key),
+         "root@2.28.62.83", "true"], cwd=Path.home(), timeout=timeout)
+    if timed_out or code != 0:
+        return Gate("host", False,
+                    "the control plane is not reachable from here; work that "
+                    "needs it cannot finish until the link returns",
+                    unmeasured=True)
+    return Gate("host", True, "reachable")
+
+
 def required(task: dict) -> tuple[str, ...]:
     """Which gates this task must pass. Declared per task, never inferred."""
     names = ["changed", "tests", "review"]
