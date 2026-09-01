@@ -891,3 +891,22 @@ def test_the_driver_always_returns_to_main():
     assert '"checkout", "-q", "main"' in loop, (
         "a run can end with a task branch checked out")
     assert "finally:" in loop and loop.index("finally:") < loop.index('"checkout", "-q", "main"')
+
+
+def test_a_decision_is_answerable_from_the_console_alone():
+    """The options must be drawn as consequences, not as names.
+
+    Choosing between "A" and "B" is not deciding. What makes a decision
+    answerable from the page is what each option changes and which records it
+    moves — otherwise the person has to go and read the engineer's report,
+    which is the loop this whole system exists to remove.
+    """
+    console = Path(INFRA).parents[0] / "apps" / "control" / "src" / "index.html"
+    source = console.read_text()
+    detail = source[source.index("async function humanTask("):]
+    for field in ("what_changes", "evidence_for", "records_affected"):
+        assert field in detail, f"an option's {field} is never shown"
+    # And the controls come from what the request says it accepts, so a
+    # control the API would refuse is never drawn.
+    assert "accepts.includes('choose')" in detail
+    assert "data-respond=\"choose\"" in detail and "data-choice=" in detail

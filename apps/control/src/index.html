@@ -1905,12 +1905,29 @@ async function humanTask(id) {
   /* Which controls exist is the request's own answer, not this page's guess.
      A question has no approve button because the model refuses approval on a
      question, and a control the API would reject should not be drawn. */
+  /* A decision's controls are its options; everything else gets plain buttons.
+     Drawn from what the request says it accepts, so a control the API would
+     refuse is never on the page. */
   const controls = [
     accepts.includes('approve')
       ? `<button class="primary" data-respond="approve">Approve</button>` : '',
     accepts.includes('reject') ? `<button data-respond="reject">Reject</button>` : '',
-    accepts.includes('choose') ? (t.options || []).map((o) =>
-      `<button data-respond="choose" data-choice="${esc(o.key)}">${esc(o.label || o.key)}</button>`).join('') : '',
+    /* Options are drawn as their consequences, not as their names. A person
+       choosing between "A" and "B" is not deciding; the thing that makes a
+       decision answerable from this page is what each one changes and which
+       records it moves. */
+    accepts.includes('choose') ? (t.options || []).map((o) => `
+      <div class="row"><div class="body">
+        <div class="title">${esc(o.label || o.key)}</div>
+        ${o.what_changes ? `<div class="meta">${esc(o.what_changes)}</div>` : ''}
+        ${o.evidence_for ? `<div class="meta"><strong>Evidence:</strong>
+          ${esc(o.evidence_for)}</div>` : ''}
+        ${o.records_affected ? `<div class="meta"><strong>Records affected:</strong>
+          ${esc(o.records_affected)}</div>` : ''}
+      </div><div class="actions">
+        <button class="primary" data-respond="choose"
+          data-choice="${esc(o.key)}">Choose this</button>
+      </div></div>`).join('') : '',
     accepts.includes('defer') ? `<button data-respond="defer">Defer</button>` : '',
   ].join(' ');
 
@@ -1962,7 +1979,9 @@ async function humanTask(id) {
       ${accepts.includes('answer') || accepts.includes('context') ? `
         <div class="field"><label for="answer">Answer</label>
           <textarea id="answer" rows="4" placeholder="Answer in your own words."></textarea></div>` : ''}
-      <div class="actions">${controls}
+      ${accepts.includes('choose') ? `<div class="rows">${controls}</div>`
+        : `<div class="actions">${controls}</div>`}
+      <div class="actions">
         ${accepts.includes('answer') ? `<button class="primary" data-respond="answer">Record answer</button>` : ''}
         ${accepts.includes('context') ? `<button data-respond="context">Add context</button>` : ''}</div>
       ${said}
