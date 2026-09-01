@@ -159,6 +159,10 @@ Read it at `GET /api/missions/outreach-unreviewed` — `GET` and `READ` only —
 and on the Publications screen in app.qevik.ai, under **Drafted, never
 decided**. The screen prints the kernel's wording and has no control on it.
 
+Longest-waiting first, and `limit` truncates the far end. There is no second
+page, so which end it truncates matters: working the front of the queue brings
+the rest into view, and nothing sits permanently behind the cut.
+
 The four conditions were not invented for the code. Each is something the
 written record already says about the drafts that exist:
 `73_FIRST_COMMERCIAL_TEST.md` holds Dubai Sky Clinic and Klinika back because

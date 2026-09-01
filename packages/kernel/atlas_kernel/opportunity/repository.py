@@ -939,8 +939,6 @@ class OpportunityRepository:
         """
         if since is None:
             return []
-        from ..mission.reevaluation import ABOUT_THE_BUSINESS
-
         with SessionLocal() as session:
             rows = session.execute(
                 text("""
@@ -949,15 +947,27 @@ class OpportunityRepository:
                   AND at > :since
                 ORDER BY at
                 """), {"business": business_id, "since": since}).mappings().all()
+        return [change for row in rows
+                for change in self._changes_about_the_business(
+                    row["detail"], row["at"])]
+
+    @staticmethod
+    def _changes_about_the_business(detail: object, at) -> list[dict]:
+        """The part of one reevaluation event that says something about the company.
+
+        Shared with the batched read behind `unreviewed_outreach`, so both
+        answer "did the ground move" the same way. `reevaluation` separates a
+        site that changed from a reading that could not see, and a message
+        flagged because our own crawler lost visibility would train an operator
+        to ignore the flag.
+        """
+        from ..mission.reevaluation import ABOUT_THE_BUSINESS
+
         about_business = {c.value for c in ABOUT_THE_BUSINESS}
-        found: list[dict] = []
-        for row in rows:
-            detail = _decoded(row["detail"]) or {}
-            for change in detail.get("changes") or []:
-                if change.get("change") in about_business:
-                    found.append({**change,
-                                  "at": row["at"].isoformat() if row["at"] else ""})
-        return found
+        stamp = at.isoformat() if at else ""
+        return [{**change, "at": stamp}
+                for change in (_decoded(detail) or {}).get("changes") or []
+                if change.get("change") in about_business]
 
     def contact_provenance(self, business_id: str) -> list[dict]:
         """Where each of this business's addresses was read from.
@@ -1860,11 +1870,25 @@ class OpportunityRepository:
         things is the most tempting place in the system to add a control that
         decides them all at once.
 
-        **The status filter here only narrows; `unreviewed.undecided` decides.**
+        **`unreviewed.undecided` decides; the SQL narrows by the same signals.**
         Two definitions of "nobody has decided" is how an approved message
         eventually appears in a queue inviting somebody to approve it again, so
-        the SQL picks candidate businesses cheaply and the module makes the
-        actual judgement on four independent signals.
+        the module keeps the judgement and the query narrows by
+        `UNDECIDED_STATUSES` and `DECISION_COLUMNS` — its list, not a second one.
+
+        It narrowed by `status` alone, and that was wrong in a way a looser
+        filter usually is not, because `LIMIT` runs inside the database and the
+        judgement runs after it. A row whose status still said `draft` while it
+        carried an approval was admitted, spent one of the places, and was then
+        correctly dropped — so a genuinely undecided draft could sit behind it
+        and never be read. Narrowing by every signal is what makes a place in
+        the queue cost a real one.
+
+        Candidates come back oldest-waiting first for the same reason. The limit
+        can still truncate — more businesses may be waiting than were asked for —
+        but truncation now drops the newest rather than whatever sorted last by
+        id, so a long-waiting draft is never permanently behind the cut, and
+        clearing the front of the queue brings the rest into view.
 
         **Every message for those businesses is read, not only the undecided
         ones.** Supersession is only answerable that way: a draft replaced by a
@@ -1884,14 +1908,27 @@ class OpportunityRepository:
 
         tenant = _require_tenant(tenant, method="unreviewed_outreach")
         where, params = _tenant_predicate(tenant, alias="b")
+        # Built from the reader's own list, so a fifth signal cannot be added
+        # there and forgotten here. `coalesce(CAST(x AS text), '') = ''` is what
+        # `undecided` asks of every one of them: the text columns are absent
+        # when empty as well as when null, and a timestamp cast to text is
+        # non-empty exactly when it is set. Equivalent rather than merely
+        # similar — a query *stricter* than the judgement would hide a draft
+        # nobody has decided about, which is what this list exists to prevent.
+        # `CAST` rather than `::`, because `text()` reads `:` as a bind marker
+        # and one column name away from a cast is not where that wants testing.
+        undecided_sql = " AND ".join(
+            f"coalesce(CAST(m.{column} AS text), '') = ''"
+            for column in reader.DECISION_COLUMNS)
         with SessionLocal() as session:
             businesses = [row[0] for row in session.execute(
                 text(f"""
-                SELECT DISTINCT m.business_id
+                SELECT m.business_id
                 FROM atlas_outreach_messages m
                 JOIN atlas_businesses b ON b.id = m.business_id
-                WHERE m.status = ANY(:statuses) AND {where}
-                ORDER BY m.business_id
+                WHERE m.status = ANY(:statuses) AND {undecided_sql} AND {where}
+                GROUP BY m.business_id
+                ORDER BY min(m.created_at), m.business_id
                 LIMIT :limit
                 """),
                 {**params, "statuses": list(reader.UNDECIDED_STATUSES),
@@ -1905,14 +1942,65 @@ class OpportunityRepository:
             names = {row[0]: row[1] for row in session.execute(
                 text("SELECT id, name FROM atlas_businesses WHERE id = ANY(:ids)"),
                 {"ids": businesses}).all()}
+            messages = [OutreachMessage(**dict(row)) for row in rows]
+            changes = self._evidence_changes_for(session, messages)
 
-        messages = [OutreachMessage(**dict(row)) for row in rows]
-        # Only for the rows that are actually undecided: each is a query, and
-        # asking it about a message somebody already decided buys nothing.
-        changes = {message.id: self.evidence_changes_since(
-                       message.business_id, message.created_at)
-                   for message in messages if reader.undecided(message)}
         return reader.from_records(messages, names=names, changes=changes)
+
+    def _evidence_changes_for(self, session, messages: list) -> dict[str, list[dict]]:
+        """Evidence that moved after each undecided message was written.
+
+        One query for the whole queue, on the session the queue already has.
+        Asking `evidence_changes_since` per message was a round trip and a
+        connection each, so a hundred undecided drafts was a hundred of both on
+        every page load — and the supported limit is ten times that. The events
+        are the same events; only the window each message asks about differs,
+        and a window is not a reason to talk to the database again.
+
+        Bounded below by the oldest undecided draft, so the fold reads no event
+        that no message could be asking about. Only undecided rows are folded:
+        every message for these businesses was fetched, because supersession
+        needs them, but what changed after a message somebody already decided is
+        not this list's question.
+
+        Takes no tenant and must not grow one. It reads events for exactly the
+        businesses it is handed, and the caller has already scoped those; a
+        second predicate here would be a second place for the scoping to be
+        right, which is one more than there should be. Private for that reason.
+        """
+        from ..outreach import unreviewed as reader
+
+        waiting = [message for message in messages
+                   if reader.undecided(message) and message.created_at is not None]
+        if not waiting:
+            return {}
+
+        rows = session.execute(
+            text("""
+            SELECT business_id, detail, at FROM atlas_business_events
+            WHERE kind = 'business_reevaluated'
+              AND business_id = ANY(:ids) AND at > :since
+            ORDER BY at
+            """),
+            {"ids": sorted({message.business_id for message in waiting}),
+             "since": min(message.created_at for message in waiting)},
+        ).mappings().all()
+
+        recorded: dict[str, list[tuple[datetime, list[dict]]]] = {}
+        for row in rows:
+            found = self._changes_about_the_business(row["detail"], row["at"])
+            if found:
+                recorded.setdefault(row["business_id"], []).append((row["at"], found))
+
+        # `at` and `created_at` are both TIMESTAMP WITH TIME ZONE read back over
+        # the same connection, so they are aware and compare directly. The
+        # comparison is `>`, matching the SQL it replaced: a change recorded in
+        # the same instant as the draft is not a change made after it.
+        return {message.id: [change
+                             for at, found in recorded.get(message.business_id, ())
+                             if at > message.created_at
+                             for change in found]
+                for message in waiting}
 
     def record_event(self, event: BusinessEvent) -> BusinessEvent:
         """Append to a business's permanent history.

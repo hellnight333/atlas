@@ -89,6 +89,20 @@ LADDER: tuple[str, ...] = (SUPERSEDED, NO_RECIPIENT, UNREACHABLE, EVIDENCE_MOVED
 #: no business listing it as waiting.
 UNDECIDED_STATUSES: tuple[str, ...] = ("draft", "awaiting_approval")
 
+#: Columns whose presence *is* a decision, whatever the status column says. Any
+#: one of them set means somebody acted on this message.
+#:
+#: Named here rather than spelled out inside `undecided` because the SQL that
+#: picks candidates out of the database has to narrow by the same four. It
+#: narrowed by `status` alone, and the gap was not merely wasteful: the query
+#: takes its `LIMIT` before this function ever runs, so a row that only *looked*
+#: undecided spent a place in the queue and a genuinely undecided draft behind
+#: it was never read at all. One list, applied in both places, and
+#: `test_the_queue_narrows_by_every_signal_that_means_decided` fails if a fifth
+#: signal is added here and not there.
+DECISION_COLUMNS: tuple[str, ...] = ("approval_id", "approved_fingerprint",
+                                     "sent_at", "authorized_automated_at")
+
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -122,13 +136,16 @@ def undecided(message: Any) -> bool:
     that case. They carry `approved_fingerprint`, so they are decisions and are
     not this module's business. What is to happen to them is DQ-008, and it is a
     person's to answer.
+
+    Absence is read as falsiness rather than `is None`, which is the same test
+    for both kinds of column: the two text ones are absent when empty as well as
+    when null, and a `datetime` is never falsy, so a timestamp is caught exactly
+    when it is `None`.
     """
     status = str(getattr(message, "status", "") or "")
     return (status in UNDECIDED_STATUSES
-            and not getattr(message, "approval_id", None)
-            and not getattr(message, "approved_fingerprint", None)
-            and getattr(message, "sent_at", None) is None
-            and getattr(message, "authorized_automated_at", None) is None)
+            and not any(getattr(message, column, None)
+                        for column in DECISION_COLUMNS))
 
 
 @dataclass(frozen=True)

@@ -11,16 +11,37 @@ forbids.
 **The reader cannot act.** No approve, no send, no delete, structurally rather
 than by a flag — a list of undecided things is the most tempting place in this
 system to grow a control that decides all of them at once.
+
+`TestTheQueueAgainstRealRows` adds the third, which only a database can be wrong
+about: **nothing waiting is invisible**. The judgement above runs in Python and
+the `LIMIT` runs in Postgres, so the two have to agree on what "decided" means
+before the limit is taken — and reading the queue has to cost one query rather
+than one per draft, because a queue expensive enough to time out is a queue that
+shows nothing at all.
 """
 
 from __future__ import annotations
 
 import inspect
 import re
-from datetime import UTC, datetime
+import uuid
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
-from atlas_kernel.opportunity.models import OutreachMessage, OutreachStatus
+import pytest
+from sqlalchemy import event, text
+
+from atlas_kernel import db
+from atlas_kernel.db import SessionLocal
+from atlas_kernel.opportunity.models import (
+    Business,
+    BusinessEvent,
+    OutreachMessage,
+    OutreachStatus,
+)
+from atlas_kernel.opportunity.repository import OpportunityRepository
 from atlas_kernel.outreach import unreviewed
 
 DRAFTED = datetime(2026, 8, 19, 13, 35, tzinfo=UTC)
@@ -90,12 +111,39 @@ def test_a_sent_message_is_never_listed() -> None:
 
 def test_a_status_that_says_draft_is_not_enough_on_its_own() -> None:
     """Four signals, not one column. A status is one edit away from lying, and
-    the direction that matters here is an approval reappearing as a draft."""
-    for carried in ({"approval_id": "manual-abc123"},
-                    {"approved_fingerprint": "b" * 64},
-                    {"sent_at": NOW},
-                    {"authorized_automated_at": NOW}):
-        assert unreviewed.undecided(message(**carried)) is False, carried
+    the direction that matters here is an approval reappearing as a draft.
+
+    Driven by `DECISION_COLUMNS` rather than a list written out again, because
+    the SQL that feeds this queue narrows by the same names and a signal added
+    to one place and not the other is the defect this constant exists to close.
+    """
+    carried = {"approval_id": "manual-abc123",
+               "approved_fingerprint": "b" * 64,
+               "sent_at": NOW,
+               "authorized_automated_at": NOW}
+    assert set(carried) == set(unreviewed.DECISION_COLUMNS), (
+        "a decision signal is not exercised here")
+    for column, value in carried.items():
+        assert unreviewed.undecided(message(**{column: value})) is False, column
+
+
+def test_the_queue_narrows_by_every_signal_that_means_decided() -> None:
+    """The database query and the judgement must agree on what "decided" is.
+
+    `LIMIT` runs inside the database and `undecided` runs after it, so a query
+    that admits a row the judgement then drops has spent a place in the queue on
+    nothing — and the draft behind it is not read at all. Narrowing by `status`
+    alone did exactly that. The query is built from `DECISION_COLUMNS`, so this
+    asserts it is *derived from* the list rather than a copy of it.
+    """
+    from atlas_kernel.opportunity.repository import OpportunityRepository
+
+    source = inspect.getsource(OpportunityRepository.unreviewed_outreach)
+    assert "reader.DECISION_COLUMNS" in source, (
+        "the candidate query does not narrow by the reader's decision signals")
+    assert "reader.UNDECIDED_STATUSES" in source
+    # And it narrows before the limit, which is the whole point.
+    assert source.index("undecided_sql") < source.index("LIMIT :limit")
 
 
 def test_a_rejected_message_is_a_decision_too() -> None:
@@ -265,14 +313,22 @@ def test_the_reader_can_neither_decide_nor_send_nor_delete() -> None:
 
 def test_the_repository_read_writes_nothing_and_is_tenant_scoped() -> None:
     """A guard that is imported but not called protects nothing, and a read
-    across every tenant's outreach is a disclosure."""
+    across every tenant's outreach is a disclosure.
+
+    The helper is covered too. Batching the evidence read moved SQL out of the
+    scoped method, and a write is no less a write for sitting one call away.
+    """
     from atlas_kernel.opportunity.repository import OpportunityRepository
 
     source = inspect.getsource(OpportunityRepository.unreviewed_outreach)
     assert "_require_tenant" in source
     assert "_tenant_predicate" in source
-    for forbidden in ("DELETE", "UPDATE", "INSERT", "commit()"):
-        assert forbidden not in source, f"the read performs {forbidden}"
+    for method in (OpportunityRepository.unreviewed_outreach,
+                   OpportunityRepository._evidence_changes_for):
+        body = inspect.getsource(method)
+        for forbidden in ("DELETE", "UPDATE", "INSERT", "commit()"):
+            assert forbidden not in body, (
+                f"{method.__name__} performs {forbidden}")
 
 
 # --- and it is actually reachable ------------------------------------------
@@ -326,3 +382,225 @@ def test_the_console_shows_the_drafts_and_decides_nothing_about_them() -> None:
     section = section[:section.index("views.measurements")]
     assert not re.search(r"API\.post|data-approve|<button", section), (
         "the console grew a control on a list of undecided messages")
+
+
+# --- nothing waiting is invisible ------------------------------------------
+
+
+@contextmanager
+def counting(table: str):
+    """How many statements touching one table a block of work runs.
+
+    An N+1 is invisible to an assertion on the answer, because the answer is
+    correct either way — the cost is the defect, so the cost is what is
+    measured. Attached to the engine rather than to a session, so a call that
+    opens its own connections is counted too, which is exactly what the
+    per-message version did.
+    """
+    seen = SimpleNamespace(queries=0)
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if table in statement:
+            seen.queries += 1
+
+    event.listen(db.engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(db.engine, "before_cursor_execute", record)
+
+
+@pytest.fixture(scope="module")
+def repo() -> OpportunityRepository:
+    db.init_db()
+    # `atlas_businesses.tenant_id` is not created by `init_db`; the tenancy
+    # migration was applied out of band and the schema never caught up. Added
+    # here for the reason `test_tenant_isolation` adds it — the predicate this
+    # queue is scoped by reads the column, and without it the queue cannot run
+    # at all against a freshly initialised database.
+    with SessionLocal() as session:
+        session.execute(text(
+            "ALTER TABLE atlas_businesses ADD COLUMN IF NOT EXISTS tenant_id TEXT"))
+        session.commit()
+    return OpportunityRepository()
+
+
+@pytest.fixture
+def queue(repo):
+    """A tenant of its own, and everything it wrote removed afterwards.
+
+    A fresh tenant per test rather than a shared one: these assert on what the
+    *whole* queue contains, the suite's database is shared, and a draft another
+    test left behind would be indistinguishable from a defect here.
+    """
+    tenant = f"tenant-unreviewed-{uuid.uuid4().hex[:8]}"
+    created: list[str] = []
+
+    def business(label: str) -> str:
+        """A business whose id sorts by its label, so ordering is assertable."""
+        made = Business(id=f"biz-unreviewed-{label}-{uuid.uuid4().hex[:8]}",
+                        name=f"Unreviewed {label} {uuid.uuid4().hex[:6]}",
+                        geography="United Arab Emirates",
+                        sources=["unreviewed-queue-test"])
+        repo.save_business(made)
+        with SessionLocal() as session:
+            session.execute(
+                text("UPDATE atlas_businesses SET tenant_id = :t WHERE id = :i"),
+                {"t": tenant, "i": made.id})
+            session.commit()
+        created.append(made.id)
+        return made.id
+
+    def draft(business_id: str, *, at: datetime, **carried) -> OutreachMessage:
+        made = OutreachMessage(
+            proposal_id="", business_id=business_id, channel="email",
+            recipient="owner@example.ae", subject="A quick health check",
+            body="Hello — I'm Ayoub.", status=OutreachStatus.DRAFT,
+            created_at=at, **carried)
+        repo.save_message(made)
+        return made
+
+    def reevaluated(business_id: str, *, at: datetime) -> None:
+        repo.record_event(BusinessEvent(
+            business_id=business_id, factory="reevaluation",
+            kind="business_reevaluated", at=at,
+            detail={"changes": [{"feature": "online booking", "was": "present",
+                                 "now": "not_found", "change": "disappeared"}]}))
+
+    yield SimpleNamespace(tenant=tenant, business=business, draft=draft,
+                          reevaluated=reevaluated)
+
+    with SessionLocal() as session:
+        for statement in (
+                "DELETE FROM atlas_outreach_messages WHERE business_id = ANY(:i)",
+                "DELETE FROM atlas_business_events WHERE business_id = ANY(:i)",
+                "DELETE FROM atlas_businesses WHERE id = ANY(:i)"):
+            session.execute(text(statement), {"i": created})
+        session.commit()
+
+
+class TestTheQueueAgainstRealRows:
+    """What the dataclass tests above cannot see, because it lives in the SQL.
+
+    Everything before this point checks the judgement on records handed to it.
+    Neither of the two defects here is visible that way: both are about the
+    *set of records the judgement is handed*, which the database chooses.
+
+    **A place in the queue must cost a real one.** The limit is applied in
+    Postgres and `undecided` is applied in Python afterwards, so a candidate the
+    query admits and the judgement drops leaves a genuine draft unread — and
+    there is no second page to find it on.
+
+    **Reading the queue is one query, not one per draft.** Every undecided
+    message asks the same table the same question over a different window.
+    Asking separately was a session and a round trip each, and a page that times
+    out reports nothing waiting just as surely as an empty list does.
+    """
+
+    def test_a_decided_row_does_not_spend_a_place_in_the_queue(
+            self, repo, queue) -> None:
+        """The limit is the database's and the judgement is Python's.
+
+        A row that only *looked* undecided was admitted by the query, counted
+        against the limit, and then correctly dropped — and the genuine draft
+        behind it was never read. There is no second page, so it was not late:
+        it was invisible.
+
+        The decided business is first by both orderings the query has ever used:
+        its id sorts earlier and its draft is older.
+        """
+        decided = queue.business("a-decided")
+        queue.draft(decided, at=DRAFTED, approved_fingerprint="c" * 64)
+        waiting = queue.business("z-waiting")
+        queue.draft(waiting, at=DRAFTED + timedelta(hours=1))
+
+        rows = repo.unreviewed_outreach(limit=1, tenant=queue.tenant)
+
+        assert [row.business_id for row in rows] == [waiting], (
+            "the one place in the queue was spent on a message somebody had "
+            "already decided about")
+
+    def test_no_decision_signal_at_all_survives_the_candidate_query(
+            self, repo, queue) -> None:
+        """Each of the four, against the database rather than the dataclass.
+
+        The unit test proves `undecided` refuses them. This proves the query
+        that feeds it refuses them too, which is the half that governs the
+        limit — and it is the half that narrowed by `status` alone.
+        """
+        marks = {"approval_id": "manual-abc123",
+                 "approved_fingerprint": "d" * 64,
+                 "sent_at": DRAFTED,
+                 "authorized_automated_at": DRAFTED}
+        assert set(marks) == set(unreviewed.DECISION_COLUMNS)
+        for index, (column, value) in enumerate(marks.items()):
+            queue.draft(queue.business(f"decided-{index}"), at=DRAFTED,
+                        **{column: value})
+        waiting = queue.business("waiting")
+        queue.draft(waiting, at=DRAFTED + timedelta(hours=1))
+
+        rows = repo.unreviewed_outreach(limit=1, tenant=queue.tenant)
+
+        assert [row.business_id for row in rows] == [waiting]
+
+    def test_the_whole_queue_costs_one_evidence_query(self, repo, queue) -> None:
+        """Not one per draft, and not a session per draft either.
+
+        Ten here; a real queue is a hundred and the endpoint permits a thousand.
+        At one round trip each, reading the list is where the Publications page
+        exhausts the connection pool.
+        """
+        business = queue.business("busy")
+        for index in range(10):
+            queue.draft(business, at=DRAFTED + timedelta(minutes=index),
+                        mission_id=f"mission-{index}")
+        queue.reevaluated(business, at=DRAFTED + timedelta(days=1))
+
+        with counting("atlas_business_events") as counted:
+            rows = repo.unreviewed_outreach(limit=50, tenant=queue.tenant)
+
+        assert len(rows) == 10
+        assert counted.queries == 1, (
+            f"reading {len(rows)} drafts took {counted.queries} evidence "
+            "queries; it is one question asked over ten windows")
+
+    def test_one_query_still_answers_each_draft_separately(
+            self, repo, queue) -> None:
+        """Batching must not batch the *question*.
+
+        Each draft asks what moved after **it** was written. A fold that reused
+        the oldest draft's window would report the ground moving under words
+        that were written after it moved, which is worse than not reporting it:
+        an operator learns the flag means nothing.
+        """
+        business = queue.business("moved")
+        before = queue.draft(business, at=DRAFTED, mission_id="mission-early")
+        after = queue.draft(business, at=DRAFTED + timedelta(days=2),
+                            mission_id="mission-late")
+        queue.reevaluated(business, at=DRAFTED + timedelta(days=1))
+
+        rows = {row.message_id: row for row
+                in repo.unreviewed_outreach(limit=10, tenant=queue.tenant)}
+
+        assert unreviewed.EVIDENCE_MOVED in rows[before.id].blocked_on
+        assert unreviewed.EVIDENCE_MOVED not in rows[after.id].blocked_on, (
+            "a draft written after the change was reported as resting on "
+            "evidence that moved")
+
+    def test_the_longest_waiting_are_the_ones_a_short_limit_keeps(
+            self, repo, queue) -> None:
+        """A limit truncates; which end it truncates is the design.
+
+        Ordered by id, a business whose id sorted late was behind the cut
+        however long it had waited, and stayed there — the queue could not be
+        cleared into visibility. Ordered by the oldest draft, working the front
+        of the queue brings the rest into view.
+        """
+        oldest = queue.business("z-oldest")
+        queue.draft(oldest, at=DRAFTED)
+        newest = queue.business("a-newest")
+        queue.draft(newest, at=DRAFTED + timedelta(days=3))
+
+        rows = repo.unreviewed_outreach(limit=1, tenant=queue.tenant)
+
+        assert [row.business_id for row in rows] == [oldest]
