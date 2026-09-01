@@ -408,17 +408,67 @@ def counting(table: str):
 
 @pytest.fixture(scope="module")
 def repo() -> OpportunityRepository:
+    """No hand-applied schema. `init_db` is the whole setup, deliberately.
+
+    This fixture used to add `atlas_businesses.tenant_id` itself, which made the
+    queue testable while leaving it unable to run against a database built the
+    ordinary way: the tenancy migration had added the column out of band and the
+    managed schema never caught up. A fixture that repairs the schema hides
+    exactly the failure a fresh installation would hit, so the repair moved into
+    `init_db` and `test_the_initialised_schema_carries_the_ownership_column`
+    fails if it is ever taken out again.
+    """
     db.init_db()
-    # `atlas_businesses.tenant_id` is not created by `init_db`; the tenancy
-    # migration was applied out of band and the schema never caught up. Added
-    # here for the reason `test_tenant_isolation` adds it — the predicate this
-    # queue is scoped by reads the column, and without it the queue cannot run
-    # at all against a freshly initialised database.
-    with SessionLocal() as session:
-        session.execute(text(
-            "ALTER TABLE atlas_businesses ADD COLUMN IF NOT EXISTS tenant_id TEXT"))
-        session.commit()
     return OpportunityRepository()
+
+
+def test_the_initialised_schema_carries_the_ownership_column(repo) -> None:
+    """The queue must run on a database built the ordinary way.
+
+    It is scoped through `atlas_businesses`, so the predicate names
+    `b.tenant_id`. Without the column the query does not return the wrong rows —
+    it raises `UndefinedColumn`, and a queue that raises reports nothing waiting
+    just as surely as an empty one does. Only a *named* tenant reaches the
+    column, because `ALL_TENANTS` compiles to `TRUE` and names nothing, which is
+    how every other tenant-scoped read went on passing while it was missing.
+
+    Asserted by running the read rather than by inspecting the schema alone: the
+    column existing and the query working are the same claim, and only the
+    second one is what a fresh installation needs.
+
+    And asserted of `init_db`'s source as well, because the live checks cannot
+    fail on a database that already has the column — this suite's has carried it
+    since a fixture added it by hand, which is exactly how the gap survived. The
+    source is what a fresh installation runs.
+    """
+    source = inspect.getsource(db.init_db)
+    assert "atlas_businesses ADD COLUMN IF NOT EXISTS tenant_id" in source, (
+        "init_db no longer adds the ownership column, so a database built from "
+        "it cannot answer any read scoped to a named tenant")
+
+    assert repo.unreviewed_outreach(
+        limit=1, tenant=f"tenant-owns-nothing-{uuid.uuid4().hex[:8]}") == []
+
+    with SessionLocal() as session:
+        column = session.execute(text(
+            "SELECT is_nullable, column_default FROM information_schema.columns "
+            "WHERE table_name = 'atlas_businesses' AND column_name = 'tenant_id'"
+        )).first()
+        indexes = {row[0] for row in session.execute(text(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'atlas_businesses'"))}
+
+    assert column is not None, "init_db does not create atlas_businesses.tenant_id"
+    # Nullable, exactly as `infra/migrate_tenancy.py` made it. Residue owned by
+    # nobody keeps a NULL because that is the honest record, and `tenancy.owns`
+    # returns such a row to nobody; a `DEFAULT ''` would invent an owner for
+    # eight thousand legacy rows and hand them to whoever asked with one.
+    assert (column[0], column[1]) == ("YES", None), (
+        "tenant_id was given a default or made NOT NULL, which assigns an owner "
+        "to rows that have none")
+    assert "atlas_businesses_tenant_idx" in indexes, (
+        "the ownership index is missing, or init_db and migrate_tenancy have "
+        "stopped agreeing on its name — two indexes on one column is what that "
+        "disagreement looks like in production")
 
 
 @pytest.fixture

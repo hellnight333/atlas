@@ -1251,6 +1251,33 @@ def init_db() -> None:
             NOT NULL DEFAULT now()
         """)
         )
+        # Who owns the company. `infra/migrate_tenancy.py` added this to the
+        # production database out of band and the managed schema never caught
+        # up, so a freshly initialised one had no `tenant_id` at all — and every
+        # read scoped to a named tenant through `atlas_businesses`
+        # (`list_businesses`, `find_possible_duplicates`, `list_events`,
+        # `load_contact_history`, `unreviewed_outreach`) failed on the missing
+        # column. Only a *named* tenant did: `ALL_TENANTS` compiles to `TRUE` and
+        # names nothing, which is why the suite never saw it.
+        #
+        # Nullable and without a default, exactly as the migration made it.
+        # Residue keeps a NULL owner because that is the honest record, and
+        # `tenancy.owns` returns a row owned by nobody to nobody; `DEFAULT ''`
+        # would invent an owner for those rows. Nothing in the kernel writes the
+        # column yet — ownership is assigned by the migration — so a fresh
+        # database answers a tenant with an empty list rather than an error,
+        # which is the difference this closes.
+        conn.execute(
+            text("ALTER TABLE atlas_businesses ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+        )
+        # Same index name the migration creates, so the production database
+        # already has it and this is a no-op there.
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS atlas_businesses_tenant_idx "
+                "ON atlas_businesses (tenant_id)"
+            )
+        )
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS niche"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS source"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS discovered_at"))

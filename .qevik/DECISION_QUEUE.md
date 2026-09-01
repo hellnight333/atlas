@@ -141,3 +141,20 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-c61027684e89`
 - **Review unit:** `5cdbc4e8da18..db29c4ac3d07`
+
+<!-- devloop:oversized:t-bed79dbd0ec3 -->
+## Too large for one run — Why each outreach draft is unreviewed, from the records
+
+4 files and 1451 lines is more than one run can review and converge on (limits: 14 files, 700 lines). Split it at a real boundary rather than spending rounds on it.
+
+The work is on `devloop/t-bed79dbd0ec3` and is not lost. Split it at a real boundary — frontend from backend, configuration from application code, data model from integration, build assets from runtime logic — and enqueue the pieces.
+
+- **What it was asked to do:** 14 outreach drafts exist that nobody has decided about. Establish from
+the records why each one is unreviewed and make that answerable.
+
+Scope: the domain and the data only — `atlas_kernel/outreach/unreviewed.py`
+and the repository read it needs, with their tests. No API route, no console
+view, no documentation page. Those are a separate task and are deliberately
+not this one.
+
+A reviewer already

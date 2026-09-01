@@ -95,6 +95,50 @@ class TestRealApprovalService:
         assert channel.delivered == []
         assert runtime.approval_service.get(request.id) is not None
 
+    def test_asking_a_person_is_recorded_on_the_message_itself(self) -> None:
+        """Otherwise no reader of the message can tell the question was put.
+
+        The timeline event says an approval was requested for an *opportunity*;
+        nothing turns that back into "these words, on this channel, were put to
+        somebody". `atlas_outreach_messages` is what every reader of undecided
+        outreach reads, and while the row stayed at DRAFT the unreviewed queue
+        reported a message a reviewer had already been asked about as one nobody
+        had been asked about — inviting a second request for the same decision,
+        which is the single thing that queue exists to prevent.
+
+        And it must still be listed as waiting. Asking is not answering: none of
+        the four decision signals may be written here, least of all the new
+        request's id, or the message drops out of every unreviewed list while it
+        is waiting on the very person who was asked.
+        """
+        from atlas_kernel.opportunity.repository import OpportunityRepository
+        from atlas_kernel.outreach import unreviewed
+
+        runtime = create_runtime()
+        service = _service(RecordingChannel(), runtime.approval_service)
+        service.repository = OpportunityRepository()
+        business, _, prepared = _prepared(service)
+        assert prepared.message.status is OutreachStatus.DRAFT
+
+        request = service.request_approval(prepared)
+
+        stored = {message.id: message
+                  for message in service.repository.messages_for(business.id)}
+        asked = stored[prepared.message.id]
+        assert asked.status is OutreachStatus.AWAITING_APPROVAL
+        assert prepared.message.status is OutreachStatus.AWAITING_APPROVAL, (
+            "the in-memory message disagrees with the row, so whichever one the "
+            "next step reads decides the answer")
+        assert unreviewed.undecided(asked) is True, (
+            "asking was recorded as a decision, so the message a person was "
+            "asked about is no longer listed as waiting on them")
+        assert asked.approval_id is None, (
+            f"the pending request {request.id} was written to the message as "
+            "though it were an answer")
+        assert (asked.approved_fingerprint, asked.authorized_automated_at,
+                asked.sent_at) == (None, None, None)
+        assert unreviewed.from_records([asked])[0].state == unreviewed.ASKED
+
     def test_the_request_carries_the_scopes_a_policy_can_act_on(self) -> None:
         """Named scopes and a named action, so a policy can demand a second
         approver for outreach without the gate knowing such a policy exists."""

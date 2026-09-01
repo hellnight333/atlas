@@ -32,6 +32,16 @@ cannot.
 **Has anyone been asked?** Always answerable from the row itself, and it is one
 of exactly two states — `NEVER_PUT_TO_A_PERSON` or `ASKED_AND_UNANSWERED`.
 
+That it is answerable from the row is an invariant somebody has to hold up, not
+a property of the column: every path that puts the question to a person records
+it here, by moving the message to `AWAITING_APPROVAL`. The one that asks —
+`OpportunityService.request_approval` — did not. It wrote an `approval_requested`
+event against the *opportunity* and left the row at `DRAFT`, and this module duly
+reported a message a reviewer had already been asked about as one nobody had been
+asked about. A queue that exists so nobody is asked twice cannot be the thing
+that asks twice, so the fix went where the ask happens rather than into a second
+lookup here.
+
 **Is there something in the record a reviewer would have to settle first?** Zero
 or more named conditions: the draft was replaced, it is addressed to nobody, the
 channel cannot reach the address, or the evidence under its claims moved after
@@ -66,7 +76,11 @@ from typing import Any
 NEVER_ASKED = "NEVER_PUT_TO_A_PERSON"
 
 #: Somebody was asked and has not answered. `AWAITING_APPROVAL` is the only
-#: status that records the question having been put at all.
+#: status that records the question having been put at all, and the one path
+#: that puts it — `OpportunityService.request_approval` — writes it there;
+#: `test_asking_a_person_is_recorded_on_the_message_itself` fails if it stops.
+#: A path that asks without writing it turns `NEVER_PUT_TO_A_PERSON` above into
+#: a false statement about the records.
 ASKED = "ASKED_AND_UNANSWERED"
 
 #: A later message for the same business, channel and origin exists. This one

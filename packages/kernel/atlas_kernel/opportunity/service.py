@@ -31,6 +31,7 @@ from .models import (
     Opportunity,
     OpportunityStage,
     OutreachMessage,
+    OutreachStatus,
     PipelineEventKind,
     Proposal,
 )
@@ -173,7 +174,35 @@ class OpportunityService:
         )
 
     def request_approval(self, prepared: PreparedOutreach, *, requested_by: str = "atlas"):
+        """Ask a person, and record on the message itself that they were asked.
+
+        The row moves DRAFT → AWAITING_APPROVAL, and that is not bookkeeping.
+        `atlas_outreach_messages` is what every reader of undecided outreach
+        reads; the timeline event written below says an approval was requested
+        for an *opportunity*, and nothing turns that back into "these words, on
+        this channel, were put to somebody". Leaving the row at DRAFT is why
+        `outreach/unreviewed.py` reported a message a reviewer had already been
+        asked about as one the question was never put to — and a queue whose
+        purpose is that nobody is asked twice cannot be the thing that asks
+        twice.
+
+        **The four decision signals stay empty.** Asking is not answering:
+        `approval_id`, `approved_fingerprint`, `authorized_automated_at` and
+        `sent_at` are what `unreviewed.undecided` reads as somebody having
+        decided, and writing the new request's id into `approval_id` here would
+        drop the message out of every unreviewed list while it is still waiting
+        on the very person who was asked. The id belongs to the approval, which
+        already records what it is about; the message acquires it at `authorise`,
+        where an answer actually exists.
+
+        The request is created first. If the gate refuses, the row must not be
+        left claiming a question nobody was asked.
+        """
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
+        prepared.message = prepared.message.model_copy(
+            update={"status": OutreachStatus.AWAITING_APPROVAL})
+        if self.repository is not None:
+            self.repository.save_message(prepared.message)
         self._record(
             prepared.business.id,
             PipelineEventKind.APPROVAL_REQUESTED,
