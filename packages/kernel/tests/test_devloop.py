@@ -713,6 +713,85 @@ def test_the_review_cannot_touch_the_tree_being_built():
         "finally:" in source, "a failed review leaks a worktree"
 
 
+def test_a_finding_names_a_file_that_still_exists_after_the_review(tmp_path,
+                                                                   monkeypatch):
+    """Isolation moved the reviewer; its findings pointed at the wrong tree.
+
+    `codex exec review` names files absolutely, so once it ran in a throwaway
+    worktree every finding came back as
+    `/private/var/folders/.../devloop-review-xxxx/wt/infra/devloop/agents.py`.
+    `parse_review` relativised against the repository, which cannot match that,
+    so the absolute path was passed through whole — and the worktree is deleted
+    in the `finally` before `fix` is ever called. Two real blocking findings
+    arrived naming files that no longer existed.
+
+    End-to-end rather than on `parse_review` alone: the defect was in the
+    wiring between where the reviewer ran and what the parser was told about
+    it, and each half was correct on its own.
+    """
+    import json
+    import subprocess
+
+    repo = tmp_path / "r"
+    (repo / "pkg").mkdir(parents=True)
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "pkg" / "thing.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+
+    seen: dict[str, Path] = {}
+
+    def fake_codex(argv, *, cwd, timeout, env=None):
+        # What the real reviewer does: name the file absolutely, in whatever
+        # tree it was actually pointed at.
+        seen["cwd"] = Path(cwd)
+        message = ("Reviewed the diff and found one issue.\n\n"
+                   "Review comments:\n"
+                   f"- [P1] The value is never read — "
+                   f"{Path(cwd) / 'pkg' / 'thing.py'}:1-1\n"
+                   "  nothing consumes it")
+        return 0, json.dumps({"item": {"type": "agent_message",
+                                       "text": message}}), False
+
+    monkeypatch.setattr(agents, "_run", fake_codex)
+    out = agents.review(cwd=repo, base_sha="HEAD",
+                        out_file=tmp_path / "review.json", timeout=10)
+
+    assert out.ok, out.detail
+    assert seen["cwd"] != repo, "the reviewer ran in the tree being built"
+    assert not seen["cwd"].exists(), "the review worktree outlived the review"
+    assert out.data["findings"][0]["file"] == "pkg/thing.py:1-1", (
+        "the finding still names the deleted review worktree, so the fixer is "
+        f"sent to a file that does not exist: {out.data['findings'][0]['file']}")
+    # And the repository still resolves it, which is the point of relative.
+    assert (repo / "pkg/thing.py").exists()
+
+
+def test_a_finding_in_the_repository_is_still_relativised(tmp_path):
+    """The worktree is tried first; the repository must still be tried.
+
+    A reviewer run without isolation — or one that names a path the worktree
+    does not contain — has to keep working, so `reviewed_in` is an addition to
+    the fallback chain and not a replacement for it.
+    """
+    absolute = tmp_path / "pkg" / "thing.py"
+    parsed = agents.parse_review(
+        f"Found one.\n\n- [P2] A thing — {absolute}:4-6\n  why",
+        repo=tmp_path, reviewed_in=tmp_path / "nowhere")
+    assert parsed["findings"][0]["file"] == "pkg/thing.py:4-6"
+
+    # And a path under neither root is left exactly as the reviewer wrote it,
+    # rather than mangled into something that resolves somewhere unrelated.
+    elsewhere = agents.parse_review(
+        "Found one.\n\n- [P2] A thing — /somewhere/else.py:4-6\n  why",
+        repo=tmp_path, reviewed_in=tmp_path / "nowhere")
+    assert elsewhere["findings"][0]["file"] == "/somewhere/else.py:4-6"
+
+
 def test_the_first_changed_file_keeps_its_whole_name(tmp_path):
     """The bug that cost three runs and a wrong diagnosis.
 

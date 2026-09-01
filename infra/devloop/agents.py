@@ -249,12 +249,43 @@ _FINDING = re.compile(
 _SEVERITY = {"P1": "blocking", "P2": "major", "P3": "minor"}
 
 
-def parse_review(text: str, *, repo: Path) -> dict | None:
+def _repo_relative(path: str, roots: tuple[Path | None, ...]) -> str:
+    """A finding's file, named as it is in the tree the fixer will edit.
+
+    The reviewer runs in a throwaway worktree and names files absolutely, so
+    every finding it produces arrives as
+    `/tmp/devloop-review-xxxx/wt/infra/devloop/agents.py` — under a directory
+    already deleted by the time `fix` reads it. Relativising against the
+    repository alone cannot match that, the absolute path was passed through
+    whole, and the fixer was handed files that do not exist. Two real findings
+    arrived that way on the first isolated review.
+
+    So the worktree is tried first and the repository second. They are
+    checkouts of the same commit, so the relative form is the one path that is
+    true in both, and the review's stored location stays meaningful after the
+    worktree is gone.
+    """
+    for root in roots:
+        if root is None:
+            continue
+        try:
+            return str(Path(path).resolve().relative_to(root.resolve()))
+        except (ValueError, OSError):
+            continue
+    return path
+
+
+def parse_review(text: str, *, repo: Path,
+                 reviewed_in: Path | None = None) -> dict | None:
     """Turn one review message into findings. `None` when it cannot be read.
 
     Fails closed on purpose. A review whose shape is unrecognised has told us
     nothing, and returning `CLEAN` for it would be the exact failure this loop
     exists to prevent — shipping unreviewed code and reporting success.
+
+    `reviewed_in` is the tree the reviewer actually ran in, which is not the
+    repository — see `_repo_relative` for what happens to a finding's path
+    without it.
     """
     if not text or not text.strip():
         return None
@@ -270,11 +301,7 @@ def parse_review(text: str, *, repo: Path) -> dict | None:
             if not following.strip() or _FINDING.match(following):
                 break
             body.append(following.strip())
-        path = match.group("file")
-        try:
-            path = str(Path(path).resolve().relative_to(repo.resolve()))
-        except (ValueError, OSError):
-            pass
+        path = _repo_relative(match.group("file"), (reviewed_in, repo))
         findings.append({
             "severity": _SEVERITY.get(match.group("severity"), "major"),
             "file": f"{path}:{match.group('lines')}",
@@ -332,7 +359,12 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
     # and whatever it writes there goes when the worktree does.
     #
     # The same isolation the mission engine uses, for the same reason.
-    scratch = Path(tempfile.mkdtemp(prefix="devloop-review-"))
+    #
+    # Resolved at creation, not at use: the reviewer's findings are relativised
+    # against this path *after* the directory is gone, and a `/var` that is a
+    # symlink to `/private/var` would then no longer match the absolute paths
+    # the reviewer wrote from inside it.
+    scratch = Path(tempfile.mkdtemp(prefix="devloop-review-")).resolve()
     tree = scratch / "wt"
     made, why = _git_in(cwd, "worktree", "add", "--detach", str(tree), "HEAD")
     if made != 0:
@@ -373,7 +405,10 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
                        detail="the reviewer produced no review message")
 
     out_file.write_text(message)
-    parsed = parse_review(message, repo=cwd)
+    # `reviewed_in=tree` even though the tree is already gone: the reviewer
+    # named its files there, and this is what turns those names back into paths
+    # that exist in the repository the fixer edits.
+    parsed = parse_review(message, repo=cwd, reviewed_in=tree)
     if parsed is None:
         return Outcome(ok=False, exit_code=code, output=message[:2000],
                        infrastructure_failure=True,

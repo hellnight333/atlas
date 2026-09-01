@@ -970,10 +970,11 @@ class OpportunityRepository:
     def _freshness(self, session) -> dict:
         """`audit_freshness`, on a session somebody else opened.
 
-        Split out so `audit_backlog` can read this **inside its own
-        transaction** rather than in a second one afterwards. The two numbers
-        stand next to each other on one screen, and an audit recorded between
-        two reads is enough to make them contradict each other there.
+        Split out so `audit_backlog` and `audit_freshness_and_backlog` can read
+        this **inside their own transaction** rather than in a second one. The
+        two numbers stand next to each other on one screen, and an audit
+        recorded between two reads is enough to make them contradict each other
+        there.
         """
         row = session.execute(
             text("""
@@ -1070,23 +1071,60 @@ class OpportunityRepository:
         `older_than_a_week` is **read from `audit_freshness`**, not recomputed.
         Two queries written to the same intent is how two numbers standing next
         to each other on one screen come to disagree, and the number here has
-        to be the number beside it. `freshness` is how the caller hands over the
-        result it has already read — `/coverage` renders both, and reading them
-        twice is how the same screen came to be able to contradict itself. When
-        it is not given, freshness is read **inside this transaction**, so the
-        pair is still one snapshot rather than two.
-        """
-        from ..mission.toolrunner import NIGHTLY_SITE_LIMIT
-        from .coverage import backlog
+        to be the number beside it. Freshness is read **inside this
+        transaction**, so the pair is one snapshot rather than two.
 
+        `freshness` lets a caller substitute a figure — the standalone probe
+        does, to prove the number here is not recomputed. It is **not** a way
+        to share a snapshot: a dict read in an earlier transaction stays that
+        transaction's answer, and pairing it with subsets read here is the
+        contradiction this method exists to prevent, only harder to see. A
+        caller that needs both numbers together calls
+        `audit_freshness_and_backlog`, which is the operation that actually
+        obtains them in one transaction.
+        """
         with SessionLocal() as session:
             # One snapshot for every number below. Under READ COMMITTED each
             # statement would see its own, and an audit recorded between them is
             # enough to report a subset larger than the set it belongs to.
             session.connection(
                 execution_options={"isolation_level": "REPEATABLE READ"})
-            row = session.execute(
-                text(f"""
+            return self._backlog(session, freshness=freshness)
+
+    def audit_freshness_and_backlog(self) -> tuple[dict, dict]:
+        """Both, from one transaction. The pair `/coverage` renders.
+
+        The backlog explains a number the same response prints, so the response
+        may not carry two answers to "how many are older than a week". Handing
+        `audit_backlog` a freshness dict read a moment earlier does not settle
+        that — it puts the older total beside newer subsets, and the clamp in
+        `coverage.backlog` then trims stale records the second read had just
+        discovered. Two transactions is two moments however the numbers travel
+        between them.
+
+        So the pair is obtained here, in one `REPEATABLE READ` transaction:
+        both queries see one snapshot, and `now()` — which is transaction-start
+        time, and decides where the eight-day line falls — is one moment for
+        both.
+        """
+        with SessionLocal() as session:
+            session.connection(
+                execution_options={"isolation_level": "REPEATABLE READ"})
+            freshness = self._freshness(session)
+            return freshness, self._backlog(session, freshness=freshness)
+
+    def _backlog(self, session, *, freshness: dict | None = None) -> dict:
+        """`audit_backlog`, on a transaction somebody else opened.
+
+        Split out for the same reason `_freshness` was: the caller that needs
+        freshness and the backlog to agree has to be able to read both without
+        leaving the transaction.
+        """
+        from ..mission.toolrunner import NIGHTLY_SITE_LIMIT
+        from .coverage import backlog
+
+        row = session.execute(
+            text(f"""
                 WITH observed AS (
                     SELECT DISTINCT ON (business_id) business_id, at
                     FROM atlas_business_events WHERE kind = :observed
@@ -1150,8 +1188,8 @@ class OpportunityRepository:
                     AS never_in_the_rotation
                 """), {"observed": OBSERVED_EVENT,
                        "verified": VERIFIED_EVENT}).mappings().first()
-            if freshness is None:
-                freshness = self._freshness(session)
+        if freshness is None:
+            freshness = self._freshness(session)
 
         def _nights(at) -> float | None:
             """Nights since a moment, or `None` when there is no moment.

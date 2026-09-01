@@ -384,15 +384,12 @@ def test_the_backlog_is_reported_where_freshness_already_is():
                 inner.func.attr for inner in ast.walk(node)
                 if isinstance(inner, ast.Call)
                 and isinstance(inner.func, ast.Attribute)}
-    assert "audit_freshness" in calls["coverage"], (
-        "the coverage route no longer carries freshness; this test is "
-        "asserting the wrong surface")
-    assert "audit_backlog" in calls["coverage"], (
+    assert "audit_freshness_and_backlog" in calls["coverage"], (
         "the backlog is not surfaced where the operator sees freshness, so "
         "the number that alarms them still has no explanation beside it")
 
 
-def test_the_route_reads_freshness_once_and_hands_it_to_the_backlog():
+def test_the_route_reads_the_pair_in_one_transaction():
     """One response may not carry two answers to the same question.
 
     The backlog explains `older_than_a_week`, and the response prints that
@@ -400,37 +397,55 @@ def test_the_route_reads_freshness_once_and_hands_it_to_the_backlog():
     to make the explanation refer to a number the page is not showing — and a
     screen caught contradicting itself is one nobody believes again.
 
-    Asserted on the call rather than on the docstring: this is a property of
+    Handing the freshness dict from the first call into the second did not fix
+    that, which is what this test used to assert. The dict travelled and the
+    transaction did not: the total came from the earlier read and every subset
+    explaining it from `audit_backlog`'s own later one. So the route must make
+    a *single* call, and the operation it calls is the one that opens one
+    transaction for both.
+
+    Asserted on the calls rather than on the docstring: this is a property of
     how the route is wired, and a comment saying so is not the wiring.
     """
     tree = ast.parse(Path("packages/kernel/atlas_kernel/mission/api.py")
                      .read_text(encoding="utf-8"))
     route = next(node for node in ast.walk(tree)
                  if isinstance(node, ast.FunctionDef) and node.name == "coverage")
-    backlog_calls = [node for node in ast.walk(route)
-                     if isinstance(node, ast.Call)
-                     and isinstance(node.func, ast.Attribute)
-                     and node.func.attr == "audit_backlog"]
-    assert len(backlog_calls) == 1
-    passed = {kw.arg for kw in backlog_calls[0].keywords}
-    assert "freshness" in passed, (
-        "the route lets the backlog read freshness for itself, so the two "
-        "counts in one response come from two moments and can disagree")
+    called = [node.func.attr for node in ast.walk(route)
+              if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute)]
+    assert called.count("audit_freshness_and_backlog") == 1, (
+        "the pair is not read as one operation, so the two counts in one "
+        "response come from two transactions and can disagree")
+    assert "audit_backlog" not in called and "audit_freshness" not in called, (
+        "the route reads one of the pair in a transaction of its own again; "
+        f"it calls {sorted(set(called))}")
 
-    freshness_calls = [node for node in ast.walk(route)
-                       if isinstance(node, ast.Call)
-                       and isinstance(node.func, ast.Attribute)
-                       and node.func.attr == "audit_freshness"]
-    assert len(freshness_calls) == 1, (
-        "freshness is read more than once while assembling one response")
+    # And the operation it calls really does hold both inside one transaction.
+    source = inspect.getsource(
+        OpportunityRepository.audit_freshness_and_backlog)
+    assert source.count("SessionLocal()") == 1, (
+        "the pair is assembled from more than one session, which is more than "
+        "one snapshot however the numbers travel between them")
+    assert "REPEATABLE READ" in source, (
+        "under READ COMMITTED each statement takes its own snapshot, so the "
+        "one session buys nothing")
+    assert "self._freshness(session)" in source \
+        and "self._backlog(session" in source, (
+            "the two halves are not read on the same session, so the one "
+            "transaction above is not the one either of them runs in")
 
 
-def test_the_backlog_can_be_handed_the_freshness_the_caller_already_read(repo):
+def test_the_backlog_can_be_handed_a_freshness_figure(repo):
     """And uses it, rather than reading its own and reporting that.
 
-    A caller that has already read freshness is the only one that can promise
-    the two numbers match, so being handed one has to actually decide the
-    answer. Handed a figure no query would produce, the report must carry it.
+    This is what proves `older_than_a_week` is not recomputed here: handed a
+    figure no query would produce, the report must carry it.
+
+    It is **not** a way to share a snapshot — a dict read in an earlier
+    transaction stays that transaction's answer, and
+    `test_the_route_reads_the_pair_in_one_transaction` holds the route to the
+    operation that does.
     """
     handed = repo.audit_backlog(freshness={"older_than_a_week": 4242})
     assert handed["older_than_a_week"] == 4242
@@ -511,6 +526,51 @@ def test_the_stale_count_is_the_one_freshness_already_reports(repo):
         assert repo.audit_freshness()["older_than_a_week"] == before + 1
         assert found["older_than_a_week"] == \
                repo.audit_freshness()["older_than_a_week"]
+    finally:
+        _clean(business.id)
+
+
+def test_an_audit_between_two_reads_cannot_split_the_pair(repo):
+    """Handing the freshness over moved the seam; it did not close it.
+
+    `/coverage` read freshness, then called `audit_backlog(freshness=...)`,
+    which opens its own transaction. The dict travelled between them and the
+    snapshot did not: the total came from the earlier moment and every subset
+    explaining it from the later one, so one response could print an old
+    `older_than_a_week` beside newer reach counts — and where the two reads
+    straddled enough records, the clamp in `coverage.backlog` would trim
+    unreachable ones the second read had just discovered.
+
+    An audit recorded in the gap is all it takes, so this records one on
+    purpose, in the half of the population that is never in the rotation.
+    """
+    business = _unfetchable(repo, f"mailto:{uuid4().hex}@backlog.test")
+    try:
+        earlier = repo.audit_freshness()          # the moment the route had
+        before = earlier["older_than_a_week"]
+
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=OBSERVED_EVENT,
+            actor="test", detail={"url": business.website, "counts": {}},
+            at=datetime.now(UTC) - timedelta(days=30)))
+
+        # The old wiring, reproduced: a total from before the audit, and every
+        # subset explaining it read after.
+        handed = repo.audit_backlog(freshness=earlier)
+        assert handed["older_than_a_week"] == before, (
+            "the handed-over total is no longer the earlier read, so this test "
+            "has stopped reproducing what it exists to rule out")
+
+        # One transaction: the total and the subsets are one moment.
+        freshness, found = repo.audit_freshness_and_backlog()
+        assert found["older_than_a_week"] == before + 1, (
+            "the pair still reports the total from before the audit")
+        assert freshness["older_than_a_week"] == found["older_than_a_week"], (
+            "one response carries two answers to how many are older than a "
+            "week")
+        assert found["never_in_the_rotation"] >= 1, (
+            "the record no rotation will ever reach was not counted, so the "
+            "subset half of the pair is not being read at all")
     finally:
         _clean(business.id)
 

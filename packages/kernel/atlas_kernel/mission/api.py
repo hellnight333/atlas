@@ -762,19 +762,25 @@ def build_router() -> APIRouter:
         fetching more a night to make a number smaller would be a decision
         about other people's bandwidth taken to improve a screen.
 
-        **One freshness read, handed to both.** The backlog explains a number
-        the response also prints, so reading it twice would let one response
-        carry two answers to "how many are older than a week" — an audit
-        recorded between the two reads is all it would take, and a screen caught
-        contradicting itself is one nobody believes again.
+        **One read for both.** The backlog explains a number the response also
+        prints, so reading it twice would let one response carry two answers to
+        "how many are older than a week" — an audit recorded between the two
+        reads is all it would take, and a screen caught contradicting itself is
+        one nobody believes again.
+
+        Reading freshness here and *handing* it to the backlog was not enough:
+        the dict travelled, but the transaction did not. The total came from
+        the earlier read and the subsets explaining it from a later one, which
+        is the same contradiction with the seam moved somewhere harder to see.
+        `audit_freshness_and_backlog` is the operation that obtains the pair in
+        one transaction, and it is one call here so no future edit can slip
+        another read between them.
 
         **Declared above `/{mission_id}`**, like every sibling here.
         """
         memory = _opportunities(request)
         found = memory.audit_coverage()
-        freshness = memory.audit_freshness()
-        found["freshness"] = freshness
-        found["backlog"] = memory.audit_backlog(freshness=freshness)
+        found["freshness"], found["backlog"] = memory.audit_freshness_and_backlog()
         return found
 
     @router.get("/inbound")
