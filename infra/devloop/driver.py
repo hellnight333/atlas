@@ -160,10 +160,16 @@ class Driver:
         # as its work. Refused rather than adopted: the review unit has to be
         # the task's diff and nothing else.
         readable, dirty = _git("status", "--porcelain", cwd=self.repo)
+        # Only when starting fresh. A resumed task's uncommitted work is its
+        # own — left behind when a round was interrupted — and refusing it
+        # would strand every task that stopped mid-edit, which is precisely the
+        # case the branch and the lease exist to recover.
+        resuming = _git("rev-parse", "--verify", "--quiet",
+                        f"devloop/{ident}", cwd=self.repo)[0] == 0
         # Only when git actually answered. An unreadable status has not shown
         # the tree is dirty, and the `changed` gate already reports a repo it
         # cannot read as unmeasured rather than as a pass.
-        if readable == 0 and dirty:
+        if readable == 0 and dirty and not resuming:
             self.q.move(ident, State.QUEUED,
                         reason="the working tree was not clean when the task "
                                "was claimed; the review unit must contain only "

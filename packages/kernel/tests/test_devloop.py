@@ -459,8 +459,14 @@ def test_a_task_refuses_to_start_on_a_dirty_tree(tmp_path, monkeypatch):
     q = Queue(tmp_path / "s.db")
     ident = q.add(title="t", brief="b", origin="human")
     task = q.claim(owner="d")
-    monkeypatch.setattr(drv, "_git",
-                        lambda *a, **k: (0, " M somebody_elses_file.py"))
+    def fresh_start(*args, **kwargs):
+        # No branch for this task: a fresh start, so whatever is in the tree
+        # belongs to somebody else.
+        if args[:2] == ("rev-parse", "--verify"):
+            return 1, ""
+        return 0, " M somebody_elses_file.py"
+
+    monkeypatch.setattr(drv, "_git", fresh_start)
     driver = drv.Driver(q, drv.Limits(), repo=tmp_path)
     assert driver.run_task(task) == State.FAILED
     assert q.get(ident)["state"] == State.QUEUED, (
@@ -600,3 +606,53 @@ def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
         "the base is computed before the branch is checked out"
     assert '"merge", "-q", "--no-edit", "main"' in run_task, (
         "a resumed branch is not brought up to main, so its base is stale")
+
+
+def test_the_reviewer_is_explicitly_read_only():
+    """A real review edited the repository, and the gate caught it.
+
+    `codex exec review` has no `--sandbox` flag, so without an explicit
+    `sandbox_mode` it takes the default write policy. A reviewer that can write
+    is a reviewer whose diff is no longer the diff that was built, and every
+    conclusion after it is about something else.
+    """
+    source = Path(INFRA / "devloop" / "agents.py").read_text()
+    call = source[source.index('"codex", "exec", "review"'):][:400]
+    assert 'sandbox_mode="read-only"' in call
+
+
+def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
+                                                                 monkeypatch):
+    """The guard must not strand the tasks it exists to recover.
+
+    A round interrupted mid-edit leaves uncommitted work that belongs to the
+    task. Refusing to resume on it would park every task that stopped part-way
+    — the exact case the branch and the lease exist for.
+    """
+    import devloop.driver as drv
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="t", brief="b", origin="human")
+    task = q.claim(owner="d")
+
+    calls = {"checked_out": False}
+
+    def fake_git(*args, **kwargs):
+        if args[:1] == ("status",):
+            return 0, " M its_own_leftover.py"
+        if args[:2] == ("rev-parse", "--verify"):
+            return 0, "abc123"          # the branch exists: this is a resume
+        if args[:1] == ("checkout",):
+            calls["checked_out"] = True
+        return 0, ""
+
+    monkeypatch.setattr(drv, "_git", fake_git)
+    monkeypatch.setattr(drv.agents, "build",
+                        lambda *a, **k: drv.agents.Outcome(
+                            ok=False, exit_code=1, output="",
+                            infrastructure_failure=True, detail="stop here"))
+    driver = drv.Driver(q, drv.Limits(), repo=tmp_path)
+    driver.run_task(task)
+    assert calls["checked_out"], (
+        "a resumed task was refused for its own uncommitted work")
+    assert not any("not clean" in t["reason"] for t in q.transitions(ident))
