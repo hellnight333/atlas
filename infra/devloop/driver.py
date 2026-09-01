@@ -466,19 +466,30 @@ class Driver:
         _git("commit", "-q", "-m", message, cwd=self.repo)
 
     def _touched(self) -> list[str]:
-        """Paths this task changed, from git rather than from an agent's word."""
-        code, out = _git("status", "--porcelain", cwd=self.repo)
-        if code != 0:
-            return []
-        found = []
-        for line in out.splitlines():
-            path = line[3:].strip().strip('"')
-            # A rename is reported as `old -> new`; the new path is the one to
-            # stage, and the old one goes with it.
-            if " -> " in path:
-                found.extend(part.strip() for part in path.split(" -> "))
-            elif path:
-                found.append(path)
+        """Paths this task changed, from git rather than from an agent's word.
+
+        Deliberately not `git status --porcelain`. Its output is column-aligned
+        — two status characters then a space — and `_git` strips the combined
+        stdout, which removes the leading space from the **first line only**.
+        So the first changed file came back missing its first character:
+        `.qevik/CAPABILITY_LEDGER.md` became `qevik/CAPABILITY_LEDGER.md`, git
+        could not stage a path that does not exist, and the file stayed dirty
+        through the commit. `clean_tree` then reported it as the reviewer
+        writing to the tree, and three runs were spent isolating a reviewer
+        that had never touched anything.
+
+        These two commands print one path per line with no columns, so there is
+        nothing to mis-slice.
+        """
+        tracked = _git("diff", "--name-only", "HEAD", cwd=self.repo)
+        untracked = _git("ls-files", "--others", "--exclude-standard",
+                         cwd=self.repo)
+        found: list[str] = []
+        for code, out in (tracked, untracked):
+            if code != 0:
+                continue
+            found.extend(line.strip() for line in out.splitlines()
+                         if line.strip())
         return found
 
     def _infra(self, task_id: str, detail: str) -> str:

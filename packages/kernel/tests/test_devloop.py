@@ -680,3 +680,72 @@ def test_the_review_cannot_touch_the_tree_being_built():
     # And the worktree must go even when the review fails.
     assert "finally:" in source[:source.index('"codex", "exec", "review"')] or \
         "finally:" in source, "a failed review leaks a worktree"
+
+
+def test_the_first_changed_file_keeps_its_whole_name(tmp_path):
+    """The bug that cost three runs and a wrong diagnosis.
+
+    `git status --porcelain` is column-aligned — two status characters then a
+    space — and `_git` strips the combined output, which removes the leading
+    space from the *first line only*. The first changed path came back missing
+    its first character, git could not stage a file that does not exist, and it
+    stayed dirty through the commit. `clean_tree` then reported it as the
+    reviewer writing to the working tree, and three runs were spent isolating a
+    reviewer that had never touched anything.
+
+    A dotfile makes it visible; any first path would have been truncated.
+    """
+    import subprocess
+
+    import devloop.driver as drv
+
+    repo = tmp_path / "r"
+    (repo / ".qevik").mkdir(parents=True)
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / ".qevik" / "LEDGER.md").write_text("one\n")
+    (repo / "later.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    (repo / ".qevik" / "LEDGER.md").write_text("two\n")
+    (repo / "later.py").write_text("x = 2\n")
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = repo
+    touched = driver._touched()
+    assert ".qevik/LEDGER.md" in touched, (
+        f"the first path lost characters: {touched}")
+    assert "later.py" in touched
+
+    # Negative control: staging what it reports actually works, which is the
+    # thing that silently failed.
+    for path in touched:
+        assert subprocess.run(["git", "add", "--", path], cwd=repo,
+                              capture_output=True).returncode == 0, path
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                            cwd=repo, capture_output=True, text=True).stdout
+    assert ".qevik/LEDGER.md" in staged
+
+
+def test_untracked_files_are_staged_too(tmp_path):
+    """A new test file is the commonest thing a task adds."""
+    import subprocess
+
+    import devloop.driver as drv
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "seed.txt").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    (repo / "test_new_thing.py").write_text("def test_x(): pass\n")
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = repo
+    assert "test_new_thing.py" in driver._touched()
