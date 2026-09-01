@@ -486,3 +486,88 @@ def test_work_under_review_never_lands_on_main(tmp_path):
     # path into `_ship`.
     assert "_ship(" in run_task[run_task.index("if not must:"):
                                 run_task.index("if not must:") + 200]
+
+
+# ============================================================ main protection
+#
+# The failure this section exists for actually happened: three commits reached
+# `main` carrying a task's work that had never come back clean — two rounds the
+# reviewer raised blocking findings against, and a third round nothing reviewed
+# at all. Prompting an agent not to do that is not a guard. These are.
+
+
+def test_a_round_that_never_reviewed_can_never_land(q):
+    """No recorded review means unreviewed, and unreviewed never lands."""
+    ident = q.add(title="t", brief="b", origin="human")
+    assert q.review_was_clean(ident) is False, (
+        "a task nothing reviewed reported itself clean")
+
+
+def test_a_round_the_reviewer_objected_to_can_never_land(q):
+    ident = q.add(title="t", brief="b", origin="human")
+    q.move(ident, State.REVIEWING, review_rounds=1)
+    q.record_findings(ident, round=1, sha="a", findings=[
+        {"severity": "blocking", "file": "f.py", "claim": "c",
+         "why_it_matters": "w", "failure_scenario": "s"}])
+    assert q.review_was_clean(ident) is False
+
+    # Negative control: the same task lands once a later round comes back with
+    # nothing blocking, so the refusal above is the finding and not a gate
+    # that refuses everything.
+    q.move(ident, State.REVIEWING, review_rounds=2)
+    assert q.review_was_clean(ident) is True
+
+
+def test_a_minor_finding_does_not_hold_a_task_but_a_major_one_does(q):
+    for severity, expected in (("minor", True), ("major", False),
+                               ("blocking", False)):
+        ident = q.add(title=f"t-{severity}", brief="b", origin="human")
+        q.move(ident, State.REVIEWING, review_rounds=1)
+        q.record_findings(ident, round=1, sha="a", findings=[
+            {"severity": severity, "file": "f.py", "claim": "c",
+             "why_it_matters": "w", "failure_scenario": "s"}])
+        assert q.review_was_clean(ident) is expected, severity
+
+
+def test_landing_asks_the_record_rather_than_the_control_flow():
+    """Structural, not incidental.
+
+    `_ship` is only reachable from a clean review *today*. A future edit could
+    add a second caller, and then main protection would rest on nobody having
+    made that mistake. So `_ship` re-asks the stored findings before it merges,
+    and the merge is unreachable without that answer.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    ship = source[source.index("def _ship("):source.index("def _touched(")]
+    guard = ship.index("review_was_clean")
+    merge = ship.index('"merge", "--squash"')
+    assert guard < merge, (
+        "the squash-merge is not behind the recorded-review check")
+    assert "CONTESTED" in ship[guard:merge], (
+        "a task that fails the check is not parked before the merge")
+
+
+def test_the_review_unit_never_absorbs_another_tasks_edits():
+    """The uncontrolled staging that caused the contamination.
+
+    `git add -A` swept unrelated working-tree edits into a task's commit, and
+    the reviewer raised two findings against code the task had never touched.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    assert '"add", "-A"' not in source, (
+        "uncontrolled staging is back; a task will absorb whatever else is in "
+        "the tree and the reviewer will judge work it was not given")
+    commit = source[source.index("def _commit("):source.index("def _infra(")]
+    assert "self._touched()" in commit, (
+        "paths are not staged explicitly from what the task changed")
+
+
+def test_a_task_that_ends_contested_leaves_main_untouched():
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    contested = run_task.index("rounds")
+    section = run_task[run_task.index("if round_no == self.limits.review_rounds:"):]
+    assert '"checkout", "-q", "main"' in section[:400], (
+        "a contested task does not return to main, so its branch stays checked "
+        "out and the next task builds on top of rejected work")
+    assert "merge" not in section[:400]

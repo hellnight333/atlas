@@ -435,6 +435,35 @@ class Queue:
                      redact(one.get("why_it_matters", "")),
                      redact(one.get("failure_scenario", "")), sha, _now()))
 
+    def review_was_clean(self, task_id: str) -> bool:
+        """Whether the newest recorded review left nothing blocking.
+
+        The check that stands between reviewed work and `main`. It reads the
+        stored findings rather than a flag somebody set, so a task can only
+        land on the strength of a review that actually happened and actually
+        came back clean.
+
+        **False when no review is recorded at all.** An unreviewed task is not
+        a clean one, and defaulting the other way is precisely how a round that
+        never reached the reviewer ends up on `main`.
+        """
+        rounds = self._db.execute(
+            "SELECT review_rounds FROM tasks WHERE id = ?",
+            (task_id,)).fetchone()
+        if rounds is None or not rounds["review_rounds"]:
+            return False
+        # The round that actually ran, not the newest round that produced
+        # findings. A clean review records none, so `max(round)` would stay at
+        # the last round that objected and a task could never land after
+        # fixing anything — which is the wrong answer in the safe direction,
+        # and still the wrong answer.
+        current = int(rounds["review_rounds"])
+        blocking = self._db.execute(
+            "SELECT count(*) AS n FROM findings WHERE task_id = ? AND round = ?"
+            " AND severity IN ('blocking','major')",
+            (task_id, current)).fetchone()
+        return int(blocking["n"]) == 0
+
     def findings(self, task_id: str, *, round: int | None = None) -> list[dict]:
         sql = "SELECT * FROM findings WHERE task_id = ?"
         args: tuple = (task_id,)

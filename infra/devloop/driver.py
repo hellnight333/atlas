@@ -322,6 +322,21 @@ class Driver:
         # "this task, reviewed clean" rather than replaying the argument the
         # builder and the reviewer had on the way there.
         branch = f"devloop/{ident}"
+        # The gate that makes main protection structural rather than a promise.
+        #
+        # `_ship` is only reachable from a clean review, but "only reachable"
+        # is a property of today's control flow and a future edit could add a
+        # second caller. This asks the record instead: the newest review round
+        # for this task must exist and must have left no blocking finding.
+        # A task with no recorded review has not been reviewed, and that is
+        # refused rather than assumed.
+        if not self.q.review_was_clean(ident):
+            self.q.move(ident, State.CONTESTED,
+                        reason="refused to land: the recorded review for this "
+                               "task is missing or left blocking findings")
+            log("REFUSED_TO_LAND", task=ident)
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.CONTESTED
         _git("checkout", "-q", "main", cwd=self.repo)
         merged, out = _git("merge", "--squash", branch, cwd=self.repo)
         if merged != 0:
@@ -398,7 +413,11 @@ class Driver:
         present at that point is the caller's to deal with rather than the
         loop's to adopt.
         """
-        _git("add", "-A", cwd=self.repo)
+        # `git add -A` is the uncontrolled staging that put another task's
+        # edits into a review unit. Paths are staged explicitly, and anything
+        # the task did not touch stays where it is.
+        for path in self._touched():
+            _git("add", "--", path, cwd=self.repo)
         code, out = _git("diff", "--cached", "--quiet", cwd=self.repo)
         if code == 0:
             return                       # nothing staged; nothing to commit
@@ -407,6 +426,22 @@ class Driver:
                    "Co-Authored-By: Claude Opus 5 (1M context) "
                    "<noreply@anthropic.com>")
         _git("commit", "-q", "-m", message, cwd=self.repo)
+
+    def _touched(self) -> list[str]:
+        """Paths this task changed, from git rather than from an agent's word."""
+        code, out = _git("status", "--porcelain", cwd=self.repo)
+        if code != 0:
+            return []
+        found = []
+        for line in out.splitlines():
+            path = line[3:].strip().strip('"')
+            # A rename is reported as `old -> new`; the new path is the one to
+            # stage, and the old one goes with it.
+            if " -> " in path:
+                found.extend(part.strip() for part in path.split(" -> "))
+            elif path:
+                found.append(path)
+        return found
 
     def _infra(self, task_id: str, detail: str) -> str:
         """The tooling failed, not the work. Requeue and count it."""

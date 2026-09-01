@@ -180,8 +180,7 @@ def permitted_urls(recipe: Recipe, *, targets: list[str] | None = None
 
 
 def targets_map_for(recipe: Recipe, *, repository: object,
-                    tenant: str | None = None,
-                    limit: int | None = None) -> dict:
+                    tenant: str | None = None, limit: int = 40) -> dict:
     """The addresses this recipe will fetch, and which business owns each.
 
     One call, so the set that is fetched and the set that can be attributed are
@@ -191,31 +190,16 @@ def targets_map_for(recipe: Recipe, *, repository: object,
     Bounded. A verification recipe over a market that grows to ten thousand
     businesses would otherwise fetch ten thousand sites in one mission, which is
     neither polite to them nor recoverable for us.
-
-    The bound is `SITES_A_NIGHT`, taken from where the queue is served rather
-    than repeated here. This is the call that decides how much a production
-    pass actually does — nothing passes `limit` — so a literal that merely
-    happened to agree with the repository's was one edit away from moving the
-    freshness report while the nightly pass carried on at the old rate.
-
-    `None` rather than the constant itself as the default, because it is
-    resolved inside: this package reaches the database lazily throughout, and a
-    default evaluated at import time would pull the engine into every import of
-    `mission`.
     """
     if recipe.targets_from != "business_websites" or repository is None:
         return {}
-    from ..opportunity.repository import SITES_A_NIGHT
-
-    found = repository.businesses_by_website(
-        limit=SITES_A_NIGHT if limit is None else limit, tenant=tenant)
+    found = repository.businesses_by_website(limit=limit, tenant=tenant)
     log.info("%s: %d recorded website(s) to verify", recipe.id, len(found))
     return found
 
 
 def targets_for(recipe: Recipe, *, repository: object,
-                tenant: str | None = None,
-                limit: int | None = None) -> list[str]:
+                tenant: str | None = None, limit: int = 40) -> list[str]:
     """Just the addresses, for a caller that does not need the owners."""
     return list(targets_map_for(recipe, repository=repository, tenant=tenant,
                                 limit=limit))
