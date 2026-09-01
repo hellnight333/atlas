@@ -608,17 +608,19 @@ def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
         "a resumed branch is not brought up to main, so its base is stale")
 
 
-def test_the_reviewer_is_explicitly_read_only():
-    """A real review edited the repository, and the gate caught it.
+def test_read_only_is_not_left_to_a_configuration_flag():
+    """The flag was set and the reviewer wrote anyway.
 
-    `codex exec review` has no `--sandbox` flag, so without an explicit
-    `sandbox_mode` it takes the default write policy. A reviewer that can write
-    is a reviewer whose diff is no longer the diff that was built, and every
-    conclusion after it is about something else.
+    Kept as a guard against putting the flag back and believing it. A reviewer
+    that can write is a reviewer whose diff is no longer the diff that was
+    built, and `sandbox_mode` did not make that impossible —
+    `test_the_review_cannot_touch_the_tree_being_built` covers what does.
     """
     source = Path(INFRA / "devloop" / "agents.py").read_text()
     call = source[source.index('"codex", "exec", "review"'):][:400]
-    assert 'sandbox_mode="read-only"' in call
+    assert 'sandbox_mode' not in call, (
+        "the review is relying on a config flag that two real runs showed is "
+        "not honoured; isolation is what makes it read-only")
 
 
 def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
