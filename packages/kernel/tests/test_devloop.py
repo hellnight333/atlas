@@ -1170,14 +1170,23 @@ def test_a_run_where_everything_skipped_asserted_nothing(monkeypatch, summary,
 
 
 @pytest.mark.parametrize("numstat,bounded", [
-    ("1\t2\tone.py", True),
-    ("\n".join(f"1\t1\tf{n}.py" for n in range(20)), False),
-    ("900\t100\tbig.py", False),
+    # The four real tasks the limit is calibrated on.
+    ("100\t23\tapps/public/build.py\n150\t31\tpackages/kernel/tests/t_x.py", True),
+    ("70\t12\tinfra/q.Caddyfile\n200\t16\tpackages/kernel/tests/t_y.py", True),
+    ("379\t0\tsrc/unreviewed.py\n161\t10\tsrc/repository.py\n800\t46\t"
+     "packages/kernel/tests/t_z.py", False),
+    ("\n".join(f"40\t3\tsrc/f{n}.py" for n in range(35)), False),
+    # Tests are not the cost a review round pays: nine hundred lines of them
+    # beside fifty lines of source is a small change.
+    ("50\t0\tsrc/a.py\n" + "\n".join(
+        f"100\t0\tpackages/kernel/tests/test_{n}.py" for n in range(9)), True),
     ("-\t-\timage.png\n3\t1\tcode.py", True),          # binary counts as a file
     ("\n".join(f"1\t1\tf{n}.py" for n in range(14)), True),   # exactly the limit
 ])
 def test_a_task_too_large_to_finish_is_stopped_before_review(monkeypatch,
                                                              numstat, bounded):
+    """Calibrated on outcomes, not taste. Non-test lines separate the tasks
+    that landed from the ones that could not converge; total lines do not."""
     monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, numstat, False))
     assert gates.size(cwd=Path("."), base_sha="x").passed is bounded
 

@@ -75,19 +75,29 @@ def changed(*, cwd: Path, base_sha: str | None = None) -> Gate:
     return Gate("changed", True, out.strip().splitlines()[-1][:200])
 
 
-#: What one bounded loop run can actually carry, measured rather than guessed.
+#: What one bounded loop run can actually carry, calibrated on real outcomes.
 #:
-#: A 38-file, 1,863-insertion task ran three times over about two hours and
-#: never landed: each round the reviewer found something new in a different
-#: part of it, and three rounds were never going to converge on a change that
-#: large. Split at real boundaries — the 404 page alone, then the web-server
-#: config alone — the same work landed in 25 and 20 minutes, the second clean
-#: on its first review.
+#: Measured across four tasks, counting the lines that are **not** tests:
 #:
-#: Generous on purpose. This is not a style limit; it is the point past which a
-#: review cannot be thorough and a fix round cannot be focused.
+#:     404 page          3 files, 123 non-test lines  → landed
+#:     web-server config 2 files,  82 non-test lines  → landed, clean first review
+#:     unreviewed drafts 4 files, 605 non-test lines  → could not converge
+#:     site routing     35 files, 1523 non-test lines → contested three times
+#:
+#: Non-test lines separate them cleanly and total lines do not: the two that
+#: landed carried 181 and 216 lines of tests between them, and a limit counting
+#: those would have refused exactly the work this project wants most. Tests are
+#: not the cost a review round pays.
+#:
+#: The file count is the weaker signal and is kept anyway — thirty-five files is
+#: not one change however few lines each carries.
 TOO_MANY_FILES = 14
-TOO_MANY_LINES = 700
+TOO_MANY_LINES = 400
+
+
+def _is_test(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name.startswith("test_") or "/tests/" in path
 
 
 def size(*, cwd: Path, base_sha: str) -> Gate:
@@ -105,23 +115,29 @@ def size(*, cwd: Path, base_sha: str) -> Gate:
                        cwd=cwd, timeout=60)
     if code != 0:
         return Gate("size", False, f"git failed: {out[:200]}", unmeasured=True)
-    files = added = removed = 0
+    files = changed = in_tests = 0
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) != 3:
             continue
         files += 1
         # A binary file reports "-"; it counts as a file and no lines.
-        added += int(parts[0]) if parts[0].isdigit() else 0
-        removed += int(parts[1]) if parts[1].isdigit() else 0
-    changed = added + removed
+        lines = ((int(parts[0]) if parts[0].isdigit() else 0)
+                 + (int(parts[1]) if parts[1].isdigit() else 0))
+        if _is_test(parts[2]):
+            in_tests += lines
+        else:
+            changed += lines
     if files > TOO_MANY_FILES or changed > TOO_MANY_LINES:
         return Gate("size", False,
-                    f"{files} files and {changed} lines is more than one run "
-                    f"can review and converge on (limits: {TOO_MANY_FILES} "
-                    f"files, {TOO_MANY_LINES} lines). Split it at a real "
-                    f"boundary rather than spending rounds on it.")
-    return Gate("size", True, f"{files} file(s), {changed} line(s)")
+                    f"{files} files and {changed} lines outside tests is more "
+                    f"than one run can review and converge on (limits: "
+                    f"{TOO_MANY_FILES} files, {TOO_MANY_LINES} non-test "
+                    f"lines). Split it at a real boundary rather than spending "
+                    f"rounds on it.")
+    return Gate("size", True,
+                f"{files} file(s), {changed} line(s) outside tests"
+                + (f", {in_tests} in tests" if in_tests else ""))
 
 
 def clean_tree(*, cwd: Path) -> Gate:
