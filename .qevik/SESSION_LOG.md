@@ -600,3 +600,39 @@ Two things this cost, and one it did not:
 
 The loop found this the way it finds everything: by being run against
 production and then checked independently. The task's own report said DONE.
+
+## Three gate defects, found by running the loop against production
+
+The routing task exposed all three. None was visible statically; each was found
+because the loop ran and its claim was then checked independently.
+
+**1. The production gate could not fail.** `proved = "PROVED" in out`, and
+`"PROVED" in "NOT PROVED"` is True. The probe correctly reported failure and
+the gate passed it, so a task whose defect was live on the public internet was
+marked DONE and production-verified. Now a line whose first word is exactly
+`PROVED`, with nine negations negative-controlled and a structural guard
+refusing any gate that decides by substring.
+
+**2. A reopened task inherited the previous run's objections.** Rounds restart
+on reopen, and the landing gate counted findings by round — so a clean review
+at round 2 was refused because round 2 of an earlier run had objected, against
+a different commit. It failed safe and was still wrong. Keyed on the reviewed
+commit now, and every review is recorded as a fact of its own, because a clean
+review records no findings and "found nothing" must be distinguishable from
+"nobody looked".
+
+**3. A finished builder that exits non-zero was a failed build.** A resumed
+task with nothing left to build stopped with subtype `success` and exit 1, and
+its branch — already holding finished, reviewed work — was discarded. When the
+agent's account and the exit code disagree, the diff and the tests decide. A
+crash still fails without reaching them.
+
+### What this cost and did not cost
+
+The routing defect is still live: every route on qevik.ai serves the homepage
+and unknown URLs return 200. The task is CONTESTED after three rounds against
+findings about deploy safety — verifying the API backend rather than its
+content type, and not discarding a restart that may never have executed.
+
+Nothing false reached production. The false gate lies about verification; it
+does not deploy. `main` holds only reviewed work throughout.

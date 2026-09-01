@@ -124,3 +124,20 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-f81e4bf36fe4`
 - **Review unit:** `59b97edbc08b..`
+
+<!-- devloop:contested:t-c61027684e89 -->
+## Contested — Every page on qevik.ai serves the homepage, and no URL 404s
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/qevik-production.Caddyfile:106-106` [major] Deploy the new 404 artifacts with the Caddyfile
+  - `infra/deploy_public.sh:253-258` [blocking] Install the Caddyfile atomically before validating it
+  - `infra/deploy_control.sh:281-283` [blocking] Restore Caddy when the control-plane probe fails
+  - `infra/deploy_control.sh:265-269` [blocking] Restore the config when public verification fails
+  - `infra/deploy_control.sh:283-284` [blocking] Avoid making control deploys depend on untracked assets
+  - `infra/deploy_control.sh:85-85` [major] Limit shipped prefixes to files the builder consumes
+  - `infra/deploy_control.sh:306-312` [blocking] Verify the API backend, not just its content type
+  - `infra/deploy_public.sh:594-597` [major] Do not ignore a restart that may never execute
+
+- **Driver task:** `t-c61027684e89`
+- **Review unit:** `5cdbc4e8da18..db29c4ac3d07`
