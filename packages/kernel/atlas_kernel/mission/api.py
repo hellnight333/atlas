@@ -592,15 +592,26 @@ def build_router() -> APIRouter:
             # Unreadable is not empty. A centre that silently dropped the
             # posed half would tell somebody they are blocking nothing.
             posed, found["posed_unreadable"] = [], True
+        # Every key the derived shape guarantees, so one list can be read one
+        # way. The first version omitted `service` and the rest, and the
+        # existing action-centre tests only noticed once a real posed request
+        # existed — until then the merged list was empty and shape-compatible
+        # by accident.
         found["open"] = list(found.get("open", [])) + [
             {"id": r["id"], "kind": r["kind"], "title": r["title"],
+             # A posed request is about a question rather than a provider, so
+             # there is no service to name. Empty, not invented.
+             "service": "", "phase": "", "tenant_id": r["tenant_id"],
              "blocking": r["state"] != "DEFERRED",
              "reason": r["why"], "instructions": r["asked"],
              "affects": [r["blocks"]] if r["blocks"] else [],
-             "requires": [], "status": r["state"].lower(),
+             "requires": [], "setup_url": "",
+             "status": r["state"].lower(),
              "verification": r["verification"], "posed": True,
              "reversible": r["reversible"], "accepts": r["accepts"],
-             "created_at": r["created_at"]}
+             "options": r["options"],
+             "created_at": r["created_at"], "due_at": r["due_at"],
+             "stale": False}
             for r in posed]
         counts = dict(found.get("counts") or {})
         counts["blocking"] = sum(1 for a in found["open"] if a.get("blocking"))

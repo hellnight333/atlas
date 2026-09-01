@@ -351,3 +351,37 @@ def test_answering_one_decision_frees_only_its_own_blocked_tasks():
         q.close()
         _clean(answered)
         _clean(other)
+
+
+def test_a_posed_request_carries_every_key_the_derived_shape_guarantees():
+    """One inbox must be readable one way.
+
+    The merged list omitted `service` and four other keys, and the existing
+    action-centre tests only noticed once a real posed request existed — until
+    then the posed half was empty and shape-compatible by accident. A consumer
+    iterating `open` must not have to ask which half a row came from.
+    """
+    from atlas_kernel.controlplane.actions import HumanAction
+
+    derived_keys = set(HumanAction(
+        id="x", kind=ActionKind.CREDENTIAL, title="t", service="s").summary())
+
+    ident = human.raise_request(
+        kind=ActionKind.QUESTION, subject="shape-probe",
+        title="A question", why="w", created_by="test")
+    try:
+        posed = [r for r in human.open_requests() if r["id"] == ident][0]
+        # Exactly the mapping `/api/missions/actions` performs.
+        row = {"id": posed["id"], "kind": posed["kind"], "title": posed["title"],
+               "service": "", "phase": "", "tenant_id": posed["tenant_id"],
+               "blocking": True, "reason": posed["why"],
+               "instructions": posed["asked"], "affects": [], "requires": [],
+               "setup_url": "", "status": posed["state"].lower(),
+               "verification": posed["verification"], "posed": True,
+               "reversible": posed["reversible"], "accepts": posed["accepts"],
+               "options": posed["options"], "created_at": posed["created_at"],
+               "due_at": posed["due_at"], "stale": False}
+        missing = derived_keys - set(row)
+        assert not missing, f"a posed row is missing {sorted(missing)}"
+    finally:
+        _clean(ident)
