@@ -48,7 +48,7 @@ from atlas_kernel.opportunity.outreach import (
 )
 from atlas_kernel.opportunity.profiles import EXAMPLE_PROFILE
 from atlas_kernel.opportunity.repository import OpportunityRepository
-from atlas_kernel.opportunity.service import OpportunityService
+from atlas_kernel.opportunity.service import OpportunityService, PreparedOutreach
 from atlas_kernel.opportunity.tenancy import ALL_TENANTS
 from atlas_kernel.outreach import unreviewed
 
@@ -539,6 +539,159 @@ class TestTheMessageFollowsTheDecision:
 
         assert len(runtime.approval_service.list_pending()) == before
         assert _stored(prepared.message.id, business.id).approval_id == first.id
+
+    def test_a_copy_taken_before_the_question_was_put_cannot_ask_it_again(self) -> None:
+        """The guards have to read the row, not the caller's memory of it.
+
+        A `PreparedOutreach` still holding the pre-question copy says `DRAFT`
+        and names no approval — so both guards pass on it however far the stored
+        row has moved, and the ask goes through a second time. `gate`'s
+        `_must_describe` already names this exact caller: somebody holding a copy
+        of the row from before the question was put.
+        """
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        stale = PreparedOutreach(
+            business=prepared.business,
+            opportunity=prepared.opportunity,
+            proposal=prepared.proposal,
+            message=prepared.message.model_copy(),
+            outcome=prepared.outcome,
+        )
+        first = service.request_approval(prepared)
+        before = len(runtime.approval_service.list_pending())
+
+        assert stale.message.status is OutreachStatus.DRAFT
+        assert stale.message.approval_id is None
+        with pytest.raises(OutreachNotApproved, match="already raised under approval"):
+            service.request_approval(stale)
+
+        assert len(runtime.approval_service.list_pending()) == before
+        assert _stored(prepared.message.id, business.id).approval_id == first.id
+
+    def test_a_decision_taken_out_of_process_is_not_overwritten_by_a_stale_ask(self) -> None:
+        """The destructive half, and the second writer is real.
+
+        `infra/approve_send.py` is run by an operator, outside this process, and
+        it moves a draft to `APPROVED_FOR_MANUAL_SEND` with the fingerprint of
+        the words they read. A caller still holding the draft would ask about it
+        again — and because `save_message` writes every mutable column from the
+        object it is handed, the ask would replace that decision with
+        `AWAITING_APPROVAL` and a null fingerprint, destroying the record of a
+        person having approved these words.
+        """
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        service.repository.save_message(
+            prepared.message.model_copy(
+                update={
+                    "status": OutreachStatus.APPROVED_FOR_MANUAL_SEND,
+                    "approval_id": "manual-deadbeef",
+                    "approved_fingerprint": "manual-fingerprint",
+                }
+            )
+        )
+        before = len(runtime.approval_service.list_pending())
+
+        with pytest.raises(OutreachNotApproved, match="already records what was decided"):
+            service.request_approval(prepared)
+
+        stored = _stored(prepared.message.id, business.id)
+        assert stored.status is OutreachStatus.APPROVED_FOR_MANUAL_SEND
+        assert stored.approval_id == "manual-deadbeef"
+        assert stored.approved_fingerprint == "manual-fingerprint"
+        assert len(runtime.approval_service.list_pending()) == before
+
+    def test_asking_writes_the_stored_row_and_not_whatever_the_caller_edited(self) -> None:
+        """Asking moves the question along; it is not a save button.
+
+        Building the write from the caller's copy would let anything mutated in
+        memory since the row was written ride along with the status change —
+        under an approval request that was never about it.
+        """
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        prepared.message = prepared.message.model_copy(
+            update={"detail": "a note nobody persisted", "provider_message_id": "never-sent"}
+        )
+
+        service.request_approval(prepared)
+
+        stored = _stored(prepared.message.id, business.id)
+        assert stored.status is OutreachStatus.AWAITING_APPROVAL
+        assert stored.detail is None
+        assert stored.provider_message_id is None
+
+    def test_a_question_whose_claim_never_landed_is_withdrawn(self) -> None:
+        """The request and the row's record of it are two writes, and the second
+        can fail. Left alone, the question is live and nothing points at it: it
+        waits in the pending queue while the row still reads as an untouched
+        draft, so the retry asks a second person about the same words."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+
+        class Refusing:
+            """Every read as normal; the message write does not land."""
+
+            def __init__(self, real) -> None:
+                self._real = real
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def save_message(self, message):
+                raise RuntimeError("the write did not land")
+
+        service.repository = Refusing(service.repository)
+        before = {r.id for r in runtime.approval_service.list_requests()}
+
+        with pytest.raises(RuntimeError, match="the write did not land"):
+            service.request_approval(prepared)
+
+        raised = [r for r in runtime.approval_service.list_requests() if r.id not in before]
+        assert len(raised) == 1, "the ask created no request, so this proves nothing"
+        assert raised[0].state is ApprovalState.CANCELLED
+        stored = _stored(prepared.message.id, business.id)
+        assert stored.status is OutreachStatus.DRAFT
+        assert stored.approval_id is None
+
+    def test_a_withdrawn_question_leaves_the_row_askable_again(self) -> None:
+        """The compensation must not be a dead end. Nothing was recorded about
+        these words, so the next attempt is the first question about them — not
+        a second one somebody has to reconcile with a request nobody can see."""
+        runtime = create_runtime()
+        service = _durable(runtime)
+        business, _, prepared = _prepared(service)
+        real = service.repository
+
+        class RefusingOnce:
+            def __init__(self, inner) -> None:
+                self._inner = inner
+                self.failed = False
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def save_message(self, message):
+                if not self.failed:
+                    self.failed = True
+                    raise RuntimeError("the write did not land")
+                return self._inner.save_message(message)
+
+        service.repository = RefusingOnce(real)
+        with pytest.raises(RuntimeError):
+            service.request_approval(prepared)
+
+        request = service.request_approval(prepared)
+
+        assert request.state is ApprovalState.PENDING
+        stored = _stored(prepared.message.id, business.id)
+        assert stored.status is OutreachStatus.AWAITING_APPROVAL
+        assert stored.approval_id == request.id
 
     def test_settling_the_question_is_what_makes_asking_again_possible(self) -> None:
         """The guard must not be a dead end. A cancelled request is closed by

@@ -255,43 +255,81 @@ class OpportunityService:
         Asked about **once**, and the two guards below are what hold that. A
         ``PreparedOutreach`` is reusable and mutable, so a second call is one
         stray loop away, and the write is unconditional: it would move a sent,
-        suppressed, failed or refused row back to ``AWAITING_APPROVAL`` while
-        leaving ``sent_at`` and ``approved_fingerprint`` where they are — a row
-        that reports an open question and a completed send at once, and a
-        history no reader can reconstruct. Asking again about a row that already
-        names a *pending* request is the other half: it abandons that request,
-        still open and now unreachable from any message, and puts the same words
-        to a second person. Neither is repaired by re-asking, so neither is
-        allowed. New words are a new question, and ``prepare`` is what makes one.
+        suppressed, failed or refused row back to ``AWAITING_APPROVAL``, and
+        ``save_message`` writes every mutable column from the object it is
+        handed — so ``sent_at``, ``approved_fingerprint`` and
+        ``authorized_automated_at`` are not merely left behind by the move, they
+        are overwritten with whatever the caller happens to be holding. Asking
+        again about a row that already names a *pending* request is the other
+        half: it abandons that request, still open and now unreachable from any
+        message, and puts the same words to a second person. Neither is repaired
+        by re-asking, so neither is allowed. New words are a new question, and
+        ``prepare`` is what makes one.
+
+        **Both guards read the stored row, and the write is built from it.** The
+        caller's copy is the wrong thing to ask, because it is a snapshot of the
+        row as it stood when whoever holds it last looked — and ``gate``'s
+        ``_must_describe`` already names that case out loud: a caller holding a
+        copy taken before the question was put. Such a copy still says ``DRAFT``
+        and still names no approval, so both guards pass on it however far the
+        row itself has moved, and the write then puts a settled decision back to
+        ``AWAITING_APPROVAL`` and clears the columns that recorded it. This is
+        not a thought experiment: ``infra/approve_send.py`` is a second writer of
+        exactly these rows, an operator runs it out of this process, and it moves
+        a draft to ``APPROVED_FOR_MANUAL_SEND`` with the fingerprint of the words
+        they read.
+
+        Reloading settles what the record says; it does not make the check and
+        the write one act. The row can still move between them, because
+        ``save_message`` is an unconditional upsert — closing that last gap needs
+        a conditional update in ``OpportunityRepository``, which is a change to a
+        file this one does not own. What reloading removes is the half that needs
+        no race at all.
+
+        The request and the row's record of it have to arrive together. Two
+        stores, two writes, and the second can fail: ``gate.withdraw`` takes the
+        question back rather than leaving it live with nothing pointing at it.
         """
-        if not _undecided(prepared.message):
+        stored = self._as_persisted(prepared.message)
+        if not _undecided(stored):
             raise OutreachNotApproved(
-                f"message {prepared.message.id} is {prepared.message.status.value} "
+                f"message {stored.id} is {stored.status.value} "
                 "and already records what was decided about it; asking again would "
                 "move it back to awaiting a question somebody already answered. "
                 "Prepare the words afresh — a new question is a new message"
             )
-        if prepared.message.approval_id:
+        if stored.approval_id:
             raise OutreachNotApproved(
-                f"message {prepared.message.id} was already raised under approval "
-                f"{prepared.message.approval_id}; a second request would leave that "
+                f"message {stored.id} was already raised under approval "
+                f"{stored.approval_id}; a second request would leave that "
                 "one open with nothing pointing at it and put the same words to two "
                 "people. Settle it first — record_decision closes it"
             )
 
         request = self.gate.request(prepared.outcome, requested_by=requested_by)
-        prepared.message = prepared.message.model_copy(
+        asked = stored.model_copy(
             update={
                 "status": OutreachStatus.AWAITING_APPROVAL,
                 "approval_id": request.id,
             }
         )
         if self.repository is not None:
-            self.repository.save_message(prepared.message)
+            try:
+                self.repository.save_message(asked)
+            except Exception:
+                # The question is live and the row does not say so. Withdrawing
+                # is the only thing that stops the retry from being a second
+                # person asked about the same words. If the withdrawal fails too
+                # it surfaces with this failure chained behind it — an
+                # unreachable pending request deserves an error nobody can miss,
+                # not a quieter one.
+                self.gate.withdraw(request)
+                raise
+        prepared.message = asked
         self._record(
             prepared.business.id,
             PipelineEventKind.APPROVAL_REQUESTED,
-            {"approval_id": request.id, "message_id": prepared.message.id},
+            {"approval_id": request.id, "message_id": asked.id},
             opportunity_id=prepared.opportunity.id,
         )
         return request
@@ -323,6 +361,19 @@ class OpportunityService:
         because only ``authorise`` re-derives the fingerprint and refuses words
         that moved since a person read them. A method whose job is keeping a row
         honest must not become a second door onto sending.
+
+        **The check and the write are not one act, and cannot be made one from
+        here.** ``_message_asked_about`` reads the row, this writes it, and
+        ``save_message`` is an unconditional upsert — so a send or a manual
+        approval that another writer records in between is overwritten by the
+        refusal rather than protected by the check that just passed.
+        ``infra/approve_send.py`` is that other writer, and an operator runs it
+        whenever they like. The fix is a conditional update in
+        ``OpportunityRepository`` — write the refusal only where the row is still
+        open and still carries none of ``DECIDED_COLUMNS`` — and it belongs in
+        that file. Reading the row a second time just before the write would move
+        the window rather than close it, and a guard that looks sound and is not
+        is worse than a gap somebody can see.
 
         **Nothing in production calls this yet, and nothing can.** The refusal
         endpoints — ``POST /approvals/{id}/reject`` and ``/cancel`` in
@@ -398,6 +449,30 @@ class OpportunityService:
             if message.approval_id == approval.id and _undecided(message):
                 return message
         return None
+
+    def _as_persisted(self, message: OutreachMessage) -> OutreachMessage:
+        """The stored row this message is a copy of, or the copy when there is none.
+
+        A guard that reads its argument guards the caller's memory rather than
+        the record, and those two disagree the moment anything else writes the
+        row — another process, an operator running ``infra/approve_send.py``, or
+        this service itself on a run whose ``PreparedOutreach`` somebody kept.
+
+        Found by id through ``messages_for``, the same way ``_message_asked_about``
+        finds its row, and for the same reason: the repository has no read of a
+        single message, and adding one is a change to a file this one does not own.
+
+        Falls back to the argument, which is not a weakened check. With no
+        repository nothing is stored at all, and a message that was never saved
+        has no row that could contradict it — in both cases the record says
+        nothing about this message, and the copy is the only account there is.
+        """
+        if self.repository is None:
+            return message
+        for row in self.repository.messages_for(message.business_id):
+            if row.id == message.id:
+                return row
+        return message
 
     def _opportunity_behind(self, message: OutreachMessage) -> str | None:
         """Which opportunity a persisted message belongs to, when that is knowable.

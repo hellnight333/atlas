@@ -71,6 +71,15 @@ FORECLOSED: dict[ApprovalState, str] = {
     ApprovalState.EXPIRED: "the approval request expired with nobody having answered it",
 }
 
+#: Why a request this gate raised was taken back before anybody answered it.
+#:
+#: Recorded as the cancellation comment, because the state alone cannot say it.
+#: A request an operator cancelled and one withdrawn because the message could
+#: not record that it was raised are both ``CANCELLED``, and only this separates
+#: them for whoever reads the history afterwards — the first is a decision about
+#: the words, the second is Atlas cleaning up after itself.
+WITHDRAWN = "withdrawn: the message could not record that this question was raised"
+
 #: Which message ``request`` was raised about, recorded on the approval.
 #:
 #: The mirror of the ``approval_id`` ``request_approval`` writes onto the row,
@@ -165,6 +174,30 @@ class OutreachGate:
                 "channel": outcome.channel,
             },
         )
+
+    def withdraw(self, request: ApprovalRequest, *, actor: str = "atlas") -> ApprovalRequest:
+        """Take back a request whose claim on the message was never recorded.
+
+        ``request`` creates a live question the moment it returns, and the
+        caller then has to write onto the row that it was raised. Those are two
+        writes to two stores and the second can fail — at which point the
+        question is real, somebody will be shown it, and nothing points at it
+        from the other end: the row still reads as an untouched draft, so the
+        next pass asks a *second* person about the same words while the first
+        request sits in the pending queue with no way back to the message.
+
+        Cancelled rather than deleted. The request happened, the approval log is
+        append-only, and ``FORECLOSED`` already reads ``CANCELLED`` as
+        "cancelled before anybody decided", which is exactly what this is.
+        ``WITHDRAWN`` is what distinguishes it from a person cancelling.
+
+        Only ever called on a request this gate raised moments earlier, so a
+        request that is no longer pending means somebody answered in between —
+        and the ``ApprovalError`` ``cancel`` raises for that is the honest
+        outcome rather than something to swallow. An answered question must not
+        be quietly withdrawn.
+        """
+        return self._approvals.cancel(request.id, actor=actor, comment=WITHDRAWN)
 
     def authorise(
         self,
