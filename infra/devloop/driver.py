@@ -77,10 +77,15 @@ class Limits:
 
     #: One task may not run for ever. A build that has not finished in this
     #: long has stopped making progress.
-    task_runtime_s: int = 3600
-    #: A builder given unbounded turns explores instead of finishing.
-    claude_turns: int = 60
-    build_timeout_s: int = 2400
+    #: Both proving runs died here rather than on anything conceptual, so the
+    #: bound is set from what the work actually took: a real task ran three
+    #: review rounds and was still going at 3600s.
+    task_runtime_s: int = 9000
+    #: A builder given unbounded turns explores instead of finishing — but 60
+    #: was under what a real task needs, and every run ended `error_max_turns`
+    #: with the work incomplete.
+    claude_turns: int = 220
+    build_timeout_s: int = 3600
     review_timeout_s: int = 1200
     #: Requirement, and a real bound: after three rounds the disagreement is
     #: not going to resolve itself, and a person should read it.
@@ -175,7 +180,15 @@ class Driver:
         # raised three blocking findings against. Work under review is not work
         # that has passed, and `main` should not hold it.
         branch = f"devloop/{ident}"
-        _git("checkout", "-q", "-B", branch, cwd=self.repo)
+        # Reuse the branch when it exists. `-B` resets it to HEAD, which would
+        # discard the work of a task that was parked, requeued or interrupted —
+        # the exact case a resumable queue exists to serve.
+        if _git("rev-parse", "--verify", "--quiet", branch, cwd=self.repo)[0] == 0:
+            _git("checkout", "-q", branch, cwd=self.repo)
+            log("RESUMING", task=ident, branch=branch,
+                at=head_sha(self.repo)[:12])
+        else:
+            _git("checkout", "-q", "-b", branch, cwd=self.repo)
         self.q.move(ident, State.BUILDING, reason=f"base {base[:12]} on {branch}",
                     base_sha=base)
         log("BUILDING", task=ident, title=task["title"][:60], base=base[:12])
