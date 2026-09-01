@@ -636,3 +636,41 @@ content type, and not discarding a restart that may never have executed.
 
 Nothing false reached production. The false gate lies about verification; it
 does not deploy. `main` holds only reviewed work throughout.
+
+## Splitting the task fixed the throughput, and exposed a fourth gate defect
+
+The routing task was 38 files and 1,863 insertions — not a review unit. Three
+runs, three contests, nothing landed. Split into scoped slices:
+
+| | rounds | outcome | time |
+|---|---|---|---|
+| the oversized task | 3 × 3 | contested, nothing landed | ~2h |
+| 404 page (builder only) | 2 | **DONE**, landed `5b20f59` | 25 min |
+| web-server config (repo only) | 1, clean | **DONE**, landed `f1171ef` | 20 min |
+
+Two consecutive slices through build → gate → blind review → clean → merge.
+The problem was task sizing, not the loop.
+
+### The fourth gate defect
+
+`deploy_public.sh --check` refused the built site: the Caddyfile rewrites to
+`/404.html` and the build does not produce one. The 404 slice's tests had
+**skipped** — honestly, because the artwork is gitignored and the site cannot be
+built locally, with a message that says "Nothing below is being asserted about
+the site" — and `gates.tests` read exit zero and passed.
+
+Four gates in this family have now read the wrong signal: a substring that its
+own negation contains, a round number that a reopen reuses, an exit code that a
+finished agent contradicts, and an exit code that a wholly-skipped run
+satisfies. Each was found by running the loop and checking its claim
+independently; none was visible statically.
+
+The gate now fails a run that selected tests and ran none of them. Skips stay
+legitimate in general.
+
+### Still true
+
+qevik.ai is unchanged: every route serves the homepage, unknown URLs return
+200. The config that fixes it is in the repository and the 404 page is declared
+in the builder but not produced by a real build. Applying it to the host is the
+remaining slice, and it needs the artwork, which is not in this repository.
