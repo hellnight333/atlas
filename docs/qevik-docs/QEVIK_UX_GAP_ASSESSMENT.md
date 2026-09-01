@@ -67,22 +67,45 @@ other route entirely. Installing the fixed config on its own would have pointed
 have answered with a bare file-server error while the deploy exited zero — the
 same shape of failure as the original defect.
 
-So `infra/deploy_public.sh` now builds the site and ships it to the document root
-the Caddyfile declares, refusing if the build is missing any path that Caddyfile
-rewrites to; `deploy_console.sh` runs it **before** installing the config, and
-afterwards asserts at the origin — not through Cloudflare — that `/services/`
-serves its own page, that an unknown URL answers 404 with the built page, and
-that an unknown URL under `/ar/` answers in Arabic.
+So `infra/deploy_public.sh` builds the site, ships it to the document root the
+Caddyfile declares — refusing if the build is missing any path that Caddyfile
+rewrites to — and then installs that Caddyfile as `/etc/caddy/Caddyfile`,
+validates it on the host, restarts Caddy (restart, not reload: the admin API is
+off), puts the previous config back if Caddy does not come up, and asserts at the
+origin — not through Cloudflare — that `/services/` serves its own page, that an
+unknown URL answers 404 with the built page, and that an unknown URL under `/ar/`
+answers in Arabic. It exits non-zero if any of that is untrue.
+
+### The fourth way to be broken, and it was also live
+
+All of the above was committed, reviewed and tested on 2026-09-01, and every URL
+on qevik.ai still served the homepage — because **nothing ran it.** The pages
+were published by `deploy_public.sh` and the config was installed by
+`deploy_console.sh`, and the development loop's `deployed` gate
+(`infra/devloop/gates.py`) runs `infra/deploy_control.sh`, which called neither.
+The task was marked done and production-verified against a site that had not
+changed.
+
+Two things follow from that, and both are now true:
+
+- The two halves are **one script**. `deploy_public.sh` owns the pages and the
+  config together; `deploy_console.sh` no longer installs the Caddyfile itself.
+  There is nothing left for a second script to forget.
+- `infra/deploy_control.sh` — the script the gate actually executes — runs it,
+  last, after the kernel, console and workers are verified up, and then checks
+  that `app.qevik.ai/api/health` still answers JSON through the restarted Caddy.
 
 Guarded by `packages/kernel/tests/test_public_serving.py`, which asserts the
 config is the one that serves a page per URL, that the built artefact satisfies
-it, and that the deploy carries both to the host together — any one of the three
-alone passed while the site was broken.
+it, that the deploy carries both to the host together, and that the script named
+in `gates.py` is the one that does it — reading that name out of the gate rather
+than repeating it. Any one of the four alone passed while the site was broken.
 
-**The measurements above still describe the live site.** This becomes true in
-production when `infra/deploy_console.sh` runs: the site is published, the
-Caddyfile reaches the host and Caddy is restarted (restart, not reload: the
-admin API is off). Until then §1 remains the state of qevik.ai.
+**The measurements above still describe the live site**, and will until a deploy
+runs. Applying this needs the host: it is the loop's `deployed` gate, or an
+operator running `bash infra/deploy_public.sh` with the SSH key. No claim of
+production verification belongs here until `https://qevik.ai/services/` returns
+its own page and an unknown URL returns 404.
 
 ## 2. What the site actually says today
 

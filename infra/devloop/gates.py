@@ -111,12 +111,19 @@ def tests(*, cwd: Path, selector: str = "", timeout: int = 2400) -> Gate:
     return Gate("tests", code == 0, tail[:300])
 
 
-def deployed(*, cwd: Path, timeout: int = 900) -> Gate:
+def deployed(*, cwd: Path, timeout: int = 1500) -> Gate:
     """The deploy script's own verdict.
 
     `deploy_control.sh` installs, restarts, waits for the service to answer and
     puts the previous tree back if it does not. Its exit code is therefore a
     real gate rather than a report that files were copied.
+
+    It also publishes qevik.ai and the web server config that serves it —
+    a build, a second rsync, a Caddy restart and five origin probes on top of
+    the kernel deploy. The budget went from 900s to 1500s for that: a timeout
+    here reports `unmeasured`, which is not a failure and not a pass, and a
+    deploy that did the work and ran out of clock is the least useful answer
+    this gate can give.
     """
     code, out, timed_out = _sh(["./infra/deploy_control.sh"], cwd=cwd,
                                timeout=timeout)

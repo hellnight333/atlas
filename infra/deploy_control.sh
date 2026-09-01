@@ -77,7 +77,12 @@ rsync_() {
 # Tracked, modified, runtime files only -- tests and documents do not run in
 # production. Committed work is covered too: the comparison is against what the
 # host has, not against the last commit.
-SHIPPED_PREFIXES="packages/kernel/atlas_kernel/ infra/ apps/control/src/"
+# `apps/public/` joined the list with the `deploy_public.sh` step near the end,
+# which builds that tree and sends the output to `/srv/qevik-public`. It belongs
+# here now and did not before, and the difference matters in both directions: an
+# unlisted prefix that is shipped refuses every deploy the moment the builder is
+# edited, and a listed prefix that is not shipped is this guard lying.
+SHIPPED_PREFIXES="packages/kernel/atlas_kernel/ infra/ apps/control/src/ apps/public/"
 UNSHIPPED=""
 for f in $(git -C "$ROOT" ls-files -mo --exclude-standard 2>/dev/null); do
   case "$f" in
@@ -236,6 +241,47 @@ done
 echo "==> what the service now reports"
 ssh_ "curl -s $HEALTH -o /dev/null -w 'health: %{http_code}\n'" || true
 ssh_ "systemctl is-active $SERVICE"
+
+# --- and the public site, which this is the only deploy that runs ------------
+#
+# This is the script the development loop's `deployed` gate executes
+# (`infra/devloop/gates.py`), and for a while it was the *only* deploy anything
+# ran. So a fix to how qevik.ai is served — committed, reviewed, tested, and
+# correct in this repository — never reached the host at all: it lived in
+# `infra/deploy_console.sh`, which the loop does not call, and the task was
+# marked done and production-verified while every URL on qevik.ai still served
+# the homepage.
+#
+# Last, and deliberately. It restarts Caddy, so it runs only once the kernel,
+# the console and the workers are up and verified; a web server restarted in
+# front of a control plane that did not come back is two failures reported as
+# one.
+#
+# Hard failure, not a warning. A deploy that exits zero having left the public
+# site on last week's pages is the failure this whole path exists to stop, and
+# the steps above have already been verified individually — what is lost by
+# failing here is a green tick, not a rollback.
+echo "==> publishing qevik.ai and the config that serves it"
+bash "$ROOT/infra/deploy_public.sh" "$TARGET" || {
+  echo "FAILED: qevik.ai was not published, or the origin did not serve a page"
+  echo "        per URL afterwards. The kernel, the console and the workers are"
+  echo "        deployed and verified — that part of this run stands."
+  exit 1
+}
+
+# Caddy has just been restarted with a config out of this repository, and it
+# fronts the control plane as well as the marketing site. Ask it, at the origin
+# rather than through Cloudflare, whether app.qevik.ai still answers as itself:
+# a config that serves qevik.ai perfectly and 404s the API is not a good deploy.
+echo "==> checking the control plane still answers through the restarted Caddy"
+CONSOLE_TYPE="$(ssh_ "curl -sS --max-time 15 --resolve app.qevik.ai:443:127.0.0.1 -o /dev/null -w '%{content_type}' https://app.qevik.ai/api/health" || echo none)"
+echo "    GET app.qevik.ai/api/health -> $CONSOLE_TYPE"
+case "$CONSOLE_TYPE" in
+  application/json*) ;;
+  *) echo "FAILED: app.qevik.ai/api/* no longer reaches the control plane"
+     echo "        after the Caddy restart (content-type: $CONSOLE_TYPE)."
+     exit 1 ;;
+esac
 
 echo
 echo "deployed. The service answered; that is not the same as the change being"

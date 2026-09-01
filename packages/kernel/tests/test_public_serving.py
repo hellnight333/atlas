@@ -15,12 +15,11 @@ studies, and `/nonsense-does-not-exist/` — was rewritten to `/index.html` and
 answered 200. Measured on the live site 2026-09-01.
 
 Nothing in the Python could have caught that, which is why these tests are here
-rather than only in `test_public_site.py`. Three parts, and all three are
-needed:
+rather than only in `test_public_site.py`. Four parts, and all four are needed:
 
 1. The **web server config** is the one that resolves a directory to its own
    index and answers a miss with 404. Asserted against
-   `infra/qevik-production.Caddyfile`, which `infra/deploy_console.sh` copies to
+   `infra/qevik-production.Caddyfile`, which `infra/deploy_public.sh` copies to
    `/etc/caddy/Caddyfile` — so this file is the origin of the production
    behaviour, not a description of it.
 2. The **built artefact** actually satisfies that config: every URL the sitemap
@@ -32,9 +31,17 @@ needed:
    to that directory. Rolling out §1 alone would have pointed `handle_errors` at
    files the host does not have, so an unknown URL would answer with a bare
    file-server error — while the deploy exited zero.
+4. The deploy **that anything actually runs** is that deploy. This is the fourth
+   way, and it is the one that let §1–§3 be committed, reviewed, tested and
+   marked production-verified while every URL on qevik.ai still served the
+   homepage. The publishing script existed and was correct; it was called by
+   `infra/deploy_console.sh`, and the development loop's `deployed` gate runs
+   `infra/deploy_control.sh`, which called neither it nor the console script.
+   Nothing applied the fix, so §4 reads the script name out of
+   `infra/devloop/gates.py` and follows what that script runs.
 
-Together they say "every page serves its own page, on the live host". Any one
-alone would have passed while the site was broken.
+Together they say "every page serves its own page, on the live host, by a deploy
+something runs". Any one alone passed while the site was broken.
 """
 
 from __future__ import annotations
@@ -165,10 +172,11 @@ def test_an_unexpected_failure_is_not_dressed_as_a_designed_page(public) -> None
 def test_the_deploy_validates_the_config_before_restarting_caddy() -> None:
     """A malformed Caddyfile has taken this server down once already, and the
     admin API is off so `reload` is not available. Validate, then restart."""
-    deploy = (REPO / "infra" / "deploy_console.sh").read_text(encoding="utf-8")
+    deploy = (REPO / "infra" / "deploy_public.sh").read_text(encoding="utf-8")
     assert "caddy validate --config /etc/caddy/Caddyfile" in deploy
-    assert "systemctl restart caddy" in deploy
-    assert deploy.index("caddy validate") < deploy.index("systemctl restart caddy")
+    assert 'echo "==> restarting Caddy"' in deploy
+    assert (deploy.index("caddy validate --config /etc/caddy/Caddyfile")
+            < deploy.index('echo "==> restarting Caddy"'))
 
 
 # --- 2. the artefact that config serves --------------------------------------
@@ -263,6 +271,8 @@ def test_the_404_pages_are_kept_out_of_the_index(dist) -> None:
 
 DEPLOY_PUBLIC = REPO / "infra" / "deploy_public.sh"
 DEPLOY_CONSOLE = REPO / "infra" / "deploy_console.sh"
+DEPLOY_CONTROL = REPO / "infra" / "deploy_control.sh"
+GATES = REPO / "infra" / "devloop" / "gates.py"
 
 
 def preflight(dist: Path, caddyfile: Path | None = None):
@@ -295,13 +305,25 @@ def caddyfile_with(root: str, rewrites: tuple[str, ...]) -> str:
     return f"qevik.ai {{\n\troot * {root}\n\tfile_server\n\n\thandle_errors {{\n{handlers}\n\t}}\n}}\n"
 
 
-def test_the_deploy_that_installs_this_config_also_ships_the_site_it_serves() -> None:
-    """The gap itself. `/srv/qevik-public` had no writer in this repository."""
-    console = DEPLOY_CONSOLE.read_text(encoding="utf-8")
-    assert "deploy_public.sh" in console, (
-        "deploy_console.sh installs a Caddyfile that serves /srv/qevik-public "
-        "and nothing puts the site there")
-    assert DEPLOY_PUBLIC.is_file()
+def test_one_script_ships_the_pages_and_the_config_that_names_them() -> None:
+    """The gap itself, and then the gap that replaced it.
+
+    `/srv/qevik-public` had no writer in this repository at all. Once it had
+    one, the pages and the config that rewrites to them were installed by two
+    different scripts — and the second was never run.
+    """
+    installers = sorted(
+        path.name
+        for path in sorted((REPO / "infra").glob("*.sh"))
+        if '"$TARGET:/etc/caddy/Caddyfile"' in path.read_text(encoding="utf-8")
+    )
+    assert installers == ["deploy_public.sh"], (
+        "the config that serves /srv/qevik-public must be installed by the same "
+        f"script that writes it, and by only that script; found {installers}")
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    assert 'python3 "$ROOT/apps/public/build.py"' in public, (
+        "the script that installs the config must be the one that builds the "
+        "pages it names")
 
 
 def test_the_site_is_shipped_before_the_config_that_names_its_pages() -> None:
@@ -311,15 +333,30 @@ def test_the_site_is_shipped_before_the_config_that_names_its_pages() -> None:
     the homepage regardless — so content first is free. The reverse order leaves
     a window in which the server rewrites to a page that is not there.
     """
-    console = DEPLOY_CONSOLE.read_text(encoding="utf-8")
-    # The invocation with its argument, not the bare filename: the comment above
-    # it names the script too, and matching that would put "ships" before
-    # "installs" no matter what the script actually does.
-    ships = console.index('bash "$HERE/deploy_public.sh" "$TARGET"')
-    installs = console.index('"$TARGET:/etc/caddy/Caddyfile"')
-    restarts = console.index("systemctl restart caddy")
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    ships = public.index("rsync -az --partial")
+    installs = public.index('"$TARGET:/etc/caddy/Caddyfile"')
+    # The banner rather than `systemctl restart caddy`: the rollback path calls
+    # that too, above, and matching it would compare against the wrong restart.
+    restarts = public.index('echo "==> restarting Caddy"')
     assert ships < installs < restarts, (
         "the Caddyfile is installed before the pages it rewrites to are on the host")
+
+
+def test_the_config_it_replaces_is_kept_and_put_back_if_caddy_will_not_start() -> None:
+    """This file fronts four hostnames. A config that validates and then fails
+    to start takes down the marketing site, the console, the customer sites and
+    the operator's fallback door at once — so the one being replaced is kept
+    beside it and restored rather than left for someone to notice."""
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    backs_up = public.index("cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous")
+    installs = public.index('"$TARGET:/etc/caddy/Caddyfile"')
+    assert backs_up < installs, "the config is overwritten before it is kept"
+    assert "systemctl is-active --quiet caddy" in public, (
+        "`systemctl restart` succeeds on a unit that then exits")
+    assert public.count("restore_config") >= 3, (
+        "the rollback must run for a config that does not validate and for one "
+        "that validates and does not come up")
 
 
 def test_the_deploy_accepts_the_build_this_repository_produces(dist) -> None:
@@ -380,22 +417,158 @@ def test_the_deploy_verifies_the_live_404_instead_of_reporting_success(dist) -> 
     deploy greps for a string only the built page contains, and that string is
     asserted here against the real build so the two cannot drift apart.
     """
-    console = DEPLOY_CONSOLE.read_text(encoding="utf-8")
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
 
     # At the origin. This deploy changes what the origin serves, and Cloudflare
     # can still be answering for what it served before.
-    assert "--resolve qevik.ai:443:127.0.0.1" in console, console
+    assert "--resolve qevik.ai:443:127.0.0.1" in public, public
 
-    assert '[ "$miss_code" = "404" ]' in console
+    assert '[ "$miss_code" = "404" ]' in public
     marker = "That page is not here"
-    assert f"grep -q '{marker}'" in console
+    assert f"grep -q '{marker}'" in public
     assert marker in (dist / "404.html").read_text(encoding="utf-8"), (
         "the deploy checks the live 404 for a string the 404 page no longer has, "
         "so the check would fail on a correct deploy")
-    assert 'grep -q \'dir="rtl"\'' in console, "a wrong /ar/ URL must 404 in Arabic"
+    assert 'grep -q \'dir="rtl"\'' in public, "a wrong /ar/ URL must 404 in Arabic"
 
 
-# --- 4. and building here changes nothing for the rest of the suite ----------
+def test_the_deploy_checks_that_a_page_serves_its_own_page(dist) -> None:
+    """The measured defect, as the deploy's own gate.
+
+    `/services/` answering 200 was never the question — it always did. The
+    deploy looks for the title only that page carries, and the title is checked
+    here against the real build so a rename cannot leave the deploy grepping
+    for a string production will never send.
+    """
+    public = DEPLOY_PUBLIC.read_text(encoding="utf-8")
+    assert "grep -q '<title>Services'" in public
+    served = title_of((dist / "services" / "index.html").read_text(encoding="utf-8"))
+    assert served.startswith("Services"), served
+    assert not title_of((dist / "index.html").read_text(encoding="utf-8")).startswith(
+        "Services"), "the check would pass on a homepage served for /services/"
+
+
+# --- 4. and something actually runs that deploy ------------------------------
+#
+# §1–§3 were all true, committed and reviewed, and qevik.ai still served the
+# homepage on every URL. The publishing script was correct; nothing called it.
+# `infra/deploy_console.sh` did, and the development loop's `deployed` gate runs
+# `infra/deploy_control.sh` — a different script, which shipped the kernel, the
+# console and `infra/`, restarted the services, verified the worker fingerprint,
+# exited zero, and touched neither the public site nor `/etc/caddy/Caddyfile`.
+#
+# So these read the entry point out of the gate rather than naming it here. A
+# test that hard-coded "deploy_control.sh" would be wrong in exactly the way the
+# deploy was: right about a script, silent about which one runs.
+
+
+def deploy_gate_entry_point() -> Path:
+    """The script `infra/devloop/gates.py` runs for the `deployed` gate."""
+    source = GATES.read_text(encoding="utf-8")
+    body = source[source.index("def deployed("):]
+    body = body[: body.index("\ndef ")]
+    named = re.findall(r'"\./infra/([\w.-]+\.sh)"', body)
+    assert len(named) == 1, f"the deployed gate runs {named}, expected one script"
+    return REPO / "infra" / named[0]
+
+
+def scripts_run_by(entry: Path) -> set[str]:
+    """Every deploy script `entry` runs, transitively, by name.
+
+    Follows `bash "$VAR/.../name.sh"` — the form every script here uses, and
+    deliberately not a bare mention: the comment above an invocation names the
+    script too, and matching prose would report a call that is not made.
+    """
+    seen: set[str] = set()
+    pending = [entry]
+    while pending:
+        script = pending.pop()
+        if script.name in seen or not script.is_file():
+            continue
+        seen.add(script.name)
+        for name in re.findall(
+            r'bash "\$[A-Z_]+(?:/[\w.-]+)*/([\w.-]+\.sh)"',
+            script.read_text(encoding="utf-8"),
+        ):
+            pending.append(REPO / "infra" / name)
+    return seen
+
+
+def test_the_deploy_the_loop_runs_publishes_the_public_site() -> None:
+    """The reopened defect, stated as a rule.
+
+    Not "a deploy script publishes qevik.ai" — that was already true. *The one
+    the gate executes* publishes qevik.ai, or the fix sits in the repository
+    while production serves the homepage for every URL and the task is marked
+    done.
+    """
+    entry = deploy_gate_entry_point()
+    run = scripts_run_by(entry)
+    assert "deploy_public.sh" in run, (
+        f"the deployed gate runs {entry.name}, which runs {sorted(run)} — "
+        "nothing there publishes qevik.ai or installs the config that serves it")
+
+
+def test_both_deploy_paths_publish_the_site() -> None:
+    """`deploy_console.sh` is the operator's path and `deploy_control.sh` is the
+    loop's. Whichever of the two is run must leave qevik.ai correct, because the
+    one certainty here is that somebody will run the other one."""
+    for script in (DEPLOY_CONSOLE, DEPLOY_CONTROL):
+        assert "deploy_public.sh" in scripts_run_by(script), (
+            f"{script.name} deploys to the host that serves qevik.ai and does "
+            "not publish it")
+
+
+def test_the_reachability_check_can_answer_no(tmp_path) -> None:
+    """Negative control. A follower that always finds what it looks for would
+    have passed on the broken deploy too, which is the whole point of §4."""
+    lonely = tmp_path / "deploy_nothing.sh"
+    lonely.write_text('#!/usr/bin/env bash\n# mentions deploy_public.sh in prose\n',
+                      encoding="utf-8")
+    assert scripts_run_by(lonely) == {"deploy_nothing.sh"}
+
+
+def test_the_loops_deploy_counts_the_site_builder_among_what_it_ships() -> None:
+    """`deploy_control.sh` refuses to run when a changed runtime file is not
+    covered by anything it sends — a guard that exists because `infra/` went
+    unshipped for the life of the script. Now that it publishes the public site,
+    `apps/public/` is shipped; while it was not listed, a change to the site
+    builder would have refused every deploy of anything."""
+    control = DEPLOY_CONTROL.read_text(encoding="utf-8")
+    declared = re.search(r'^SHIPPED_PREFIXES="([^"]*)"', control, re.M)
+    assert declared, "deploy_control.sh no longer declares what it ships"
+    assert "apps/public/" in declared.group(1).split(), declared.group(1)
+
+
+def test_the_public_site_is_published_after_the_control_plane_is_up() -> None:
+    """Order, for the same reason the pages go before the config.
+
+    Publishing restarts Caddy, and Caddy fronts the console and the API as well
+    as the marketing site. Restarting it before the control plane has answered
+    turns one failure into two, and the second one is the one that gets read.
+    """
+    control = DEPLOY_CONTROL.read_text(encoding="utf-8")
+    fingerprint = control.index("all $COUNT worker(s) report $FINGERPRINT")
+    publishes = control.index('bash "$ROOT/infra/deploy_public.sh" "$TARGET"')
+    assert fingerprint < publishes, (
+        "Caddy is restarted before the code behind it has been verified")
+
+
+def test_restarting_caddy_is_followed_by_asking_the_console_if_it_still_answers() -> None:
+    """The same Caddyfile serves app.qevik.ai. A config that fixes the
+    marketing site and 404s the API is not a good deploy, and the deploy that
+    installs it is the one place that can tell."""
+    control = DEPLOY_CONTROL.read_text(encoding="utf-8")
+    publishes = control.index('bash "$ROOT/infra/deploy_public.sh" "$TARGET"')
+    # At the origin, like every other post-deploy check here: this run changed
+    # what the origin serves and Cloudflare can still answer for what it did.
+    checks = control.index("--resolve app.qevik.ai:443:127.0.0.1")
+    assert publishes < checks
+    assert "application/json*" in control[checks:], (
+        "a static handler answering /api/health with HTML would pass a status check")
+
+
+# --- 5. and building here changes nothing for the rest of the suite ----------
 
 
 def test_a_build_leaves_the_asset_map_as_it_found_it(dist) -> None:

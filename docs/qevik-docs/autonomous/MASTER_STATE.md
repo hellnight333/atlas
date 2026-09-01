@@ -226,10 +226,15 @@ to confirm the mission, its full lifecycle history and its report survived.
 | Caddyfile | Fixed: `/api/*` now proxies to the control plane |
 | Remaining | One operator needs a tenant — an auth change on a live system, so it is the user's to make |
 
-`infra/deploy_console.sh` copies the console, publishes the public site through
-`infra/deploy_public.sh` (the Caddyfile names pages inside `/srv/qevik-public`,
-so the content has to land first), installs the Caddyfile, validates it,
-restarts Caddy and verifies over HTTPS — app.qevik.ai and qevik.ai both.
+`infra/deploy_public.sh` publishes qevik.ai: it builds the site, ships it to
+`/srv/qevik-public`, installs `infra/qevik-production.Caddyfile` as
+`/etc/caddy/Caddyfile` (the content lands first — that config names pages inside
+the document root), validates on the host, restarts Caddy, rolls the config back
+if Caddy does not come up, and asserts at the origin that a page serves its own
+page and an unknown URL 404s. `infra/deploy_console.sh` and
+`infra/deploy_control.sh` both run it; the devloop `deployed` gate runs
+`deploy_control.sh`, which is why it has to be there and not only in the console
+script.
 
 **Correction to an earlier report:** SSH access exists.
 `ssh -i ~/.ssh/naml_hetzner -o IdentitiesOnly=yes root@2.28.62.83` works; the
