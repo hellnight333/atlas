@@ -607,9 +607,22 @@ views.dashboard = async () => {
    * This states it in a sentence, in the display face, and the cards below stay
    * as reference.
    */
+  /* Named by kind, not counted. "3 things need you" reads the same whether
+     they are three credentials or a product decision nobody else can make, and
+     the decision is the one that stops a branch of work until it is answered. */
+  const mine = (actions.open || []).filter((a) => a.blocking);
+  const decisions = mine.filter((a) => a.kind === 'decision');
+  const questions = mine.filter((a) => a.kind === 'question');
+  const named = [
+    decisions.length ? `<a href="#/actions">${decisions.length} decision${
+      decisions.length === 1 ? '' : 's'} only you can make</a>` : '',
+    questions.length ? `<a href="#/actions">${questions.length} question${
+      questions.length === 1 ? '' : 's'}</a>` : '',
+  ].filter(Boolean).join(' · ');
   const lead = state.counts.actions
     ? `<p class="lead"><strong>${state.counts.actions}</strong> ${
         state.counts.actions === 1 ? 'thing needs' : 'things need'} you.</p>
+       ${named ? `<p class="lead-note">${named}</p>` : ''}
        <p class="lead-note">${waiting ? esc(waiting + ' waiting for approval') : ''}${
         waiting && blocking ? ' · ' : ''}${blocking ? esc(blocking + ' blocked on a credential') : ''}</p>`
     : `<p class="lead lead-clear">Nothing needs you.</p>
@@ -1845,8 +1858,12 @@ async function conversation(id) {
    ActionKind, because a person asking "what do you need from me" is asking one
    question and must not be shown two centres that disagree. */
 const GROUPS = [
-  ['BLOCKING NOW', (a) => a.blocking && a.status !== 'deferred'],
-  ['WAITING FOR ME', (a) => !a.blocking && a.status !== 'deferred'],
+  ['NEEDS A DECISION FROM YOU',
+   (a) => a.kind === 'decision' && a.status !== 'deferred'],
+  ['BLOCKING NOW',
+   (a) => a.kind !== 'decision' && a.blocking && a.status !== 'deferred'],
+  ['WAITING FOR ME',
+   (a) => a.kind !== 'decision' && !a.blocking && a.status !== 'deferred'],
   ['DEFERRED', (a) => a.status === 'deferred'],
 ];
 
@@ -1870,7 +1887,10 @@ views.actions = async () => {
         <div class="row"><div class="body">
           <div class="title">${esc(a.title)}
             ${a.blocking ? pill('BLOCKING', 'bad') : ''}
-            ${a.posed ? pill(esc(a.kind), 'wait') : ''}
+            ${a.kind === 'decision' ? pill('DECISION', 'warn')
+              : a.posed ? pill(esc(a.kind), 'wait') : ''}
+            ${a.kind === 'decision' && (a.options || []).length
+              ? `<span class="note">${a.options.length} options</span>` : ''}
             ${a.reversible === false ? pill('irreversible', 'warn') : ''}</div>
           <div class="meta">${esc(a.reason || a.instructions || '')}</div>
           ${(a.affects || []).length

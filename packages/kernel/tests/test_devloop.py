@@ -972,3 +972,25 @@ def test_the_review_reads_findings_against_the_isolated_tree():
     source = Path(INFRA / "devloop" / "agents.py").read_text()
     assert "parse_review(message, repo=tree)" in source, (
         "findings are relativised against the wrong tree")
+
+
+def test_a_decision_is_findable_from_the_landing_screen():
+    """The operator could not find an open decision in the live console.
+
+    The cause was that nothing was deployed — but the screen was also weak:
+    "3 things need you" reads the same whether they are three credentials or a
+    product decision nobody else can make, and only the decision stops a branch
+    of work until it is answered.
+    """
+    console = Path(INFRA).parents[0] / "apps" / "control" / "src" / "index.html"
+    source = console.read_text()
+
+    dashboard = source[source.index("views.dashboard"):source.index("views.roadmap")]
+    assert "only you can make" in dashboard, (
+        "the landing screen does not say a decision is waiting")
+    assert "'decision'" in dashboard, "decisions are not counted separately"
+
+    # And the inbox leads with them, labelled as decisions rather than as
+    # another thing to go and configure.
+    assert "NEEDS A DECISION FROM YOU" in source
+    assert "pill('DECISION'" in source
