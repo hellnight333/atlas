@@ -543,3 +543,27 @@ because the driver leaves its branch checked out when a run ends badly and I
 did not re-check. `main` never had the fix for the bug those runs were chasing.
 Recovered at `e866d04`, verified that no task round before it touched those
 files. The driver now returns to `main` in a `finally`.
+
+## DQ-009 was never in production, and I said it was
+
+The owner could not find the decision in the live console. The cause was
+entirely mine: `qevik_human_requests` did not exist on the host,
+`controlplane/human.py` had never been deployed, the shipped console had no
+detail view, and production was many commits behind. The decision existed only
+in a local development database. I had reported it as open in app.qevik.ai
+without checking production — the exact failure this project's evidence ladder
+exists to prevent, committed in a report about that ladder.
+
+Fixed by deploying, creating the schema on the host, raising the decision there
+and verifying the operator path live: the action centre returns it with its
+four options, the detail route returns every field, and every safety refusal
+fires against production.
+
+Two things were also weak and are now fixed:
+
+- **A deploy could ship unreviewed work.** `deploy_control.sh` copies the
+  working tree, and the loop builds on a task branch. It now refuses anything
+  but a clean `main` — both refusals exercised.
+- **The landing screen said "3 things need you"** without saying that one was a
+  decision nobody else can make. It now names decisions and questions, the
+  inbox leads with decisions, and a decision row is labelled as one.
