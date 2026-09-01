@@ -1133,3 +1133,29 @@ def test_an_empty_diff_records_what_the_builder_said(tmp_path, monkeypatch):
     reasons = " ".join(t["reason"] for t in q.transitions(ident))
     assert "could not find the builder module" in reasons, (
         "the failure records that nothing changed and not why")
+
+
+@pytest.mark.parametrize("summary,code,passes,unmeasured", [
+    ("3 passed, 8 skipped in 0.5s", 0, True, False),
+    ("11 skipped in 0.4s", 0, False, True),
+    ("12 passed in 3s", 0, True, False),
+    ("2 failed, 9 passed in 5s", 1, False, False),
+])
+def test_a_run_where_everything_skipped_asserted_nothing(monkeypatch, summary,
+                                                         code, passes,
+                                                         unmeasured):
+    """Exit zero is not the same as "something was checked".
+
+    A task added a page to the site builder; its tests skipped because the
+    artwork is gitignored and the site cannot be built locally; the gate read
+    exit zero and passed; and the page was never produced by a real build. The
+    tests were honest — their skip message says "Nothing below is being
+    asserted" — and the gate did not read it.
+
+    Skips are legitimate in general, so this fires only when a run selected
+    tests and none of them ran.
+    """
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (code, summary, False))
+    g = gates.tests(cwd=Path("."))
+    assert g.passed is passes
+    assert g.unmeasured is unmeasured

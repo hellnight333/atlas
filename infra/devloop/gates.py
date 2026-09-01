@@ -22,6 +22,7 @@ A task that requires deployment and does not pass `deployed` never reaches
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,7 +109,28 @@ def tests(*, cwd: Path, selector: str = "", timeout: int = 2400) -> Gate:
     if timed_out:
         return Gate("tests", False, f"the suite did not finish in {timeout}s",
                     unmeasured=True)
-    return Gate("tests", code == 0, tail[:300])
+    if code != 0:
+        return Gate("tests", False, tail[:300])
+
+    # Exit zero is not the same as "something was checked".
+    #
+    # A narrowed run whose every selected test skipped exits zero and reports
+    # `pass`, and nothing was asserted. It happened: a task added a page to the
+    # site builder, its tests skipped because the artwork is gitignored and the
+    # site cannot be built locally, the gate passed, and the page was never
+    # produced by a real build. The tests were honest — their skip message says
+    # "Nothing below is being asserted" — and the gate did not read it.
+    #
+    # Skips are legitimate in general, so this only fires when a run selected
+    # tests and *none* of them ran.
+    ran = re.search(r"(\d+)\s+passed", out)
+    skipped = re.search(r"(\d+)\s+skipped", out)
+    if not ran and skipped and int(skipped.group(1)):
+        return Gate("tests", False,
+                    f"every selected test skipped ({skipped.group(1)}); "
+                    f"nothing was asserted about this change",
+                    unmeasured=True)
+    return Gate("tests", True, tail[:300])
 
 
 def deployed(*, cwd: Path, timeout: int = 900) -> Gate:
