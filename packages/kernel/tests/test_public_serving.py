@@ -195,16 +195,22 @@ def test_the_deploy_validates_the_config_before_restarting_caddy() -> None:
 # --- 2. the artefact that config serves --------------------------------------
 
 
-def resolve(root: Path, url_path: str) -> Path | None:
-    """What `root * <root>` + `file_server` serves for a URL, or None for a 404.
+def served_by(root: Path, url_path: str) -> Path:
+    """Where `root * <root>` + `file_server` looks for a URL.
 
-    The rule the fixed config expresses, applied to the real build output: a
+    The rule the fixed config expresses, and the rule `build.py` writes by: a
     path ending in "/" is a directory served by its `index.html`, anything else
-    is a file, and a miss is a miss.
+    is a file at exactly that path. Written once, because a second copy of it
+    drifts and this file's whole subject is a server and a builder that
+    disagreed about where a page lives.
     """
     candidate = root / url_path.lstrip("/")
-    if url_path.endswith("/"):
-        candidate = candidate / "index.html"
+    return candidate / "index.html" if url_path.endswith("/") else candidate
+
+
+def resolve(root: Path, url_path: str) -> Path | None:
+    """What that rule serves for a URL against a real build, or None for a 404."""
+    candidate = served_by(root, url_path)
     return candidate if candidate.is_file() else None
 
 
@@ -347,11 +353,12 @@ DEPLOY_CONSOLE = REPO / "infra" / "deploy_console.sh"
 def preflight(dist: Path, caddyfile: Path | None = None):
     """The deploy's own pre-flight, run for real against a built directory.
 
-    `deploy_public.sh --check` reads the Caddyfile, works out which files it
-    names, and exits non-zero if the build lacks one — without touching a host.
-    Driving the script itself rather than asserting on its text is the point:
-    a test that greps a shell script for a filename passes on a script that
-    never runs the check.
+    `deploy_public.sh --check` reads the Caddyfile, refuses a config that has
+    gone back to serving the site as a single-page application, and exits
+    non-zero where the build cannot answer a URL the config or the sitemap
+    names — without touching a host. Driving the script itself rather than
+    asserting on its text is the point: a test that greps a shell script for a
+    filename passes on a script that never runs the check.
     """
     env = dict(os.environ)
     if caddyfile is not None:
@@ -364,14 +371,20 @@ def preflight(dist: Path, caddyfile: Path | None = None):
     )
 
 
-def caddyfile_with(root: str, rewrites: tuple[str, ...]) -> str:
+def caddyfile_with(
+    root: str, rewrites: tuple[str, ...], *, spa_fallback: bool = False
+) -> str:
     """A minimal production-shaped config, for asking what the check reads."""
     handlers = "\n".join(
         f"\t\thandle {{\n\t\t\trewrite * {path}\n\t\t\tfile_server {{\n"
         f"\t\t\t\tstatus 404\n\t\t\t}}\n\t\t}}"
         for path in rewrites
     )
-    return f"qevik.ai {{\n\troot * {root}\n\tfile_server\n\n\thandle_errors {{\n{handlers}\n\t}}\n}}\n"
+    fallback = "\ttry_files {path} /index.html\n" if spa_fallback else ""
+    return (
+        f"qevik.ai {{\n\troot * {root}\n{fallback}\tfile_server\n\n"
+        f"\thandle_errors {{\n{handlers}\n\t}}\n}}\n"
+    )
 
 
 def test_the_deploy_that_installs_this_config_also_ships_the_site_it_serves() -> None:
@@ -426,7 +439,9 @@ def test_the_deploy_refuses_a_build_missing_a_page_the_config_rewrites_to(
         assert result.returncode != 0, (
             f"the deploy would have shipped a config rewriting to /{missing} "
             f"with no such file: {result.stdout}")
-        assert f"/{missing}" in result.stderr, result.stderr
+        # A whole line: "/ar/404.html" contains "/404.html", so a refusal naming
+        # only the Arabic page would otherwise satisfy the English case.
+        assert f"    /{missing}\n" in result.stderr, result.stderr
 
 
 def test_the_deploy_reads_what_to_check_from_the_config_rather_than_repeating_it(
@@ -472,6 +487,179 @@ def test_the_deploy_verifies_the_live_404_instead_of_reporting_success(dist) -> 
         "the deploy checks the live 404 for a string the 404 page no longer has, "
         "so the check would fail on a correct deploy")
     assert 'grep -q \'dir="rtl"\'' in console, "a wrong /ar/ URL must 404 in Arabic"
+
+
+# --- 3b. the check itself, in a checkout that cannot build the site ----------
+#
+# Everything above that takes `dist` skips where `apps/public/assets/` is absent,
+# and it is absent in this repository by design — the blanket `assets/` rule in
+# .gitignore covers the stylesheet and the twenty-odd photographs. So on a fresh
+# clone, on CI, and on the machine this loop runs on, the gate whose entire job
+# is to refuse a build the config cannot serve is never exercised at all. That
+# is the shape of every defect this file records: a check that cannot fail
+# because nothing runs it.
+#
+# `--check` reads a *directory*, so it does not need the real build to be
+# checkable. These drive the same script against directories shaped like one.
+
+FIXTURE_URLS = ("/", "/services/", "/work/", "/work/apex/", "/ar/", "/ar/services/")
+
+
+def a_sitemap(urls: tuple[str, ...]) -> str:
+    entries = "\n".join(
+        f"  <url><loc>https://qevik.ai{url}</loc><priority>0.8</priority></url>"
+        for url in urls
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{entries}\n</urlset>\n"
+    )
+
+
+def a_built_site(
+    root: Path,
+    urls: tuple[str, ...] = FIXTURE_URLS,
+    error_pages: tuple[str, ...] = ("/404.html", "/ar/404.html"),
+) -> Path:
+    """A directory shaped like a build of the site, without building one.
+
+    Laid out by `served_by`, the same rule the builder and the config agree on,
+    so a fixture cannot be right here and wrong on the host.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "robots.txt").write_text("User-agent: *\nAllow: /\n", encoding="utf-8")
+    for url in (*urls, *error_pages):
+        page = served_by(root, url)
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(f"<title>{url}</title>", encoding="utf-8")
+    (root / "sitemap.xml").write_text(a_sitemap(urls), encoding="utf-8")
+    return root
+
+
+def test_the_check_accepts_a_directory_that_satisfies_the_production_config(
+    tmp_path,
+) -> None:
+    """Negative control, and it runs everywhere.
+
+    Without it every refusal below is satisfied by a check that refuses
+    everything, which is a deploy that can never run.
+    """
+    result = preflight(a_built_site(tmp_path / "dist"))
+    assert result.returncode == 0, result.stderr
+    assert "/srv/qevik-public" in result.stdout, result.stdout
+    # And it says what it checked. A stage that silently did nothing passes too.
+    assert "every path the config names is present" in result.stdout, result.stdout
+    assert f"all {len(FIXTURE_URLS)} URLs in the sitemap" in result.stdout, result.stdout
+
+
+def test_the_check_refuses_a_build_missing_a_page_the_config_names(tmp_path) -> None:
+    """The finding this whole task came from, asserted without the artwork.
+
+    Each error page in turn, because a check that only looks for `/404.html`
+    ships an Arabic site that answers a missing page in English.
+
+    The name is matched as a whole line, because "/ar/404.html" contains
+    "/404.html": a refusal naming only the Arabic page would otherwise satisfy
+    the English case.
+    """
+    for missing in ("/404.html", "/ar/404.html"):
+        dist = a_built_site(tmp_path / f"without{missing.replace('/', '-')}")
+        served_by(dist, missing).unlink()
+
+        result = preflight(dist)
+        assert result.returncode != 0, result.stdout
+        assert f"    {missing}\n" in result.stderr, result.stderr
+
+
+def test_the_check_refuses_a_directory_where_the_config_names_a_file(tmp_path) -> None:
+    """`rewrite * /404.html` names a file. A directory of that name 404s the 404."""
+    dist = a_built_site(tmp_path / "dist")
+    page = dist / "404.html"
+    page.unlink()
+    page.mkdir()
+    (page / "index.html").write_text("<title>not found</title>", encoding="utf-8")
+
+    result = preflight(dist)
+    assert result.returncode != 0, result.stdout
+    assert "    /404.html\n" in result.stderr, result.stderr
+
+
+def test_the_check_refuses_a_url_the_sitemap_advertises_and_the_build_cannot_serve(
+    tmp_path,
+) -> None:
+    """The other half of the same defect, pointing the other way.
+
+    The rewrite targets are files the *config* names; these are pages the
+    *sitemap* names. A build that stops emitting `services/index.html` satisfies
+    every check on the config and still 404s a URL this site tells search
+    engines is a page — and `/services/` is exactly the URL that was broken.
+    """
+    dist = a_built_site(tmp_path / "dist")
+    served_by(dist, "/services/").unlink()
+
+    result = preflight(dist)
+    assert result.returncode != 0, result.stdout
+    # A whole line: "/ar/services/" is still built and must not be what is named.
+    assert "    /services/\n" in result.stderr, result.stderr
+
+
+def test_the_check_refuses_a_sitemap_that_advertises_nothing(tmp_path) -> None:
+    """Otherwise the URL check passes by having no URLs, which is not a pass."""
+    dist = a_built_site(tmp_path / "dist")
+    (dist / "sitemap.xml").write_text(a_sitemap(()), encoding="utf-8")
+
+    result = preflight(dist)
+    assert result.returncode != 0, result.stdout
+    assert "sitemap.xml" in result.stderr, result.stderr
+
+
+def test_the_check_refuses_the_single_page_application_fallback(tmp_path) -> None:
+    """The premise the rest of the check rests on, made a refusal.
+
+    Under `try_files {path} /index.html` every directory URL is rewritten to the
+    homepage and answers 200, so nothing ever reaches `handle_errors` — and then
+    "is /404.html present" and "does /services/ resolve" both pass against a
+    site serving one page to every URL on it. The build here satisfies every
+    other check, so only the config is being judged.
+    """
+    fixture = tmp_path / "Caddyfile"
+    fixture.write_text(
+        caddyfile_with("/srv/qevik-public", ("/404.html",), spa_fallback=True),
+        encoding="utf-8",
+    )
+
+    result = preflight(a_built_site(tmp_path / "dist"), caddyfile=fixture)
+    assert result.returncode != 0, result.stdout
+    assert "try_files" in result.stderr, result.stderr
+
+
+def test_the_check_needs_no_credentials_and_so_can_run_anywhere(tmp_path) -> None:
+    """A gate an operator cannot run is a gate that does not run.
+
+    The other mode of this script reads `$HOME/.ssh/naml_hetzner` and opens SSH
+    connections with it. `--check` is run here with `HOME` pointing at an empty
+    directory, so there is no key to find: it must still decide, both ways.
+    """
+    home = tmp_path / "no-keys-here"
+    home.mkdir()
+    env = dict(os.environ, HOME=str(home))
+
+    def check(dist: Path):
+        return subprocess.run(
+            ["bash", str(DEPLOY_PUBLIC), "--check", str(dist)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    assert check(a_built_site(tmp_path / "good")).returncode == 0
+
+    broken = a_built_site(tmp_path / "broken")
+    served_by(broken, "/ar/404.html").unlink()
+    refusal = check(broken)
+    assert refusal.returncode != 0, refusal.stdout
+    assert "    /ar/404.html\n" in refusal.stderr, refusal.stderr
 
 
 # --- 4. and building here changes nothing for the rest of the suite ----------

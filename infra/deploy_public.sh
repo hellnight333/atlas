@@ -21,6 +21,18 @@
 # rather than written down a second time. A rewrite target added there without a
 # page behind it fails here, on the operator's machine, instead of on qevik.ai.
 #
+# `--check` answers three questions about a built directory, and it needs no
+# host, no network and no credentials to answer any of them:
+#
+#   1. Does the config still resolve directories by their own index.html, or has
+#      the single-page-application fallback come back? Under `try_files` every
+#      URL serves the homepage and nothing 404s, so 2 and 3 would pass against a
+#      site serving one page.
+#   2. Is every file the config names — each `handle_errors` rewrite target —
+#      in the build, at exactly that path?
+#   3. Does every URL `sitemap.xml` advertises resolve to a page of its own,
+#      under the same rule `file_server` uses?
+#
 # Note: `apps/public/assets/` is covered by the blanket `assets/` rule in
 # .gitignore, so the artwork is not in the repository and this must be run from
 # a working tree that has it. The build refuses by name for anything missing.
@@ -66,13 +78,38 @@ REWRITES="$(printf '%s\n' "$BLOCK" | awk '$1 == "rewrite" && $2 == "*" { print $
   exit 1
 }
 
+# The premise every check below rests on. `try_files {path} /index.html` is the
+# single-page-application fallback and this site is not one: `build.py` writes a
+# directory per page, `try_files` tests for a *file*, and `/services/` is a
+# directory — so it misses and is rewritten to the homepage. Under that config
+# every URL resolves, nothing 404s, and asking "is /404.html present" says
+# nothing at all, because the rewrite that would reach it never fires. Refuse
+# the config rather than pass a build against it.
+if printf '%s\n' "$BLOCK" | grep -q '^[[:space:]]*try_files'; then
+  echo "REFUSED: the qevik.ai block of $CADDYFILE carries try_files." >&2
+  echo "  That is the single-page-application fallback, and this site is not a" >&2
+  echo "  single-page application: apps/public/build.py writes a directory per" >&2
+  echo "  page. Under it every directory URL serves the homepage with a 200 and" >&2
+  echo "  no URL reaches the 404 page, so the checks below would pass against a" >&2
+  echo "  site serving one page. file_server resolves a directory to its own" >&2
+  echo "  index.html unaided. Nothing was deployed." >&2
+  exit 1
+fi
+
+# Every URL a built sitemap advertises, as a path. One `<loc>` per line is what
+# `build.py` writes; the host is dropped rather than matched, so a sitemap built
+# for a staging hostname reads the same as one built for qevik.ai.
+sitemap_urls() {
+  sed -n 's|.*<loc>https\{0,1\}://[^/]*\([^<]*\)</loc>.*|\1|p' "$1"
+}
+
 # --- the check both modes run
 
 # A build that does not satisfy the config must never reach the host. Run before
 # the transfer, and again on the host after it, because "the files were correct
 # here" and "the files are correct there" are different claims.
 check_build() {
-  local dist="$1" missing=""
+  local dist="$1" missing="" unreachable="" advertised="" candidate="" url="" count=0
   [ -d "$dist" ] || { echo "REFUSED: no such directory: $dist" >&2; exit 1; }
 
   echo "    document root (from $(basename "$CADDYFILE")): $DOCROOT"
@@ -96,6 +133,49 @@ check_build() {
     exit 1
   fi
   echo "    every path the config names is present"
+
+  # And every URL the site advertises resolves under the rule the config serves
+  # by. The two halves are different failures: the rewrite targets above are
+  # files the *config* names, and these are pages the *sitemap* names. A build
+  # that stops emitting services/index.html satisfies every check above and
+  # still 404s a URL this site tells search engines is a page — the same defect
+  # as the homepage-for-everything one, pointing the other way.
+  #
+  # Read out of the built sitemap rather than listed here, for the reason the
+  # rewrite targets are: a second list drifts, and it drifts towards advertising
+  # more than the build contains.
+  advertised="$(sitemap_urls "$dist/sitemap.xml" || true)"
+  [ -n "$advertised" ] || {
+    echo >&2
+    echo "REFUSED: $dist/sitemap.xml advertises no URLs at all." >&2
+    echo "  Every check of the sitemap then passes by having nothing to check," >&2
+    echo "  which is indistinguishable from a site that resolves. Nothing was" >&2
+    echo "  deployed." >&2
+    exit 1
+  }
+
+  for url in $advertised; do
+    # Exactly what `root * <docroot>` + `file_server` does: a path ending in "/"
+    # is a directory served by its own index.html, anything else is a file.
+    case "$url" in
+      */) candidate="${url#/}index.html" ;;
+      *) candidate="${url#/}" ;;
+    esac
+    [ -f "$dist/$candidate" ] || unreachable="$unreachable $url"
+    count=$((count + 1))
+  done
+
+  if [ -n "$unreachable" ]; then
+    echo >&2
+    echo "REFUSED: the sitemap advertises URLs this build cannot serve:" >&2
+    for url in $unreachable; do echo "    $url" >&2; done
+    echo >&2
+    echo "  The config resolves a directory to its own index.html and answers a" >&2
+    echo "  miss with the 404 page, so each of these would 404 on qevik.ai while" >&2
+    echo "  sitemap.xml tells search engines it is a page. Nothing was deployed." >&2
+    exit 1
+  fi
+  echo "    all $count URLs in the sitemap resolve to a page of their own"
 }
 
 if [ "${1:-}" = "--check" ]; then
