@@ -656,3 +656,58 @@ def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
     assert calls["checked_out"], (
         "a resumed task was refused for its own uncommitted work")
     assert not any("not clean" in t["reason"] for t in q.transitions(ident))
+
+
+def test_finding_paths_are_relative_to_the_tree_that_was_reviewed():
+    """A blocking finding the reviewer raised against the loop's own change.
+
+    Codex emits absolute paths. Once the review moved into an isolated
+    worktree, those pointed under the temporary checkout — and relativising
+    them against the repository left every finding carrying a
+    `/private/var/folders/...` path naming a file nobody can open.
+    """
+    parsed = agents.parse_review(
+        "Summary.\n\nReview comment:\n\n"
+        "- [P1] A thing — /tmp/devloop-review-x/wt/packages/kernel/a.py:3-3\n"
+        "  because z\n",
+        repo=Path("/tmp/devloop-review-x/wt"))
+    assert parsed["findings"][0]["file"].startswith("packages/kernel/a.py")
+
+    # Negative control: a path outside the reviewed tree is left alone rather
+    # than mangled into a relative path that means something else.
+    other = agents.parse_review(
+        "Summary.\n\nReview comment:\n\n- [P1] X — /elsewhere/b.py:1-1\n  why\n",
+        repo=Path("/tmp/devloop-review-x/wt"))
+    assert other["findings"][0]["file"] == "/elsewhere/b.py:1-1"
+
+
+def test_the_round_gate_runs_only_what_the_task_touched(tmp_path, monkeypatch):
+    """Fifteen minutes a round was spent re-proving untouched code.
+
+    The full suite still runs before deploy, in `_ship`, which is where that
+    guarantee belongs.
+    """
+    import devloop.driver as drv
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = tmp_path
+    monkeypatch.setattr(
+        drv.Driver, "_touched",
+        lambda self: ["packages/kernel/atlas_kernel/opportunity/coverage.py",
+                      "packages/kernel/tests/test_audit_backlog.py"])
+    selector = driver._selector()
+    assert "coverage" in selector and "audit_backlog" in selector
+    assert " or " in selector
+
+    # Nothing recognisable changed: the whole suite, not a selector that
+    # matches nothing and passes silently.
+    monkeypatch.setattr(drv.Driver, "_touched", lambda self: ["__init__.py"])
+    assert driver._selector() == ""
+
+
+def test_the_full_suite_still_runs_before_anything_deploys():
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    ship = source[source.index("def _ship("):source.index("def _selector(")]
+    assert "gates.tests(cwd=self.repo)" in ship, (
+        "the deploy path runs a narrowed suite; a narrow gate is not enough to "
+        "put code on a live host")

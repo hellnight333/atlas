@@ -55,3 +55,20 @@ a fresh audit, or (c) left exactly as they are and excluded from any future
 automated send. Until then they sit approved and unsent, which is where they
 have been since 2026-08-19 and is the safe direction.
 
+<!-- devloop:contested:t-9c7566206741 -->
+## Contested — Most observation records are more than a week old
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:1004-1006` [blocking] Base sweep claims on completed verification passes
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:121-129` [major] Share the nightly limit with the actual runner
+  - `packages/kernel/atlas_kernel/opportunity/coverage.py:338-341` [major] Stop explaining ages when the pass is below its promised rate
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:989-996` [major] Discard observations for a business's previous website
+  - `packages/kernel/atlas_kernel/opportunity/repository.py:1018-1021` [major] Measure throughput only for sites in the current queue
+  - `/private/var/folders/k4/1yd9slj94ts6fnsn8l1h8p2r0000gn/T/devloop-review-sbp4lv_u/wt/infra/devloop/agents.py:344-347` [blocking] Normalize findings against the review worktree
+  - `/private/var/folders/k4/1yd9slj94ts6fnsn8l1h8p2r0000gn/T/devloop-review-sbp4lv_u/wt/packages/kernel/atlas_kernel/mission/api.py:775-777` [major] Read freshness and backlog in the same transaction
+  - `/private/var/folders/k4/1yd9slj94ts6fnsn8l1h8p2r0000gn/T/devloop-review-3p4ne2hh/wt/packages/kernel/atlas_kernel/opportunity/coverage.py:368-369` [major] Bound the stale count the cadence can explain
+  - `/private/var/folders/k4/1yd9slj94ts6fnsn8l1h8p2r0000gn/T/devloop-review-3p4ne2hh/wt/apps/control/src/index.html:1618-1619` [major] Render unreachable records when the rotation is empty
+
+- **Driver task:** `t-9c7566206741`
+- **Review unit:** `a42cd63f8e1e..fb1b2ac25ca2`

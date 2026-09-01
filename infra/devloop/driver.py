@@ -276,8 +276,14 @@ class Driver:
                 self.q.move(ident, State.FAILED, reason=diff.detail)
                 log("FAILED", task=ident, why="nothing changed")
                 return State.FAILED
+            # Narrowed to what the task touched. The full suite is 4035 tests
+            # and about fifteen minutes, and running all of it on every round
+            # was roughly a third of each cycle spent re-proving code the task
+            # never went near. `_ship` still runs the whole suite before
+            # anything is deployed, which is where that guarantee belongs.
             suite = gates.tests(cwd=self.repo,
-                                selector=task.get("test_selector") or "")
+                                selector=task.get("test_selector")
+                                or self._selector())
             log("GATING", task=ident, round=round_no,
                 gates=gates.summarise([diff, suite]))
             if suite.unmeasured:
@@ -464,6 +470,24 @@ class Driver:
                    "Co-Authored-By: Claude Opus 5 (1M context) "
                    "<noreply@anthropic.com>")
         _git("commit", "-q", "-m", message, cwd=self.repo)
+
+    def _selector(self) -> str:
+        """A `-k` expression covering the modules this task changed.
+
+        Built from the changed paths rather than guessed: a change to
+        `opportunity/coverage.py` runs everything whose name mentions
+        `coverage`. Empty when nothing recognisable changed, and empty means
+        the whole suite — the safe direction, since a selector that matches
+        nothing would silently pass.
+        """
+        names = set()
+        for path in self._touched():
+            stem = Path(path).stem
+            if stem.startswith("test_"):
+                stem = stem[len("test_"):]
+            if stem and stem not in ("__init__", "conftest"):
+                names.add(stem)
+        return " or ".join(sorted(names))
 
     def _touched(self) -> list[str]:
         """Paths this task changed, from git rather than from an agent's word."""
