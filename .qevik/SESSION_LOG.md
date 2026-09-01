@@ -567,3 +567,36 @@ Two things were also weak and are now fixed:
 - **The landing screen said "3 things need you"** without saying that one was a
   decision nobody else can make. It now names decisions and questions, the
   inbox leads with decisions, and a decision row is labelled as one.
+
+## The production gate could not fail
+
+A task was marked DONE and production-verified while its defect was fully live
+on the public internet. Every route on qevik.ai still served the homepage, and
+an unknown URL still returned 200.
+
+The probe was right. It printed:
+
+    NOT PROVED {'pages_serving_the_homepage': ['/services/', '/about/', ...]}
+
+The gate was `proved = "PROVED" in out`, and `"PROVED" in "NOT PROVED"` is
+True. **Every probe that correctly reported failure passed the gate.** The one
+check standing between the loop and a false claim about production could not
+fail, and I wrote it.
+
+It now requires a line whose first word is exactly `PROVED`. Nine negations are
+negative-controlled — NOT PROVED, NOT_PROVED, UNPROVED, DISPROVED,
+PROVED_NOTHING, empty output and prose among them — and a structural guard
+refuses any gate that decides by searching for a word in output, because a
+substring cannot distinguish a claim from its negation.
+
+Two things this cost, and one it did not:
+
+- The task is reopened. It was never done.
+- Every previous `in_production` pass is now suspect. Only one task had ever
+  reached that gate, and it is this one.
+- It did **not** put anything false into production. The gate lies about
+  verification; it does not deploy. `main` holds the work, which looks sound
+  and was simply never applied to the host.
+
+The loop found this the way it finds everything: by being run against
+production and then checked independently. The task's own report said DONE.

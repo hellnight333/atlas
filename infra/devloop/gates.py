@@ -151,7 +151,18 @@ def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
     if timed_out or code == 255:
         return Gate("in_production", False,
                     f"could not reach the host: {out[:200]}", unmeasured=True)
-    proved = "PROVED" in out
+    # A line whose first word is exactly PROVED. **Not a substring search.**
+    #
+    # It was `"PROVED" in out`, and `"PROVED" in "NOT PROVED"` is True — so a
+    # probe that correctly reported failure passed the gate, and a task whose
+    # defect is still live on the public internet was marked DONE and
+    # production-verified. The gate could not fail.
+    #
+    # Every other negation a probe might print — NOT PROVED, UNPROVED,
+    # DISPROVED, NOT_PROVED — is caught by the same rule, because each puts
+    # something other than `PROVED` first.
+    proved = any(line.strip().split()[:1] == ["PROVED"]
+                 for line in out.splitlines() if line.strip())
     return Gate("in_production", proved,
                 out.strip().splitlines()[-1][:300] if out.strip() else "no output")
 

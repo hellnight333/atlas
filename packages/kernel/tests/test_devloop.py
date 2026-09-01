@@ -994,3 +994,47 @@ def test_a_decision_is_findable_from_the_landing_screen():
     # another thing to go and configure.
     assert "NEEDS A DECISION FROM YOU" in source
     assert "pill('DECISION'" in source
+
+
+# ============================================ the gate that could not fail
+#
+# `gates.in_production` tested `"PROVED" in out`. A probe that correctly
+# reported failure printed "NOT PROVED", which contains "PROVED", so the gate
+# passed — and a task whose defect was still live on the public internet was
+# marked DONE and production-verified. Every negation is checked below.
+
+
+@pytest.mark.parametrize("output,expected", [
+    ("PROVED {'sites': 359}", True),
+    ("checking...\nPROVED all pages serve their own content", True),
+    ("NOT PROVED {'pages_serving_the_homepage': ['/services/']}", False),
+    ("NOT_PROVED", False),
+    ("UNPROVED", False),
+    ("DISPROVED", False),
+    ("PROVED_NOTHING", False),
+    ("the probe could not decide", False),
+    ("", False),
+])
+def test_only_a_line_beginning_PROVED_passes_production(monkeypatch, output,
+                                                        expected):
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, output, False))
+    assert gates.in_production(cwd=Path("."), probe="x").passed is expected
+
+
+def test_no_gate_decides_by_searching_for_a_word_in_output():
+    """The shape of the defect, kept out of every other gate.
+
+    A substring search cannot distinguish a claim from its negation. Gates read
+    exit codes, emptiness, or a token in a known position — never `"WORD" in
+    output`.
+    """
+    import re
+
+    # Code only. The comment explaining the defect necessarily contains it.
+    code = "\n".join(
+        line for line in Path(INFRA / "devloop" / "gates.py").read_text().splitlines()
+        if not line.lstrip().startswith("#"))
+    offenders = re.findall(r'"[A-Z_]{4,}"\s+in\s+out\b', code)
+    assert not offenders, (
+        f"a gate decides by substring search: {offenders}. "
+        '"PROVED" in "NOT PROVED" is True.')
