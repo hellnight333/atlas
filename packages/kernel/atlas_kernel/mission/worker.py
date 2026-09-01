@@ -16,10 +16,14 @@ case too, an agent that reports success having changed nothing.
 that forever. `max_attempts` ends it, and exhausting it is a recorded failure
 with the reason, not a silent give-up.
 
-**Failure is recorded.** Every exit — success, test failure, blocker, crash —
-leaves the mission in a defined state with a report. A worker that dies without
-writing anything is the one case that cannot be recovered from, so the release
-path runs in `finally`.
+**Failure is recorded, and says what failed.** Every exit — success, test
+failure, blocker, crash — leaves the mission in a defined state with a report.
+A worker that dies without writing anything is the one case that cannot be
+recovered from, so the release path runs in `finally`. The note carries the
+cause in the failing step's own words, and — where the role has already written
+results outside its workspace, which some do before anything reviews them — it
+says that too. "Failed" about a run whose output is in production is a record
+that is only half true.
 
 **Nothing is committed that did not pass.** Commit is the last step and it is
 reachable only from a passed review.
@@ -231,9 +235,11 @@ class Worker:
                 self._emit(result, event)
 
         if not passed or outcome is None:
-            note = (f"{self._acceptance.name} did not pass after "
-                    f"{result.attempts} attempt(s): {detail}")
+            note = self._and_what_is_live(
+                f"{self._acceptance.name} did not pass after "
+                f"{result.attempts} attempt(s): {detail}", outcome)
             result.detail = note
+            result.report = outcome.notes if outcome is not None else ""
             result.mission, event = self._fail(result.mission, tenant=tenant,
                                                note=note)
             self._emit(result, event)
@@ -248,8 +254,14 @@ class Worker:
         reviewer = self._roles.reviewer or self._roles.implementer
         reviewed = reviewer.review(plan, outcome)
         if not reviewed.claims_done:
-            note = f"review rejected the change: {reviewed.summary}"
+            note = self._and_what_is_live(
+                f"review rejected the change: {reviewed.summary}", reviewed)
             result.detail = note
+            # The step-by-step account the agent already produced, so a failed
+            # mission's report has an evidence section too. Without it the only
+            # record of what went wrong is this one line, and the report — the
+            # thing an operator opens — says nothing about what ran.
+            result.report = reviewed.notes
             result.mission, event = self._fail(result.mission, tenant=tenant,
                                                note=note)
             self._emit(result, event)
@@ -272,6 +284,28 @@ class Worker:
         result.mission = mission
         self._emit(result, event)
         return result
+
+    def _and_what_is_live(self, note: str,
+                          outcome: AgentOutcome | None) -> str:
+        """The failure, and whether the run's output is already in production.
+
+        A role may persist real results *before* the run is reviewed.
+        `toolrunner.ToolAgent` does, deliberately: the responses it recorded
+        are real, and losing them because a database was briefly away is the
+        worse outcome. The consequence is that a mission recorded as `failed`
+        can be one whose findings, signals and observations are live — and
+        until this was here, nothing anywhere said both things at once.
+
+        Adds nothing when the outcome reports nothing live, which is the
+        ordinary case for a coding role: its work sits in a workspace a failed
+        mission never commits.
+        """
+        live = (outcome.live_outputs if outcome is not None else "").strip()
+        if not live:
+            return note
+        return (f"{note} — and this run's output is already live: {live}. It "
+                "was written before the review, and the failure does not "
+                "withdraw it.")
 
     def _fail(self, mission: Mission, *, tenant: TenantId | None,
               note: str) -> tuple[Mission, BusinessEvent]:

@@ -71,6 +71,19 @@ class AgentOutcome(BaseModel):
     #:
     #: A coding agent leaves this at zero and is judged on `files`, as before.
     evidence_count: int = 0
+    #: What this run has already written **outside** the mission's workspace,
+    #: named and counted. Empty when it has written nothing there, which is the
+    #: ordinary case for a coding role: its work sits in a workspace a failed
+    #: mission never commits.
+    #:
+    #: Not so for a role that observes the world. `toolrunner.ToolAgent`
+    #: persists findings, signals, observations and contactability *inside*
+    #: `implement`, before anything reviews the run — deliberately, so that a
+    #: database briefly away does not lose evidence that was genuinely
+    #: gathered. A mission recorded as `failed` can therefore be one whose
+    #: results are in production, and the worker writes this into the failure
+    #: note so the record says both things at once.
+    live_outputs: str = ""
 
     @property
     def produced_nothing(self) -> bool:

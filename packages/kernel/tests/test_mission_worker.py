@@ -28,6 +28,7 @@ from atlas_kernel.mission import (
 )
 from atlas_kernel.mission.agents import (
     AgentError,
+    AgentOutcome,
     AgentTimeout,
     Behaviour,
     FakeCodingAgent,
@@ -155,6 +156,72 @@ def test_a_rejected_review_never_commits() -> None:
     assert result.mission.status is MissionStatus.FAILED
     assert result.committed == ""
     assert "review rejected" in result.detail
+
+
+# ================================ a failed mission that left live output
+
+
+class _PublishesBeforeReview(FakeCodingAgent):
+    """A role whose work is in production before the review sees it.
+
+    `toolrunner.ToolAgent`'s shape, and not a hypothetical one: it persists
+    findings, signals and observations inside `implement` so that a database
+    briefly away does not lose evidence that was genuinely gathered. Three
+    production missions in three days were then recorded as `failed` while
+    their results were live.
+    """
+
+    def implement(self, plan, *, workspace_root: str, context: str = ""):
+        return AgentOutcome(
+            summary="40 piece(s) of evidence from 2 step(s)",
+            claims_done=True, evidence_count=40,
+            live_outputs="10 finding(s), 7 observation record(s)",
+            notes="ok  audit  website\nFAILED  http-fetch\n    address refused")
+
+    def review(self, plan, outcome, *, diff: str = ""):
+        return outcome.model_copy(update={
+            "claims_done": False,
+            "summary": "the http-fetch step failed: address refused: "
+                       "169.254.169.254 is not a public address"})
+
+
+def test_a_failed_mission_states_the_cause_and_that_its_output_is_live() -> None:
+    """Both facts, in the one record an operator reads. Neither was there: the
+    note restated what the run produced, and nothing anywhere said that a
+    failed mission's results were already in production."""
+    mission, _ = _queued()
+    worker, _ = _worker(agent=_PublishesBeforeReview())
+    result = worker.run(mission, tenant=A)
+
+    assert result.mission.status is MissionStatus.FAILED
+    assert result.committed == ""
+    assert "address refused" in result.detail, "the record does not say why"
+    assert "10 finding(s), 7 observation record(s)" in result.detail
+    assert "already live" in result.detail
+
+    # And the same sentence survives into the folded mission, which is what
+    # the console and the report read.
+    assert fold(result.events, tenant=A)[0]["because"] == result.detail
+
+
+def test_a_failed_mission_keeps_the_agents_own_account_of_the_run() -> None:
+    """The report is written from this. A failed mission used to reach it with
+    nothing, so the only record of what ran was the one-line note."""
+    mission, _ = _queued()
+    worker, _ = _worker(agent=_PublishesBeforeReview())
+    result = worker.run(mission, tenant=A)
+
+    assert "FAILED  http-fetch" in result.report
+
+
+def test_a_failure_that_left_nothing_behind_claims_nothing_is_live() -> None:
+    """The clause must be absent when it would be false — a coding role's work
+    sits in a workspace a failed mission never commits."""
+    mission, _ = _queued()
+    worker, _ = _worker(behaviour=Behaviour.TEST_FAILURE)
+    result = worker.run(mission, tenant=A)
+
+    assert "live" not in result.detail
 
 
 def test_nothing_commits_without_passing_through_review() -> None:

@@ -15,6 +15,7 @@ from atlas_kernel.fabric.agents import Registry
 from atlas_kernel.mission import toolrunner
 from atlas_kernel.mission.agents import AgentOutcome, CodingAgent
 from atlas_kernel.mission.toolrunner import ToolAgent
+from atlas_kernel.opportunity.models import Business, Evidence, EvidenceKind
 
 RESEARCHER = "researcher"
 RECIPE = "discover-uae-dental"
@@ -333,3 +334,169 @@ def test_an_address_guard_refusal_still_fails_a_multi_target_step():
         client=None, check_addresses=True)
     assert not step.passed
     assert step.evidence, "the refusals were not recorded as evidence"
+
+
+# ------------------------------------ a failed run has to say what failed
+#
+# `mission-9403ed56cc88` recorded 40 responses, wrote 7 observation records and
+# 3 comparisons, raised signals for 10 sites — and was recorded as `failed`
+# with the note "review rejected the change: 40 piece(s) of evidence from 2
+# step(s) via audit, http-fetch; 10 site(s) with evidenced defects". That
+# restates what the run produced and never says what went wrong.
+
+VERIFY = "verify-recorded-websites"
+
+#: The two failures that used to read identically in the record: a pass where
+#: nothing came back at all, and one where the sites answered and a single
+#: address tripped the address guard.
+GUARDED = "address refused: 169.254.169.254 is not a public address"
+FETCHED_NOTHING = "0 response(s) recorded; 40 not fetched"
+
+#: What the implementer reported, word for word from the production mission.
+PRODUCED = AgentOutcome(
+    summary=("40 piece(s) of evidence from 2 step(s) via audit, http-fetch; "
+             "10 site(s) with evidenced defects"),
+    claims_done=True, evidence_count=40)
+
+#: A homepage with real content, so `audit_html` has something to observe.
+HOMEPAGE = """<!doctype html><html><head><title>Al Waha Dental</title>
+<meta name="description" content="A dental clinic in Dubai."></head>
+<body><h1>Al Waha Dental</h1>
+<a href="tel:+971501234567">Call us</a>
+<form><input name="name"><textarea name="message"></textarea></form>
+<p>We have cared for families in Jumeirah since 2004, offering general
+dentistry, hygiene appointments and emergency care.</p>
+</body></html>"""
+
+
+def _response(url: str, *, body: str = "<html></html>") -> Evidence:
+    """One recorded response, in the shape `crawler.evidence_from` writes."""
+    return Evidence(
+        kind=EvidenceKind.HTML_CONTENT, source=url,
+        observed={"status": 200, "content_type": "text/html",
+                  "bytes": len(body), "elapsed_ms": 210, "redirect_chain": [],
+                  "error": "", "body": body, "body_truncated": False,
+                  "url": url},
+        summary="HTTP 200", detector="recipe:http-fetch")
+
+
+def _fetch_failed(detail: str, evidence: list | None = None) -> toolrunner.Step:
+    return toolrunner.Step(
+        tool="http-fetch", invoked="40 recorded websites",
+        proves="whether each recorded website answers", passed=False,
+        evidence=(evidence if evidence is not None
+                  else [_response("https://alwaha.test")]),
+        detail=detail)
+
+
+def _reviewed(detail: str) -> AgentOutcome:
+    """The production shape: a fetch step that failed, an audit that ran."""
+    agent = ToolAgent(recipes.get(VERIFY))
+    agent.result = toolrunner.Result(recipe=VERIFY, agent_id=RESEARCHER, steps=[
+        _fetch_failed(detail),
+        toolrunner.Step(tool="audit", invoked="website", passed=True,
+                        proves="what the returned pages support saying",
+                        detail="40 response(s) read, 22 finding(s) on 10 site(s)"),
+    ])
+    return agent.review(agent.plan("ignored"), PRODUCED)
+
+
+def test_a_rejected_run_records_the_cause_and_not_its_own_output():
+    """The failing step's `detail` already said what happened. Nothing carried
+    it to the record."""
+    reviewed = _reviewed(GUARDED)
+
+    assert not reviewed.claims_done
+    assert "http-fetch" in reviewed.summary, "the record does not say which step"
+    assert GUARDED in reviewed.summary
+    assert "piece(s) of evidence" not in reviewed.summary, (
+        "the rejection restates what the run produced instead of naming the "
+        "failure, which is the defect")
+
+
+def test_fetching_nothing_and_tripping_one_guard_do_not_read_alike():
+    """An operator has to be able to tell them apart, and could not: both were
+    recorded with the same sentence, because the sentence came from the
+    implementer's summary rather than from the step."""
+    guarded, empty = _reviewed(GUARDED), _reviewed(FETCHED_NOTHING)
+
+    assert GUARDED in guarded.summary
+    assert FETCHED_NOTHING in empty.summary
+    assert guarded.summary != empty.summary
+
+
+def test_a_step_that_failed_without_saying_why_is_recorded_as_such():
+    """Silence is reported as silence. A blank detail must not read as a run
+    that had no failure."""
+    reviewed = _reviewed("")
+    assert not reviewed.claims_done
+    assert "recorded no reason" in reviewed.summary
+
+
+# ----------------------------------------- and whether its output is live
+
+
+class RecordingMemory:
+    """Just enough repository for one audit pass, remembering what was written.
+
+    No database on purpose: every method here is one `_audit` actually calls,
+    and what is under test is what the run reports having written — not how the
+    rows are stored, which `test_audit_freshness` covers against the real one.
+    """
+
+    def __init__(self) -> None:
+        self.findings: list = []
+        self.events: list = []
+        self.signals: list = []
+        self.contacts: list = []
+
+    def save_finding(self, finding) -> None:
+        self.findings.append(finding)
+
+    def record_event(self, event) -> None:
+        self.events.append(event)
+
+    def latest_audit(self, business_id: str) -> dict:
+        return {}
+
+    def record_contactability(self, business_id: str, *, address: str,
+                              source_url: str) -> None:
+        self.contacts.append((business_id, address))
+
+    def save_signal(self, signal, ranked, *, tenant=None) -> bool:
+        self.signals.append(signal)
+        return True
+
+
+def test_a_failed_run_says_that_its_output_is_already_in_production():
+    """`_audit` persists before anything reviews the run — deliberately, and
+    unchanged here. What was missing is a record that says so, so that "failed"
+    and "its results are live" are readable in one place."""
+    memory = RecordingMemory()
+    business = Business(id="b-live", name="Al Waha Dental",
+                        website="https://alwaha.test")
+    agent = ToolAgent(recipes.get(VERIFY), repository=memory,
+                      tenant="tenant-toolrunner")
+    agent._targets = {business.website: business}
+    agent.result = toolrunner.Result(
+        recipe=VERIFY, agent_id=RESEARCHER,
+        steps=[_fetch_failed(GUARDED,
+                             [_response(business.website, body=HOMEPAGE)])])
+
+    agent._audit(agent.result)
+
+    assert memory.events, "the pass wrote nothing, so there is nothing to tell"
+    assert "site(s) marked verified" in agent.live
+    assert "observation record(s)" in agent.live
+
+    reviewed = agent.review(agent.plan("ignored"), PRODUCED)
+    assert not reviewed.claims_done
+    assert GUARDED in reviewed.summary
+    assert reviewed.live_outputs == agent.live, (
+        "the mission record cannot tell whether this run's output is live")
+
+
+def test_a_run_that_wrote_nothing_claims_nothing_is_live():
+    """The clause has to be absent when it would be false."""
+    assert ToolAgent(recipes.get(VERIFY)).live == ""
+    assert _reviewed(GUARDED).live_outputs == ""

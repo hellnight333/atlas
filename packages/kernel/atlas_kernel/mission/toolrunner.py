@@ -141,6 +141,32 @@ class Result:
         return [piece for step in self.steps for piece in step.evidence]
 
     @property
+    def failed(self) -> list[Step]:
+        """Every step that did not pass.
+
+        Usually one, because `run` stops at the first — but `_remember` and
+        `_audit` append steps of their own afterwards, and either can fail on
+        its own terms.
+        """
+        return [step for step in self.steps if not step.passed]
+
+    @property
+    def because(self) -> str:
+        """Why this run did not pass, in the failing step's own words.
+
+        Empty when it passed. The step already knows: an address the guard
+        refuses, a body nothing could be extracted from, a publication that
+        would not serve. What was missing was anything that carried it to the
+        record — the mission's note restated what the run *produced*, so an
+        operator could not tell a pass that fetched nothing from one that
+        fetched forty sites and was pointed at a single refused address.
+        """
+        return "; ".join(
+            f"the {step.tool} step failed"
+            + (f": {step.detail}" if step.detail else " and recorded no reason")
+            for step in self.failed)
+
+    @property
     def tools_invoked(self) -> tuple[str, ...]:
         """Which tools were **actually** used, not which were permitted.
 
@@ -674,10 +700,39 @@ class ToolAgent:
         #: This mission's own id, recorded beside a publication so "which run
         #: put this live" has an answer.
         self._mission_id = mission_id
+        #: What this run has written outside its own workspace, by kind, as it
+        #: wrote it. See `_wrote`.
+        self.persisted: dict[str, int] = {}
 
     @property
     def name(self) -> str:
         return f"{self._recipe.agent_id}:{self._recipe.id}"
+
+    def _wrote(self, what: str, count: int = 1) -> None:
+        """Count something this run put somewhere a failure does not undo.
+
+        `_remember` and `_audit` persist sightings, findings, signals,
+        observations and contactability *before* the run is reviewed. That is
+        deliberate and stays that way: the responses are real, and losing them
+        because a database was briefly away is the worse outcome. What it means
+        is that a mission recorded as `failed` can be one whose results are in
+        production — and nothing anywhere said both things at once.
+
+        So this changes nothing about when a write happens. It counts the ones
+        that did, so the record can state it.
+        """
+        if count > 0:
+            self.persisted[what] = self.persisted.get(what, 0) + count
+
+    @property
+    def live(self) -> str:
+        """What this run has already put in production, as a sentence.
+
+        Empty when it has put nothing there, which is what a reader would
+        otherwise assume about any failed run.
+        """
+        return ", ".join(f"{count} {what}"
+                         for what, count in self.persisted.items())
 
     @property
     def recipe(self) -> Recipe:
@@ -743,6 +798,9 @@ class ToolAgent:
                               if step.tool not in PUBLISHERS)
         self.published = tuple(f for step in found.steps for f in step.files
                                if step.tool in PUBLISHERS)
+        # On a host, in front of strangers, and not undone by a later step
+        # failing. Counted first because it is the least recoverable of them.
+        self._wrote("file(s) live on the public host", len(self.published))
         remembered = self._remember(found)
         judged = self._audit(found)
         self._record_publication(found)
@@ -765,6 +823,10 @@ class ToolAgent:
             files=self.artefact,
             evidence_count=len(found.evidence),
             claims_done=found.passed,
+            # Carried on the outcome rather than only in this summary, so every
+            # path that ends a mission can say it — including the acceptance
+            # check, which never reaches `review`.
+            live_outputs=self.live,
             notes=_readable(found, self.recorded, self.signals))
 
     def _delivery(self) -> Delivery | None:
@@ -972,6 +1034,7 @@ class ToolAgent:
                     # stays unknown rather than becoming a guess.
                     offer=self._publishes_offer,
                     tenant=self._tenant)
+                self._wrote("publication record(s)")
             except Exception:                     # noqa: BLE001 - reported
                 log.exception(
                     "published %s but could not record it; the page is live and "
@@ -1147,6 +1210,7 @@ class ToolAgent:
             return 0
 
         self.recorded = pass_.recorded
+        self._wrote("sighting(s) recorded", len(pass_.recorded))
         found.steps.append(Step(
             tool="extract", invoked=extractor.id,
             proves="what the source stated, by declared rules", passed=True,
@@ -1185,12 +1249,15 @@ class ToolAgent:
         # reads. Delivery needs the kind — "this is a `page_speed` problem" —
         # and reading it back out of prose is how a build ends up guessing what
         # it was asked to fix. The rows were being computed and thrown away.
+        stored_findings = 0
         for findings in audited.values():
             for finding in findings:
                 try:
                     self._repository.save_finding(finding)
+                    stored_findings += 1
                 except Exception:                 # noqa: BLE001 - reported
                     log.exception("could not store finding %s", finding.id)
+        self._wrote("finding(s)", stored_findings)
         # Which recorded response each business's findings came out of, so a
         # signal cannot be built from derived evidence alone. Matched the same
         # way the audit matched them, rather than by re-deriving it.
@@ -1220,6 +1287,8 @@ class ToolAgent:
         # the observations, and every consumer that reads observations was
         # reading `infra/audit_discovered.py`'s output from 2026-08-19.
         recorded, compared = self._record_audit(businesses, responses)
+        self._wrote("observation record(s)", recorded)
+        self._wrote("reevaluation comparison(s)", compared)
         signals = detect.from_verification(audited, businesses, responses,
                                            source=self._recipe.id)
         found.steps.append(Step(
@@ -1237,12 +1306,18 @@ class ToolAgent:
         ranked = ranking.order(signals)
         self.signals = list(self.signals) + list(ranked)
         by_id = {s.id: s for s in signals}
+        stored = 0
         for scored in ranked:
             try:
-                self._repository.save_signal(by_id[scored.signal_id], scored,
-                                             tenant=self._tenant)
+                # The return says whether this one was new. A re-detection of
+                # something already on the operator's list writes nothing, and
+                # counting it would overstate what this run put there.
+                if self._repository.save_signal(by_id[scored.signal_id], scored,
+                                                tenant=self._tenant):
+                    stored += 1
             except Exception:                     # noqa: BLE001 - reported
                 log.exception("could not store signal %s", scored.signal_id)
+        self._wrote("new opportunity signal(s)", stored)
         return len(audited)
 
     def _record_audit(self, businesses: dict, responses: dict) -> tuple[int, int]:
@@ -1386,6 +1461,7 @@ class ToolAgent:
         """
         from ..opportunity.contacts import contactable_at, observed
 
+        reachable = 0
         for business_id, piece in responses.items():
             business = businesses.get(business_id)
             if business is None:
@@ -1402,10 +1478,12 @@ class ToolAgent:
                 if address:
                     self._repository.record_contactability(
                         business_id, address=address, source_url=url)
+                    reachable += 1
             except Exception:                     # noqa: BLE001 - reported
                 # A business left without an address is one the next pass picks
                 # up again. Failing the run over it would lose the findings too.
                 log.exception("could not read contacts from %s", url)
+        self._wrote("business(es) made contactable", reachable)
 
     def _mark_verified(self, businesses: dict, audited: dict,
                        responses: dict) -> None:
@@ -1426,6 +1504,7 @@ class ToolAgent:
         record = getattr(self._repository, "record_event", None)
         if not callable(record):
             return
+        marked = 0
         for business_id in businesses:
             try:
                 record(BusinessEvent(
@@ -1433,9 +1512,13 @@ class ToolAgent:
                     actor=f"recipe:{self._recipe.id}",
                     detail={"findings": len(audited.get(business_id, [])),
                             "answered": business_id in responses}))
+                marked += 1
             except Exception:                     # noqa: BLE001 - reported
                 log.exception("could not mark %s verified; it will be offered "
                               "again on the next pass", business_id)
+        # The backlog is ordered by this event, so these sites have moved to
+        # the back of the queue whatever the mission is recorded as.
+        self._wrote("site(s) marked verified", marked)
 
     def _detect(self, found: Result, extractions: list, *, source: str) -> None:
         """Turn what memory now knows into ranked opportunities.
@@ -1464,6 +1547,7 @@ class ToolAgent:
                     stored += 1
             except Exception:                     # noqa: BLE001 - reported
                 log.exception("could not store signal %s", scored.signal_id)
+        self._wrote("new opportunity signal(s)", stored)
         found.steps.append(Step(
             tool="detect", invoked="opportunity detection",
             proves="what the evidence supports saying about these businesses",
@@ -1479,6 +1563,19 @@ class ToolAgent:
         passed and that something was recorded. It does **not** judge whether
         the evidence means anything — that is `opportunity/`'s work, against
         Qevik's own memory, which this cannot see.
+
+        ## A rejection has to say what it rejected
+
+        `claims_done` came from `Result.passed` and the summary was left as the
+        implementer wrote it — a count of what the run produced. So a real
+        mission was recorded as "review rejected the change: 40 piece(s) of
+        evidence from 2 step(s) via audit, http-fetch; 10 site(s) with
+        evidenced defects", which restates the output and never names the
+        failure. The failing step's own `detail` says exactly what happened;
+        this is what carries it to the record.
+
+        What the guard refuses and when a step fails are unchanged. This
+        changes only what the record says about them.
         """
         found = self.result
         if found is None or not found.steps:
@@ -1493,11 +1590,33 @@ class ToolAgent:
             produced = ("an artefact" if self._recipe.delivers
                         else "a publication" if self._recipe.publishes
                         else "any evidence")
-            return outcome.model_copy(update={
-                "claims_done": False,
-                "summary": f"every step passed and nothing was recorded — no "
-                           f"{produced}, which is not a successful run"})
-        return outcome.model_copy(update={"claims_done": found.passed})
+            # The failing step first when there is one: "every step passed" is
+            # a false sentence about a run where one did not, and a step that
+            # refused to fetch anything has already said why.
+            return self._verdict(
+                False,
+                found.because
+                or (f"every step passed and nothing was recorded — no "
+                    f"{produced}, which is not a successful run"),
+                outcome)
+        if found.passed:
+            return self._verdict(True, outcome.summary, outcome)
+        return self._verdict(False, found.because, outcome)
+
+    def _verdict(self, passed: bool, summary: str,
+                 outcome: AgentOutcome) -> AgentOutcome:
+        """The reviewed outcome: the verdict, why, and what is already live.
+
+        `live_outputs` is refreshed here as well as on `implement` because this
+        is the last thing the role says about the run, and it is what every
+        surface reading the mission's failure note ends up quoting. Only when
+        this role has something to report — an independent reviewer holds its
+        own empty result and must not erase the implementer's count.
+        """
+        update: dict = {"claims_done": passed, "summary": summary[:400]}
+        if self.live:
+            update["live_outputs"] = self.live
+        return outcome.model_copy(update=update)
 
     def summarize(self, plan: Plan, outcome: AgentOutcome) -> str:
         return (_readable(self.result, self.recorded, self.signals)
