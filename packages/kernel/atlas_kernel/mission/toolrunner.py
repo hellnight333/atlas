@@ -1150,7 +1150,12 @@ class ToolAgent:
                            source_mission=self._publishes, files=files)
 
     def _remember(self, found: Result) -> int:
-        """Extract, identify, classify and persist. Returns how many were new.
+        """Extract, identify, classify and persist. Returns how many it stored.
+
+        The return is what `implement` puts in the summary as "N sighting(s)
+        recorded", and `live` reports the same number under the same words, so
+        the two cannot disagree about whether this run wrote anything. What was
+        *seen* is a different count and is on the extract step's own detail.
 
         Runs inside `implement` so one mission is one chain: fetch, extract,
         resolve against memory, classify, remember. Splitting it across two
@@ -1210,7 +1215,14 @@ class ToolAgent:
             return 0
 
         self.recorded = pass_.recorded
-        self._wrote("sighting(s) recorded", len(pass_.recorded))
+        # Only the ones an insert actually took. `record_sighting` returns
+        # False for a sighting already stored — same business, same source,
+        # same instant — which is the normal state of a replayed scan and of
+        # every acceptance retry. Counting the whole list would make a failed
+        # run claim it wrote rows it did not write, which is the exact
+        # inaccuracy this record exists to remove.
+        stored = sum(1 for r in pass_.recorded if r.stored)
+        self._wrote("sighting(s) recorded", stored)
         found.steps.append(Step(
             tool="extract", invoked=extractor.id,
             proves="what the source stated, by declared rules", passed=True,
@@ -1218,7 +1230,7 @@ class ToolAgent:
                     f"Qevik, {len(pass_.proven_new)} evidenced as new by the "
                     "source")))
         self._detect(found, extractions, source=extractor.source)
-        return len(pass_.recorded)
+        return stored
 
     def _audit(self, found: Result) -> int:
         """Read this run's responses into findings, and findings into signals.
@@ -1476,9 +1488,14 @@ class ToolAgent:
                                  str(piece.observed_at))
                 address = contactable_at(found)
                 if address:
-                    self._repository.record_contactability(
-                        business_id, address=address, source_url=url)
-                    reachable += 1
+                    # The repository's answer, not the fact that a page stated
+                    # an address. `record_contactability` only fills an absent
+                    # one, so a business that already had an email is left
+                    # untouched and nothing became reachable that was not
+                    # reachable before.
+                    if self._repository.record_contactability(
+                            business_id, address=address, source_url=url):
+                        reachable += 1
             except Exception:                     # noqa: BLE001 - reported
                 # A business left without an address is one the next pass picks
                 # up again. Failing the run over it would lose the findings too.

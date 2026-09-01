@@ -8,6 +8,8 @@ each one of those refusals.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from atlas_kernel.fabric import recipes
@@ -19,6 +21,11 @@ from atlas_kernel.opportunity.models import Business, Evidence, EvidenceKind
 
 RESEARCHER = "researcher"
 RECIPE = "discover-uae-dental"
+
+#: The discovery recipe that declares an extractor. `RECIPE` above declares
+#: none, so `_remember` returns before reading anything — which is correct for
+#: it and useless for testing what a pass records.
+DISCOVER = "discover-dubai-dental-osm"
 
 
 def a_recipe(tool: str, *command: str, agent: str = RESEARCHER) -> recipes.Recipe:
@@ -369,6 +376,29 @@ dentistry, hygiene appointments and emergency care.</p>
 </body></html>"""
 
 
+#: The same page, publishing a role address, so contact discovery has one to
+#: read. Whether that address is *written* is the repository's answer.
+PUBLISHES_AN_ADDRESS = HOMEPAGE.replace(
+    "<h1>Al Waha Dental</h1>",
+    '<h1>Al Waha Dental</h1><p>Contact us: '
+    '<a href="mailto:info@alwaha.ae">info@alwaha.ae</a></p>')
+
+#: One Overpass response, in the shape the fetcher records it, carrying one
+#: clinic the declared extractor can read.
+OVERPASS = Evidence(
+    kind=EvidenceKind.HTTP_RESPONSE,
+    source="https://overpass-api.de/api/interpreter",
+    observed={"status": 200, "content_type": "application/json",
+              "body": json.dumps({"elements": [
+                  {"type": "node", "id": 11, "tags": {
+                      "name": "Al Waha Dental",
+                      "addr:city": "Dubai",
+                      "addr:country": "AE",
+                      "website": "https://alwaha.test"}}]}),
+              "body_truncated": False},
+    summary="HTTP 200", detector="recipe:http-fetch")
+
+
 def _response(url: str, *, body: str = "<html></html>") -> Evidence:
     """One recorded response, in the shape `crawler.evidence_from` writes."""
     return Evidence(
@@ -444,11 +474,12 @@ class RecordingMemory:
     rows are stored, which `test_audit_freshness` covers against the real one.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, already_contactable: tuple[str, ...] = ()) -> None:
         self.findings: list = []
         self.events: list = []
         self.signals: list = []
         self.contacts: list = []
+        self._contactable = set(already_contactable)
 
     def save_finding(self, finding) -> None:
         self.findings.append(finding)
@@ -460,8 +491,18 @@ class RecordingMemory:
         return {}
 
     def record_contactability(self, business_id: str, *, address: str,
-                              source_url: str) -> None:
+                              source_url: str) -> bool:
+        """Fills an absent address only, and says whether it did.
+
+        The real repository's contract: `UPDATE ... WHERE email IS NULL OR
+        email = ''`, returning whether the row changed. A business that already
+        carries an address is left exactly as it was.
+        """
+        if business_id in self._contactable:
+            return False
+        self._contactable.add(business_id)
         self.contacts.append((business_id, address))
+        return True
 
     def save_signal(self, signal, ranked, *, tenant=None) -> bool:
         self.signals.append(signal)
@@ -500,3 +541,147 @@ def test_a_run_that_wrote_nothing_claims_nothing_is_live():
     """The clause has to be absent when it would be false."""
     assert ToolAgent(recipes.get(VERIFY)).live == ""
     assert _reviewed(GUARDED).live_outputs == ""
+
+
+# --------------------------------- a claim of live output is a claim of a write
+
+
+def _contacts_pass(memory, business: Business, body: str) -> ToolAgent:
+    """One `_remember_contacts` over a page that publishes an address."""
+    agent = ToolAgent(recipes.get(VERIFY), repository=memory,
+                      tenant="tenant-toolrunner")
+    agent._remember_contacts(
+        {business.id: business},
+        {business.id: _response(str(business.website), body=body)})
+    return agent
+
+
+def test_an_address_a_page_states_is_only_live_output_if_it_was_written():
+    """`record_contactability` fills an absent address and nothing else, so a
+    business that already had one is unchanged by this pass. Counting the page
+    rather than the repository's answer would have a failed mission claim it
+    made that business reachable when it changed no row at all."""
+    memory = RecordingMemory(already_contactable=("b-has-one",))
+    business = Business(id="b-has-one", name="Al Waha Dental",
+                        website="https://alwaha.test",
+                        email="hello@alwaha.ae")
+
+    agent = _contacts_pass(memory, business, PUBLISHES_AN_ADDRESS)
+
+    assert memory.contacts == [], "the address already on the record was kept"
+    assert "made contactable" not in agent.live, (
+        "the run claims it made a business reachable and wrote nothing")
+
+
+def test_an_address_this_run_did_write_is_reported_as_live():
+    """The other direction, so the fix is not simply silence."""
+    memory = RecordingMemory()
+    business = Business(id="b-reachable", name="Al Waha Dental",
+                        website="https://alwaha.test")
+
+    agent = _contacts_pass(memory, business, PUBLISHES_AN_ADDRESS)
+
+    assert memory.contacts == [("b-reachable", "info@alwaha.ae")]
+    assert "1 business(es) made contactable" in agent.live
+
+
+class DiscoveryMemory:
+    """Just enough repository for one discovery pass.
+
+    `first_pass` is the whole difference between the two states under test. On
+    a first pass the repository has no record, so `resolve_business` reports it
+    created one and `record_sighting` takes the insert. On a replay — the same
+    business, source and instant, which is every acceptance retry — it resolves
+    the existing record and the unique index refuses the insert, so a re-run
+    after a crash is safe. Both answers come from the same fact, which is why
+    they are one argument.
+    """
+
+    def __init__(self, *, first_pass: bool) -> None:
+        self._first_pass = first_pass
+        self.sightings: list = []
+        self.signals: list = []
+
+    def resolve_business(self, business) -> tuple[Business, bool]:
+        return business.model_copy(update={"id": "b-osm"}), self._first_pass
+
+    def record_sighting(self, sighting, classification, *, tenant=None) -> bool:
+        if self._first_pass:
+            self.sightings.append(sighting)
+        return self._first_pass
+
+    def save_signal(self, signal, ranked, *, tenant=None) -> bool:
+        self.signals.append(signal)
+        return True
+
+
+def test_the_discovery_pass_under_test_declares_an_extractor():
+    """The property the two tests below rest on, asserted where it can be read.
+
+    `_remember` returns before reading anything when the recipe names no
+    extractor — correct for such a recipe, and it empties every assertion about
+    what a pass recorded. Naming the extractor here means a recipe that loses
+    it fails as itself, rather than as two tests that quietly pass over nothing.
+    """
+    assert recipes.get(DISCOVER).extractor == "openstreetmap"
+
+
+def _discovery_pass(memory) -> ToolAgent:
+    """One `_remember` over an Overpass response the extractor can read."""
+    agent = ToolAgent(recipes.get(DISCOVER), repository=memory,
+                      tenant="tenant-toolrunner")
+    agent.result = toolrunner.Result(
+        recipe=DISCOVER, agent_id=RESEARCHER,
+        steps=[toolrunner.Step(
+            tool="http-fetch", invoked="overpass", passed=True,
+            proves="what the source stated", evidence=[OVERPASS])])
+    agent._remember(agent.result)
+    return agent
+
+
+def test_a_replayed_sighting_is_not_reported_as_a_row_this_run_wrote():
+    """`scan.record` returns a `Recorded` for every sighting it resolved,
+    stored or not — `stored` is False when the insert was refused as a
+    duplicate. Counting the list rather than the flag makes every acceptance
+    retry of a discovery pass claim it wrote the same rows again."""
+    memory = DiscoveryMemory(first_pass=False)
+
+    agent = _discovery_pass(memory)
+
+    assert agent.recorded, "nothing was extracted, so nothing is under test"
+    assert not any(r.stored for r in agent.recorded)
+    assert memory.sightings == []
+    assert "sighting(s) recorded" not in agent.live, (
+        "a replayed scan claims it wrote sightings it did not write")
+
+
+def test_a_sighting_this_run_did_store_is_reported_as_live():
+    """The first pass writes, and says so."""
+    memory = DiscoveryMemory(first_pass=True)
+
+    agent = _discovery_pass(memory)
+
+    assert len(memory.sightings) == len(agent.recorded) == 1
+    assert "1 sighting(s) recorded" in agent.live
+
+
+@pytest.mark.parametrize("first_pass", [True, False])
+def test_the_summary_and_the_live_record_count_sightings_the_same_way(first_pass):
+    """`implement` writes "N sighting(s) recorded" into the summary from
+    `_remember`'s return, and `live` reports it under the same words. One
+    outcome saying "1 sighting(s) recorded" while its live record says nothing
+    was written is the contradiction, not a smaller version of the fix."""
+    memory = DiscoveryMemory(first_pass=first_pass)
+    agent = ToolAgent(recipes.get(DISCOVER), repository=memory,
+                      tenant="tenant-toolrunner")
+    result = toolrunner.Result(
+        recipe=DISCOVER, agent_id=RESEARCHER,
+        steps=[toolrunner.Step(
+            tool="http-fetch", invoked="overpass", passed=True,
+            proves="what the source stated", evidence=[OVERPASS])])
+
+    stored = agent._remember(result)
+
+    assert stored == len(memory.sightings)
+    assert (f"{stored} sighting(s) recorded" in agent.live) is bool(stored), (
+        "the summary would claim a write the live record does not")
