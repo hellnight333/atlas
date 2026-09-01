@@ -313,8 +313,14 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
     """
     out_file.parent.mkdir(parents=True, exist_ok=True)
     code, out, timed_out = _run(
+        # Read-only, said explicitly. `codex exec review` has no `--sandbox`
+        # flag, and without this the run took the default write policy — a real
+        # review edited `.qevik/CAPABILITY_LEDGER.md` mid-review and the
+        # `clean_tree` gate caught it. A reviewer that can write is a reviewer
+        # whose diff is no longer the diff that was built.
         ["codex", "exec", "review", "--base", base_sha, "--json",
-         "-c", f"model_reasoning_effort={effort}"],
+         "-c", f"model_reasoning_effort={effort}",
+         "-c", 'sandbox_mode="read-only"'],
         cwd=cwd, timeout=timeout)
     if timed_out or code == 127:
         return Outcome(ok=False, exit_code=code, output=out,
