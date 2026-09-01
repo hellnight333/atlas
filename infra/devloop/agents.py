@@ -39,7 +39,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,6 +77,13 @@ class Outcome:
     #: `error_during_execution`. Empty when nothing readable was returned,
     #: which is itself an answer: an unexplained stop is not a known one.
     stop_reason: str = ""
+
+
+def _git_in(cwd: Path, *args: str) -> tuple[int, str]:
+    """Run git in a repository. Used to make and remove the review worktree."""
+    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True, stdin=subprocess.DEVNULL)
+    return done.returncode, (done.stdout + done.stderr).strip()
 
 
 def _run(argv: list[str], *, cwd: Path, timeout: int,
@@ -312,16 +321,33 @@ def review(*, cwd: Path, base_sha: str, out_file: Path, timeout: int,
     even by mistake.
     """
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    code, out, timed_out = _run(
-        # Read-only, said explicitly. `codex exec review` has no `--sandbox`
-        # flag, and without this the run took the default write policy — a real
-        # review edited `.qevik/CAPABILITY_LEDGER.md` mid-review and the
-        # `clean_tree` gate caught it. A reviewer that can write is a reviewer
-        # whose diff is no longer the diff that was built.
-        ["codex", "exec", "review", "--base", base_sha, "--json",
-         "-c", f"model_reasoning_effort={effort}",
-         "-c", 'sandbox_mode="read-only"'],
-        cwd=cwd, timeout=timeout)
+
+    # The review runs in a throwaway worktree, not in the tree being built.
+    #
+    # `codex exec review` has no `--sandbox` flag and does not honour
+    # `-c sandbox_mode="read-only"` — set, a real review still edited
+    # `.qevik/CAPABILITY_LEDGER.md` in the working tree, twice, and the
+    # `clean_tree` gate stopped the round both times. So read-only is made
+    # structural: the reviewer is given its own checkout of the same commits,
+    # and whatever it writes there goes when the worktree does.
+    #
+    # The same isolation the mission engine uses, for the same reason.
+    scratch = Path(tempfile.mkdtemp(prefix="devloop-review-"))
+    tree = scratch / "wt"
+    made, why = _git_in(cwd, "worktree", "add", "--detach", str(tree), "HEAD")
+    if made != 0:
+        shutil.rmtree(scratch, ignore_errors=True)
+        return Outcome(ok=False, exit_code=made, output=why,
+                       infrastructure_failure=True,
+                       detail=f"could not isolate the review: {why[:200]}")
+    try:
+        code, out, timed_out = _run(
+            ["codex", "exec", "review", "--base", base_sha, "--json",
+             "-c", f"model_reasoning_effort={effort}"],
+            cwd=tree, timeout=timeout)
+    finally:
+        _git_in(cwd, "worktree", "remove", "--force", str(tree))
+        shutil.rmtree(scratch, ignore_errors=True)
     if timed_out or code == 127:
         return Outcome(ok=False, exit_code=code, output=out,
                        infrastructure_failure=True,

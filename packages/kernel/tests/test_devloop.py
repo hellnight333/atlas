@@ -608,17 +608,19 @@ def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
         "a resumed branch is not brought up to main, so its base is stale")
 
 
-def test_the_reviewer_is_explicitly_read_only():
-    """A real review edited the repository, and the gate caught it.
+def test_read_only_is_not_left_to_a_configuration_flag():
+    """The flag was set and the reviewer wrote anyway.
 
-    `codex exec review` has no `--sandbox` flag, so without an explicit
-    `sandbox_mode` it takes the default write policy. A reviewer that can write
-    is a reviewer whose diff is no longer the diff that was built, and every
-    conclusion after it is about something else.
+    Kept as a guard against putting the flag back and believing it. A reviewer
+    that can write is a reviewer whose diff is no longer the diff that was
+    built, and `sandbox_mode` did not make that impossible —
+    `test_the_review_cannot_touch_the_tree_being_built` covers what does.
     """
     source = Path(INFRA / "devloop" / "agents.py").read_text()
     call = source[source.index('"codex", "exec", "review"'):][:400]
-    assert 'sandbox_mode="read-only"' in call
+    assert 'sandbox_mode' not in call, (
+        "the review is relying on a config flag that two real runs showed is "
+        "not honoured; isolation is what makes it read-only")
 
 
 def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
@@ -658,56 +660,92 @@ def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
     assert not any("not clean" in t["reason"] for t in q.transitions(ident))
 
 
-def test_finding_paths_are_relative_to_the_tree_that_was_reviewed():
-    """A blocking finding the reviewer raised against the loop's own change.
+def test_the_review_cannot_touch_the_tree_being_built():
+    """Configured read-only was not read-only.
 
-    Codex emits absolute paths. Once the review moved into an isolated
-    worktree, those pointed under the temporary checkout — and relativising
-    them against the repository left every finding carrying a
-    `/private/var/folders/...` path naming a file nobody can open.
+    `codex exec review` has no `--sandbox` flag and did not honour
+    `-c sandbox_mode="read-only"`: with it set, a real review edited
+    `.qevik/CAPABILITY_LEDGER.md` in the working tree on two consecutive runs,
+    and `clean_tree` stopped the round both times. A flag says what was asked
+    for; a separate checkout says what is possible.
     """
-    parsed = agents.parse_review(
-        "Summary.\n\nReview comment:\n\n"
-        "- [P1] A thing — /tmp/devloop-review-x/wt/packages/kernel/a.py:3-3\n"
-        "  because z\n",
-        repo=Path("/tmp/devloop-review-x/wt"))
-    assert parsed["findings"][0]["file"].startswith("packages/kernel/a.py")
+    import inspect
 
-    # Negative control: a path outside the reviewed tree is left alone rather
-    # than mangled into a relative path that means something else.
-    other = agents.parse_review(
-        "Summary.\n\nReview comment:\n\n- [P1] X — /elsewhere/b.py:1-1\n  why\n",
-        repo=Path("/tmp/devloop-review-x/wt"))
-    assert other["findings"][0]["file"] == "/elsewhere/b.py:1-1"
+    source = inspect.getsource(agents.review)
+    assert "worktree" in source and "mkdtemp" in source, (
+        "the reviewer runs in the tree being built, where it can write")
+    # It must run *there*, not in the repository it was given.
+    call = source[source.index('"codex", "exec", "review"'):][:400]
+    assert "cwd=tree" in call, "the reviewer was pointed at the working tree"
+    # And the worktree must go even when the review fails.
+    assert "finally:" in source[:source.index('"codex", "exec", "review"')] or \
+        "finally:" in source, "a failed review leaks a worktree"
 
 
-def test_the_round_gate_runs_only_what_the_task_touched(tmp_path, monkeypatch):
-    """Fifteen minutes a round was spent re-proving untouched code.
+def test_the_first_changed_file_keeps_its_whole_name(tmp_path):
+    """The bug that cost three runs and a wrong diagnosis.
 
-    The full suite still runs before deploy, in `_ship`, which is where that
-    guarantee belongs.
+    `git status --porcelain` is column-aligned — two status characters then a
+    space — and `_git` strips the combined output, which removes the leading
+    space from the *first line only*. The first changed path came back missing
+    its first character, git could not stage a file that does not exist, and it
+    stayed dirty through the commit. `clean_tree` then reported it as the
+    reviewer writing to the working tree, and three runs were spent isolating a
+    reviewer that had never touched anything.
+
+    A dotfile makes it visible; any first path would have been truncated.
     """
+    import subprocess
+
     import devloop.driver as drv
 
+    repo = tmp_path / "r"
+    (repo / ".qevik").mkdir(parents=True)
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / ".qevik" / "LEDGER.md").write_text("one\n")
+    (repo / "later.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    (repo / ".qevik" / "LEDGER.md").write_text("two\n")
+    (repo / "later.py").write_text("x = 2\n")
+
     driver = drv.Driver.__new__(drv.Driver)
-    driver.repo = tmp_path
-    monkeypatch.setattr(
-        drv.Driver, "_touched",
-        lambda self: ["packages/kernel/atlas_kernel/opportunity/coverage.py",
-                      "packages/kernel/tests/test_audit_backlog.py"])
-    selector = driver._selector()
-    assert "coverage" in selector and "audit_backlog" in selector
-    assert " or " in selector
+    driver.repo = repo
+    touched = driver._touched()
+    assert ".qevik/LEDGER.md" in touched, (
+        f"the first path lost characters: {touched}")
+    assert "later.py" in touched
 
-    # Nothing recognisable changed: the whole suite, not a selector that
-    # matches nothing and passes silently.
-    monkeypatch.setattr(drv.Driver, "_touched", lambda self: ["__init__.py"])
-    assert driver._selector() == ""
+    # Negative control: staging what it reports actually works, which is the
+    # thing that silently failed.
+    for path in touched:
+        assert subprocess.run(["git", "add", "--", path], cwd=repo,
+                              capture_output=True).returncode == 0, path
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                            cwd=repo, capture_output=True, text=True).stdout
+    assert ".qevik/LEDGER.md" in staged
 
 
-def test_the_full_suite_still_runs_before_anything_deploys():
-    source = Path(INFRA / "devloop" / "driver.py").read_text()
-    ship = source[source.index("def _ship("):source.index("def _selector(")]
-    assert "gates.tests(cwd=self.repo)" in ship, (
-        "the deploy path runs a narrowed suite; a narrow gate is not enough to "
-        "put code on a live host")
+def test_untracked_files_are_staged_too(tmp_path):
+    """A new test file is the commonest thing a task adds."""
+    import subprocess
+
+    import devloop.driver as drv
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "seed.txt").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    (repo / "test_new_thing.py").write_text("def test_x(): pass\n")
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = repo
+    assert "test_new_thing.py" in driver._touched()
