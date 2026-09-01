@@ -234,3 +234,32 @@ def test_resolution_is_what_the_driver_reads():
         assert human.is_resolved("human-question-nothing-at-all") is False
     finally:
         _clean(ident)
+
+
+def test_a_decision_with_no_options_is_refused_at_creation():
+    """It could never be answered, and the person would find that out.
+
+    A decision is answered by naming one of its options. Raised without any,
+    it sits in the inbox accepting only `defer` and `cancel` — which is what
+    happened the first time the driver parked a real boundary.
+
+    The caller that would otherwise keep hitting this is the development loop's
+    boundary classifier, which asks a question instead. That half is held by
+    `test_no_boundary_becomes_a_decision_the_driver_cannot_state_options_for`
+    in `test_devloop.py`, because the mapping is the driver's.
+    """
+    with pytest.raises(NotAcceptable, match="state the options"):
+        human.raise_request(kind=ActionKind.DECISION, subject="no-options",
+                            title="Which way?", why="w", created_by="test")
+    # Negative control: with options stated, the same call is accepted. Without
+    # this the refusal above would also pass on a `raise_request` that refused
+    # every decision.
+    ident = human.raise_request(
+        kind=ActionKind.DECISION, subject="options-stated",
+        title="Which way?", why="w", created_by="test",
+        options=[{"key": "left", "label": "Left"},
+                 {"key": "right", "label": "Right"}])
+    try:
+        assert human.get(ident)["state"] == RequestState.WAITING_FOR_INPUT.value
+    finally:
+        _clean(ident)

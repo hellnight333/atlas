@@ -145,10 +145,41 @@ def test_an_unreachable_control_plane_leaves_a_task_parked(monkeypatch, q):
 def test_a_boundary_only_becomes_a_request_when_it_names_one():
     """An agent that is merely uncertain may not manufacture a human request."""
     assert boundary.classify("SMTP credential required") == "credential"
-    assert boundary.classify("this needs a product decision") == "decision"
     assert boundary.classify("DNS records must exist") == "provisioning"
+    assert boundary.classify("this is irreversible") == "external_action"
+    # A named product or architecture decision is recognised as a boundary, and
+    # asked as a QUESTION. The test below is why.
+    assert boundary.classify("this needs a product decision") == "question"
     # Anything else is a question: it accepts free text and authorises nothing.
     assert boundary.classify("I am unsure which name reads better") == "question"
+
+
+def test_no_boundary_becomes_a_decision_the_driver_cannot_state_options_for():
+    """The coupling, which the mapping got wrong in its first form.
+
+    `raise_for` builds its payload from the boundary text alone and passes no
+    `options` — it has none to pass, because an agent that stopped can say what
+    it ran into but cannot enumerate the choices. `human.raise_request` refuses
+    a `DECISION` with no options, since nothing in the inbox could ever answer
+    one. So a marker mapping to `decision` does not produce a badly-shaped
+    request; it produces *no* request: the remote call raises, `raise_for`
+    returns "", and the task parks against a local marker with the boundary
+    recorded nowhere a person is going to look.
+
+    Asserted over the whole table rather than on the three markers that exist
+    today, because the next marker somebody adds is the one that reintroduces
+    this.
+    """
+    from atlas_kernel.controlplane.actions import ActionKind
+
+    for marker, kind in boundary.KINDS:
+        assert ActionKind(kind) is not ActionKind.DECISION, (
+            f"{marker!r} raises a decision, and `raise_for` cannot state its "
+            "options — the request would be refused and the boundary lost")
+    # Not vacuous: every kind here is one the control plane accepts, and the
+    # default `classify` falls through to is among them.
+    assert {kind for _, kind in boundary.KINDS} | {"question"} == {
+        "credential", "provisioning", "question", "external_action"}
 
 
 # ------------------------------------------------- the reviewer stays blind

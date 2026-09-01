@@ -27,9 +27,10 @@ The pure arithmetic is tested pure, because every boolean above has to hold for
 populations this database will never contain. The database tests assert the
 things only the database can settle: that the two numbers standing beside each
 other on one screen are the same number, that a turn is not an observation,
-that whose reading it was decides whether it counts as the pass being alive, and
-that a record the rotation does not contain is reported as unreachable rather
-than as a turn that is coming.
+that whose reading it was decides whether it counts as the pass being alive,
+that whose *turn* it was decides whether the sweep has been past a stale site
+at all, and that a record the rotation does not contain is reported as
+unreachable rather than as a turn that is coming.
 """
 
 from __future__ import annotations
@@ -617,6 +618,56 @@ def test_only_the_passs_own_turns_count_as_the_rotation_coming_round(repo):
             actor="recipe:verify-recorded-websites",
             detail={"answered": True}))
         assert repo.audit_backlog()["last_turn"] != before["last_turn"]
+    finally:
+        _clean(business.id)
+
+
+def test_a_probe_is_not_the_sweep_having_reached_a_stale_site(repo):
+    """The same rule where it produces a number somebody acts on.
+
+    `last_turn` is a clock, and getting it wrong makes one paragraph read
+    oddly. `unread_after_a_turn` is the count behind "waiting will not clear
+    these" — it says the rotation has already been past this site and could not
+    read it, so the queue is not the explanation and somebody has to go and
+    look. A hand-run `infra/verify_weak_web_presence.py` writes exactly the
+    turn that shape is measured from, with actor `probe`, and it is run against
+    precisely these sites: stale ones with a website. Counting it moves a site
+    out of the queue it is still sitting in and into a warning about a sweep
+    that has not been past yet — this surface's own mistake, made backwards.
+    """
+    business = _business(repo)
+    try:
+        # Stale, fetchable, in the rotation, and no turn since its reading:
+        # a queue position, which is what the whole report exists to say.
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=OBSERVED_EVENT, actor="test",
+            detail={"url": business.website, "counts": {}},
+            at=datetime.now(UTC) - timedelta(days=30)))
+        queued = repo.audit_backlog()
+        assert queued["older_than_a_week"] >= 1
+
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=VERIFIED_EVENT, actor="probe",
+            detail={"answered": True},
+            at=datetime.now(UTC) - timedelta(days=1)))
+        probed = repo.audit_backlog()
+        assert probed["unread_after_a_turn"] == queued["unread_after_a_turn"], (
+            "a hand-run probe was reported as the nightly sweep having reached "
+            "this site and failed to read it; the sweep has not been past, and "
+            "an operator would have been sent to look at a queue")
+        assert probed["beyond_the_rotations_reach"] == \
+               queued["beyond_the_rotations_reach"]
+
+        # And the rotation's own turn does count, so the filter narrows rather
+        # than emptying the number it is applied to.
+        repo.record_event(BusinessEvent(
+            business_id=business.id, kind=VERIFIED_EVENT,
+            actor="recipe:verify-recorded-websites",
+            detail={"answered": False, "error": "timed out"},
+            at=datetime.now(UTC) - timedelta(days=1)))
+        swept = repo.audit_backlog()
+        assert swept["unread_after_a_turn"] == queued["unread_after_a_turn"] + 1
+        assert swept["waiting_will_not_clear_these"]
     finally:
         _clean(business.id)
 

@@ -254,6 +254,12 @@ class Backlog:
     #: could not re-observe. The measured answer to "does the refresh path
     #: reach them", as opposed to the ordering's promise that it will.
     #:
+    #: The turn has to be the scheduled pass's own. A hand-run probe marks a
+    #: site as having had its turn too, and reading that as the rotation would
+    #: move a site out of the queue it is still in and into the count that says
+    #: waiting will not help — an operator acting on a sweep that has not been
+    #: past yet.
+    #:
     #: Named for what was not read rather than for what stayed stale, because
     #: the console renders this field and refuses any name beginning
     #: `stale_after`: that is the shape of a worker-health threshold

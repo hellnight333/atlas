@@ -45,9 +45,14 @@ KINDS: tuple[tuple[str, str], ...] = (
     ("physical", "provisioning"),
     ("hardware", "provisioning"),
     ("machine", "provisioning"),
-    ("product decision", "decision"),
-    ("architecture decision", "decision"),
-    ("policy", "decision"),
+    # Deliberately QUESTION, not DECISION. A decision is answered by choosing
+    # one of its stated options, and an agent that stopped at a boundary can
+    # say what it is stuck on but cannot reliably enumerate the choices. Asked
+    # as a question, the answer comes in the person's own words — and a
+    # question authorises nothing, which is the safe way to be wrong.
+    ("product decision", "question"),
+    ("architecture decision", "question"),
+    ("policy", "question"),
     ("irreversible", "external_action"),
     ("send", "external_action"),
 )

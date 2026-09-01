@@ -1048,7 +1048,13 @@ class OpportunityRepository:
           read. A server that refused, timed out, returned something that is not
           HTML or was cut off mid-body takes its turn and is deliberately not
           re-observed, because auditing what came back would put an invented
-          absence in front of a business. Those sites cycle for ever.
+          absence in front of a business. Those sites cycle for ever. The turn
+          counted is `PASS_TURN`, the pass's own: a hand-run
+          `infra/verify_weak_web_presence.py` marks a site `probe`, and letting
+          that stand for the rotation would tell an operator the sweep had
+          reached a site and failed on it when the sweep has not been past yet
+          — a queue position reported as unreachable, which is this surface's
+          own mistake made backwards.
         * `never_in_the_rotation` — no turn is ever coming. One night's work is
           one *address*, so only the earliest business recorded against a
           website is ever fetched, and a business the fetcher is never handed
@@ -1087,7 +1093,8 @@ class OpportunityRepository:
                     ORDER BY business_id, at DESC),
                 turned AS (
                     SELECT business_id, max(at) AS at
-                    FROM atlas_business_events WHERE kind = :verified
+                    FROM atlas_business_events
+                    WHERE kind = :verified AND {PASS_TURN}
                     GROUP BY business_id),
                 rotation AS ({ROTATION_MEMBERS})
                 SELECT
@@ -1110,12 +1117,22 @@ class OpportunityRepository:
                   -- The rotation came back round and the reading did not
                   -- refresh. `8 days` is `audit_freshness`'s own week, so this
                   -- is a subset of the number it reports and not a second
-                  -- opinion about what stale means. Unfiltered on the writer,
-                  -- unlike the two above: this has to stay a subset of the
-                  -- sites freshness calls stale, and freshness counts a reading
-                  -- as a reading whoever recorded it. Restricted to the
-                  -- rotation's own members so it cannot overlap the count
-                  -- below, which is the same question answered the other way.
+                  -- opinion about what stale means.
+                  --
+                  -- The turn is the pass's own, via `turned`: a hand-run
+                  -- `infra/verify_weak_web_presence.py` writes this kind as
+                  -- `probe`, and counting it would report that the nightly
+                  -- sweep reached this site and failed to read it when the
+                  -- sweep never came. That is a warning an operator would act
+                  -- on, about a rotation that is in fact still queued.
+                  --
+                  -- `observed` stays unfiltered on the writer, unlike every
+                  -- turn and reading measured above, because this has to stay
+                  -- a subset of the sites freshness calls stale and freshness
+                  -- counts a reading as a reading whoever recorded it.
+                  -- Restricted to the rotation's own members so it cannot
+                  -- overlap the count below, which is the same question
+                  -- answered the other way.
                   (SELECT count(*) FROM observed
                      JOIN turned ON turned.business_id = observed.business_id
                     WHERE observed.at <= now() - interval '8 days'

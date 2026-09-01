@@ -223,6 +223,16 @@ def raise_request(*, kind: ActionKind, subject: str, title: str, why: str,
     retry adds nothing the second time, which is what stops one blocker
     becoming forty rows nobody reads.
     """
+    if kind is ActionKind.DECISION and not (options or []):
+        # A decision is answered by naming one of its options, so one with no
+        # options can never be answered at all — it would sit in the inbox
+        # accepting only `defer` and `cancel`. Refused at creation rather than
+        # discovered by the person trying to reply: if the choices cannot be
+        # stated, what is being asked is a QUESTION.
+        raise NotAcceptable(
+            "a decision must state the options it is choosing between. "
+            "Without them nobody can answer it — raise a QUESTION instead, "
+            "which takes an answer in the person's own words.")
     if kind is ActionKind.CREDENTIAL and (evidence or {}).get("value"):
         raise NotAcceptable(
             "a credential value must never be written to a human request. The "
