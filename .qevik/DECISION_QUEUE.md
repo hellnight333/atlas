@@ -72,3 +72,31 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-9c7566206741`
 - **Review unit:** `a42cd63f8e1e..fb1b2ac25ca2`
+
+<!-- human-decision:cadence-verdict -->
+## DQ-009 — what the cadence verdict may claim about stale observations
+
+**Open, and answerable in app.qevik.ai** — Human Actions →
+"When should Qevik say the audit schedule explains a stale record?"
+This file is the projection; the request is the record, and it carries the
+four options with their consequences.
+
+346 of 353 businesses carry observations more than a week old, and the coverage
+screen says the schedule explains it. A reviewer showed the test is
+magnitude-blind: it says the same thing whether 39 records are stale or 358.
+
+Two things make this a person's call rather than an engineer's.
+
+The docstring's arithmetic is provably false — 359 sites at 40 a night leaves
+**39** of 359 past the eight-night line, not "the majority" — but that falsehood
+has two repairs producing opposite code, and which is right turns on whether
+`per_night` means the declared limit (40) or measured throughput (**7**, on the
+one real pass). The repository has visited that question three times and
+settled it none.
+
+And no available input distinguishes "the pass is running and not reaching
+these sites" from "the pass is draining a backlog after a gap". Qevik's only
+production population is the second, so a bound would turn it red.
+
+Blocks devloop task `t-9c7566206741`, which is parked and resumes on the
+answer. The loop continues with independent work meanwhile.

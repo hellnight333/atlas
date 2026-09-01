@@ -496,3 +496,50 @@ A parked task, a question in the one inbox, a casual approval refused because a
 question does not accept one, an answer in the owner's own words, and the task
 runnable again — with nothing copied by hand. See the report; the flow is
 `scratchpad/human_proof.py`.
+
+## The contested findings, adjudicated rather than assumed
+
+Both remaining findings were investigated across six independent lenses
+(arithmetic, doctrine, existing behaviour × two findings) and then adjudicated
+by agents told to argue **as hard as possible that a human is required** and to
+default to that when uncertain. The point was to avoid the failure mode this
+project keeps finding: inventing a product rule because it would make the tests
+pass.
+
+They split.
+
+**The console guard is determined.** `backlog(b)` hides everything when
+`sites === 0` — the case where the operator most needs to see the records no
+waiting clears. The adjudicator's best case for asking a human was that the
+module's own docstring endorses not saying the same thing twice, and that an
+existing check is literally named "an empty population renders nothing". Both
+failed against evidence it verified directly: `Coverage` buckets by the latest
+audit's `reachable` field and cannot observe rotation membership at all, so
+nothing else on the screen names those records. The settled fix is attached to
+the task.
+
+**The cadence verdict is not.** The docstring's arithmetic is provably false —
+359 sites at 40 a night leaves 39 past the eight-night line, not "the majority"
+— and that is determined. But the falsehood has two repairs producing opposite
+code, and choosing between them settles whether `per_night` means the declared
+limit or measured throughput. Production's own figures differ sixfold (40
+declared, 7 observed on one real pass), and the repository has visited that
+question three times without answering it.
+
+Underneath is something no input can resolve: a bound violation is exactly
+ambiguous between "the pass is not reaching these sites" and "the pass is
+draining a backlog", and Qevik's only production population is the second. A
+bound would turn 346-of-353 red on the state the feature was written to
+explain.
+
+Recorded as **DQ-009** with four options, each carrying what changes, the
+evidence for it, and which records move.
+
+### And a git-integrity failure of my own
+
+Three infrastructure commits — the review isolation, its test correction, and
+the first-changed-file root-cause fix — were made onto a **task branch**,
+because the driver leaves its branch checked out when a run ends badly and I
+did not re-check. `main` never had the fix for the bug those runs were chasing.
+Recovered at `e866d04`, verified that no task round before it touched those
+files. The driver now returns to `main` in a `finally`.
