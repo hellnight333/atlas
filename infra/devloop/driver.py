@@ -5,6 +5,7 @@
     driver.py enqueue --title ... --brief ... --path ... [--path ...]
     driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
     driver.py declare-deploy-only <task>   its whole content is the deploy
+    driver.py requeue <task>         a task that ended, back on the queue
     driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
@@ -61,6 +62,12 @@ those two facts as "there was nothing to do" would deploy unchanged code and
 write DONE against work nobody did, which is the failure the `changed` gate
 exists for. An undeclared task with an empty diff keeps failing, with the
 declaration named in its reason so a person can correct it and requeue.
+
+Correcting it takes both commands, because `claim` runs on the state and the
+declaration does not change it: `declare-deploy-only` says what the task is,
+and `requeue` makes it runnable. The task this whole path was written for was
+already FAILED when it was declared, and a declaration alone would have left it
+exactly as unreachable as it was.
 
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into
@@ -364,9 +371,15 @@ class Driver:
                 # content really is the deploy says so with `declare-deploy-only`
                 # and is requeued. A person decides that, not the driver — the
                 # driver cannot see the difference, which is the reason it asks.
+                #
+                # Both commands are named because both are needed. This row is
+                # about to become FAILED, `claim` reads the state and the
+                # declaration does not change it, so declaring alone leaves the
+                # task exactly as unreachable as this failure left it.
                 hint = ("" if declares_deploy_only(task) else
                         " | if this task's whole content is the deploy, "
-                        "declare it (devloop declare-deploy-only) and requeue")
+                        "declare it and put it back: declare-deploy-only "
+                        "<task>, then requeue <task>")
                 self.q.move(ident, State.FAILED,
                             reason=f"{diff.detail} | builder said: {said}{hint}")
                 log("FAILED", task=ident, why="nothing changed",
@@ -549,7 +562,12 @@ class Driver:
         _git("branch", "-D", branch, cwd=self.repo)
         landed = head_sha(self.repo)
         log("LANDED", task=ident, sha=landed[:12])
-        return self._finish(task, started, sha=landed)
+        # The four gates this route ran before it got here, named rather than
+        # copied from `gates.required`: what a task *requires* and what a given
+        # route actually ran are the same list on this path and are not on the
+        # other one, and the DONE record has to say what happened.
+        return self._finish(task, started, sha=landed,
+                            passed=("changed", "tests", "scope", "review"))
 
     def _deploy_only(self, task: dict, started: float) -> str:
         """A task whose whole content is the deploy. There is no diff to review.
@@ -623,9 +641,14 @@ class Driver:
                            f"already carries, at {sha}")
         log("DEPLOY_ONLY", task=ident, sha=sha[:12],
             note="no diff to review; deploying what main already carries")
-        return self._finish(task, started, sha=sha)
+        # Nothing is claimed as already passed. Three of this task's required
+        # gates do not run on this route — the first of them is how the task
+        # arrived here, having failed it — and `_finish` records them as not
+        # run rather than writing a pass against a check nobody performed.
+        return self._finish(task, started, sha=sha, passed=())
 
-    def _finish(self, task: dict, started: float, *, sha: str) -> str:
+    def _finish(self, task: dict, started: float, *, sha: str,
+                passed: tuple[str, ...] = ()) -> str:
         """The gates that run on `main`, and the state they leave a task in.
 
         One deploy mechanism, reached two ways: work that was reviewed and
@@ -633,9 +656,21 @@ class Driver:
         already carries what it deploys. Both run the whole suite, then the
         deploy script's own exit code, then the production probe — in that
         order, each recorded against the sha that is going to the host.
+
+        `passed` is what the caller ran and passed on the way here, and the
+        DONE record is built from it plus what this method runs — never from
+        `gates.required`, which is what a task *demands* and not what happened
+        to it. The two lists are identical on the merged route and are not on
+        the other one: `changed`, `scope` and `review` are required of every
+        task and none of the three runs on a deploy with no diff, `changed`
+        having failed on the way in. Copying the requirement into the record
+        would write "review passed" against a review nobody performed, on the
+        one route that deliberately has none — so the record names what ran,
+        and names separately what did not.
         """
         ident = task["id"]
         needed = gates.required(task)
+        ran = list(passed)
         if "deployed" in needed:
             # The whole suite before anything leaves this machine. A narrowed
             # run is a real gate for a narrow change and is not enough to
@@ -647,6 +682,10 @@ class Driver:
                 self.q.move(ident, State.CONTESTED,
                             reason=f"full suite fails: {whole.detail}")
                 return State.CONTESTED
+            # Once, however many times it ran. The merged route already passed
+            # a narrowed suite under the same gate's name.
+            if "tests" not in ran:
+                ran.append("tests")
             self.q.move(ident, State.DEPLOYING,
                         reason=f"{sha[:12]}: full suite {whole.detail}")
             log("DEPLOYING", task=ident, sha=sha[:12])
@@ -659,6 +698,7 @@ class Driver:
                                    f"{shipped.detail}")
                 log("FAILED", task=ident, why="deploy failed")
                 return State.FAILED
+            ran.append("deployed")
 
         if "in_production" in needed:
             probe = (json.loads(task.get("evidence") or "{}")
@@ -683,9 +723,17 @@ class Driver:
                                    f"{live.detail}")
                 log("FAILED", task=ident, why="production did not agree")
                 return State.FAILED
+            ran.append("in_production")
 
+        # What this task required and nothing on its route ran. Empty on the
+        # merged path; on a deploy with no diff it is the three gates there was
+        # nothing to run them against, and saying so is the whole difference
+        # between a record and a claim.
+        skipped = [name for name in needed if name not in ran]
         self.q.move(ident, State.DONE,
-                    reason=f"gates: {', '.join(needed)} at {sha}",
+                    reason=f"gates: {', '.join(ran)} at {sha}"
+                           + (f" | not run on this route: {', '.join(skipped)}"
+                              if skipped else ""),
                     detail=f"completed in {int(time.monotonic() - started)}s")
         log("DONE", task=ident, sha=sha[:12],
             seconds=int(time.monotonic() - started))
@@ -939,6 +987,15 @@ def main(argv: list[str] | None = None) -> int:
     only.add_argument("--reason", default="")
     only.add_argument("--actor", default=os.environ.get("USER", "person"))
 
+    # The other half of every repair made on a task that already ended.
+    # Declaring paths or a classification changes the row and leaves the state
+    # alone, and `claim` reads the state — so without this the correction lands
+    # on a task nothing will ever pick up again.
+    again = sub.add_parser("requeue")
+    again.add_argument("task")
+    again.add_argument("--reason", default="")
+    again.add_argument("--actor", default=os.environ.get("USER", "person"))
+
     show = sub.add_parser("scope")
     show.add_argument("task")
 
@@ -989,6 +1046,27 @@ def main(argv: list[str] | None = None) -> int:
               + ("deploys what main already carries; it builds nothing and is "
                  "not reviewed" if set_to else
                  "must build something before it deploys"))
+        # The declaration says what the task is; it does not make it runnable.
+        # The row this command exists for was already FAILED when it was
+        # declared, so the next step is named here rather than left to be
+        # discovered by watching a queue that never picks the task up.
+        ended = (q.get(args.task) or {}).get("state")
+        if ended in State.RETRYABLE:
+            print(f"  it ended {ended}, so nothing will claim it until it is "
+                  f"put back:\n    driver.py requeue {args.task}")
+        return 0
+
+    if args.command == "requeue":
+        try:
+            moved = q.requeue(args.task, actor=args.actor, reason=args.reason)
+        except KeyError:
+            print(f"no task {args.task}")
+            return 1
+        except ValueError as refused:
+            print(refused)
+            return 1
+        print(f"{args.task} is queued again" if moved
+              else f"{args.task} was already queued")
         return 0
 
     if args.command == "scope":

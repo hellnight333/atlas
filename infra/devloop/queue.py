@@ -75,6 +75,13 @@ class State:
     FAILED = "FAILED"
 
     TERMINAL = frozenset({DONE, CONTESTED, BLOCKED, FAILED})
+    #: Endings a person can undo. The task stopped for a reason that lives
+    #: outside the loop — a contract too narrow, a classification nobody had
+    #: made, a credential that was missing — and once that reason is dealt
+    #: with the work itself is still wanted. `DONE` is deliberately absent: a
+    #: finished task is a record, and running one again would deploy under a
+    #: row that already says it completed.
+    RETRYABLE = frozenset({CONTESTED, BLOCKED, FAILED})
     #: Parked, not terminal and not runnable. `claim` skips these until the
     #: human request clears, which is what stops a blocked branch from being
     #: retried every minute against a boundary that has not moved.
@@ -612,6 +619,69 @@ class Queue:
                         + (f": {reason}" if reason else "")),
                  actor, _now()))
         return bool(deploy_only)
+
+    def requeue(self, task_id: str, *, actor: str, reason: str = "") -> bool:
+        """Put a task that ended back on the queue. A person's decision.
+
+        `claim` takes QUEUED rows and in-flight rows whose lease has expired,
+        and nothing else — so FAILED, CONTESTED and BLOCKED are the end of a
+        task unless something moves it. Every repair for those endings happens
+        outside the loop and changes the row *without* changing its state: a
+        contract widened with `declare_paths`, a task classified with
+        `declare_deploy_only`, a credential somebody finally supplied. Without
+        this the repair lands on a row nothing will ever pick up again.
+
+        Which is exactly what happened to the task the deploy-only declaration
+        was written for. t-4f02ee7a36c0 was already FAILED when the
+        declaration arrived; declaring it set two flags and left it FAILED, and
+        the driver's own failure text told the reader to "declare it and
+        requeue" against a requeue that did not exist. The declaration is the
+        classification; this is what makes it runnable, and the two are kept
+        apart because a person redeclaring a contested task has not thereby
+        asked for it to run again.
+
+        Refused wherever retrying is not what the caller means. DONE is a
+        record of finished work — running it again is new work and is enqueued
+        as new work. An in-flight task is running right now. A parked one is
+        held at a human boundary that `release` clears when the boundary
+        actually clears; unparking it here would only walk it back into the
+        same wall every lap. Already-QUEUED is reported rather than refused,
+        so running this twice is not an error.
+        """
+        with self._write() as db:
+            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+                             (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            state = row["state"]
+            if state == State.QUEUED:
+                return False
+            if state not in State.RETRYABLE:
+                raise ValueError(
+                    f"{task_id} is {state}; only a task that ended "
+                    f"{', '.join(sorted(State.RETRYABLE))} is put back on the "
+                    f"queue"
+                    + (" — a finished task is a record, and the work you want"
+                       " again is enqueued as new work"
+                       if state == State.DONE else "")
+                    + (" — a parked task becomes runnable when its human"
+                       " boundary is resolved, not before"
+                       if state in State.PARKED else ""))
+            # The lease goes with the state. A queued row carrying the owner
+            # of the driver that failed it reads as claimed by a process that
+            # is not coming back.
+            db.execute(
+                "UPDATE tasks SET state = ?, lease_owner = NULL,"
+                " lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+                (State.QUEUED, _now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, state, State.QUEUED,
+                 redact(f"requeued from {state}"
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
+        return True
 
     def park(self, task_id: str, *, request_id: str, stage: str, sha: str,
              reason: str, run_id: str = "") -> None:

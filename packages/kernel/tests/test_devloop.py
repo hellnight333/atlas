@@ -2295,3 +2295,223 @@ def test_the_classification_reads_the_declaration_and_not_the_deploy_flag():
     assert "requires_deploy" not in bypass and "gates.required(" not in bypass, (
         "the deploy-without-a-review path is chosen by a flag that ordinary "
         "build-and-deploy tasks also carry")
+
+
+# ------------------------------ a repair reaches the task it was made for
+#
+# Classifying a task and making it runnable are two different things, and the
+# task the deploy-only declaration was written for needed both: t-4f02ee7a36c0
+# was already FAILED when the declaration arrived. `claim` reads the state, the
+# declaration does not touch it, and nothing else moves a terminal row — so the
+# declaration landed on a task nothing would ever pick up again.
+
+
+def test_a_declared_task_that_already_failed_can_actually_run_again(q):
+    """The legacy scenario end to end, on the queue that has to serve it.
+
+    The declaration is a statement about the task and changes two flags. It is
+    not a claim, and a FAILED row is not runnable: `claim` takes QUEUED rows
+    and in-flight rows whose lease expired, and a terminal row is neither. So
+    declaring the task is half the repair, and without the other half the fix
+    never reaches the task it was written for.
+    """
+    from devloop.queue import declares_deploy_only
+
+    ident = q.add(title="deploy and verify the unreviewed-drafts surface",
+                  brief="b", origin="human", paths=["infra/devloop/"],
+                  requires_deploy=True)
+    q.claim(owner="the driver that failed it")
+    q.move(ident, State.FAILED, reason="nothing was changed")
+
+    # The declaration, made afterwards, exactly as a person would make it.
+    q.declare_deploy_only(ident, actor="ayoub", reason="main already has it")
+    assert declares_deploy_only(q.get(ident)) is True
+    assert q.get(ident)["state"] == State.FAILED
+    assert q.claim(owner="d") is None, (
+        "declaring a failed task deploy-only was enough to make it runnable, "
+        "so this test is no longer about anything")
+
+    # And the half that makes the repair reach it.
+    assert q.requeue(ident, actor="ayoub", reason="declared deploy-only") is True
+    claimed = q.claim(owner="d")
+    assert claimed is not None and claimed["id"] == ident, (
+        "a task a person declared and requeued is still unreachable; the "
+        "deploy-only path cannot run for the task it was written for")
+    assert declares_deploy_only(claimed) is True, (
+        "the requeue lost the declaration the driver reads to choose the "
+        "deploy-only route")
+    assert any(t["reason"].startswith("requeued from FAILED")
+               and t["actor"] == "ayoub" for t in q.transitions(ident)), (
+        "nothing records who put the task back, or what it was put back from")
+
+
+def test_a_task_is_put_back_only_from_an_ending_a_person_can_undo(q):
+    """Requeue is for a task that stopped, not for one that is running or done.
+
+    DONE is the one refusal that matters: re-running a finished task would
+    deploy again under a row that already says it completed, and the work
+    somebody wants again is new work. The rest follow from the same rule —
+    a claimed task is being worked on now, and a parked one is held at a human
+    boundary that resolving the boundary clears.
+    """
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+
+    q.claim(owner="d")
+    with pytest.raises(ValueError):
+        q.requeue(ident, actor="ayoub")
+    assert q.get(ident)["state"] == State.BUILDING
+
+    q.park(ident, request_id="h-1", stage=State.BUILDING, sha="abc",
+           reason="a credential")
+    with pytest.raises(ValueError):
+        q.requeue(ident, actor="ayoub")
+    assert q.get(ident)["state"] == State.WAITING_FOR_HUMAN, (
+        "a parked task was unparked by something other than its boundary "
+        "clearing, so it will walk into the same wall every lap")
+
+    q.move(ident, State.DONE, reason="finished")
+    with pytest.raises(ValueError):
+        q.requeue(ident, actor="ayoub")
+    assert q.get(ident)["state"] == State.DONE, (
+        "a completed task was queued to run again, which would deploy under a "
+        "row that already says it finished")
+
+    # CONTESTED and BLOCKED are undone like FAILED: the reason each of them
+    # ended lives outside the loop, and a person deals with it there.
+    for ending in (State.CONTESTED, State.BLOCKED, State.FAILED):
+        q.move(ident, ending, reason="ended")
+        assert q.requeue(ident, actor="ayoub") is True
+        row = q.get(ident)
+        assert row["state"] == State.QUEUED
+        assert row["lease_owner"] is None and row["lease_expires_at"] is None, (
+            "a queued task carries the lease of the driver that ended it")
+
+    # Idempotent, and it says so rather than raising: a person who runs it
+    # twice has not made a mistake.
+    assert q.requeue(ident, actor="ayoub") is False
+    assert len([t for t in q.transitions(ident)
+                if t["reason"].startswith("requeued from")]) == 3
+
+    with pytest.raises(KeyError):
+        q.requeue("t-nothing", actor="ayoub")
+
+
+def test_the_cli_carries_a_reclassified_task_all_the_way_back(tmp_path,
+                                                              monkeypatch,
+                                                              capsys):
+    """Both halves of the repair are reachable from the command line.
+
+    The driver's own failure text tells the reader to declare the task and
+    requeue it. That text named a command that did not exist, so the route out
+    it described could not be walked — and the one task the deploy-only path
+    was written for is the task that failure text was printed for.
+    """
+    from devloop import driver as drv
+    from devloop.queue import declares_deploy_only
+
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    assert drv.main(["enqueue", "--title", "deploy the unreviewed-drafts surface",
+                     "--brief", "b", "--path", "infra/devloop/",
+                     "--deploy"]) == 0
+
+    q = Queue(tmp_path / ".qevik" / "devloop" / "state.db")
+    [row] = q.tasks()
+    ident = row["id"]
+    q.claim(owner="the driver that failed it")
+    q.move(ident, State.FAILED, reason="nothing was changed")
+
+    assert drv.main(["declare-deploy-only", ident, "--actor", "ayoub"]) == 0
+    # And it says what is still missing, rather than leaving a person to work
+    # out from a queue that never moves that declaring was not enough.
+    said = capsys.readouterr().out
+    assert "requeue" in said and ident in said, (
+        "declaring a task that had already ended says nothing about how to "
+        "make it runnable again")
+
+    assert drv.main(["requeue", ident, "--actor", "ayoub",
+                     "--reason", "declared deploy-only"]) == 0
+    claimed = q.claim(owner="d")
+    assert claimed is not None and claimed["id"] == ident
+    assert declares_deploy_only(claimed) is True
+
+    # A task that cannot be requeued is refused with a reason, not a traceback.
+    q.move(ident, State.DONE, reason="finished")
+    assert drv.main(["requeue", ident]) == 1
+    assert drv.main(["requeue", "t-nothing"]) == 1
+
+
+# ------------------------------- the DONE record says what actually happened
+
+
+def test_the_done_record_names_the_gates_that_ran_and_only_those(tmp_path,
+                                                                  monkeypatch):
+    """A deploy with no diff runs three of its six gates. It records three.
+
+    `gates.required` is what a task *demands*: every task requires `changed`,
+    `scope` and `review`, and none of the three runs on this route — `changed`
+    is how the task reached it, having failed. Copying the requirement into the
+    DONE transition would record a passed review against a task nobody
+    reviewed, on the one route that deliberately has no reviewer, and the
+    transitions table is where a person goes to find out what was checked.
+    """
+    q, ident, main_sha, outcome, called, _ = _deploy_only_run(tmp_path,
+                                                              monkeypatch)
+    assert outcome == State.DONE
+    done = [t for t in q.transitions(ident) if t["to_state"] == State.DONE][-1]
+
+    ran, _, not_run = done["reason"].partition("| not run on this route:")
+    for name in called:
+        assert name in ran, f"{name} ran and the DONE record does not say so"
+    for name in ("changed", "scope", "review"):
+        assert name not in ran, (
+            f"the DONE record claims {name} passed; it never ran, and the "
+            f"record is the only thing anybody has afterwards")
+        assert name in not_run, (
+            f"{name} was required of this task and was not run, and nothing "
+            f"says so")
+    assert main_sha in done["reason"]
+
+    # The rest of the record already refuses to call this head reviewed. The
+    # transition must not be the one place that says otherwise.
+    assert q.review_was_clean(ident) is False
+    assert q.scope_was_kept(ident) is False
+
+
+def test_the_merged_route_records_every_gate_it_ran(tmp_path, monkeypatch):
+    """Negative control: a task that really did pass all six says all six.
+
+    The fix must narrow the record to what happened, not narrow every record.
+    A task built, gated, scope-checked, reviewed, merged and deployed ran every
+    gate it declared, and its DONE transition names them with nothing left out.
+    """
+    from devloop import driver as drv
+
+    repo, _ = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="build it, then deploy it", brief="b", origin="human",
+                  paths=["src/"], requires_deploy=True)
+    task = q.claim(owner="test")
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "app.py").write_text("x = 2\n")
+        return drv.agents.Outcome(ok=True, exit_code=0, output="done")
+
+    def review(**_):
+        return drv.agents.Outcome(ok=True, exit_code=0, output="",
+                                  data={"verdict": "clean", "findings": []})
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.agents, "review", review)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "412 passed"))
+    monkeypatch.setattr(drv.gates, "deployed",
+                        lambda **k: gates.Gate("deployed", True, "answered"))
+
+    assert drv.Driver(q, drv.Limits(), repo=repo).run_task(task) == State.DONE
+    done = [t for t in q.transitions(ident) if t["to_state"] == State.DONE][-1]
+    for name in gates.required(q.get(ident)):
+        assert name in done["reason"], (
+            f"{name} ran on the merged route and the DONE record drops it")
+    assert "not run" not in done["reason"], (
+        "a task that passed every gate it declared is recorded as having "
+        "skipped one")
