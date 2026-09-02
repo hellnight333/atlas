@@ -56,6 +56,20 @@ jobs:
           ffmpeg -version | head -1
           ffprobe -version | head -1
 
+      # The console regression proof executes the Opportunities view under node
+      # rather than reading its text, so node is a real dependency of this job.
+      # The tests fail deliberately when it is absent, and a silent skip would
+      # drop the only executable check of the console out of the gate. No npm
+      # cache: this job installs no packages, and a cache keyed on a lockfile it
+      # never touches fails the step.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Prove node is present
+        run: node --version
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

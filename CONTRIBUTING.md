@@ -50,6 +50,13 @@ pre-commit install
 You need PostgreSQL 14+ running for the kernel tests. See
 [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md).
 
+You also need `node` 22+ on your PATH. The console regression proof in
+`packages/kernel/tests/test_app_composition.py` executes the Opportunities view
+under node rather than reading its text, and the suite **fails deliberately**
+when node is absent — it never skips, because a regression test that quietly
+stops running is what let the last console bug reach production. A Python-only
+run may deselect it knowingly with `-m "not integration"`.
+
 ## Before you open a PR
 
 All four gates must pass. CI runs exactly these:

@@ -19,7 +19,6 @@ original.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -978,38 +977,30 @@ def _declaration_back_inside_the_branch(script: str) -> str:
 
 
 def _node() -> str:
-    """The node binary — or the outcome that fits where this run is happening.
+    """The node binary, or a failure — never a skip.
 
-    Node is not a dependency of `.[dev]` and nothing in the kernel job of
-    `.github/workflows/ci.yml` installs it, so failing outright here would break
-    the default kernel suite on a Python-only machine. `[tool.pytest.ini_options]`
-    promises the opposite, and a suite that cannot run on a laptop is a suite
-    developers stop running.
+    This class is the *proof* that the view runs, and a regression test that
+    quietly stops running is precisely what let `ReferenceError: inboundBlock is
+    not defined` reach the page an operator opens to approve work. So a missing
+    toolchain is a failure that names what to install, everywhere and
+    unconditionally: no `CI` branch, because where a run happens does not
+    change whether the proof executed.
 
-    Skipping everywhere is the other wrong answer: this class is the *proof*
-    that the view runs, and a merge gate that quietly stopped executing it is
-    the exact shape of the failure this file was written about.
-
-    So the two cases are told apart. On CI a missing node fails and names the
-    step to add, because there it means the gate stopped proving anything. On a
-    developer's machine it skips, and the structural guard in
-    `test_the_console_carries_no_secret_and_no_business_logic` — which reads the
-    text and needs nothing installed — still holds `const inboundBlock` at
-    function scope on every single run.
+    Node is a declared prerequisite of this suite — `CONTRIBUTING.md` and
+    `docs/DEVELOPER_GUIDE.md` say so, and the kernel job in
+    `.github/workflows/ci.yml` provisions it. A Python-only run may still
+    deselect this class with `-m "not integration"`, which is a deliberate
+    choice somebody made and can read back, unlike a skip nobody sees.
     """
     found = shutil.which("node")
     if found is not None:
         return found
-    if os.environ.get("CI"):
-        pytest.fail(
-            "node is missing on CI, so the opportunities view is no longer "
-            "executed by the suite that gates a merge. Add a Node step to the "
-            "kernel job in .github/workflows/ci.yml.")
-    pytest.skip(
-        "node is not installed, so the opportunities view cannot be executed "
-        "here. Install node to run the proof; the structural guard in "
-        "test_the_console_carries_no_secret_and_no_business_logic runs either "
-        "way.")
+    pytest.fail(
+        "node is not on PATH, so the opportunities view is not being executed "
+        "and the console regression is unproven. Install Node.js 22+ (the "
+        "kernel job in .github/workflows/ci.yml provisions it with "
+        "actions/setup-node), or deselect this class knowingly with "
+        '-m "not integration".')
 
 
 def _run_the_view(script: str, resolve: dict, reject: list, tmp_path) -> dict:
@@ -1134,50 +1125,72 @@ class TestTheOpportunitiesViewRuns:
 
 
 class TestTheNodeDependencyIsDeclaredRatherThanAssumed:
-    """The guard above decides whether a missing toolchain is a skip or a
-    failure, and getting that backwards is silent both ways: a laptop that
-    cannot run the suite at all, or a merge gate that stopped running the proof
-    and still went green. Neither shows up in a normal run, so it is asserted.
+    """A missing toolchain must be loud, wherever the run is happening.
+
+    The guard above briefly told CI apart from a laptop — failing on one and
+    skipping on the other — as a temporary accommodation for a kernel job that
+    installed no node. That job now provisions it, so the accommodation is gone:
+    the requirement was always that a missing node fails, because a regression
+    test that quietly stops running is exactly what let this bug reach
+    production. Which environment variables happen to be set does not change
+    whether the proof executed, so it is asserted both ways.
     """
 
-    def test_a_machine_without_node_skips_instead_of_failing(self, monkeypatch
-                                                             ) -> None:
-        """Node is in no dependency list. Requiring it would mean the default
-        kernel suite fails for anyone who installed `.[dev]` and nothing else."""
+    def test_a_missing_node_fails_rather_than_skipping_the_proof(
+            self, monkeypatch) -> None:
+        """No `CI`, and it must still fail. A skip here is the failure mode the
+        whole file was written about: green, and proving nothing."""
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         monkeypatch.delenv("CI", raising=False)
 
-        with pytest.raises(pytest.skip.Exception) as outcome:
+        with pytest.raises(pytest.fail.Exception) as outcome:
             _node()
 
-        assert "node is not installed" in str(outcome.value)
+        assert "node" in str(outcome.value), (
+            "the failure must name the thing that is missing")
 
-    def test_ci_losing_node_fails_rather_than_skipping_the_proof(
-            self, monkeypatch) -> None:
-        """The other direction, and the more dangerous one: on the run that
-        gates a merge, the view silently ceasing to be executed must be loud."""
+    def test_it_fails_on_ci_too_and_for_the_same_reason(self, monkeypatch
+                                                        ) -> None:
+        """The other environment, and there is deliberately no second branch to
+        exercise: `CI` set changes nothing about the outcome."""
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         monkeypatch.setenv("CI", "true")
 
         with pytest.raises(pytest.fail.Exception) as outcome:
             _node()
 
+        assert "node" in str(outcome.value)
         assert "ci.yml" in str(outcome.value), (
-            "the failure must name where the missing step has to be added")
+            "the failure must name where the toolchain is provisioned")
+
+    def test_the_guard_has_no_skip_left_in_it(self) -> None:
+        """The regression this task exists to prevent coming back: a future
+        edit re-introducing a skip would make both tests above pass while the
+        proof stopped running on whichever machine took the skip."""
+        source = Path(__file__).read_text(encoding="utf-8")
+        guard = source[source.index("def _node()"):]
+        guard = guard[:guard.index("\ndef _run_the_view")]
+
+        assert "pytest.skip" not in guard, (
+            "`_node` skips again; a missing node must fail, never skip")
+        assert "environ" not in guard, (
+            "`_node` branches on the environment again; the requirement does "
+            "not depend on where the run is happening")
 
     def test_it_returns_the_binary_when_node_is_there(self, monkeypatch) -> None:
-        """Negative control: neither branch may fire on a normal machine, or
-        the tests above would pass against a guard that always skips."""
+        """Negative control: the failure must not fire on a machine that has
+        node, or the tests above would pass against a guard that always fails."""
         monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/node")
         monkeypatch.setenv("CI", "true")
 
         assert _node() == "/usr/bin/node"
 
     def test_the_structural_guard_needs_nothing_installed(self) -> None:
-        """What makes the skip acceptable: the placement of `const inboundBlock`
-        — the actual production defect — is still checked by a test that only
-        reads text. If that check ever moves behind the node harness, a machine
-        without node stops covering the regression entirely.
+        """The always-on half: the placement of `const inboundBlock` — the
+        actual production defect — is also checked by a test that only reads
+        text, so a run that deselected `integration` still covers it. If that
+        check ever moves behind the node harness, `-m "not integration"` stops
+        covering the regression entirely.
         """
         source = Path(__file__).read_text(encoding="utf-8")
         guard = source[source.index(

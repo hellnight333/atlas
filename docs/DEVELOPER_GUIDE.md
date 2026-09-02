@@ -3,9 +3,13 @@
 ## Setup
 
 1. Install Python 3.11+.
-2. Install dev dependencies:
+2. Install Node.js 22+ (`node --version`). The console regression proof in
+   `packages/kernel/tests/test_app_composition.py` executes the Opportunities
+   view under node, and the suite fails deliberately when it is absent rather
+   than skipping; deselect it knowingly with `-m "not integration"`.
+3. Install dev dependencies:
    `python -m pip install -e '.[dev]'`
-3. Install pre-commit hooks:
+4. Install pre-commit hooks:
    `pre-commit install`
 
 ## Daily Commands
