@@ -394,3 +394,47 @@ verdict. Empty until then._
   of Step 1 is item 10 — a `--rehearse` against the real host, then the first
   human-watched deployment of a trivial reviewed commit.
 
+- **Item 10 — first human-watched deployment, DONE 2026-09-02 23:09 UTC.** Rehearse at
+  S=2d8bb2b against the real host on 2026-09-02 (exit 0, dry-run rsync, zero link
+  drops, "provenance: none recorded", six units active); the owner then required a
+  deployment impact report for that exact payload before authorising a launch. The
+  report content-hashed every file the payload ships against the host (466 files:
+  452 identical, 12 differing, 2 new; all nine unit files identical; `db.py`
+  identical, so no schema change; `deploy_control.sh` copies `qevik-production.Caddyfile`
+  and never applies it) and concluded that the only new active behaviours would be
+  the read-only Outreach page + `GET /api/missions/outreach-unreviewed`, the dormant
+  `save_message(expecting=)` with no caller, the first provenance marker — and, for
+  S′, the `/opportunities` fix. On that basis the owner approved launching
+  `t-f7dc30855d09` (priority 28, origin *production*, requires_deploy=1,
+  requires_prod_check=1, contract exactly `apps/control/src/index.html` +
+  `packages/kernel/tests/test_app_composition.py`): hoist the block-scoped
+  `const inboundBlock` in `opportunities()` above `if (!found)` so the success path
+  no longer throws `ReferenceError` (introduced 5070e4a; the live Opportunities view
+  was blank in production). Run r-974f37a63d, base 2d8bb2b, 22:37→23:09 UTC, 31 min
+  48 s: gates+scope passed both rounds; r1 blocking finding — the regression proof
+  executes the view under `node`, which the default kernel suite had never declared;
+  r2 CLEAN. Squash **346076b**. Then, in order and each bracketed by the tree check:
+  whole suite against S′ (4,370 passed, 48 skipped, 14 min 21 s) → DEPLOYING →
+  `deploy_control.sh` with `QEVIK_DEPLOY_SHA=346076b…` (rollback snapshot taken 23:07;
+  `qevik-control`/`qevik-api` restarted 23:08:06–07; marker written 23:08:52; five
+  workers restarted 23:09:02–14) → `gates.provenance` read back `state=installed
+  sha=346076b…` → VERIFYING → the task's read-only probe printed `PROVED` (served
+  `/srv/qevik-control/index.html` holds exactly one `const inboundBlock` inside
+  `opportunities()`, after `Promise.all`, before `if (!found)`) → marker re-read,
+  still S′ → **DONE**. Independent check afterwards from the Mac: `https://app.qevik.ai/`
+  200, sha256 `bcb97eda…` equal to both the served file and
+  `git show 346076b:apps/control/src/index.html`; all seven units active.
+  **Step 1 is complete.** Step 2 (release directories) has not begun; DQ-011
+  provisioning is now unblocked on its own terms (first watched deploy verified).
+
+  *Recorded deviation (owner ruling 2026-09-02, temporary).* The r1 fix made
+  `_node()` fail hard only when `CI` is set and `pytest.skip` on a developer machine.
+  The owner accepted this solely as an infrastructure-compatibility mechanism while
+  the kernel CI job installs no Node — **not** as a change to the requirement, which
+  remains: the `opportunities()` regression test executes in the authoritative CI
+  environment, a missing Node there is a hard failure never a silent skip, and both
+  the API-success and fallback paths stay exercised. Consequence as of 346076b: the
+  `Kernel quality` job fails on this test until a Node 22 step is added. A follow-up
+  task (ci.yml Kernel-quality job + restoring the unconditional `pytest.fail` +
+  documenting Node ≥ 22 beside the ffmpeg prerequisite; non-deploying) is prepared
+  for the owner's review and is to run ahead of Option 1.
