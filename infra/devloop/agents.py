@@ -55,6 +55,65 @@ SCHEMA = HERE / "review.schema.json"
 #: real findings in about ninety seconds.
 REVIEW_EFFORT = "medium"
 
+#: The only shell command the builder and the fixer may run.
+#:
+#: `--permission-mode acceptEdits` auto-accepts **file edits only**. Under it a
+#: headless session is refused every Bash call it makes. Measured on
+#: 2026-09-02 from a clean directory:
+#:
+#:     claude -p 'Use the Bash tool to run exactly: python3 -c "print(40+2)" …' \
+#:       --output-format json --permission-mode acceptEdits --max-turns 3
+#:     → "DENIED:This command requires approval", and permission_denials
+#:       carried {tool_name: Bash, tool_input: {command: python3 -c ...}}
+#:
+#: That was paid for twice: the builder on t-4f02ee7a36c0 reported "python3 is
+#: not runnable in this session's sandbox", and the fixer on t-8bdaf8c290ca
+#: edited blind for three rounds against tests it could never execute, ending
+#: CONTESTED over a capability that worked.
+#:
+#: One rule, and it is a prefix rule: `python3 -m pytest …` is approved and
+#: every other command still stops at the same refusal. The prefix is exactly
+#: the one `gates.tests` runs, so an agent can execute the gate that will judge
+#: it. Neither invocation bypasses permissions, because an agent that can run
+#: anything is no longer bounded by this list at all.
+#:
+#: **This list is scope, not containment.** pytest imports the repository, so a
+#: `conftest.py` or a test file the agent just wrote is Python that runs on
+#: this host. The rule stops the agent *reaching for another tool* in one step
+#: — no `git commit`, no `ssh`, no `curl`, no `./infra/deploy_control.sh` — and
+#: it does not confine what the code it wrote can do. Read as a sandbox it is
+#: being read wrong, and narrowing the prefix would only make it look more like
+#: one.
+#:
+#: Granting it costs no execution the loop was not already performing.
+#: `gates.tests` runs `python3 -m pytest packages/kernel/tests/` on this host,
+#: in this working tree, over whatever the builder just wrote — every round,
+#: and `driver.run_task` runs it *before* `gates.scope` has looked at a single
+#: path. The agent's own `conftest.py` executes there with or without this
+#: list. What changed is that the agent sees the result before the gate does,
+#: instead of editing blind.
+#:
+#: What bounds the run is elsewhere, and is measured rather than configured:
+#: `gates.scope` compares the committed diff against the task's allowed paths,
+#: the reviewer reads that diff blind in a repository built for it, the
+#: permission mode is never `bypassPermissions`, and nothing reaches production
+#: except through a deploy gate a task had to declare. Making pytest itself a
+#: boundary would mean sandboxing `gates.tests` too — the loop's verdict would
+#: have to come from inside the container, or the container is theatre — and
+#: that is a different change from this one.
+ALLOWED_TOOLS: tuple[str, ...] = ("Bash(python3 -m pytest:*)",)
+
+
+def _claude_argv(prompt: str, *, max_turns: int) -> list[str]:
+    """The headless invocation both editing agents share.
+
+    `--allowedTools` goes last on purpose: it is variadic, so anything placed
+    after it would be collected as a further rule.
+    """
+    return ["claude", "-p", prompt, "--output-format", "json",
+            "--permission-mode", "acceptEdits", "--max-turns", str(max_turns),
+            "--allowedTools", *ALLOWED_TOOLS]
+
 
 @dataclass
 class Outcome:
@@ -112,15 +171,17 @@ def build(task: dict, *, cwd: Path, max_turns: int, timeout: int) -> Outcome:
     do one thing at a time and prove it.
 
     `--permission-mode acceptEdits` rather than bypassing permissions: the
-    builder may edit and run, and the boundaries it must not cross are not
-    enforced by a permission flag anyway — they are in the prompt and, where it
-    matters, in what the driver refuses to do afterwards.
+    builder may edit files freely, and it may run exactly the commands in
+    `ALLOWED_TOOLS` — `python3 -m pytest …`, so it can execute the suite that
+    is about to judge it — while every other shell command is refused. That
+    list is scope and not a sandbox, for the reason written above it: the gate
+    runs the builder's tests on this host anyway. The boundaries beyond it are
+    not enforced by a permission flag at all — they are in the prompt and, where
+    it matters, in what the driver refuses to do afterwards.
     """
     prompt = builder_prompt(task)
     code, out, timed_out = _run(
-        ["claude", "-p", prompt, "--output-format", "json",
-         "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
-        cwd=cwd, timeout=timeout)
+        _claude_argv(prompt, max_turns=max_turns), cwd=cwd, timeout=timeout)
     if timed_out or code == 127:
         return Outcome(ok=False, exit_code=code, output=out,
                        infrastructure_failure=True,
@@ -175,7 +236,12 @@ Rules for this run:
   you have not made — a later step checks the diff and the tests, not your
   summary.
 - Add or update tests that would fail without your change.
-- Run the relevant tests yourself before finishing.
+- Run the relevant tests yourself before finishing. `python3 -m pytest …` is
+  the one shell command permitted in this session — the gate runs
+  `python3 -m pytest packages/kernel/tests/ -q -p no:cacheprovider --no-cov`
+  and you can run it too, narrowed with `-k` if you like. Every other shell
+  command is refused, so do not plan around one; edit files with your editing
+  tools instead.
 - Do NOT commit. The loop commits, so that the reviewed diff is exactly the
   work of this task.
 - Do NOT deploy, send anything to anybody, change DNS, create or use
@@ -213,12 +279,14 @@ You may change ONLY these paths:
 A fix outside them fails the task structurally. If a finding can only be
 settled outside those paths, leave it and say so.
 
+You can run the test suite: `python3 -m pytest …` is the one shell command
+permitted here, and every other one is refused. Run the tests you touched
+before finishing.
+
 A refutation is not a dismissal: the reviewer re-reads the code afterwards and
 raises it again if it still stands."""
     code, out, timed_out = _run(
-        ["claude", "-p", prompt, "--output-format", "json",
-         "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
-        cwd=cwd, timeout=timeout)
+        _claude_argv(prompt, max_turns=max_turns), cwd=cwd, timeout=timeout)
     if timed_out or code == 127:
         return Outcome(ok=False, exit_code=code, output=out,
                        infrastructure_failure=True,
@@ -519,6 +587,6 @@ def blocking(findings: list[dict]) -> list[dict]:
     return [f for f in findings if f.get("severity") in ("blocking", "major")]
 
 
-__all__ = ["Outcome", "REVIEW_EFFORT", "WITHHELD", "blocking", "build",
-           "builder_prompt", "fix", "isolate", "parse_review", "review",
-           "reviewer_prompt", "stopped_short"]
+__all__ = ["ALLOWED_TOOLS", "Outcome", "REVIEW_EFFORT", "WITHHELD", "blocking",
+           "build", "builder_prompt", "fix", "isolate", "parse_review",
+           "review", "reviewer_prompt", "stopped_short"]

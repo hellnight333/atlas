@@ -1607,6 +1607,144 @@ def test_the_builder_is_shown_its_contract_but_is_not_the_enforcement():
     assert '"git", "diff", "--name-only", "--no-renames"' in scope
 
 
+def _allowed_tools_in(argv: list[str]) -> list[str]:
+    """The rules `--allowedTools` was given. It is variadic, so the rules run
+    until the next flag."""
+    assert "--allowedTools" in argv, (
+        "no allow-list: `--permission-mode acceptEdits` auto-accepts file edits "
+        "only, so every Bash call the agent makes is refused and it cannot run "
+        "the suite it is told to run")
+    rules: list[str] = []
+    for token in argv[argv.index("--allowedTools") + 1:]:
+        if token.startswith("--"):
+            break
+        rules.append(token)
+    return rules
+
+
+def test_the_builder_and_the_fixer_may_run_the_suite_and_nothing_else(monkeypatch):
+    """Both editing agents get one shell command: the test suite.
+
+    Before this, both ran under `acceptEdits` with no allow-list, which grants
+    edits and refuses every Bash call — so the builder was told "run the
+    relevant tests yourself" in a session where it could not. It was paid for:
+    the fixer on t-8bdaf8c290ca edited blind for three rounds against tests it
+    could never execute.
+    """
+    seen: list[list[str]] = []
+
+    def capture(argv, **_):
+        seen.append(list(argv))
+        return 0, '{"is_error": false, "subtype": "success"}', False
+
+    monkeypatch.setattr(agents, "_run", capture)
+    task = {"title": "t", "brief": "b", "paths": '["infra/devloop/"]'}
+    agents.build(task, cwd=Path("."), max_turns=1, timeout=10)
+    agents.fix(task, [{"severity": "blocking", "file": "a.py:1", "claim": "c",
+                       "why_it_matters": "w", "failure_scenario": "f"}],
+               cwd=Path("."), max_turns=1, timeout=10)
+    assert len(seen) == 2, "the builder and the fixer were not both invoked"
+
+    for argv in seen:
+        assert _allowed_tools_in(argv) == ["Bash(python3 -m pytest:*)"], (
+            "the allow-list is the whole boundary; anything beyond the pytest "
+            "rule is a command the agent can run that nobody decided to give it")
+
+        # An allow-list next to a bypass is not a boundary, it is decoration.
+        assert "--dangerously-skip-permissions" not in argv
+        assert "bypassPermissions" not in argv
+        assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+
+        # No second rule quietly grants another tool. This is not a claim that
+        # the agent cannot reach these — pytest runs repository code, so it
+        # can — only that nothing here hands it one in a single step.
+        joined = " ".join(argv)
+        for reachable in ("git", "ssh", "curl", "docker", "scp", "rsync"):
+            assert f"Bash({reachable}" not in joined
+
+    # The rule is a prefix, and this is the prefix the gate itself runs — so an
+    # agent can execute the command that is about to judge it. Read from
+    # `gates.py` rather than restated, because the two drifting apart is the
+    # failure this asserts against.
+    gate = Path(INFRA / "devloop" / "gates.py").read_text()
+    assert '["python3", "-m", "pytest"' in gate
+
+    # And the builder is told what it may run, rather than left to discover the
+    # refusal by spending a turn on it.
+    prompt = agents.builder_prompt({"title": "t", "brief": "b", "paths": "[]"})
+    assert "python3 -m pytest" in prompt
+
+
+def test_the_agents_may_run_only_what_the_host_already_runs_for_them(monkeypatch):
+    """The allow-list grants no execution the loop was not already performing.
+
+    A reviewer read the pytest rule as a sandbox and asked for pytest to be
+    containerised, on the ground that it grants arbitrary host-side Python.
+    The first half is right and the second is not: `gates.tests` runs
+    `python3 -m pytest packages/kernel/tests/` on this host, in the builder's
+    own working tree, over whatever it just wrote — every round, before
+    `gates.scope` has looked at a path. A `conftest.py` the builder wrote
+    executes there with or without the allow-list.
+
+    So the invariant that has to hold is not "the agent cannot execute code" —
+    it can, and the loop makes it happen anyway — but that the agent is
+    permitted *only the command the host already runs on its behalf*. Widening
+    the rule to `Bash(python3:*)` or `Bash(bash:*)` would break that and this
+    test fails if anyone does.
+    """
+    ran: list[list[str]] = []
+
+    def capture(argv, **_):
+        ran.append(list(argv))
+        return 0, "1 passed", False
+
+    monkeypatch.setattr(gates, "_sh", capture)
+    gates.tests(cwd=Path("."))
+    [gate_argv] = ran
+
+    assert len(agents.ALLOWED_TOOLS) == 1, (
+        "one rule, so that what the agent may run stays readable in one line")
+    [rule] = agents.ALLOWED_TOOLS
+    assert rule.startswith("Bash(") and rule.endswith(":*)")
+    permitted = rule[len("Bash("):-len(":*)")]
+
+    # A bare interpreter is not a bounded command, it is every command — and
+    # it would still satisfy the prefix check below, because the gate's own
+    # argv starts with `python3`.
+    assert len(permitted.split()) > 1 and permitted not in (
+        "bash", "sh", "zsh", "env", "python3", "python", "uv", "npx",
+        "make"), (
+        f"{permitted!r} permits anything that interpreter can be handed")
+
+    # And it is a prefix of the exact argv the gate itself runs, read by
+    # calling the gate rather than by restating it here — the two drifting
+    # apart is what this asserts against.
+    assert " ".join(gate_argv).startswith(permitted + " "), (
+        f"the agent may run {permitted!r}, which is not what the gate runs "
+        f"({' '.join(gate_argv)!r}) — the allow-list has stopped being a "
+        f"subset of what the host does for it anyway")
+
+    # The gate runs it on the builder's own tree, in the same round, before the
+    # scope gate. That ordering is why the permission adds no exposure.
+    run_task = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = run_task[run_task.index("def run_task("):]
+    executed = run_task.index("gates.tests(cwd=self.repo")
+    assert executed < run_task.index("gates.scope(cwd=self.repo"), (
+        "the suite no longer runs before the scope gate; the builder's code is "
+        "not executed on the host until after its paths are checked, and the "
+        "note on ALLOWED_TOOLS needs rewriting rather than this assertion "
+        "relaxing")
+
+    # Finally, the note says what the rule is not. It was written claiming
+    # "nothing here reaches outside the working tree", which pytest does not
+    # give and nobody should rely on.
+    source = Path(INFRA / "devloop" / "agents.py").read_text()
+    note = source[:source.index("ALLOWED_TOOLS: tuple")]
+    note = note[note.index("#: The only shell command"):]
+    assert "conftest" in note and "not containment" in note, (
+        "the allow-list must be documented as scope rather than as a sandbox")
+
+
 def test_every_production_rule_declares_where_its_work_may_go():
     from devloop import inspection
 
