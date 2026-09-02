@@ -2696,6 +2696,139 @@ def test_the_route_the_refusal_names_deploys_what_main_already_carries(
     assert q.get(again)["head_sha"] == landed_sha(failed, repo=repo)
 
 
+def _revert(repo, sha) -> str:
+    """Roll a landing back off `main` the way a person in a hurry would.
+
+    `git revert`, not a hand-written undo, because the message it writes is
+    what `landed_sha` reads — a test that undid the work by rewriting the file
+    would prove nothing about the guard.
+    """
+    import subprocess
+
+    subprocess.run(["git", "revert", "--no-edit", sha], cwd=repo, check=True,
+                   capture_output=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_a_landing_that_was_reverted_is_not_a_landing_any_more(tmp_path,
+                                                                monkeypatch):
+    """The rollback, which is where this guard is most likely to be standing.
+
+    The deploy failed, so the task is FAILED with its work merged — and the
+    answer to a failed deployment is often to take it straight back off `main`.
+    Once that revert lands, everything the refusal says is false: the builder
+    has work to do again, the `changed` gate would pass, and the deploy-only
+    task the refusal recommends would put code on the host that `main` no
+    longer has. Measured in the present tense, this task is retryable.
+    """
+    from devloop.queue import landed_sha
+
+    q, ident, repo, outcome, before = _landed_then(tmp_path, monkeypatch,
+                                                   deploys=False)
+    assert outcome == State.FAILED
+    landed = landed_sha(ident, repo=repo)
+    assert landed, "the fixture no longer leaves the work on main"
+
+    _revert(repo, landed)
+    assert (repo / "src" / "app.py").read_text() == "x = 1\n", (
+        "the revert did not take the work off main, so this test is not about "
+        "the condition it claims to be about")
+    # The marker is still in `main`'s history — the revert copies the subject
+    # and the marker lives in the body — so history alone still answers "landed".
+    assert landing_marker_in_history(repo, ident), (
+        "the squash commit left main's history, so nothing here is being asked "
+        "of the guard that reads it")
+
+    assert landed_sha(ident, repo=repo) == "", (
+        "a reverted landing still reads as work main carries; the guard is "
+        "answering the historical question, not the present-tense one")
+    assert q.requeue(ident, actor="ayoub", reason="rolled back; try again") \
+        is True, ("the retry the rollback exists to allow was refused, and the "
+                  "refusal sends a person to deploy code main no longer has")
+    claimed = q.claim(owner="d")
+    assert claimed is not None and claimed["id"] == ident
+
+
+def test_work_put_back_on_main_after_a_revert_is_carried_again(tmp_path,
+                                                                monkeypatch):
+    """And the revert does not become a permanent exemption.
+
+    A rollback that is itself undone — the fix landed, the work goes back —
+    leaves `main` carrying the task again, and a requeue is refused again. The
+    re-landing carries the marker because a cherry-pick copies the whole
+    message, so the newest thing the guard finds is the copy, which nothing
+    reverts.
+    """
+    import subprocess
+
+    from devloop.queue import landed_sha
+
+    q, ident, repo, outcome, _ = _landed_then(tmp_path, monkeypatch,
+                                              deploys=False)
+    landed = landed_sha(ident, repo=repo)
+    assert outcome == State.FAILED and landed
+
+    _revert(repo, landed)
+    assert landed_sha(ident, repo=repo) == ""
+    subprocess.run(["git", "cherry-pick", landed], cwd=repo, check=True,
+                   capture_output=True)
+    assert (repo / "src" / "app.py").read_text() == "x = 2\n"
+
+    again = landed_sha(ident, repo=repo)
+    assert again and again != landed, (
+        "main carries the work again and the guard cannot see it; the requeue "
+        "it exists to refuse would start a run that fails its `changed` gate")
+    with pytest.raises(ValueError) as refused:
+        q.requeue(ident, actor="ayoub", reason="retry the deploy")
+    assert again[:12] in str(refused.value)
+
+
+def test_a_revert_that_could_not_be_read_is_unknown_too(tmp_path, monkeypatch):
+    """Half an answer is not an answer.
+
+    The landing is now two questions, and the second one failing means as
+    little is known as the first one failing. Reporting the marker's sha
+    anyway would refuse a requeue on a landing nobody checked was still there.
+    """
+    from devloop import queue as queue_module
+
+    q, ident, repo, outcome, _ = _landed_then(tmp_path, monkeypatch,
+                                              deploys=False)
+    assert outcome == State.FAILED
+
+    answering = queue_module._git
+
+    def refuses_only_the_revert(*args, cwd):
+        if any(a.startswith("--grep=This reverts") for a in args):
+            return 128, ""
+        return answering(*args, cwd=cwd)
+
+    monkeypatch.setattr(queue_module, "_git", refuses_only_the_revert)
+    assert queue_module.landed_sha(ident, repo=repo) is None, (
+        "an unread revert is reported as a landing, so a rollback nobody could "
+        "check for is treated as if it had not happened")
+    with pytest.raises(ValueError, match="could not be read"):
+        q.requeue(ident, actor="ayoub")
+    assert q.get(ident)["state"] == State.FAILED
+
+
+def landing_marker_in_history(repo, task_id) -> bool:
+    """Whether `main`'s history mentions this task's landing at all.
+
+    Deliberately the weaker question `landed_sha` used to be — it is how the
+    revert tests show that history still says "landed" while the tree does not.
+    """
+    import subprocess
+
+    from devloop.queue import landing_marker
+
+    return bool(subprocess.run(
+        ["git", "log", "main", "--fixed-strings",
+         f"--grep={landing_marker(task_id)}", "--format=%H"],
+        cwd=repo, capture_output=True, text=True).stdout.strip())
+
+
 def test_a_task_that_failed_before_landing_is_still_put_back(tmp_path):
     """The negative control, and the case requeue exists for.
 

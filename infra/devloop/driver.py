@@ -79,7 +79,8 @@ ends the task before the deploy it was put back for. The landing is measured
 from git rather than assumed: the squash commit carries `queue.landing_marker`,
 and a task found on `main` is refused with the sha named. Redeploying what
 `main` carries is what a deploy-only task is, so that is what such a retry is
-enqueued as.
+enqueued as. What is measured is the present tense — a landing that was later
+reverted is not one, and that task is put back like any other.
 
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into

@@ -400,6 +400,19 @@ def _repo_of(db: Path) -> Path | None:
     return None
 
 
+def _newest_saying(phrase: str, *, root: Path) -> str | None:
+    """The newest commit on `main` whose message contains `phrase`, literally.
+
+    `""` when `main` has no such commit and `None` when git would not answer,
+    kept apart here so that every caller can keep them apart too.
+    """
+    code, out = _git("log", "main", "--fixed-strings", f"--grep={phrase}",
+                     "--format=%H", "-n", "1", cwd=root)
+    if code != 0:
+        return None
+    return out.splitlines()[0].strip() if out else ""
+
+
 def landed_sha(task_id: str, *, repo: Path | str | None) -> str | None:
     """Whether `main` already carries this task's work, asked of git.
 
@@ -414,6 +427,32 @@ def landed_sha(task_id: str, *, repo: Path | str | None) -> str | None:
 
     A queue that lives outside every repository is answered `""` without
     asking: there is no `main` for anything to have landed on.
+
+    ## Carried now, not landed once
+
+    The question is present tense, and the marker alone answers the past one.
+    A landing that was reverted — an emergency rollback after the very deploy
+    failure that left the task FAILED with its work merged, which is the exact
+    sequence this guard sits in the middle of — leaves both commits on `main`:
+    the squash commit still carries the marker, and `main` no longer carries
+    the work. Reading only the marker there refuses the retry that is now the
+    right thing to do, and sends a person to deploy code that was deliberately
+    taken off `main`.
+
+    So the revert is asked for too. `git revert` writes `This reverts commit
+    <sha>.` into its own message, and the marker sits in the squash commit's
+    *body* while a revert copies only the subject — so the newest marker
+    commit is still the landing itself, and the question to put about it is
+    whether anything later undid it. Work re-landed after a revert answers
+    itself: a cherry-pick copies the whole message, so the newest marker
+    commit is then the re-landing, which nothing reverts.
+
+    What this does not see is an undo that does not say it is one — a commit
+    that removes the work by hand, or a reapply that git wrote as `Reapply`
+    rather than as a fresh copy of the landing. Both err towards allowing the
+    requeue, and a requeue that should not have run ends on the `changed` gate
+    with the declaration named; a refusal that should not have fired ends with
+    a person deploying code that is gone.
     """
     if repo is None:
         return ""
@@ -425,12 +464,13 @@ def landed_sha(task_id: str, *, repo: Path | str | None) -> str | None:
         return None                  # git itself is missing; nothing was asked
     if code != 0:
         return ""                    # not a repository, so there is no `main`
-    code, out = _git("log", "main", "--fixed-strings",
-                     f"--grep={landing_marker(task_id)}", "--format=%H",
-                     "-n", "1", cwd=root)
-    if code != 0:
-        return None
-    return out.splitlines()[0].strip() if out else ""
+    landed = _newest_saying(landing_marker(task_id), root=root)
+    if not landed:
+        return landed                # "" nothing landed, None nothing asked
+    undone = _newest_saying(f"This reverts commit {landed}", root=root)
+    if undone is None:
+        return None                  # half an answer is not an answer
+    return "" if undone else landed
 
 
 class Queue:
@@ -754,6 +794,11 @@ class Queue:
         which builds nothing by declaration rather than by accident. An
         unanswerable repository is refused too: whether the requeue can succeed
         is then unknown, and this is the one place that has to know.
+
+        What is measured is what `main` carries *now*: a landing somebody has
+        since reverted is not one, and the retry it was rolled back for is
+        exactly what should happen next. `landed_sha` reads the revert as well
+        as the landing.
         """
         state = self._state_of(task_id)
         if state == State.QUEUED:
