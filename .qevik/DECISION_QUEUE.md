@@ -317,3 +317,16 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-e44a121a65b1`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-03e23ee8f736 -->
+## Contested — ADR-0010 Step 1 / T3: the driver captures S, checks the tree before and after the suite, passes S into the deploy and reads the host's provenance back
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/devloop/driver.py:525-530` [blocking] Clean up the failed squash before returning
+  - `infra/devloop/driver.py:657-657` [major] Preserve unrelated edits before resetting the squash
+  - `infra/devloop/driver.py:546-547` [blocking] Lock the repository before destructive squash cleanup
+  - `infra/devloop/gates.py:443-447` [major] Reject duplicate provenance fields
+
+- **Driver task:** `t-03e23ee8f736`
+- **Review unit:** `..`

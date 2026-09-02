@@ -336,3 +336,22 @@ verdict. Empty until then._
   in preflight, unchecked second marker write) · 46 tests in the file · nothing
   deployed; the first real deployment remains human-watched after T3, per Step 1
   item 10.
+
+- **T3 (attempt 1) — CONTESTED 2026-09-02.** `t-03e23ee8f736` (base 235579d, run
+  r-e4fbcf761e, 13:31→16:07 UTC, 2 h 36 min of which 2 h 13 min was the build) on the
+  contract `infra/devloop/driver.py`, `infra/devloop/gates.py`,
+  `packages/kernel/tests/test_devloop.py`; branch `devloop/t-03e23ee8f736` kept at
+  46d8dfe (+940/−43, three commits, pushed to origin). Gates and scope passed in all
+  three rounds. Findings: r1 blocking `driver.py:525-530` — a squash *commit* failure
+  (hook/signing) returns CONTESTED with the squash still staged on main, wedging the
+  loop at the clean-tree check; r2 major `driver.py:657` — the r1 fix's
+  `git reset --hard HEAD` would also destroy edits not on the task branch (hook
+  rewrites, operator edits after the check); r3 blocking `driver.py:546-547` — the r2
+  cleanliness check is racy without an exclusive repository lock spanning
+  check/squash/commit/cleanup; r3 major `gates.py:443-447` — `gates.provenance`
+  parses the marker into a dict so duplicate `sha`/`state` lines let the last value
+  win and a contradictory marker can pass. Rounds 1–3 are one chain about the
+  failed-squash cleanup on main (absent → destructive → racy), a path the brief did
+  not name; the gates.py finding is independent and narrow. Not re-enqueued: the
+  route is the owner's decision. Nothing deployed.
+

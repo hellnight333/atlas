@@ -169,10 +169,10 @@ end; a session finding it stale should reconcile before trusting it.
 <!-- devloop:begin -->
 ## Development loop
 
-_Written by `infra/devloop/driver.py` at 2026-09-02T13:28:31+00:00. The queue is the source of truth; this is its projection._
+_Written by `infra/devloop/driver.py` at 2026-09-02T16:06:50+00:00. The queue is the source of truth; this is its projection._
 
 - **12 done** · 0 in flight · 5 queued
-- **1 waiting on a person** · 11 contested · 5 blocked
+- **1 waiting on a person** · 12 contested · 5 blocked
 
 ### Waiting on you
 
@@ -187,6 +187,7 @@ _Written by `infra/devloop/driver.py` at 2026-09-02T13:28:31+00:00. The queue is
 - **Surface unreviewed outreach drafts to the operator** — 0 finding(s) after 0 round(s).
 - **The deploy payload comes from the commit, not the tree (ADR-0010 Step 1, task 1 of 3)** — 4 finding(s) after 3 round(s).
 - **ADR-0010 Step 1 / T2: host manifest check, DEPLOYED_SHA provenance marker, rollback hygiene** — 5 finding(s) after 3 round(s).
+- **ADR-0010 Step 1 / T3: the driver captures S, checks the tree before and after the suite, passes S into the deploy and reads the host's provenance back** — 4 finding(s) after 3 round(s).
 - **Deploy what main already carries when a deploy task has no diff** — 4 finding(s) after 3 round(s).
 - **Deploy what main already carries when a deploy task has no diff (second attempt)** — 3 finding(s) after 3 round(s).
 - **Land the deploy-only path without a requeue** — 3 finding(s) after 3 round(s).
