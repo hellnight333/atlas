@@ -230,3 +230,16 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-6057acdb0b35`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-17a8c4e3e8d4 -->
+## Contested — Deploy what main already carries when a deploy task has no diff
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/devloop/driver.py:331-334` [blocking] Require an explicit deploy-only task classification
+  - `infra/devloop/queue.py:600-603` [blocking] Requeue failed tasks after declaring deploy-only
+  - `infra/devloop/driver.py:687-689` [major] Record only gates that the deploy-only path ran
+  - `infra/devloop/queue.py:659-660` [blocking] Refuse requeue after work has already landed
+
+- **Driver task:** `t-17a8c4e3e8d4`
+- **Review unit:** `..`
