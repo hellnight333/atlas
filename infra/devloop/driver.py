@@ -571,6 +571,46 @@ class Driver:
 
         return self._finish(task, started, ran)
 
+    def _main_as_committed(self) -> tuple[str, str]:
+        """What `main` is at this instant, or why nothing may ship from here.
+
+        Returns the commit and no complaint when this repository is in a state
+        a deploy-only task can deploy from, and no commit and a complaint when
+        it is not. Two questions, both asked of the repository rather than of
+        the row: `main` is what is checked out, so what deploys is reviewed
+        work and not some task branch left behind by a run that ended badly;
+        and the tree is clean, so what deploys is `main` as committed and not
+        `main` plus whatever somebody was editing.
+
+        The tree is asked directly rather than through `clean_tree`, which is
+        the gate that proves the *reviewer* wrote nothing and says so in its
+        detail. No reviewer runs on this path, and borrowing its words would
+        put a sentence about a review into the record of a task that had none.
+
+        Every answer here is about the machine *now* and decays immediately:
+        this repository is shared with whoever else is working in it. So the
+        commit is returned rather than assumed, and callers ask again rather
+        than remembering.
+        """
+        readable, on = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)
+        if readable != 0:
+            return "", f"git could not say what is checked out: {on[:200]}"
+        if on != "main":
+            return "", (f"a deploy-only task ships what main carries and {on} "
+                        f"is what this repository has checked out; nothing was "
+                        f"deployed")
+        readable, dirty = _git("status", "--porcelain", cwd=self.repo)
+        if readable != 0:
+            return "", f"git could not read the tree: {dirty[:200]}"
+        if dirty:
+            return "", (f"a deploy-only task ships main as committed and the "
+                        f"tree is not clean; nothing was deployed: "
+                        f"{dirty.strip()[:300]}")
+        readable, sha = _git("rev-parse", "HEAD", cwd=self.repo)
+        if readable != 0:
+            return "", f"git could not say what main is at: {sha[:200]}"
+        return sha, ""
+
     def _deploy_only(self, task: dict, started: float) -> str:
         """Ship what `main` already carries. No builder, no reviewer, no diff.
 
@@ -582,41 +622,31 @@ class Driver:
         anything.
 
         What replaces them is a structural re-check of git, because "nothing
-        was written" is a claim and git is where it is settled. Two questions,
-        both asked of the repository rather than of the row: `main` is what is
-        checked out, so what deploys is reviewed work and not some task branch
-        left behind by a run that ended badly; and the tree is clean, so what
-        deploys is `main` as committed and not `main` plus whatever somebody
-        was editing. Either answer coming back wrong is the machine being in a
-        state this task cannot be run from, not a verdict on the work, so it
-        is counted as an infrastructure failure: the task is requeued, and a
-        repository that keeps answering wrong stops the run through the same
-        brake that stops a broken reviewer rather than being retried for ever.
+        was written" is a claim and git is where it is settled.
+        `_main_as_committed` asks it, and it is asked **twice**: once to learn
+        what is about to be tested, and again immediately before the deploy,
+        with the commit required to be the same one both times.
+
+        The second asking is the one that matters. The full suite takes up to
+        forty minutes, this repository is not the loop's alone, and the deploy
+        script copies the working tree — it re-checks the branch and the tree
+        but never the commit, so a commit that a person or a second driver
+        landed on `main` while the suite ran would be rsynced to the live host
+        having been tested by nobody, and this row would record the sha that
+        *was* tested. What deploys has to be what the suite ran. The window
+        that remains is the deploy's own, and closing that one means handing
+        the sha to a script that today takes a tree.
+
+        A wrong answer either time is the machine being in a state this task
+        cannot be run from, not a verdict on the work, so it is counted as an
+        infrastructure failure: the task is requeued, and a repository that
+        keeps answering wrong stops the run through the same brake that stops
+        a broken reviewer rather than being retried for ever.
         """
         ident = task["id"]
-        readable, on = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)
-        if readable != 0:
-            return self._infra(ident, f"git could not say what is checked out:"
-                                      f" {on[:200]}")
-        if on != "main":
-            return self._infra(
-                ident, f"a deploy-only task ships what main carries and {on} "
-                       f"is what this repository has checked out; nothing was "
-                       f"deployed")
-        # Asked directly rather than through `clean_tree`, which is the gate
-        # that proves the *reviewer* wrote nothing and says so in its detail.
-        # No reviewer ran here, and borrowing its words would put a sentence
-        # about a review into the record of a task that had none.
-        readable, dirty = _git("status", "--porcelain", cwd=self.repo)
-        if readable != 0:
-            return self._infra(ident,
-                               f"git could not read the tree: {dirty[:200]}")
-        if dirty:
-            return self._infra(
-                ident, f"a deploy-only task ships main as committed and the "
-                       f"tree is not clean; nothing was deployed: "
-                       f"{dirty.strip()[:300]}")
-        sha = head_sha(self.repo)
+        sha, wrong = self._main_as_committed()
+        if wrong:
+            return self._infra(ident, wrong)
         log("DEPLOY_ONLY", task=ident, at=sha[:12],
             title=task["title"][:60])
         # The suite and the deploy together outlast a lease that was taken
@@ -638,6 +668,21 @@ class Driver:
             log("CONTESTED", task=ident, why="the suite fails on main")
             return State.CONTESTED
         ran.append("tests")
+
+        # Asked again, now that the suite has finished, and this time the
+        # commit has to be the one the suite ran against. A repository that
+        # moved under the task is requeued rather than deployed: re-running
+        # this task tests and ships whatever `main` has become, which is the
+        # remedy, and nothing untested reaches the host in the meantime.
+        still, moved = self._main_as_committed()
+        if moved:
+            return self._infra(ident, f"the repository moved while the suite "
+                                      f"ran: {moved}")
+        if still != sha:
+            return self._infra(
+                ident, f"main was {sha[:12]} when the suite ran and is "
+                       f"{still[:12]} now; what was tested is not what would "
+                       f"be deployed, so nothing was deployed")
 
         self.q.move(ident, State.DEPLOYING, reason=whole.detail, head_sha=sha)
         log("DEPLOYING", task=ident, at=sha[:12])

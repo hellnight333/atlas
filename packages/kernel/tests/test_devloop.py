@@ -2101,6 +2101,88 @@ def test_a_deploy_only_task_whose_suite_fails_deploys_nothing(tmp_path,
                for t in q.transitions(ident))
 
 
+def test_a_deploy_only_task_never_ships_a_commit_the_suite_never_saw(
+        tmp_path, monkeypatch):
+    """The window between the re-check and the deploy, and what fits through it.
+
+    The suite takes up to forty minutes and this repository is shared with
+    whoever else is working in it, so `main` can gain a commit while it runs.
+    The deploy script copies the working tree and re-checks only the branch and
+    the tree — never the commit — so that newer commit would be rsynced to the
+    live host having been tested by nobody, and this row would record the sha
+    that *was* tested. The commit is therefore read back immediately before the
+    deploy and has to be the one the suite ran against.
+    """
+    import subprocess
+
+    drv, repo, q, ident, task = _deploy_only_repo(tmp_path, monkeypatch)
+    tested = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()
+    calls: list = []
+    _recording(monkeypatch, drv, calls, deployed=None, in_production=None)
+
+    def somebody_else_lands(**kwargs):
+        """A green suite, and `main` moving under it while it runs."""
+        calls.append(("tests", kwargs))
+        (repo / "src" / "later.py").write_text("landed while the suite ran\n")
+        for argv in (["git", "add", "-A"], ["git", "commit", "-qm", "theirs"]):
+            subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+        return gates.Gate("tests", True, "412 passed")
+
+    monkeypatch.setattr(drv.gates, "tests", somebody_else_lands)
+
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    assert driver.run_task(task) == State.FAILED
+    assert [name for name, _ in calls] == ["tests"], \
+        "a commit the suite never ran against was deployed"
+
+    landed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()
+    assert landed != tested, "the test did not actually move main"
+    row = q.get(ident)
+    assert row["state"] == State.QUEUED, "the task was not requeued"
+    assert driver.infra_failures == 1, \
+        "a repository that moved under the task was not counted against the brake"
+    assert not row["head_sha"], \
+        "the row names a deployed commit, and nothing was deployed"
+    assert any(tested[:12] in t["reason"] and landed[:12] in t["reason"]
+               for t in q.transitions(ident)), \
+        "the refusal names neither the commit that was tested nor the one now " \
+        "on main"
+
+
+def test_a_deploy_only_task_whose_tree_goes_dirty_mid_suite_deploys_nothing(
+        tmp_path, monkeypatch):
+    """The other half of the same window.
+
+    An edit that appears while the suite runs makes the tree that would be
+    copied something nothing gated. The deploy script would refuse it, but its
+    refusal is an exit code and would be recorded as the *deploy* failing —
+    a verdict about the work, when what happened is that the machine changed.
+    Asking again before the deploy requeues it instead.
+    """
+    drv, repo, q, ident, task = _deploy_only_repo(tmp_path, monkeypatch)
+    calls: list = []
+    _recording(monkeypatch, drv, calls, deployed=None, in_production=None)
+
+    def edited_by_hand(**kwargs):
+        calls.append(("tests", kwargs))
+        (repo / "src" / "app.py").write_text("edited while the suite ran\n")
+        return gates.Gate("tests", True, "412 passed")
+
+    monkeypatch.setattr(drv.gates, "tests", edited_by_hand)
+
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    assert driver.run_task(task) == State.FAILED
+    assert [name for name, _ in calls] == ["tests"]
+    assert q.get(ident)["state"] == State.QUEUED
+    assert driver.infra_failures == 1
+    assert any("moved while the suite ran" in t["reason"]
+               and "not clean" in t["reason"] and "src/app.py" in t["reason"]
+               for t in q.transitions(ident)), \
+        "the refusal does not say the tree changed under the task"
+
+
 def test_a_deploy_only_task_that_declared_a_probe_and_gave_none_is_contested(
         tmp_path, monkeypatch):
     """Declared but not supplied is a defect in the task, never a pass."""
