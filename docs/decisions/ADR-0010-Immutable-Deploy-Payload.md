@@ -355,3 +355,22 @@ verdict. Empty until then._
   not name; the gates.py finding is independent and narrow. Not re-enqueued: the
   route is the owner's decision. Nothing deployed.
 
+- **DQ-013 — shipping-path failure policy (owner, 2026-09-02).** Decided after the T3
+  attempt-1 report, and governing every later `_ship` change: (1) the DevLoop stays a
+  single-driver, serial executor — no repository lock is introduced merely against a
+  hypothetical second driver (it would not protect against a human edit either);
+  (2) the shipping path never automatically runs `git reset --hard` or an equivalent
+  destructive reset against `main` to recover from a failed squash merge or squash
+  commit; (3) preservation of unknown work outranks automatic loop liveness — when the
+  post-failure repository state cannot be *proven* to contain only DevLoop-generated
+  squash state, nothing is destroyed: the state is preserved, the task moves to
+  BLOCKED, and explicit evidence says what remains and why a person is required;
+  (4) a non-destructive cleanup proven safe and limited strictly to the squash state
+  may be used, otherwise BLOCKED is the correct terminal outcome; (5) the successor
+  also closes the independent parser defect — duplicate authoritative marker fields
+  (`sha`, `state`, any repeated key) fail closed rather than last-value-wins;
+  (6) DQ-012 run 2/15, recorded as a chained design escalation on one
+  failed-shipping path, not the class-level pattern of run 1. T3 is not abandoned; a
+  successor with a structured diagnosis and the same three-path contract follows once
+  the owner has reviewed its brief.
+
