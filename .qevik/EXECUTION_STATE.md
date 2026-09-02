@@ -169,10 +169,10 @@ end; a session finding it stale should reconcile before trusting it.
 <!-- devloop:begin -->
 ## Development loop
 
-_Written by `infra/devloop/driver.py` at 2026-09-02T06:16:21+00:00. The queue is the source of truth; this is its projection._
+_Written by `infra/devloop/driver.py` at 2026-09-02T07:19:09+00:00. The queue is the source of truth; this is its projection._
 
-- **10 done** · 0 in flight · 4 queued
-- **1 waiting on a person** · 8 contested · 5 blocked
+- **10 done** · 0 in flight · 3 queued
+- **1 waiting on a person** · 9 contested · 5 blocked
 
 ### Waiting on you
 
@@ -188,6 +188,7 @@ _Written by `infra/devloop/driver.py` at 2026-09-02T06:16:21+00:00. The queue is
 - **Deploy what main already carries when a deploy task has no diff** — 4 finding(s) after 3 round(s).
 - **Deploy what main already carries when a deploy task has no diff (second attempt)** — 3 finding(s) after 3 round(s).
 - **Land the deploy-only path without a requeue** — 3 finding(s) after 3 round(s).
+- **Do not let a failing test gate spend a review round** — 4 finding(s) after 3 round(s).
 
 _Reviewer negative control: detected the planted defect (2026-08-31T21:29:57)._
 

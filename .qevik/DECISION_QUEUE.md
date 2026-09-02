@@ -267,3 +267,16 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-8214147cda91`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-2825280a3415 -->
+## Contested — Do not let a failing test gate spend a review round
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/devloop/driver.py:382-386` [blocking] Keep final failed fixes off main
+  - `infra/devloop/driver.py:333-334` [major] Preserve cap counters when resuming a task
+  - `infra/devloop/driver.py:360-362` [blocking] Enforce the persisted attempt cap before running gates
+  - `infra/devloop/driver.py:425-428` [major] Persist the actual review count on attempt exhaustion
+
+- **Driver task:** `t-2825280a3415`
+- **Review unit:** `..`
