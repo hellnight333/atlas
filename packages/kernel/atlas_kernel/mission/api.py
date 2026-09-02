@@ -853,6 +853,90 @@ def build_router() -> APIRouter:
                      "being down."),
         }
 
+    @router.get("/outreach-unreviewed")
+    def outreach_unreviewed(request: Request, limit: int = 100,
+                            tenant: TenantId = Depends(current_tenant),
+                            _: User = Depends(requires(Scope.READ))) -> dict:
+        """Drafted messages nobody has decided about, and why each one is there.
+
+        **Declared above `/{mission_id}`**, like every sibling here. A path
+        parameter matches a literal segment happily, so this route registered
+        after it would be served as a mission whose id is the string
+        `outreach-unreviewed` — a 404 that reads as "nothing is waiting", which
+        is the one answer a queue of undecided things must never give by
+        accident. This repository has shipped that bug once already.
+
+        `GET` and `READ`, and that is the design rather than a first
+        instalment. Seeing why a draft is undecided is not deciding it, and a
+        list of undecided messages is the most tempting place in this system to
+        grow a control that decides all of them at once. Approving stays where
+        it is — `/{mission_id}/outreach/approve`, one message, bound to the
+        fingerprint of the words a person actually read — and nothing on this
+        route creates, changes or removes a record.
+
+        This handler is only the join between two halves that were each written
+        to know nothing of the other. `unreviewed_outreach_records` reads the
+        records and scopes them to this tenant and derives nothing;
+        `outreach.unreviewed` derives the reasons and opens no database. The
+        bundle is handed straight over as that module's own keyword arguments
+        rather than unpacked and rebuilt here, so there is no third vocabulary
+        for the two halves to disagree in — and in particular `messages` is
+        **not** narrowed to `only`, because whether a draft was replaced is a
+        fact about the messages around it and narrowing it here would quietly
+        turn a superseded draft back into current words.
+
+        The wording of every reason comes from the kernel, already written.
+        Nothing downstream re-derives one: two answers to "why has nobody
+        decided this" is two answers, and the one on screen would be the
+        untested one.
+
+        `now` and `channels` are left to the reader's own defaults on purpose.
+        One is a clock and the other is the registry of send paths; neither is
+        a record, so neither is something the repository read hands over.
+
+        A full window says so. The read takes the oldest `limit` candidates, so
+        a caller handed exactly that many has been handed a page and not a
+        total — and a truncation nobody is told about is how "14 drafts" comes
+        to mean "the 14 we happened to look at".
+
+        **A window of nothing is refused rather than answered.** `limit=0`, and
+        any negative the read treats the same way, asks for no candidates and
+        gets none — and this handler would then serve an empty `unreviewed`
+        list, a zero count, and a note saying a message somebody has decided
+        about is not in it. No truncation applies to a page nobody asked to
+        fill, so nothing on that response says the window was shut, and the
+        console draws it as every message on file having been decided about.
+        That is the same false all-clear as the 404 above, reached through a
+        query parameter instead of a route table, so it is a refusal and not an
+        empty page. Above zero the answer is honest at any size: one row and a
+        note saying there may be more is a page, and a page says so.
+        """
+        from ..outreach import unreviewed as reader
+
+        window = int(limit)
+        if window < 1:
+            raise HTTPException(
+                status_code=400,
+                detail=("limit must be at least 1: a window of nothing cannot "
+                        "say whether anything is waiting, and an empty list "
+                        "here reads as every draft having been decided about"))
+        records = _opportunities(request).unreviewed_outreach_records(
+            limit=window, tenant=tenant)
+        rows = reader.from_records(**records)
+        return {
+            "unreviewed": [row.summary() for row in rows],
+            "counts": reader.counts(rows),
+            "limit": window,
+            "note": ("Listing a draft is not asking anybody about it. Nothing "
+                     "here approves, sends or removes anything, and a message "
+                     "somebody has already decided about is not in this list. "
+                     "Scoped to this account's tenant, so it is what is "
+                     "waiting on you rather than everything on file."
+                     + (f" These are the oldest {window}; there may be more "
+                        "behind the limit."
+                        if len(rows) >= window else "")),
+        }
+
     @router.get("/{mission_id}")
     def detail(mission_id: str, request: Request,
                tenant: TenantId = Depends(current_tenant),
