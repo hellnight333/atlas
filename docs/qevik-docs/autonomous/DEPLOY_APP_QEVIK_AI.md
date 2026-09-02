@@ -70,24 +70,97 @@ it is caught. Fingerprinting later, after the copies and the restarts, would
 abort the run with production already written and the rollback path unreached;
 both refusals are exit 1 and write nothing.
 
+**The host measures itself.** Before the host is touched, a manifest is built
+from the export: one `<sha256>  <absolute host path>` line per shipped regular
+file — the kernel under `/opt/qevik/atlas/packages/kernel/atlas_kernel/`,
+`infra/` under `/opt/qevik/atlas/infra/`, the console under
+`/srv/qevik-control/`, and each `infra/qevik-*.service` a second time under
+`/etc/systemd/system/` — sorted with `LC_ALL=C sort`. After the last copy and
+`systemctl daemon-reload`, the manifest is sent to
+`/opt/qevik/atlas/DEPLOYED_MANIFEST.new` and the host runs `sha256sum --check
+--quiet --strict` on it itself. **Any** non-zero exit — a mismatch, a missing
+file, a missing tool, an unsupported flag — prints `FAILED: the bytes on the
+host do not match <sha>` and rolls back: a check that could not run is a
+refusal, never a pass. On success the file is promoted to `DEPLOYED_MANIFEST`
+and the script prints `host verified: <n> files match <sha>`.
+
+**The provenance marker** `/opt/qevik/atlas/DEPLOYED_SHA` is a few `key=value`
+lines, written atomically (`DEPLOYED_SHA.tmp`, then `mv`). It describes **bytes
+on disk, never health**, and it never carries anything from `atlas.env` or the
+environment.
+
+| `state=` | Written when | What it means |
+|---|---|---|
+| `installing` | after the rollback copies, before the first transfer | the disk is about to hold a mixture; `attempted_sha`, `previous_sha` and `started_at` say what of. A deploy killed mid-copy leaves this behind, which is the truth |
+| `installed` | after the manifest check passed | the host holds `sha`; `installed_at` and `manifest_sha256` record the measurement. **The only state that means the host holds that commit** |
+| `rolled-back` | by a rollback that restored everything and found no earlier marker | `sha=unknown`, `attempted_sha=<the deploy that failed>` |
+| `rollback-incomplete` | by a rollback that could not restore something | `restored=` and `not_restored=` name the targets; a person has to look |
+
+A rollback that restored everything and *did* find an earlier marker puts that
+marker back verbatim, so the host goes on saying exactly what it said before.
+A later health or fingerprint failure does not make an `installed` marker wrong
+— the bytes really are there — until the rollback rewrites it.
+
+**Rollback.** Before the first transfer the script keeps every target it writes:
+the kernel, `infra/`, the console, the installed `qevik-*.service` files, and
+the previous marker and manifest. A copy that fails is a refusal (`REFUSED:
+could not keep the current tree`) *before* anything is sent. From that point
+every failure — a transfer that exhausted its retries, the schema step, a chown,
+the unit install, `daemon-reload`, the manifest check, the health poll, the
+worker fingerprint poll — runs one rollback, which restores each target only
+when the copy to replace it exists, re-measures the restored bytes against the
+previous manifest, writes the marker **before** restarting anything, and then
+restarts exactly what a deploy restarts. It ends with `ROLLED BACK: <targets>`
+(exit 1) or `ROLLBACK INCOMPLETE: <not restored>` (exit 4) and never reports a
+failed restore as success. Restoring the units replaces the whole set, so a unit
+this deploy added that the saved set did not contain is removed; nothing is
+enabled or disabled.
+
 **Exit codes**, which the loop and a person both read:
 
 | Code | Meaning |
 |---|---|
 | 0 | deployed and verified, or rehearsed |
-| 1 | a preflight refusal, or a deploy that failed and was rolled back |
+| 1 | a preflight refusal, or a deploy that failed and was fully rolled back |
 | 2 | refused before any host contact — arguments, the sha, the test seams |
 | 3 | the export did not match the commit |
+| 4 | rollback incomplete — something could not be put back, or a service did not restart |
+| 5 | a rehearsal found the host not ready |
 
-Nothing is written to the host before the access check, and every refusal above
-happens before it.
+Nothing is written to the host before the access check, and every refusal for
+codes 2 and 3 happens before it.
+
+**After `ROLLBACK INCOMPLETE` (exit 4)** production is in a state the script
+could not finish undoing, so this is a person's job and not the loop's. Read
+`/opt/qevik/atlas/DEPLOYED_SHA` first — it is accurate: `not_restored=` names
+what is still wrong, and the copies are still on the host at
+`/opt/qevik/rollback`, `-infra`, `-console`, `-units` and `-provenance`. Put the
+named targets back from those copies by hand, run `sha256sum --check
+/opt/qevik/rollback-provenance/DEPLOYED_MANIFEST`, restore that directory's
+`DEPLOYED_SHA`, and restart `qevik-control`, `qevik-api` and the workers. If
+`not_restored` is empty the bytes are fine and only a restart failed — the
+marker already says what is on disk.
+
+**The evidence rule** (ADR-0010): a claim that the host runs `S` is confirmed
+only when the marker names `S` with `state=installed`, **and** the manifest
+verification for that deploy passed, **and** the workers report the fingerprint
+of `S`'s `infra/mission_worker.py`. Any one missing is not verified — never
+assumed. A successful run prints all three — `host verified: <n> files match
+<sha>`, the workers' fingerprint line, and finally `deployed sha=<S>` — and the
+marker it left behind is the durable copy of the first. A rehearsal that passed
+says the payload *could* be built and transferred; it says nothing about what
+the host runs.
 
 **`--rehearse`** builds and verifies the same payload, runs every transfer a
 real deploy would run as `rsync -n -i` against the real host, prints the
-itemised changes and a count per target, reads three read-only host facts
-(the provenance marker, `systemctl is-active`, whether `sha256sum` exists) and
-writes nothing — no rollback copy, no schema, no chown, no restart. It ends
-with `REHEARSED sha=… kernel=… console=… infra=… units=…; nothing was written`.
+itemised changes and a count per target, prints the manifest's file count and
+digest (`manifest: <n> files, sha256 <digest>`), reads three read-only host
+facts (the provenance marker, `systemctl is-active`, whether `sha256sum`
+exists), and proves the host-side check itself on a known input — printing
+`host sha256sum --check: works`, or `DOES NOT WORK` followed by `NOT READY: a
+real deploy would refuse at the host check` and exit 5. It writes nothing — no
+rollback copy, no marker, no schema, no chown, no restart — and ends with
+`REHEARSED sha=… kernel=… console=… infra=… units=…; nothing was written`.
 Since this host has no staging twin, a changed deploy path is rehearsed before
 it is run.
 

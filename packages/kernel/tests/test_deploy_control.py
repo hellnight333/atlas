@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,98 @@ def fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
+# --- provenance: the marker and the manifest ---------------------------------
+
+# The four areas a deploy writes and a rollback restores, as snapshot() keys.
+TARGET_PREFIXES = ("opt/qevik/atlas/packages/", "opt/qevik/atlas/infra",
+                   "srv/qevik-control", "etc/systemd/system")
+
+
+def read_marker(world: World) -> dict[str, str]:
+    text = (world.app / "DEPLOYED_SHA").read_text(encoding="utf-8")
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            out[key] = value
+    return out
+
+
+def targets_only(snap: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in snap.items() if k.startswith(TARGET_PREFIXES)}
+
+
+def _commit_blobs(world: World, sha: str) -> dict[str, bytes]:
+    """Every shipped regular file in a commit, as the export would hold it."""
+    env = dict(os.environ)
+    env.update({"HOME": str(world.home), "XDG_CONFIG_HOME": str(world.home),
+                "GIT_CONFIG_NOSYSTEM": "1"})
+    listing = subprocess.run(
+        ["git", "-C", str(world.repo), "-c", "core.quotepath=false",
+         "ls-tree", "-r", sha],
+        check=True, capture_output=True, text=True, env=env).stdout
+    blobs: dict[str, bytes] = {}
+    for line in listing.splitlines():
+        meta, _, name = line.partition("\t")
+        if meta.split()[0] == "120000":  # a symlink is not a regular file
+            continue
+        if not name.startswith(("packages/kernel/atlas_kernel/", "infra/",
+                                "apps/control/src/")):
+            continue
+        blobs[name] = subprocess.run(
+            ["git", "-C", str(world.repo), "show", f"{sha}:{name}"],
+            check=True, capture_output=True, env=env).stdout
+    return blobs
+
+
+def expected_manifest(world: World, sha: str) -> list[str]:
+    """The manifest the script must build: the commit's files at host paths."""
+    lines = []
+    for name, blob in _commit_blobs(world, sha).items():
+        digest = hashlib.sha256(blob).hexdigest()
+        if name.startswith("apps/control/src/"):
+            host = f"{world.console}/{name[len('apps/control/src/'):]}"
+        else:
+            host = f"{world.app}/{name}"
+        lines.append(f"{digest}  {host}")
+        if name.startswith("infra/qevik-") and name.endswith(".service"):
+            lines.append(f"{digest}  {world.units}/{name[len('infra/'):]}")
+    return sorted(lines)
+
+
+def manifest_digest(lines: list[str]) -> str:
+    return hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()
+
+
+def host_manifest(world: World) -> list[str]:
+    """A manifest of whatever the fake host holds right now."""
+    lines = []
+    for root in (world.app / "packages/kernel/atlas_kernel", world.app / "infra",
+                 world.console):
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                lines.append(
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}")
+    for path in sorted(world.units.glob("qevik-*.service")):
+        lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}")
+    return sorted(lines)
+
+
+def write_previous_provenance(world: World, *, manifest: bool = True) -> str:
+    """Give the fake host the marker (and manifest) of an earlier deploy."""
+    digest = "0" * 64
+    if manifest:
+        lines = host_manifest(world)
+        _write(world.app / "DEPLOYED_MANIFEST", "\n".join(lines) + "\n")
+        digest = manifest_digest(lines)
+    text = (f"sha={'1' * 40}\n"
+            "installed_at=2026-01-01T00:00:00Z\n"
+            f"manifest_sha256={digest}\n"
+            "state=installed\n")
+    _write(world.app / "DEPLOYED_SHA", text)
+    return text
+
+
 def _write_shims(shims: Path, ctl: Path) -> None:
     real_rsync = _TOOLS["rsync"]
     common = f'CTL="{ctl}"\nmkdir -p "$CTL"\n'
@@ -165,7 +258,9 @@ while [ $# -gt 0 ]; do
 done
 shift
 CMD="$*"
-printf 'ssh %s\\n' "$CMD" >> "$CTL/log"
+# One log line per remote command even when the command is a small script: the
+# log is read line by line, and a multi-line entry would look like several.
+printf 'ssh %s\\n' "$(printf '%s' "$CMD" | tr '\\n' ' ')" >> "$CTL/log"
 DROP=0
 [ -f "$CTL/ssh_drop" ] && DROP="$(cat "$CTL/ssh_drop")"
 CALLS=0
@@ -203,7 +298,34 @@ case "$LAST" in
   *:*) ARGS[$LAST_IDX]="${{LAST#*:}}" ;;
 esac
 if [ -x "$CTL/hook" ]; then "$CTL/hook"; fi
+# A transfer that never succeeds, so `rsync_` spends its whole retry budget.
+if [ -f "$CTL/rsync_fail" ]; then
+  echo "rsync: refused by the test" >&2
+  exit 1
+fi
+# `after_hook` runs once the bytes have landed, which is the only place a test
+# can corrupt what the host holds *after* a copy reported success.
+if [ -x "$CTL/after_hook" ]; then
+  "{real_rsync}" "${{ARGS[@]}}"; RC=$?
+  "$CTL/after_hook"
+  exit $RC
+fi
 exec "{real_rsync}" "${{ARGS[@]}}"
+""", executable=True)
+
+    _write(shims / "cp", f"""#!/usr/bin/env bash
+# The real cp, except when the test names a destination it must fail on. This is
+# how "a rollback copy could not be taken" and "a restore could not be made" are
+# exercised without making the whole host read-only.
+{common}
+printf 'cp %s\\n' "$*" >> "$CTL/log"
+if [ -f "$CTL/fail_cp_dest" ]; then
+  MATCH="$(cat "$CTL/fail_cp_dest")"
+  DEST=""
+  for a in "$@"; do DEST="$a"; done
+  case "$DEST" in *"$MATCH"*) echo "cp: refused by the test" >&2; exit 1 ;; esac
+fi
+exec "{_TOOLS['cp']}" "$@"
 """, executable=True)
 
     _write(shims / "sleep", f"""#!/usr/bin/env bash
@@ -251,9 +373,13 @@ exit 0
 
     _write(shims / "sha256sum", f"""#!/usr/bin/env bash
 # macOS has /sbin/sha256sum too, so leaving the tool off PATH cannot prove the
-# absent case; this shim is the seam task 2 makes fail on demand.
+# absent case; this shim answers exactly as a host without the tool would.
 {common}
 printf 'sha256sum %s\\n' "$*" >> "$CTL/log"
+if [ -f "$CTL/no_sha256sum" ]; then
+  echo "sha256sum: command not found" >&2
+  exit 127
+fi
 exec shasum -a 256 "$@"
 """, executable=True)
 
@@ -275,7 +401,12 @@ def world(tmp_path: Path) -> World:
         _write(fake / rel, text)
     _write(fake / "opt/qevik/atlas.env", "")
     _write(fake / "opt/qevik/atlas/.venv/bin/python",
-           '#!/usr/bin/env bash\necho "schema applied"\n', executable=True)
+           f'#!/usr/bin/env bash\n'
+           f'if [ -f "{ctl}/schema_fail" ]; then\n'
+           f'  echo "init_db: refused by the test" >&2\n'
+           f'  exit 1\n'
+           f'fi\n'
+           f'echo "schema applied"\n', executable=True)
     _write(ctl / "health_code", "200")
 
     repo = tmp_path / "repo"
@@ -358,7 +489,7 @@ def test_ships_the_commit_not_the_working_tree(world: World):
     proc = run(world, env=env_for(world, sha=world.sha))
     out = both(proc)
     assert proc.returncode == 0, out
-    assert f"deployed {world.sha}" in out
+    assert f"deployed sha={world.sha}" in out
 
     kernel = world.app / "packages/kernel/atlas_kernel/qevik/app.py"
     assert kernel.read_text() == S_FILES["packages/kernel/atlas_kernel/qevik/app.py"]
@@ -616,7 +747,9 @@ def test_a_failing_remote_command_is_answered_once(world: World):
     assert "the schema could not be applied" in out
     attempts = [c for c in world.remote_commands() if "init_db" in c]
     assert len(attempts) == 1, f"the schema step ran {len(attempts)} time(s), not 1"
-    assert not [line for line in world.log() if line.startswith("systemctl restart")]
+    # The deploy stopped there: the rollback's own restarts are the only ones,
+    # and the worker registry was never asked anything.
+    assert not [c for c in world.remote_commands() if "SELECT DISTINCT" in c]
 
 
 # --- the worker registry poll ------------------------------------------------
@@ -678,4 +811,237 @@ def test_without_the_shims_the_script_reaches_nothing(world: World):
               (expired.stderr or b"").decode(errors="replace")
     assert "REFUSED: no SSH access" in out or "(link dropped" in out, out
     assert "deployed" not in out
+    assert snapshot(world.fake) == before
+
+
+# --- what the host says it holds ---------------------------------------------
+
+
+def test_the_marker_and_the_manifest_say_what_the_host_holds(world: World):
+    """(a) The host measured itself, and the marker records that measurement."""
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 0, out
+
+    expected = expected_manifest(world, world.sha)
+    body = (world.app / "DEPLOYED_MANIFEST").read_text()
+    assert body.splitlines() == expected
+    assert f"host verified: {len(expected)} files match {world.sha}" in out
+
+    # Not just the paths: every hash is the sha256 this test computes from the
+    # file the host now holds.
+    for line in body.splitlines():
+        digest, _, path = line.partition("  ")
+        assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest, path
+
+    marker = read_marker(world)
+    assert marker["sha"] == world.sha
+    assert marker["state"] == "installed"
+    datetime.strptime(marker["installed_at"], "%Y-%m-%dT%H:%M:%SZ")
+    assert marker["manifest_sha256"] == hashlib.sha256(
+        (world.app / "DEPLOYED_MANIFEST").read_bytes()).hexdigest()
+    assert not (world.app / "DEPLOYED_MANIFEST.new").exists()
+
+
+def test_bytes_that_do_not_match_the_commit_are_caught_on_the_host(world: World):
+    """(b) rsync exited zero and the bytes were still wrong."""
+    previous = write_previous_provenance(world, manifest=False)
+    # Corrupt the kernel *after* the copy reported success, and photograph the
+    # marker at that instant: the end state alone cannot show that the marker
+    # was never written `installed` before the bytes were verified.
+    _write(world.ctl / "after_hook", f"""#!/usr/bin/env bash
+CTL="{world.ctl}"
+if [ -f "$CTL/after_hook_ran" ]; then exit 0; fi
+printf 'ran\\n' > "$CTL/after_hook_ran"
+cat "{world.app}/DEPLOYED_SHA" > "$CTL/marker_at_hook"
+printf 'APP = %s\\n' "'CORRUPTED'" > "{world.app}/packages/kernel/atlas_kernel/qevik/app.py"
+""", executable=True)
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert (world.ctl / "after_hook_ran").exists(), "the corruption never ran"
+    assert f"the bytes on the host do not match {world.sha}" in out
+    assert "host verified" not in out
+    assert "ROLLED BACK:" in out
+
+    at_hook = dict(line.partition("=")[::2]
+                   for line in (world.ctl / "marker_at_hook").read_text().splitlines()
+                   if "=" in line)
+    assert at_hook["state"] == "installing", at_hook
+    assert at_hook["attempted_sha"] == world.sha, at_hook
+    assert at_hook["previous_sha"] == "1" * 40, at_hook
+    datetime.strptime(at_hook["started_at"], "%Y-%m-%dT%H:%M:%SZ")
+
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+    assert not (world.app / "DEPLOYED_MANIFEST.new").exists()
+    assert _rolled_back(world)
+
+
+def test_a_host_check_that_cannot_run_is_a_refusal_not_a_pass(world: World):
+    """(g) A missing tool must fail closed, exactly like a mismatch."""
+    previous = write_previous_provenance(world, manifest=False)
+    _write(world.ctl / "no_sha256sum", "1")
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert f"the bytes on the host do not match {world.sha}" in out
+    assert "host verified" not in out
+    assert "ROLLED BACK:" in out
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+    assert not (world.app / "DEPLOYED_MANIFEST.new").exists()
+    assert _rolled_back(world)
+
+
+# --- a rollback tells the truth ----------------------------------------------
+
+
+def _assert_previous_targets(world: World, before: dict[str, str]) -> None:
+    assert targets_only(snapshot(world.fake)) == targets_only(before)
+
+
+def test_a_health_failure_restores_every_target_and_the_provenance(world: World):
+    """(c) All four targets, the marker and the manifest go back."""
+    previous = write_previous_provenance(world)
+    previous_manifest = (world.app / "DEPLOYED_MANIFEST").read_text()
+    before = snapshot(world.fake)
+
+    # Without this the "unchanged" assertions could pass vacuously.
+    for host_rel, source in (
+        ("opt/qevik/atlas/packages/kernel/atlas_kernel/qevik/app.py",
+         "packages/kernel/atlas_kernel/qevik/app.py"),
+        ("opt/qevik/atlas/infra/mission_worker.py", "infra/mission_worker.py"),
+        ("srv/qevik-control/index.html", "apps/control/src/index.html"),
+        ("etc/systemd/system/qevik-worker.service", "infra/qevik-worker.service"),
+    ):
+        assert before[host_rel] != hashlib.sha256(S_FILES[source].encode()).hexdigest()
+
+    _write(world.ctl / "health_code", "500")
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "ROLLED BACK:" in out
+    assert "deployed" not in out
+    assert "the restored bytes match the previous manifest" in out
+
+    _assert_previous_targets(world, before)
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+    assert (world.app / "DEPLOYED_MANIFEST").read_text() == previous_manifest
+
+
+def test_a_rollback_with_no_previous_marker_says_unknown(world: World):
+    """(d) It cannot claim a sha nobody recorded."""
+    _write(world.ctl / "health_code", "500")
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+
+    marker = read_marker(world)
+    assert marker["sha"] == "unknown"
+    assert marker["state"] == "rolled-back"
+    assert marker["attempted_sha"] == world.sha
+    # Nothing recorded what was here, so no manifest may claim to.
+    assert not (world.app / "DEPLOYED_MANIFEST").exists()
+
+
+def test_a_failed_restore_is_never_reported_as_success(world: World):
+    """(e) The rollback could not put the kernel back, and says exactly that."""
+    write_previous_provenance(world, manifest=False)
+    _write(world.ctl / "health_code", "500")
+    _write(world.ctl / "fail_cp_dest",
+           str(world.app / "packages/kernel/atlas_kernel"))
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 4, out
+    assert "ROLLBACK INCOMPLETE" in out
+    assert "ROLLED BACK" not in out
+
+    marker = read_marker(world)
+    assert marker["state"] == "rollback-incomplete"
+    assert "kernel" in marker["not_restored"].split(",")
+    assert marker["attempted_sha"] == world.sha
+    assert "kernel" not in marker["restored"].split(",")
+
+
+def test_a_rollback_copy_that_fails_refuses_before_any_transfer(world: World):
+    """(f) A rollback that could not be kept is a refusal, not `echo kept`."""
+    previous = write_previous_provenance(world, manifest=False)
+    before = snapshot(world.fake)
+    _write(world.ctl / "fail_cp_dest", str(world.fake / "opt/qevik/rollback"))
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "could not keep the current tree" in out
+    assert not [line for line in world.log() if line.startswith("rsync ")]
+    assert snapshot(world.fake) == before
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+
+
+def test_a_schema_failure_rolls_back(world: World):
+    """(h) The step between the copies and the restart is covered too."""
+    previous = write_previous_provenance(world, manifest=False)
+    before = snapshot(world.fake)
+    _write(world.ctl / "schema_fail", "1")
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "the schema could not be applied" in out
+    assert "ROLLED BACK:" in out
+    _assert_previous_targets(world, before)
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+
+
+def test_a_deploy_that_cannot_copy_never_leaves_the_marker_installing(world: World):
+    """(i) The marker admits a mixture only while there might be one."""
+    _write(world.ctl / "rsync_fail", "1")
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+
+    attempts = [line for line in world.log() if line.startswith("rsync ")]
+    assert len(attempts) == 12, f"rsync_ tried {len(attempts)} time(s), not 12"
+    text = (world.app / "DEPLOYED_SHA").read_text()
+    assert "state=installing" not in text, text
+    marker = read_marker(world)
+    assert marker["state"] == "rolled-back"
+    assert marker["sha"] == "unknown"
+
+
+def test_a_registry_read_that_always_fails_reaches_the_rollback(world: World):
+    """(j) An unguarded `$(ssh_ …)` would exit here silently, mid-deploy."""
+    _write(world.ctl / "ssh_fail_match", "psql")
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "could not be read" in out
+    assert "ROLLED BACK" in out
+    assert _rolled_back(world)
+
+
+# --- rehearse proves the host-side check --------------------------------------
+
+
+def test_rehearse_reports_the_manifest_and_proves_the_host_check(world: World):
+    """(k) Still writes nothing, and refuses a host the deploy would refuse."""
+    before = snapshot(world.fake)
+    lines = expected_manifest(world, world.sha)
+
+    proc = run(world, "--rehearse", env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 0, out
+    assert f"manifest: {len(lines)} files, sha256 {manifest_digest(lines)}" in out
+    assert "host sha256sum --check: works" in out
+    assert snapshot(world.fake) == before
+
+    _write(world.ctl / "no_sha256sum", "1")
+    proc = run(world, "--rehearse", env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 5, out
+    assert "host sha256sum --check: DOES NOT WORK" in out
+    assert "NOT READY: a real deploy would refuse at the host check" in out
+    assert "REHEARSED" not in out
     assert snapshot(world.fake) == before
