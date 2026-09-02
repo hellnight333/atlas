@@ -18,6 +18,11 @@ original.
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -404,6 +409,22 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "the console does not show businesses that asked about themselves")
     assert source.count("${inboundBlock}") == 2, (
         "inbound is not rendered on both branches of the opportunities view")
+    # …and it is one binding, at function scope. Counting the uses says nothing
+    # about where the declaration lives: `const inboundBlock` sat inside
+    # `if (!found) {` while both branches interpolated it, so the success path —
+    # the normal production case — threw `ReferenceError: inboundBlock is not
+    # defined` and the page rendered as an error card.
+    #
+    # This is a guard, not the proof. The proof is
+    # `TestTheOpportunitiesViewRuns`, which executes the real file under node.
+    view = _opportunities_source(source)
+    assert view.count("const inboundBlock") == 1, (
+        "`inboundBlock` is declared more than once in the opportunities view")
+    assert (view.index("const inboundBlock") < view.index("if (!found)")), (
+        "`const inboundBlock` is declared after — or inside — the `if (!found)` "
+        "branch, so the success path reads an identifier that does not exist")
+    assert (view.index("await Promise.all([") < view.index("const inboundBlock")), (
+        "`inboundBlock` is built before the reads it is built from")
     # An allowance has three states and the console draws three. `.catch(() =>
     # null)` collapsed "this tenant is not on a plan" into "nothing to show",
     # so the card vanished and an operator whose metered work was about to be
@@ -823,6 +844,352 @@ def test_the_live_view_never_makes_the_page_load_bearing() -> None:
     live = source[source.index("const live = {"):source.index("document.addEventListener('visibilitychange'")]
     for forbidden in ("/approve", "/decide", "/plan", "method: 'POST'"):
         assert forbidden not in live, forbidden
+
+
+# ================================ the opportunities view actually runs
+
+# Every assertion above about the console reads its *text*. That is how
+# `ReferenceError: inboundBlock is not defined` reached production on the page an
+# operator opens to approve work: `const inboundBlock` was declared inside
+# `if (!found) {` and interpolated in both branches, so the count of uses was 2,
+# every structural assertion passed, and the view threw on the success path —
+# which is every normal load. Text checks cannot see that. Running it can.
+#
+# Mechanism (i) of the two allowed: each definition the view needs is extracted
+# **verbatim by name** from the real `apps/control/src/index.html`, concatenated,
+# and run under node with stubs for `API` and `document`. Chosen over loading the
+# whole `<script>` into a `node:vm` because the boot tail of that script
+# (`document.addEventListener`, `$('login-form').addEventListener`, `start()`,
+# the visibility poller) would have to be stubbed well enough not to fire, and a
+# stub that is a little too permissive turns a page that never rendered into a
+# passing test. Extraction fails loudly instead: a renamed or moved helper is a
+# `pytest.fail` naming it, never a silent pass. The code under test is the file's
+# own text — there is no copy of `opportunities()` in this file.
+
+#: Where a definition ends: the next thing at column 0 that starts one, or the
+#: comment block that introduces it.
+_NEXT_DEFINITION = re.compile(
+    r"(?m)^(?:(?:const|let|var|function|async function)[ \t]|/\*)")
+
+#: In dependency order, which is also the order they appear in the file.
+_VIEW_NEEDS = ("esc", "when", "TONE", "pill", "cost", "opportunityCard",
+               "opportunities")
+
+_OPPORTUNITIES_PATH = "/api/discovery/opportunities?limit=25"
+_INBOUND_PATH = "/api/missions/inbound"
+
+#: One full row of each shape, so every branch of the two templates is reached.
+_FOUND = {
+    "opportunities": [{
+        "id": "opp-1",
+        "kind": "NO_CONTACT_ROUTE",
+        "source": "public audit",
+        "detected_at": "2026-09-01T09:00:00+00:00",
+        "score": 0.82,
+        "needs_approval": True,
+        "business_id": "biz-1",
+        "detail": {
+            "observations": [{"statement": "The site has no contact page"}],
+            "inferences": [{"statement": "Enquiries are being lost",
+                            "confidence": 0.71,
+                            "would_be_wrong_if": "a form sits behind a script"}],
+            "actions": [{"statement": "Publish a contact page"}],
+        },
+        "value": {"status": "ESTIMATED", "amount": 1200},
+        "evidence_fingerprints": ["a1b2c3d4e5f60718"],
+    }],
+    "counts": {"total": 1, "needing_approval": 1},
+    "note": "One open opportunity.",
+}
+
+_INBOUND = {
+    "inbound": [{
+        "host": "shop.example.com",
+        "at": "2026-09-02T08:00:00+00:00",
+        "source": "health check link",
+        "asked": 1,
+        "already_known": False,
+        "observations": 4,
+        "business_id": "biz-2",
+    }],
+    "counts": {"total": 1, "new_to_qevik": 1, "asked_more_than_once": 0},
+}
+
+
+def _console_source() -> str:
+    from atlas_kernel.qevik.app import CONSOLE
+
+    return (CONSOLE / "index.html").read_text(encoding="utf-8")
+
+
+def _script_body(source: str) -> str:
+    """The one `<script>` block, which is the whole console."""
+    try:
+        opened = source.index("<script>") + len("<script>")
+        closed = source.index("</script>", opened)
+    except ValueError:  # pragma: no cover - the console stopped being one file
+        pytest.fail("the console has no <script> body to read")
+    return source[opened:closed]
+
+
+def _definition(script: str, name: str) -> str:
+    """One top-level definition, verbatim, by name."""
+    start = re.search(
+        rf"(?m)^(?:const|let|var|function|async function)[ \t]+{re.escape(name)}\b",
+        script)
+    if start is None:
+        pytest.fail(f"the console has no top-level definition of {name!r}; it "
+                    "was renamed or moved, and this test can no longer run the "
+                    "opportunities view against the real file")
+    end = _NEXT_DEFINITION.search(script, start.end())
+    return script[start.start():end.start() if end else len(script)]
+
+
+def _opportunities_source(source: str) -> str:
+    """The text of `async function opportunities()`, for the structural guard."""
+    return _definition(_script_body(source), "opportunities")
+
+
+def _declaration_back_inside_the_branch(script: str) -> str:
+    """The pre-fix shape, reconstructed on a copy. Never written to disk.
+
+    The negative control's whole value is that it reproduces the exact defect,
+    so if the statement it moves is no longer there to move, the control is
+    meaningless and this fails rather than passing quietly.
+    """
+    marker = "const inboundBlock"
+    if marker not in script:
+        pytest.fail("the negative control cannot find `const inboundBlock` to "
+                    "move back inside the branch; the view's structure changed")
+    start = script.rindex("\n", 0, script.index(marker)) + 1
+    tail = "following the link in a health check.</p>`;"
+    if tail not in script[start:]:
+        pytest.fail("the negative control cannot find the end of the "
+                    "`inboundBlock` statement; the view's structure changed")
+    end = script.index(tail, start) + len(tail)
+    statement = script[start:end]
+    rest = script[end:]
+    branch = "  if (!found) {"
+    if branch not in rest:
+        pytest.fail("the negative control cannot find `if (!found) {` after the "
+                    "`inboundBlock` statement; the view's structure changed")
+    at = rest.index(branch) + len(branch)
+    return script[:start] + rest[:at] + "\n  " + statement.lstrip() + rest[at:]
+
+
+def _node() -> str:
+    """The node binary — or the outcome that fits where this run is happening.
+
+    Node is not a dependency of `.[dev]` and nothing in the kernel job of
+    `.github/workflows/ci.yml` installs it, so failing outright here would break
+    the default kernel suite on a Python-only machine. `[tool.pytest.ini_options]`
+    promises the opposite, and a suite that cannot run on a laptop is a suite
+    developers stop running.
+
+    Skipping everywhere is the other wrong answer: this class is the *proof*
+    that the view runs, and a merge gate that quietly stopped executing it is
+    the exact shape of the failure this file was written about.
+
+    So the two cases are told apart. On CI a missing node fails and names the
+    step to add, because there it means the gate stopped proving anything. On a
+    developer's machine it skips, and the structural guard in
+    `test_the_console_carries_no_secret_and_no_business_logic` — which reads the
+    text and needs nothing installed — still holds `const inboundBlock` at
+    function scope on every single run.
+    """
+    found = shutil.which("node")
+    if found is not None:
+        return found
+    if os.environ.get("CI"):
+        pytest.fail(
+            "node is missing on CI, so the opportunities view is no longer "
+            "executed by the suite that gates a merge. Add a Node step to the "
+            "kernel job in .github/workflows/ci.yml.")
+    pytest.skip(
+        "node is not installed, so the opportunities view cannot be executed "
+        "here. Install node to run the proof; the structural guard in "
+        "test_the_console_carries_no_secret_and_no_business_logic runs either "
+        "way.")
+
+
+def _run_the_view(script: str, resolve: dict, reject: list, tmp_path) -> dict:
+    """Run `opportunities()` under node against a stubbed API.
+
+    `API.get` answers from a table keyed by the exact path. An unstubbed path
+    rejects, so a test cannot pass by reaching a read it never meant to.
+    """
+    node = _node()
+    definitions = "\n".join(_definition(script, name) for name in _VIEW_NEEDS)
+    result_path = tmp_path / "result.json"
+    harness = (
+        "'use strict';\n"
+        "const fs = require('fs');\n"
+        "const RESULT = " + json.dumps(str(result_path)) + ";\n"
+        "const CASE = " + json.dumps({"resolve": resolve, "reject": reject}) + ";\n"
+        "globalThis.document = {\n"
+        "  querySelectorAll: () => [],\n"
+        "  querySelector: () => null,\n"
+        "  getElementById: () => null,\n"
+        "};\n"
+        "globalThis.window = { addEventListener: () => {} };\n"
+        "globalThis.location = { hash: '' };\n"
+        "globalThis.confirm = () => false;\n"
+        "globalThis.alert = () => {};\n"
+        "globalThis.render = () => {};\n"
+        "globalThis.API = {\n"
+        "  get(path) {\n"
+        "    if (Object.prototype.hasOwnProperty.call(CASE.resolve, path)) {\n"
+        "      return Promise.resolve(CASE.resolve[path]);\n"
+        "    }\n"
+        "    if (CASE.reject.indexOf(path) !== -1) {\n"
+        "      return Promise.reject(new Error('stubbed failure: ' + path));\n"
+        "    }\n"
+        "    return Promise.reject(new Error('unstubbed path: ' + path));\n"
+        "  },\n"
+        "  post() { return Promise.reject(new Error('this test writes nothing')); },\n"
+        "};\n"
+        + definitions + "\n"
+        "const say = (o) => fs.writeFileSync(RESULT, JSON.stringify(o));\n"
+        "opportunities().then(\n"
+        "  (html) => say({ ok: true, html: String(html) }),\n"
+        "  (err) => say({ ok: false, name: (err && err.name) || '',\n"
+        "                 message: String((err && err.message) || err) }),\n"
+        ");\n")
+
+    harness_path = tmp_path / "run_opportunities.js"
+    harness_path.write_text(harness, encoding="utf-8")
+    # Passed as a file, never on the argument list, and with a hard ceiling: a
+    # view that hangs is a failure, not a test that never finishes.
+    run = subprocess.run([node, str(harness_path)], capture_output=True,
+                         text=True, timeout=60)
+    if not result_path.is_file():
+        pytest.fail(f"the view never produced a result. node exited "
+                    f"{run.returncode}\nstdout: {run.stdout}\n"
+                    f"stderr: {run.stderr}")
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+class TestTheOpportunitiesViewRuns:
+    """The proof. `https://app.qevik.ai/#opportunities` threw on every load."""
+
+    #: It writes a file and spawns a process against a real toolchain, which is
+    #: what `integration` is for. Declared so a run can select or exclude it
+    #: knowingly rather than discovering the dependency when it fails.
+    pytestmark = pytest.mark.integration
+
+    def test_it_renders_when_both_reads_succeed(self, tmp_path) -> None:
+        """The production case, and the one that was broken.
+
+        `if (!found)` is false here, so the success template runs — which is
+        exactly where a declaration scoped to that branch does not exist.
+        """
+        result = _run_the_view(
+            _script_body(_console_source()),
+            {_OPPORTUNITIES_PATH: _FOUND, _INBOUND_PATH: _INBOUND},
+            [], tmp_path)
+
+        assert result["ok"] is True, (
+            f"the opportunities view threw {result.get('name')}: "
+            f"{result.get('message')}")
+        html = result["html"]
+        assert "They came to us" in html
+        assert "shop.example.com" in html
+        assert "The site has no contact page" in html
+        assert "Approve this" in html
+        assert "1 open, 1 needing you." in html
+
+    def test_it_renders_when_the_opportunity_read_fails(self, tmp_path) -> None:
+        """One read failing says nothing about the other. A business that came
+        to us must not disappear because the opportunity memory was away."""
+        result = _run_the_view(
+            _script_body(_console_source()),
+            {_INBOUND_PATH: _INBOUND}, [_OPPORTUNITIES_PATH], tmp_path)
+
+        assert result["ok"] is True, (
+            f"the failure branch threw {result.get('name')}: "
+            f"{result.get('message')}")
+        html = result["html"]
+        assert "They came to us" in html
+        assert "shop.example.com" in html
+        assert "The opportunity memory could not be" in html
+
+    def test_the_harness_can_see_the_bug(self, tmp_path) -> None:
+        """Negative control, on a copy of the file's text.
+
+        Put `const inboundBlock` back inside `if (!found) {` and the same case
+        as the first test must reject with the production error. If it does not,
+        this harness is not exercising the success path and proves nothing.
+        """
+        broken = _declaration_back_inside_the_branch(
+            _script_body(_console_source()))
+        result = _run_the_view(
+            broken, {_OPPORTUNITIES_PATH: _FOUND, _INBOUND_PATH: _INBOUND},
+            [], tmp_path)
+
+        assert result["ok"] is False, (
+            "the pre-fix shape rendered successfully, so this harness never "
+            "reached the success-path template and the tests above prove nothing")
+        assert result["name"] == "ReferenceError", result
+        assert "inboundBlock" in result["message"], result
+
+
+class TestTheNodeDependencyIsDeclaredRatherThanAssumed:
+    """The guard above decides whether a missing toolchain is a skip or a
+    failure, and getting that backwards is silent both ways: a laptop that
+    cannot run the suite at all, or a merge gate that stopped running the proof
+    and still went green. Neither shows up in a normal run, so it is asserted.
+    """
+
+    def test_a_machine_without_node_skips_instead_of_failing(self, monkeypatch
+                                                             ) -> None:
+        """Node is in no dependency list. Requiring it would mean the default
+        kernel suite fails for anyone who installed `.[dev]` and nothing else."""
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        monkeypatch.delenv("CI", raising=False)
+
+        with pytest.raises(pytest.skip.Exception) as outcome:
+            _node()
+
+        assert "node is not installed" in str(outcome.value)
+
+    def test_ci_losing_node_fails_rather_than_skipping_the_proof(
+            self, monkeypatch) -> None:
+        """The other direction, and the more dangerous one: on the run that
+        gates a merge, the view silently ceasing to be executed must be loud."""
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        monkeypatch.setenv("CI", "true")
+
+        with pytest.raises(pytest.fail.Exception) as outcome:
+            _node()
+
+        assert "ci.yml" in str(outcome.value), (
+            "the failure must name where the missing step has to be added")
+
+    def test_it_returns_the_binary_when_node_is_there(self, monkeypatch) -> None:
+        """Negative control: neither branch may fire on a normal machine, or
+        the tests above would pass against a guard that always skips."""
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/node")
+        monkeypatch.setenv("CI", "true")
+
+        assert _node() == "/usr/bin/node"
+
+    def test_the_structural_guard_needs_nothing_installed(self) -> None:
+        """What makes the skip acceptable: the placement of `const inboundBlock`
+        — the actual production defect — is still checked by a test that only
+        reads text. If that check ever moves behind the node harness, a machine
+        without node stops covering the regression entirely.
+        """
+        source = Path(__file__).read_text(encoding="utf-8")
+        guard = source[source.index(
+            "def test_the_console_carries_no_secret_and_no_business_logic"):]
+        guard = guard[:guard.index("\ndef test_the_console_asset_route")]
+
+        assert "const inboundBlock" in guard and "if (!found)" in guard, (
+            "the text-only guard on where `inboundBlock` is declared is gone; "
+            "the regression is now proven only where node is installed")
+        assert "_run_the_view" not in guard, (
+            "the always-on guard now runs the node harness, so it can no longer "
+            "run on a machine without node")
 
 
 class TestWhichAppsAreActuallyRunning:

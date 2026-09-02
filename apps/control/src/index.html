@@ -1561,8 +1561,7 @@ async function opportunities() {
     API.get('/api/discovery/opportunities?limit=25').catch(() => null),
     API.get('/api/missions/inbound').catch(() => null),
   ]);
-  if (!found) {
-    const inboundBlock = !inbound ? '' : (inbound.inbound || []).length ? `
+  const inboundBlock = !inbound ? '' : (inbound.inbound || []).length ? `
     <h3 style="margin:0 0 .4rem">They came to us
       <span class="note">${esc(String(inbound.counts.total))}</span></h3>
     <p class="note" style="margin-bottom:.6rem">${esc(String(
@@ -1584,6 +1583,7 @@ async function opportunities() {
         their own site yet. This fills from the public audit and from anyone
         following the link in a health check.</p>`;
 
+  if (!found) {
   return `<header class="page"><h2>Opportunities</h2></header>
       ${inboundBlock}
       <div class="card"><p class="note">The opportunity memory could not be
