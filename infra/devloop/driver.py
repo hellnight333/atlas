@@ -4,6 +4,8 @@
     driver.py status                 what the queue holds
     driver.py enqueue --title ... --brief ... --path ... [--path ...]
     driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
+    driver.py declare-deploy-only <task>   its whole content is the deploy
+    driver.py requeue <task>         a task that ended, back on the queue
     driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
@@ -38,6 +40,46 @@ agents and knows nothing about businesses, signals or outreach.
       → DEPLOYING    where the task declares it          (objective)
       → VERIFYING    where the task declares it          (objective)
       → DONE
+
+A task that only deploys takes the same last three steps with nothing in front
+of them. The builder is told never to deploy and to change nothing it cannot do
+inside its paths, so a task whose whole content is "put what `main` already
+carries on the host" correctly leaves no diff — and the `changed` gate failed it
+for that, which is how t-4f02ee7a36c0 deployed nothing and verified nothing.
+Such a task **declares itself deploy-only** (`enqueue --deploy-only`, or
+`declare-deploy-only` on a row that predates the flag); the driver then records
+the `main` sha it is deploying and runs exactly the gates the merged path runs:
+the whole suite, the deploy script's exit code, the production probe. There is
+no review and no scope check, because a review of nothing and a contract
+measured against nothing are both vacuous — and there is no second deploy
+mechanism: both routes run the same `_finish`.
+
+The declaration is required and is never inferred from the diff. "Nothing
+changed" is also exactly what a builder that silently did nothing leaves behind,
+and `requires_deploy` is carried by every task that must build something and
+*then* deploy it — including every task production inspection enqueues. Reading
+those two facts as "there was nothing to do" would deploy unchanged code and
+write DONE against work nobody did, which is the failure the `changed` gate
+exists for. An undeclared task with an empty diff keeps failing, with the
+declaration named in its reason so a person can correct it and requeue.
+
+Correcting it takes both commands, because `claim` runs on the state and the
+declaration does not change it: `declare-deploy-only` says what the task is,
+and `requeue` makes it runnable. The task this whole path was written for was
+already FAILED when it was declared, and a declaration alone would have left it
+exactly as unreachable as it was.
+
+`requeue` also refuses a condition no state names: work that `main` already
+carries. A task that built something, was reviewed clean and then failed its
+deploy or its production probe is FAILED with the work *already* squash-merged
+into `main` and its branch gone — and a full suite that fails after that merge
+is CONTESTED the same way. Restarting either would hand a builder a `main` that
+already carries the work, so it correctly writes nothing and the `changed` gate
+ends the task before the deploy it was put back for. The landing is measured
+from git rather than assumed: the squash commit carries `queue.landing_marker`,
+and a task found on `main` is refused with the sha named. Redeploying what
+`main` carries is what a deploy-only task is, so that is what such a retry is
+enqueued as.
 
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into
@@ -81,7 +123,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from devloop import agents, boundary, gates, projection  # noqa: E402
-from devloop.queue import Queue, State, allowed_paths, redact  # noqa: E402
+from devloop.queue import (Queue, State, allowed_paths,  # noqa: E402
+                           declares_deploy_only, landing_marker, redact)
 
 REPO = Path(__file__).resolve().parents[2]
 LOG = REPO / ".qevik" / "devloop" / "driver.log"
@@ -303,21 +346,62 @@ class Driver:
             self.q.move(ident, State.GATING, reason=f"round {round_no}")
             diff = gates.changed(cwd=self.repo)
             if not diff.passed:
+                # A task that only deploys has nothing to write, and failing it
+                # for that is exactly what stopped t-4f02ee7a36c0: the builder
+                # is told never to deploy and to change nothing it cannot do
+                # inside its paths, so it correctly left the tree as it found
+                # it, and "nothing changed" ended a task whose whole content
+                # was the deploy.
+                #
+                # Three conditions, and the first is the one that matters: the
+                # task must have *declared* itself deploy-only. `requires_deploy`
+                # cannot stand in for it — every task that builds something and
+                # then deploys it carries that flag too, including every task
+                # production inspection enqueues — so classifying on the flag
+                # plus an empty diff would read "the builder silently did
+                # nothing" as "there was nothing to do", deploy unchanged code
+                # and record an unimplemented task as DONE — which is the exact
+                # failure this gate was written to catch, arriving through the
+                # exemption meant to spare one legitimate task from it.
+                #
+                # The other two are measured rather than assumed. The gate must
+                # have *measured* an empty diff — an unreadable repository has
+                # established nothing and stays a failure — and the branch must
+                # carry nothing beyond `main` either, so a deploy-only task that
+                # did build something still goes through review, scope and the
+                # squash-merge exactly as it does today.
+                if declares_deploy_only(task) and not diff.unmeasured:
+                    carried = gates.changed(cwd=self.repo, base_sha="main")
+                    if not carried.passed and not carried.unmeasured:
+                        return self._deploy_only(task, started)
                 # What the builder said, kept with the failure. Without it
                 # "nothing changed" is undiagnosable: a refusal, a crash, a
                 # boundary it did not phrase as one, and an agent that simply
                 # did nothing all look identical afterwards.
                 said = " ".join((built.output or "").split())[-600:]
+                # And, for the one case that is not a defect: a task whose whole
+                # content really is the deploy says so with `declare-deploy-only`
+                # and is requeued. A person decides that, not the driver — the
+                # driver cannot see the difference, which is the reason it asks.
+                #
+                # Both commands are named because both are needed. This row is
+                # about to become FAILED, `claim` reads the state and the
+                # declaration does not change it, so declaring alone leaves the
+                # task exactly as unreachable as this failure left it.
+                hint = ("" if declares_deploy_only(task) else
+                        " | if this task's whole content is the deploy, "
+                        "declare it and put it back: declare-deploy-only "
+                        "<task>, then requeue <task>")
                 self.q.move(ident, State.FAILED,
-                            reason=f"{diff.detail} | builder said: {said}")
+                            reason=f"{diff.detail} | builder said: {said}{hint}")
                 log("FAILED", task=ident, why="nothing changed",
                     builder_said=said[-300:])
                 return State.FAILED
             # Narrowed to what the task touched. Measured: the full suite is
             # about eleven minutes a round against a two-minute review, so
             # running all of it every round spent roughly a third of each cycle
-            # re-proving code the task never went near. `_ship` still runs the
-            # whole suite before anything deploys, which is where that
+            # re-proving code the task never went near. `_finish` still runs
+            # the whole suite before anything deploys, which is where that
             # guarantee belongs — this narrows the loop, not the evidence.
             suite = gates.tests(cwd=self.repo,
                                 selector=task.get("test_selector")
@@ -443,7 +527,6 @@ class Driver:
     def _ship(self, task: dict, started: float) -> str:
         """Review is clean. Land it, run the remaining gates, then finish."""
         ident = task["id"]
-        needed = gates.required(task)
         # Only now does it reach `main` — as one commit, so the history says
         # "this task, reviewed clean" rather than replaying the argument the
         # builder and the reviewer had on the way there.
@@ -482,15 +565,129 @@ class Driver:
             self.q.move(ident, State.CONTESTED,
                         reason=f"the reviewed work would not land: {out[:300]}")
             return State.CONTESTED
+        # `landing_marker`, not a second copy of the same words. This message is
+        # the record that `main` carries this task, and `queue.landed_sha` reads
+        # it back to refuse a requeue that would start a run with nothing left
+        # to build. Two spellings of it drifting apart would disable that guard
+        # silently, so there is one spelling and both ends use it.
         _git("commit", "-q", "-m",
              f"{task['title']}\n\n{task['brief'][:900]}\n\n"
-             f"devloop task {ident}; reviewer clean after "
+             f"{landing_marker(ident)}; reviewer clean after "
              f"{task.get('review_rounds') or 1} round(s).\n\n"
              "Co-Authored-By: Claude Opus 5 (1M context) "
              "<noreply@anthropic.com>", cwd=self.repo)
         _git("branch", "-D", branch, cwd=self.repo)
-        log("LANDED", task=ident, sha=head_sha(self.repo)[:12])
+        landed = head_sha(self.repo)
+        log("LANDED", task=ident, sha=landed[:12])
+        # The four gates this route ran before it got here, named rather than
+        # copied from `gates.required`: what a task *requires* and what a given
+        # route actually ran are the same list on this path and are not on the
+        # other one, and the DONE record has to say what happened.
+        return self._finish(task, started, sha=landed,
+                            passed=("changed", "tests", "scope", "review"))
 
+    def _deploy_only(self, task: dict, started: float) -> str:
+        """A task whose whole content is the deploy. There is no diff to review.
+
+        t-4f02ee7a36c0 asked for the unreviewed-drafts surface to be deployed
+        and verified in production. The builder is told never to deploy and to
+        change nothing it cannot do inside its paths, so it changed nothing —
+        correctly — and the `changed` gate ended the task FAILED. Nothing was
+        deployed and nothing was verified. Every DONE task before it declared
+        `requires_deploy=0`, which is why the hole stayed invisible: the deploy
+        gates could only be reached by squash-merging a diff, and a deploy of
+        what `main` already carries has no diff to merge.
+
+        So the diff is replaced by the one fact a person needs afterwards —
+        which `main` sha went to the host — and the gates that follow are the
+        same ones, in the same order, run by the same `_finish`. There is no
+        review and no scope check because there is nothing to review and
+        nothing to measure: both would be vacuous, and a vacuous pass recorded
+        against a head is worse than no record at all.
+
+        Which tasks may come here is a declaration on the task row, not
+        something read off the diff. An empty diff is equally what a builder
+        that silently did nothing leaves behind, and `requires_deploy` is
+        carried by every task that must build something and *then* deploy it —
+        so inferring it would deploy unchanged code for tasks whose work was
+        never done, and write DONE against them.
+        """
+        ident = task["id"]
+        branch = f"devloop/{ident}"
+
+        # Structural, not incidental. This is the one path that deploys without
+        # a review, so it must be impossible to reach it while anything a
+        # reviewer has not seen exists — or for a task that never said its
+        # content was the deploy. The caller established all three before
+        # delegating here, and all three are asked again — of the row and of
+        # git, not of the caller — for the same reason `_ship` re-asks the
+        # review record before it merges: "only reachable from" is a property of
+        # today's control flow, and the guard has to live in the code that acts.
+        if not declares_deploy_only(task):
+            self.q.move(ident, State.FAILED,
+                        reason="refused to deploy without a review: this task "
+                               "does not declare that its whole content is the "
+                               "deploy, so an empty diff is a build that did "
+                               "not happen")
+            log("REFUSED_TO_DEPLOY", task=ident, why="not declared deploy-only")
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.FAILED
+        pending = gates.changed(cwd=self.repo)
+        carried = gates.changed(cwd=self.repo, base_sha="main")
+        if (pending.passed or carried.passed
+                or pending.unmeasured or carried.unmeasured):
+            self.q.move(ident, State.CONTESTED,
+                        reason="refused to deploy without a review: this task "
+                               "branch is not identical to main "
+                               f"({pending.detail[:120]} | "
+                               f"{carried.detail[:120]})")
+            log("REFUSED_TO_DEPLOY", task=ident)
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.CONTESTED
+
+        # `deploy_control.sh` copies the working tree and refuses to run from
+        # anywhere but a clean `main` — so this is not merely tidy, it is what
+        # makes the deploy possible at all.
+        _git("checkout", "-q", "main", cwd=self.repo)
+        # `-d`, not `-D`: an empty branch deletes and a branch holding anything
+        # unmerged refuses to, so this cannot be the line that throws work away.
+        _git("branch", "-d", branch, cwd=self.repo)
+        sha = head_sha(self.repo)
+        self.q.move(ident, State.GATING, head_sha=sha,
+                    reason=f"nothing to build: this task deploys what main "
+                           f"already carries, at {sha}")
+        log("DEPLOY_ONLY", task=ident, sha=sha[:12],
+            note="no diff to review; deploying what main already carries")
+        # Nothing is claimed as already passed. Three of this task's required
+        # gates do not run on this route — the first of them is how the task
+        # arrived here, having failed it — and `_finish` records them as not
+        # run rather than writing a pass against a check nobody performed.
+        return self._finish(task, started, sha=sha, passed=())
+
+    def _finish(self, task: dict, started: float, *, sha: str,
+                passed: tuple[str, ...] = ()) -> str:
+        """The gates that run on `main`, and the state they leave a task in.
+
+        One deploy mechanism, reached two ways: work that was reviewed and
+        squash-merged, and a task that had nothing to merge because `main`
+        already carries what it deploys. Both run the whole suite, then the
+        deploy script's own exit code, then the production probe — in that
+        order, each recorded against the sha that is going to the host.
+
+        `passed` is what the caller ran and passed on the way here, and the
+        DONE record is built from it plus what this method runs — never from
+        `gates.required`, which is what a task *demands* and not what happened
+        to it. The two lists are identical on the merged route and are not on
+        the other one: `changed`, `scope` and `review` are required of every
+        task and none of the three runs on a deploy with no diff, `changed`
+        having failed on the way in. Copying the requirement into the record
+        would write "review passed" against a review nobody performed, on the
+        one route that deliberately has none — so the record names what ran,
+        and names separately what did not.
+        """
+        ident = task["id"]
+        needed = gates.required(task)
+        ran = list(passed)
         if "deployed" in needed:
             # The whole suite before anything leaves this machine. A narrowed
             # run is a real gate for a narrow change and is not enough to
@@ -502,15 +699,23 @@ class Driver:
                 self.q.move(ident, State.CONTESTED,
                             reason=f"full suite fails: {whole.detail}")
                 return State.CONTESTED
-            self.q.move(ident, State.DEPLOYING, reason=whole.detail)
-            log("DEPLOYING", task=ident)
+            # Once, however many times it ran. The merged route already passed
+            # a narrowed suite under the same gate's name.
+            if "tests" not in ran:
+                ran.append("tests")
+            self.q.move(ident, State.DEPLOYING,
+                        reason=f"{sha[:12]}: full suite {whole.detail}")
+            log("DEPLOYING", task=ident, sha=sha[:12])
             shipped = gates.deployed(cwd=self.repo)
             if shipped.unmeasured:
                 return self._infra(ident, shipped.detail)
             if not shipped.passed:
-                self.q.move(ident, State.FAILED, reason=shipped.detail)
+                self.q.move(ident, State.FAILED,
+                            reason=f"{sha[:12]}: the deploy failed: "
+                                   f"{shipped.detail}")
                 log("FAILED", task=ident, why="deploy failed")
                 return State.FAILED
+            ran.append("deployed")
 
         if "in_production" in needed:
             probe = (json.loads(task.get("evidence") or "{}")
@@ -523,20 +728,32 @@ class Driver:
                             reason="production verification required and no "
                                    "probe was supplied")
                 return State.CONTESTED
-            self.q.move(ident, State.VERIFYING)
-            log("VERIFYING", task=ident)
+            self.q.move(ident, State.VERIFYING,
+                        reason=f"probing {sha[:12]} in production")
+            log("VERIFYING", task=ident, sha=sha[:12])
             live = gates.in_production(cwd=self.repo, probe=probe)
             if live.unmeasured:
                 return self._infra(ident, live.detail)
             if not live.passed:
-                self.q.move(ident, State.FAILED, reason=live.detail)
+                self.q.move(ident, State.FAILED,
+                            reason=f"{sha[:12]}: production did not agree: "
+                                   f"{live.detail}")
                 log("FAILED", task=ident, why="production did not agree")
                 return State.FAILED
+            ran.append("in_production")
 
+        # What this task required and nothing on its route ran. Empty on the
+        # merged path; on a deploy with no diff it is the three gates there was
+        # nothing to run them against, and saying so is the whole difference
+        # between a record and a claim.
+        skipped = [name for name in needed if name not in ran]
         self.q.move(ident, State.DONE,
-                    reason=f"gates: {', '.join(needed)}",
+                    reason=f"gates: {', '.join(ran)} at {sha}"
+                           + (f" | not run on this route: {', '.join(skipped)}"
+                              if skipped else ""),
                     detail=f"completed in {int(time.monotonic() - started)}s")
-        log("DONE", task=ident, seconds=int(time.monotonic() - started))
+        log("DONE", task=ident, sha=sha[:12],
+            seconds=int(time.monotonic() - started))
         return State.DONE
 
     def _commit(self, task: dict, round_no: int) -> None:
@@ -761,6 +978,13 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--priority", type=int, default=50)
     add.add_argument("--evidence", default="{}")
     add.add_argument("--deploy", action="store_true")
+    add.add_argument("--deploy-only", action="store_true",
+                     help="this task's whole content is the deploy: main "
+                          "already carries what goes to the host, so there is "
+                          "nothing to build and nothing to review. Implies "
+                          "--deploy. Without it a task that changes nothing "
+                          "fails, which is what catches a builder that did "
+                          "nothing.")
     add.add_argument("--verify-production", action="store_true")
     add.add_argument("--path", action="append", default=[], required=True,
                      help="a path, directory (trailing /) or glob the task "
@@ -772,6 +996,25 @@ def main(argv: list[str] | None = None) -> int:
     declare.add_argument("--reason", default="")
     declare.add_argument("--actor", default=os.environ.get("USER", "person"))
 
+    only = sub.add_parser("declare-deploy-only")
+    only.add_argument("task")
+    only.add_argument("--no", dest="deploy_only", action="store_false",
+                      help="withdraw the declaration: this task must build "
+                           "something before it deploys")
+    only.add_argument("--reason", default="")
+    only.add_argument("--actor", default=os.environ.get("USER", "person"))
+
+    # The other half of every repair made on a task that already ended.
+    # Declaring paths or a classification changes the row and leaves the state
+    # alone, and `claim` reads the state — so without this the correction lands
+    # on a task nothing will ever pick up again.
+    # Refused for a task whose work `main` already carries: it has nothing left
+    # to build, so the run it would start cannot reach the deploy it failed.
+    again = sub.add_parser("requeue")
+    again.add_argument("task")
+    again.add_argument("--reason", default="")
+    again.add_argument("--actor", default=os.environ.get("USER", "person"))
+
     show = sub.add_parser("scope")
     show.add_argument("task")
 
@@ -780,7 +1023,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--max-tasks", type=int, default=1)
 
     args = parser.parse_args(argv)
-    q = Queue(REPO / ".qevik" / "devloop" / "state.db")
+    # The repository, explicitly. `requeue` refuses a task whose work `main`
+    # already carries, and it measures that from git — so the queue is told
+    # which tree to ask rather than left to infer it.
+    q = Queue(REPO / ".qevik" / "devloop" / "state.db", repo=REPO)
 
     if args.command == "status":
         rows = q.tasks()
@@ -803,7 +1049,8 @@ def main(argv: list[str] | None = None) -> int:
                       paths=args.path, priority=args.priority,
                       evidence=json.loads(args.evidence),
                       requires_deploy=args.deploy,
-                      requires_prod_check=args.verify_production)
+                      requires_prod_check=args.verify_production,
+                      deploy_only=args.deploy_only)
         print(ident)
         return 0
 
@@ -811,6 +1058,37 @@ def main(argv: list[str] | None = None) -> int:
         declared = q.declare_paths(args.task, args.path, actor=args.actor,
                                    reason=args.reason)
         print(f"{args.task} may change: {', '.join(declared)}")
+        return 0
+
+    if args.command == "declare-deploy-only":
+        set_to = q.declare_deploy_only(args.task, actor=args.actor,
+                                       deploy_only=args.deploy_only,
+                                       reason=args.reason)
+        print(f"{args.task} "
+              + ("deploys what main already carries; it builds nothing and is "
+                 "not reviewed" if set_to else
+                 "must build something before it deploys"))
+        # The declaration says what the task is; it does not make it runnable.
+        # The row this command exists for was already FAILED when it was
+        # declared, so the next step is named here rather than left to be
+        # discovered by watching a queue that never picks the task up.
+        ended = (q.get(args.task) or {}).get("state")
+        if ended in State.RETRYABLE:
+            print(f"  it ended {ended}, so nothing will claim it until it is "
+                  f"put back:\n    driver.py requeue {args.task}")
+        return 0
+
+    if args.command == "requeue":
+        try:
+            moved = q.requeue(args.task, actor=args.actor, reason=args.reason)
+        except KeyError:
+            print(f"no task {args.task}")
+            return 1
+        except ValueError as refused:
+            print(refused)
+            return 1
+        print(f"{args.task} is queued again" if moved
+              else f"{args.task} was already queued")
         return 0
 
     if args.command == "scope":

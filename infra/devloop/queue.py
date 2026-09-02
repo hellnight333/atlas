@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import time
 import uuid
 from contextlib import contextmanager
@@ -75,6 +76,13 @@ class State:
     FAILED = "FAILED"
 
     TERMINAL = frozenset({DONE, CONTESTED, BLOCKED, FAILED})
+    #: Endings a person can undo. The task stopped for a reason that lives
+    #: outside the loop — a contract too narrow, a classification nobody had
+    #: made, a credential that was missing — and once that reason is dealt
+    #: with the work itself is still wanted. `DONE` is deliberately absent: a
+    #: finished task is a record, and running one again would deploy under a
+    #: row that already says it completed.
+    RETRYABLE = frozenset({CONTESTED, BLOCKED, FAILED})
     #: Parked, not terminal and not runnable. `claim` skips these until the
     #: human request clears, which is what stops a blocked branch from being
     #: retried every minute against a boundary that has not moved.
@@ -141,6 +149,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     evidence            TEXT NOT NULL DEFAULT '{}',
     requires_deploy     INTEGER NOT NULL DEFAULT 0,
     requires_prod_check INTEGER NOT NULL DEFAULT 0,
+    -- Whether this task's *whole content* is the deploy: `main` already
+    -- carries what it puts on the host, so there is nothing to build and
+    -- nothing to review. Declared by whoever enqueues it, never inferred —
+    -- an empty diff is also what a builder that silently did nothing leaves,
+    -- and `requires_deploy` is carried by every task that must build
+    -- something and then deploy it. Without this column the two are
+    -- indistinguishable, and the driver would deploy unchanged code and
+    -- record an unimplemented task as DONE.
+    deploy_only         INTEGER NOT NULL DEFAULT 0,
     -- The allowed-path contract, as a JSON list of repo-relative patterns.
     -- What the task may change; the driver compares the diff against it and
     -- refuses to land anything outside. NULL only on rows that predate the
@@ -321,6 +338,101 @@ def allowed_paths(task: dict) -> list[str]:
     return [one for one in loaded if isinstance(one, str)] if isinstance(loaded, list) else []
 
 
+def declares_deploy_only(task: dict) -> bool:
+    """Whether this task says its whole content is the deploy.
+
+    Read from the row, never inferred from the diff. "The builder changed
+    nothing" is the shape of a genuine deploy-only task *and* the shape of a
+    builder that silently did nothing, and `requires_deploy` is carried by
+    every task that must build something and then deploy it — so an empty diff
+    on its own establishes neither. Only the declaration does, and a row that
+    predates the column, or that nobody declared, is not one.
+
+    Both fields are asked, because a deploy-only task that does not deploy is
+    a contradiction: there would be nothing left for it to do.
+    """
+    return bool(task.get("deploy_only")) and bool(task.get("requires_deploy"))
+
+
+def landing_marker(task_id: str) -> str:
+    """The text a task's landing leaves in `main`'s history.
+
+    `driver._ship` writes it into the squash commit that puts a reviewed task
+    on `main`. That commit is the record of the landing, and it is the right
+    one to read: it lives in the thing that actually carries the work, so it
+    survives a database restored from a backup and a driver that died between
+    merging and writing anything down.
+    """
+    return f"devloop task {task_id}"
+
+
+#: `_git` could not start git at all. Not a failed query — no query happened.
+_NO_GIT = -1
+
+
+def _git(*args: str, cwd: Path) -> tuple[int, str]:
+    """Ask git one question. Its own stdout, or a non-zero code.
+
+    stderr is deliberately dropped rather than merged into the answer: every
+    caller here reads the output as a sha, and a warning printed alongside a
+    successful query would be parsed as one.
+    """
+    try:
+        done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                              text=True, stdin=subprocess.DEVNULL)
+    except OSError:
+        return _NO_GIT, ""
+    return done.returncode, done.stdout.strip()
+
+
+def _repo_of(db: Path) -> Path | None:
+    """The working tree a queue belongs to, found from where the queue lives.
+
+    The database sits at `<repo>/.qevik/devloop/state.db`, so the repository is
+    the nearest ancestor holding a `.git`. Discovered rather than configured so
+    that a queue opened by any caller measures against the same tree the driver
+    lands work in, and `None` when there is no such ancestor — a queue outside
+    every repository, which is what the tests build.
+    """
+    for folder in db.resolve().parents:
+        if (folder / ".git").exists():
+            return folder
+    return None
+
+
+def landed_sha(task_id: str, *, repo: Path | str | None) -> str | None:
+    """Whether `main` already carries this task's work, asked of git.
+
+    Three answers, and they are different on purpose:
+
+    * a **sha** — `main` carries it. `driver._ship` squash-merged the branch,
+      deleted it, and said so in the commit message.
+    * `""` — git looked, and `main` carries nothing for this task.
+    * `None` — the question could not be put. A repository is there and would
+      not answer, so nothing is known, and a caller that must not act on a
+      guess has to treat it as unknown rather than as a no.
+
+    A queue that lives outside every repository is answered `""` without
+    asking: there is no `main` for anything to have landed on.
+    """
+    if repo is None:
+        return ""
+    root = Path(repo)
+    if not root.is_dir():
+        return ""
+    code, _ = _git("rev-parse", "--git-dir", cwd=root)
+    if code == _NO_GIT:
+        return None                  # git itself is missing; nothing was asked
+    if code != 0:
+        return ""                    # not a repository, so there is no `main`
+    code, out = _git("log", "main", "--fixed-strings",
+                     f"--grep={landing_marker(task_id)}", "--format=%H",
+                     "-n", "1", cwd=root)
+    if code != 0:
+        return None
+    return out.splitlines()[0].strip() if out else ""
+
+
 class Queue:
     """The driver's durable state. One writer at a time, by design.
 
@@ -329,8 +441,14 @@ class Queue:
     the claim so two drivers cannot take the same task.
     """
 
-    def __init__(self, path: Path | str = DEFAULT_DB) -> None:
+    def __init__(self, path: Path | str = DEFAULT_DB, *,
+                 repo: Path | str | None = None) -> None:
         self.path = Path(path)
+        # The tree this queue's tasks land in. Held by the queue because
+        # `requeue` has to measure a landing rather than be told about one, and
+        # discovered from the database's own location when nobody says — the
+        # database lives inside the repository it orchestrates.
+        self.repo = Path(repo) if repo is not None else _repo_of(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(self.path), timeout=30,
                                    isolation_level=None)
@@ -345,14 +463,21 @@ class Queue:
 
         `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it
         was, so a column that arrived later has to be added by hand. A row
-        that predates the column keeps NULL — the honest record that no
-        contract was ever declared for it, which is not the same as an empty
-        one.
+        that predates the `paths` column keeps NULL — the honest record that
+        no contract was ever declared for it, which is not the same as an
+        empty one.
+
+        `deploy_only` defaults to 0 instead, and for the same reason read the
+        other way round: a row nobody declared deploy-only is not one, and the
+        default has to be the answer that refuses rather than the one that
+        deploys.
         """
         have = {row["name"] for row in
                 self._db.execute("PRAGMA table_info(tasks)")}
-        if "paths" not in have:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN paths TEXT")
+        for name, kind in (("paths", "TEXT"),
+                           ("deploy_only", "INTEGER NOT NULL DEFAULT 0")):
+            if name not in have:
+                self._db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {kind}")
 
     def close(self) -> None:
         self._db.close()
@@ -380,7 +505,7 @@ class Queue:
     def add(self, *, title: str, brief: str, origin: str, paths: list[str],
             evidence: dict | None = None, priority: int = 50,
             requires_deploy: bool = False, requires_prod_check: bool = False,
-            task_id: str = "") -> str:
+            deploy_only: bool = False, task_id: str = "") -> str:
         """Enqueue work. Refuses production-origin work with no evidence.
 
         The refusal is the point. Requirement: never generate work merely to
@@ -394,6 +519,14 @@ class Queue:
         rounds had been spent on it. The contract is a list the driver can
         compare a diff against, so the comparison is made by the loop rather
         than by whoever remembers to look.
+
+        `deploy_only` says the whole content of this task is the deploy —
+        `main` already carries what goes to the host, so the builder correctly
+        writes nothing. It is a declaration and not an observation: without it
+        the driver cannot tell such a task from one whose builder silently did
+        nothing, and every other task keeps failing on an empty diff. It
+        implies `requires_deploy`, because a deploy-only task that does not
+        deploy has nothing left to do.
         """
         if origin == "production" and not (evidence or {}):
             raise ValueError(
@@ -401,15 +534,18 @@ class Queue:
                 "Work with no evidence behind it is work invented to fill a "
                 "queue, and that is the failure this loop exists to avoid.")
         declared = contract(paths)
+        requires_deploy = bool(requires_deploy) or bool(deploy_only)
         ident = task_id or f"t-{uuid.uuid4().hex[:12]}"
         with self._write() as db:
             db.execute(
                 "INSERT INTO tasks (id, title, brief, state, origin, priority,"
-                " evidence, requires_deploy, requires_prod_check, paths,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " evidence, requires_deploy, requires_prod_check, deploy_only,"
+                " paths, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ident, redact(title), redact(brief), State.QUEUED, origin,
                  int(priority), json.dumps(evidence or {}),
                  int(requires_deploy), int(requires_prod_check),
+                 int(bool(deploy_only)),
                  json.dumps(declared), _now(), _now()))
             db.execute(
                 "INSERT INTO transitions (task_id, from_state, to_state, reason,"
@@ -523,6 +659,168 @@ class Queue:
                         + (f": {reason}" if reason else "")),
                  actor, _now()))
         return declared
+
+    def declare_deploy_only(self, task_id: str, *, actor: str,
+                            deploy_only: bool = True,
+                            reason: str = "") -> bool:
+        """Declare — or withdraw — that a task's whole content is the deploy.
+
+        The counterpart of `declare_paths`, and it exists for the same row:
+        one already in the queue whose nature nobody wrote down. t-4f02ee7a36c0
+        was enqueued as `requires_deploy=1` before this column existed, and
+        without a way to say so afterwards the task that motivated the whole
+        deploy-without-a-diff path could never take it.
+
+        It is a person's decision, so it leaves a transition naming who made
+        it, and it is refused on a task being measured right now — the driver
+        reads this field to choose between deploying and failing, and that
+        choice must not change underneath a task mid-run.
+        """
+        with self._write() as db:
+            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+                             (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            if row["state"] in State.IN_FLIGHT:
+                raise ValueError(
+                    f"{task_id} is {row['state']}; what a task is cannot be "
+                    f"redeclared while the driver is deciding what to do "
+                    f"with it")
+            # A deploy-only task deploys: the flag is what makes an empty diff
+            # legitimate, and it would be meaningless on a task with no deploy
+            # gate to reach. Withdrawing it leaves `requires_deploy` alone —
+            # the task still deploys, it simply has to build something first.
+            sets = ("deploy_only = ?, requires_deploy = 1, updated_at = ?"
+                    if deploy_only else "deploy_only = ?, updated_at = ?")
+            db.execute(f"UPDATE tasks SET {sets} WHERE id = ?",
+                       (int(bool(deploy_only)), _now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, row["state"], row["state"],
+                 redact(("declared deploy-only: main already carries what "
+                         "this task deploys" if deploy_only else
+                         "no longer deploy-only: this task must build "
+                         "something before it deploys")
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
+        return bool(deploy_only)
+
+    def requeue(self, task_id: str, *, actor: str, reason: str = "") -> bool:
+        """Put a task that ended back on the queue. A person's decision.
+
+        `claim` takes QUEUED rows and in-flight rows whose lease has expired,
+        and nothing else — so FAILED, CONTESTED and BLOCKED are the end of a
+        task unless something moves it. Every repair for those endings happens
+        outside the loop and changes the row *without* changing its state: a
+        contract widened with `declare_paths`, a task classified with
+        `declare_deploy_only`, a credential somebody finally supplied. Without
+        this the repair lands on a row nothing will ever pick up again.
+
+        Which is exactly what happened to the task the deploy-only declaration
+        was written for. t-4f02ee7a36c0 was already FAILED when the
+        declaration arrived; declaring it set two flags and left it FAILED, and
+        the driver's own failure text told the reader to "declare it and
+        requeue" against a requeue that did not exist. The declaration is the
+        classification; this is what makes it runnable, and the two are kept
+        apart because a person redeclaring a contested task has not thereby
+        asked for it to run again.
+
+        Refused wherever retrying is not what the caller means. DONE is a
+        record of finished work — running it again is new work and is enqueued
+        as new work. An in-flight task is running right now. A parked one is
+        held at a human boundary that `release` clears when the boundary
+        actually clears; unparking it here would only walk it back into the
+        same wall every lap. Already-QUEUED is reported rather than refused,
+        so running this twice is not an error.
+
+        ## And refused for a task whose work `main` already carries
+
+        An ending is not by itself a statement about where the work is. A task
+        that built something, was reviewed clean and then failed its deploy or
+        its production probe reaches FAILED with `_ship` having *already*
+        squash-merged it and deleted its branch; a full suite that fails after
+        that same merge reaches CONTESTED the same way. Putting either back
+        starts a run against a `main` that already carries the work, so the
+        builder correctly writes nothing, and the `changed` gate ends the task
+        before it can reach the deploy that failed — a requeue that can only
+        produce a run that cannot succeed.
+
+        So the landing is measured, from git and not from whoever is asking:
+        `_ship` writes `landing_marker` into the squash commit, and
+        `landed_sha` reads it back out of `main`. A task it finds there is
+        refused with the sha named, and pointed at the path this line of work
+        created — deploying what `main` already carries is a deploy-only task,
+        which builds nothing by declaration rather than by accident. An
+        unanswerable repository is refused too: whether the requeue can succeed
+        is then unknown, and this is the one place that has to know.
+        """
+        state = self._state_of(task_id)
+        if state == State.QUEUED:
+            return False
+        if state not in State.RETRYABLE:
+            raise self._not_an_ending(task_id, state)
+        # Measured before the write lock is taken. `_write` is IMMEDIATE, and
+        # holding it across a subprocess would block the driver's next claim
+        # for as long as git takes to walk `main`.
+        landed = landed_sha(task_id, repo=self.repo)
+        if landed is None:
+            raise ValueError(
+                f"{task_id} is not put back: `main` could not be read, so "
+                f"whether this task's work already landed is unknown. A "
+                f"requeue that starts a run which cannot succeed is worse than "
+                f"one that waits for a repository somebody can read")
+        if landed:
+            raise ValueError(
+                f"{task_id} already landed on main as {landed[:12]}, so there "
+                f"is nothing left for a builder to write; a run started from "
+                f"here fails its `changed` gate before it reaches the deploy. "
+                f"Deploying what main already carries is a deploy-only task: "
+                f"enqueue one (enqueue --deploy-only), which builds nothing by "
+                f"declaration rather than by accident")
+        with self._write() as db:
+            # Asked again under the write lock, because the state is what makes
+            # this legal and it was last read outside one.
+            state = self._state_of(task_id, db)
+            if state == State.QUEUED:
+                return False
+            if state not in State.RETRYABLE:
+                raise self._not_an_ending(task_id, state)
+            # The lease goes with the state. A queued row carrying the owner
+            # of the driver that failed it reads as claimed by a process that
+            # is not coming back.
+            db.execute(
+                "UPDATE tasks SET state = ?, lease_owner = NULL,"
+                " lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+                (State.QUEUED, _now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, state, State.QUEUED,
+                 redact(f"requeued from {state}"
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
+        return True
+
+    def _state_of(self, task_id: str,
+                  db: sqlite3.Connection | None = None) -> str:
+        """Where a task is right now. `KeyError` when there is no such task."""
+        row = (db or self._db).execute(
+            "SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return str(row["state"])
+
+    @staticmethod
+    def _not_an_ending(task_id: str, state: str) -> ValueError:
+        """Why this state is not one a requeue undoes. Built once, raised twice."""
+        return ValueError(
+            f"{task_id} is {state}; only a task that ended "
+            f"{', '.join(sorted(State.RETRYABLE))} is put back on the queue"
+            + (" — a finished task is a record, and the work you want again is"
+               " enqueued as new work" if state == State.DONE else "")
+            + (" — a parked task becomes runnable when its human boundary is"
+               " resolved, not before" if state in State.PARKED else ""))
 
     def park(self, task_id: str, *, request_id: str, stage: str, sha: str,
              reason: str, run_id: str = "") -> None:
@@ -756,4 +1054,5 @@ class Queue:
             "SELECT * FROM evaluations ORDER BY at")]
 
 
-__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract", "redact"]
+__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract",
+           "declares_deploy_only", "landed_sha", "landing_marker", "redact"]
