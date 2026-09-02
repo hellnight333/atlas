@@ -3,7 +3,9 @@
 
     driver.py status                 what the queue holds
     driver.py enqueue --title ... --brief ... --path ... [--path ...]
+    driver.py enqueue ... --deploy-only     ship what main carries, build nothing
     driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
+    driver.py declare-deploy-only <task>    same, for a QUEUED row only
     driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
@@ -38,6 +40,24 @@ agents and knows nothing about businesses, signals or outreach.
       → DEPLOYING    where the task declares it          (objective)
       → VERIFYING    where the task declares it          (objective)
       → DONE
+
+## The deploy-only path
+
+A task that declares `deploy_only` writes nothing. It exists for the case
+where reviewed work is already on `main` and only needs to reach the running
+system, and it takes none of the machine above: no branch, no builder, no
+review unit, no reviewer. It re-asks git what is checked out and whether the
+tree is clean — the deploy must ship `main` as `main` stands and nothing
+else — then runs the full suite, the deploy script and the production probe.
+Its DONE record names the gates that actually ran, so it says `tests,
+deployed, in_production` and never claims a review or a scope check that
+nobody performed.
+
+Only a QUEUED task can be declared deploy-only. A terminal task is the record
+of what happened to it, and reopening one would leave its reviews, findings
+and scope checks describing a row that has become something else; redeploying
+what `main` carries is new work and is enqueued as a new deploy-only task.
+There is no requeue here, deliberately.
 
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into
@@ -81,7 +101,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from devloop import agents, boundary, gates, projection  # noqa: E402
-from devloop.queue import Queue, State, allowed_paths, redact  # noqa: E402
+from devloop.queue import (Queue, State, allowed_paths,  # noqa: E402
+                           declares_deploy_only, redact)
 
 REPO = Path(__file__).resolve().parents[2]
 LOG = REPO / ".qevik" / "devloop" / "driver.log"
@@ -186,6 +207,14 @@ class Driver:
                                "declare the paths it may change and requeue")
             log("BLOCKED", task=ident, why="no allowed-path contract")
             return State.BLOCKED
+        # A task that only redeploys writes nothing, so none of what follows
+        # applies to it: no branch to build on, no builder, no review unit.
+        # Taken after the contract check rather than before it so that "no
+        # task runs without a contract" stays unconditional — and a task that
+        # writes nothing keeps any contract, which `_deploy_only` proves by
+        # asking git rather than by asserting it.
+        if declares_deploy_only(task):
+            return self._deploy_only(task, started)
         # A dirty tree would be committed under this task's name and reviewed
         # as its work. Refused rather than adopted: the review unit has to be
         # the task's diff and nothing else.
@@ -444,6 +473,11 @@ class Driver:
         """Review is clean. Land it, run the remaining gates, then finish."""
         ident = task["id"]
         needed = gates.required(task)
+        # What actually ran, accumulated as it runs rather than copied from
+        # what the task asked for. The four below are behind every route into
+        # `_ship`: the diff gate, the round's suite, the scope check and the
+        # review, each of which this method re-asks the record about.
+        ran = ["changed", "tests", "scope", "review"]
         # Only now does it reach `main` — as one commit, so the history says
         # "this task, reviewed clean" rather than replaying the argument the
         # builder and the reviewer had on the way there.
@@ -511,6 +545,7 @@ class Driver:
                 self.q.move(ident, State.FAILED, reason=shipped.detail)
                 log("FAILED", task=ident, why="deploy failed")
                 return State.FAILED
+            ran.append("deployed")
 
         if "in_production" in needed:
             probe = (json.loads(task.get("evidence") or "{}")
@@ -532,11 +567,129 @@ class Driver:
                 self.q.move(ident, State.FAILED, reason=live.detail)
                 log("FAILED", task=ident, why="production did not agree")
                 return State.FAILED
+            ran.append("in_production")
 
-        self.q.move(ident, State.DONE,
-                    reason=f"gates: {', '.join(needed)}",
-                    detail=f"completed in {int(time.monotonic() - started)}s")
-        log("DONE", task=ident, seconds=int(time.monotonic() - started))
+        return self._finish(task, started, ran)
+
+    def _deploy_only(self, task: dict, started: float) -> str:
+        """Ship what `main` already carries. No builder, no reviewer, no diff.
+
+        The work being deployed was written, reviewed, scope-checked and
+        landed by the task that produced it. This one adds nothing to it, so
+        there is nothing here for a review unit to contain and nothing for a
+        reviewer to be shown — asking for either would be asking about an
+        empty diff, and a clean review of nothing is not evidence about
+        anything.
+
+        What replaces them is a structural re-check of git, because "nothing
+        was written" is a claim and git is where it is settled. Two questions,
+        both asked of the repository rather than of the row: `main` is what is
+        checked out, so what deploys is reviewed work and not some task branch
+        left behind by a run that ended badly; and the tree is clean, so what
+        deploys is `main` as committed and not `main` plus whatever somebody
+        was editing. Either answer coming back wrong is the machine being in a
+        state this task cannot be run from, not a verdict on the work, so it
+        is counted as an infrastructure failure: the task is requeued, and a
+        repository that keeps answering wrong stops the run through the same
+        brake that stops a broken reviewer rather than being retried for ever.
+        """
+        ident = task["id"]
+        readable, on = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)
+        if readable != 0:
+            return self._infra(ident, f"git could not say what is checked out:"
+                                      f" {on[:200]}")
+        if on != "main":
+            return self._infra(
+                ident, f"a deploy-only task ships what main carries and {on} "
+                       f"is what this repository has checked out; nothing was "
+                       f"deployed")
+        # Asked directly rather than through `clean_tree`, which is the gate
+        # that proves the *reviewer* wrote nothing and says so in its detail.
+        # No reviewer ran here, and borrowing its words would put a sentence
+        # about a review into the record of a task that had none.
+        readable, dirty = _git("status", "--porcelain", cwd=self.repo)
+        if readable != 0:
+            return self._infra(ident,
+                               f"git could not read the tree: {dirty[:200]}")
+        if dirty:
+            return self._infra(
+                ident, f"a deploy-only task ships main as committed and the "
+                       f"tree is not clean; nothing was deployed: "
+                       f"{dirty.strip()[:300]}")
+        sha = head_sha(self.repo)
+        log("DEPLOY_ONLY", task=ident, at=sha[:12],
+            title=task["title"][:60])
+        # The suite and the deploy together outlast a lease that was taken
+        # before either started, and a lease that expires under a running
+        # deploy is a second driver claiming the same redeploy.
+        self.q.renew(ident)
+
+        # The whole suite, never a narrowed one. There is no diff to narrow
+        # to: the question a deploy-only task asks is whether `main` as it
+        # stands is fit to run, and only the whole suite answers that.
+        ran: list[str] = []
+        whole = gates.tests(cwd=self.repo)
+        if whole.unmeasured:
+            return self._infra(ident, f"full suite unmeasured: {whole.detail}")
+        if not whole.passed:
+            self.q.move(ident, State.CONTESTED,
+                        reason=f"full suite fails on main: {whole.detail}",
+                        head_sha=sha)
+            log("CONTESTED", task=ident, why="the suite fails on main")
+            return State.CONTESTED
+        ran.append("tests")
+
+        self.q.move(ident, State.DEPLOYING, reason=whole.detail, head_sha=sha)
+        log("DEPLOYING", task=ident, at=sha[:12])
+        shipped = gates.deployed(cwd=self.repo)
+        if shipped.unmeasured:
+            return self._infra(ident, shipped.detail)
+        if not shipped.passed:
+            self.q.move(ident, State.FAILED, reason=shipped.detail)
+            log("FAILED", task=ident, why="deploy failed")
+            return State.FAILED
+        ran.append("deployed")
+
+        if task.get("requires_prod_check"):
+            probe = (json.loads(task.get("evidence") or "{}")
+                     .get("production_probe", ""))
+            if not probe:
+                # Declared but not supplied, exactly as in `_ship`: the task
+                # asked to be verified in production and gave nothing to
+                # verify with. That is a defect in the task, not a pass.
+                self.q.move(ident, State.CONTESTED,
+                            reason="production verification required and no "
+                                   "probe was supplied")
+                return State.CONTESTED
+            self.q.move(ident, State.VERIFYING)
+            log("VERIFYING", task=ident)
+            live = gates.in_production(cwd=self.repo, probe=probe)
+            if live.unmeasured:
+                return self._infra(ident, live.detail)
+            if not live.passed:
+                self.q.move(ident, State.FAILED, reason=live.detail)
+                log("FAILED", task=ident, why="production did not agree")
+                return State.FAILED
+            ran.append("in_production")
+
+        return self._finish(task, started, ran)
+
+    def _finish(self, task: dict, started: float, ran: list[str]) -> str:
+        """DONE, recorded against the gates that ran and not the ones declared.
+
+        The record used to name `gates.required(task)`, which is what the task
+        *asked for*. On the build path the two coincide and the difference
+        never showed. On the deploy-only path they do not: `changed`, `scope`
+        and `review` are in the declared list of every task and none of them
+        runs, so a record copied from it would say a review happened when no
+        reviewer was ever asked. The list is therefore built as each gate
+        passes, and a gate that did not run cannot appear in it.
+        """
+        ident = task["id"]
+        seconds = int(time.monotonic() - started)
+        self.q.move(ident, State.DONE, reason=f"gates: {', '.join(ran)}",
+                    detail=f"completed in {seconds}s")
+        log("DONE", task=ident, seconds=seconds, gates=ran)
         return State.DONE
 
     def _commit(self, task: dict, round_no: int) -> None:
@@ -762,6 +915,9 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--evidence", default="{}")
     add.add_argument("--deploy", action="store_true")
     add.add_argument("--verify-production", action="store_true")
+    add.add_argument("--deploy-only", action="store_true",
+                     help="ship what main already carries: the full suite, the "
+                          "deploy and the probe, with no builder and no review")
     add.add_argument("--path", action="append", default=[], required=True,
                      help="a path, directory (trailing /) or glob the task "
                           "may change; repeatable, at least one")
@@ -771,6 +927,11 @@ def main(argv: list[str] | None = None) -> int:
     declare.add_argument("--path", action="append", default=[], required=True)
     declare.add_argument("--reason", default="")
     declare.add_argument("--actor", default=os.environ.get("USER", "person"))
+
+    redeploy = sub.add_parser("declare-deploy-only")
+    redeploy.add_argument("task")
+    redeploy.add_argument("--reason", default="")
+    redeploy.add_argument("--actor", default=os.environ.get("USER", "person"))
 
     show = sub.add_parser("scope")
     show.add_argument("task")
@@ -803,7 +964,8 @@ def main(argv: list[str] | None = None) -> int:
                       paths=args.path, priority=args.priority,
                       evidence=json.loads(args.evidence),
                       requires_deploy=args.deploy,
-                      requires_prod_check=args.verify_production)
+                      requires_prod_check=args.verify_production,
+                      deploy_only=args.deploy_only)
         print(ident)
         return 0
 
@@ -811,6 +973,19 @@ def main(argv: list[str] | None = None) -> int:
         declared = q.declare_paths(args.task, args.path, actor=args.actor,
                                    reason=args.reason)
         print(f"{args.task} may change: {', '.join(declared)}")
+        return 0
+
+    if args.command == "declare-deploy-only":
+        # The refusal is the interesting half. A person reaching for this on a
+        # task that already ended is told, in the error, that the record stays
+        # a record and that a redeploy is a new task.
+        try:
+            q.declare_deploy_only(args.task, actor=args.actor,
+                                  reason=args.reason)
+        except (KeyError, ValueError) as refused:
+            print(f"refused: {refused}")
+            return 1
+        print(f"{args.task} will ship what main carries and build nothing")
         return 0
 
     if args.command == "scope":

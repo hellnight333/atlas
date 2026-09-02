@@ -25,6 +25,18 @@ live nearby. Nothing here may hold a secret regardless: see `redact`.
 `transitions` records every state change with its reason. A task that ends
 CONTESTED can be read backwards to the exact review round that contested it,
 and a driver that died can be told apart from one that refused.
+
+## A terminal task is a record, and there is deliberately no requeue
+
+Nothing here reopens a DONE, CONTESTED, BLOCKED or FAILED row, and that is a
+decision rather than an omission. A terminal row is the record of what
+happened to one piece of work: reviews, findings and scope checks all point at
+it by id and by the sha it landed, and moving it back to QUEUED would rewrite
+what those records describe while leaving them saying otherwise. Retrying is
+new work, so it gets a new row — including the commonest case, redeploying
+what `main` already carries, which is enqueued as a fresh deploy-only task
+rather than reanimated out of an old one. `declare_deploy_only` refuses every
+non-QUEUED row for exactly this reason.
 """
 
 from __future__ import annotations
@@ -141,6 +153,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     evidence            TEXT NOT NULL DEFAULT '{}',
     requires_deploy     INTEGER NOT NULL DEFAULT 0,
     requires_prod_check INTEGER NOT NULL DEFAULT 0,
+    -- Ship what `main` already carries, and build nothing. No builder, no
+    -- branch, no review unit: the work being deployed was reviewed and landed
+    -- by the task that wrote it, and this one only runs the full suite, the
+    -- deploy script and the production probe against it. 0 on every row that
+    -- did not declare it, which is every row that builds.
+    deploy_only         INTEGER NOT NULL DEFAULT 0,
     -- The allowed-path contract, as a JSON list of repo-relative patterns.
     -- What the task may change; the driver compares the diff against it and
     -- refuses to land anything outside. NULL only on rows that predate the
@@ -321,6 +339,21 @@ def allowed_paths(task: dict) -> list[str]:
     return [one for one in loaded if isinstance(one, str)] if isinstance(loaded, list) else []
 
 
+def declares_deploy_only(task: dict) -> bool:
+    """Whether this task ships what `main` carries instead of writing anything.
+
+    Read off the row, never inferred from the brief. "Redeploy the control
+    plane" in prose is an instruction to a builder that a builder may
+    misread; this is a column the driver branches on, and the branch it takes
+    runs no builder at all.
+
+    A row from before the column, or one that never declared it, is False —
+    a task that builds. Defaulting the other way would turn every legacy row
+    into one that deploys without a review unit.
+    """
+    return bool(task.get("deploy_only"))
+
+
 class Queue:
     """The driver's durable state. One writer at a time, by design.
 
@@ -353,6 +386,12 @@ class Queue:
                 self._db.execute("PRAGMA table_info(tasks)")}
         if "paths" not in have:
             self._db.execute("ALTER TABLE tasks ADD COLUMN paths TEXT")
+        if "deploy_only" not in have:
+            # A constant default, so the existing rows get 0 rather than NULL:
+            # a task that predates the column is a task that builds, and that
+            # is the honest answer for it rather than an unknown one.
+            self._db.execute("ALTER TABLE tasks ADD COLUMN deploy_only"
+                             " INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self._db.close()
@@ -380,7 +419,7 @@ class Queue:
     def add(self, *, title: str, brief: str, origin: str, paths: list[str],
             evidence: dict | None = None, priority: int = 50,
             requires_deploy: bool = False, requires_prod_check: bool = False,
-            task_id: str = "") -> str:
+            deploy_only: bool = False, task_id: str = "") -> str:
         """Enqueue work. Refuses production-origin work with no evidence.
 
         The refusal is the point. Requirement: never generate work merely to
@@ -394,6 +433,12 @@ class Queue:
         rounds had been spent on it. The contract is a list the driver can
         compare a diff against, so the comparison is made by the loop rather
         than by whoever remembers to look.
+
+        `deploy_only` marks a task that ships what `main` already carries. It
+        implies `requires_deploy`, written onto the row rather than left
+        implied, so `claim` skips it while the control plane is unreachable —
+        the same rule that keeps every other task needing the host away from a
+        driver that cannot reach it.
         """
         if origin == "production" and not (evidence or {}):
             raise ValueError(
@@ -405,11 +450,13 @@ class Queue:
         with self._write() as db:
             db.execute(
                 "INSERT INTO tasks (id, title, brief, state, origin, priority,"
-                " evidence, requires_deploy, requires_prod_check, paths,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " evidence, requires_deploy, requires_prod_check, deploy_only,"
+                " paths, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ident, redact(title), redact(brief), State.QUEUED, origin,
                  int(priority), json.dumps(evidence or {}),
-                 int(requires_deploy), int(requires_prod_check),
+                 int(bool(requires_deploy) or bool(deploy_only)),
+                 int(requires_prod_check), int(bool(deploy_only)),
                  json.dumps(declared), _now(), _now()))
             db.execute(
                 "INSERT INTO transitions (task_id, from_state, to_state, reason,"
@@ -523,6 +570,54 @@ class Queue:
                         + (f": {reason}" if reason else "")),
                  actor, _now()))
         return declared
+
+    def declare_deploy_only(self, task_id: str, *, actor: str,
+                            reason: str = "") -> None:
+        """Mark a QUEUED task as one that only redeploys. QUEUED, and no other.
+
+        A finished or failed task is a record of what happened, not a handle
+        on the work it describes: its reviews, findings and scope checks name
+        the sha it ended on, and changing what the row claims to be leaves all
+        of them describing something else. Redeploying what `main` carries is
+        new work, and new work is a new row — so this refuses every state but
+        QUEUED, and refusing the terminal ones is how the queue stays free of
+        a requeue rather than growing one.
+
+        The refusal is also what answers the obvious objection to the
+        declaration existing at all: a FAILED task declared deploy-only
+        afterwards could never be claimed, because `claim` does not hand out
+        terminal rows. It cannot reach that shape, because the declaration
+        cannot be applied to it.
+
+        In flight is refused for the same reason a contract is not changed
+        under a running task: the driver is already measuring the row as it
+        stood when it claimed it.
+        """
+        with self._write() as db:
+            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+                             (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            state = row["state"]
+            if state != State.QUEUED:
+                raise ValueError(
+                    f"{task_id} is {state}; only a QUEUED task can be declared "
+                    f"deploy-only. A finished or failed task is a record of "
+                    f"what happened and is not reopened, and a task in flight "
+                    f"is being run as it stood when it was claimed. "
+                    f"Redeploying what main carries is new work: enqueue it as "
+                    f"a new deploy-only task.")
+            db.execute(
+                "UPDATE tasks SET deploy_only = 1, requires_deploy = 1,"
+                " updated_at = ? WHERE id = ?", (_now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, state, state,
+                 redact("declared deploy-only: it ships what main already "
+                        "carries and builds nothing"
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
 
     def park(self, task_id: str, *, request_id: str, stage: str, sha: str,
              reason: str, run_id: str = "") -> None:
@@ -756,4 +851,5 @@ class Queue:
             "SELECT * FROM evaluations ORDER BY at")]
 
 
-__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract", "redact"]
+__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract",
+           "declares_deploy_only", "redact"]
