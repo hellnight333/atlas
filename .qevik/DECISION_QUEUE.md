@@ -243,3 +243,15 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-17a8c4e3e8d4`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-17fc65e5c5b9 -->
+## Contested — Deploy what main already carries when a deploy task has no diff (second attempt)
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/devloop/queue.py:789-792` [blocking] Preserve committed branch work when requeuing
+  - `infra/devloop/queue.py:428-430` [major] Check whether the landing is still present
+  - `infra/devloop/driver.py:368-370` [major] Isolate prior findings when reviewing unchanged requeued work
+
+- **Driver task:** `t-17fc65e5c5b9`
+- **Review unit:** `..`
