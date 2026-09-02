@@ -46,6 +46,76 @@ config as valid. Use `systemctl restart caddy`. The old Caddyfile is preserved a
 printed, transmitted or stored anywhere else. Without it the vault seals and the
 Credential Centre stores nothing rather than falling back to plaintext.
 
+## How a deploy is built
+
+`infra/deploy_control.sh` builds everything it ships from one immutable commit,
+never from the working tree (ADR-0010 Step 1). A checkout, a rebase or an edit
+while a copy is in flight cannot change what lands on the host.
+
+```bash
+QEVIK_DEPLOY_SHA=<commit> ./infra/deploy_control.sh [--rehearse] [user@host]
+```
+
+**The sha contract.** The commit comes from `QEVIK_DEPLOY_SHA`, never from `$1`
+— `$1` is and stays the ssh target. The script refuses when the variable is
+unset, when it does not name a commit, and when that commit is not an ancestor
+of `main` ("not landed on main"). It resolves the value to its full 40-hex id
+and prints that id everywhere it mentions the commit. The branch/porcelain
+checks stay as fail-safes about the operator's own checkout; they are not
+where the payload comes from.
+
+**The export.** `git archive <sha> -- packages/kernel/atlas_kernel infra
+apps/control/src` is extracted into a private temporary directory that is
+removed on exit. Before anything is sent, every blob in `git ls-tree -r <sha>`
+for those prefixes is compared with `git hash-object` of the extracted file,
+and the number of regular files under the export must equal the number of
+blobs. The run prints `export verified: <n> files from <sha>`. Every shipped
+read — the kernel, the console, the infra tree, the unit files, the worker
+fingerprint, the kernel-presence check — comes from that export.
+
+**Exit codes**, so a person and the loop read the same answer:
+
+| Code | Meaning |
+|---|---|
+| 0 | deployed, or rehearsed |
+| 1 | a preflight refusal, or a deploy that failed |
+| 2 | refused before any host contact — arguments, seams, sha, tree |
+| 3 | the export did not match the commit |
+
+Nothing is written to the host before the access check (`ssh true`) succeeds.
+
+**`--rehearse`** does the same argument parsing, the same refusals, the same
+export and verification, and the same access check — then plans every transfer
+a real run would make as `rsync -n -i` against the real host, reads the host's
+provenance marker, service states and `sha256sum` availability, and writes
+nothing: no rollback copy, no schema step, no chown, no restart. It finishes
+with `REHEARSED sha=<sha> kernel=… console=… infra=… units=…; nothing was
+written`. The host has no staging twin, so this is the only way to see what a
+deploy would do before it does it.
+
+**Redeploying an older state.** An already-landed older commit is allowed on
+purpose — that is how the previous state goes back:
+
+```bash
+git -C . log --oneline -n 5 main          # find the commit that was good
+QEVIK_DEPLOY_SHA=<that sha> ./infra/deploy_control.sh --rehearse
+QEVIK_DEPLOY_SHA=<that sha> ./infra/deploy_control.sh
+```
+
+**Retries.** `ssh_` retries only exit 255 — ssh's own status for a
+connection-level failure. Any other status is the remote command's own answer
+and is returned at once, so a deterministic failure costs one round trip
+instead of 165 seconds. The two polls therefore state their own patience: the
+health poll waits 60 × 2 s, the worker fingerprint poll 60 × 3 s.
+
+**Test seams.** `QEVIK_REMOTE_APP`, `QEVIK_CONSOLE_DIR`, `QEVIK_UNIT_DIR`,
+`QEVIK_ENV_FILE`, `QEVIK_HEALTH_URL` and `QEVIK_ROLLBACK_DIR` redirect the host
+paths so `packages/kernel/tests/test_deploy_control.py` can drive a whole run
+against a fake host. **Production never sets them.** All six together and only
+under `QEVIK_TEST_HOST=1`, or the script refuses — a seam left behind in a
+shell must never redirect part of a real deploy. Every run prints
+`targets: app=… console=… units=… rollback=…` so the destination is visible.
+
 ## The one thing left, and it needs a person
 
 `/api/*` answers 401 for everyone because **no operator is attached to a
