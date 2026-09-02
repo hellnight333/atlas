@@ -298,3 +298,17 @@ verdict. Empty until then._
   (`infra/deploy_control.sh` +352/−53, `packages/kernel/tests/test_deploy_control.py` +681,
   `docs/qevik-docs/autonomous/DEPLOY_APP_QEVIK_AI.md` +76) · 2,866 s. Not yet run against
   the host; `--rehearse` against the real host happens after T2 and T3 land.
+- **T2 — host manifest check, `DEPLOYED_SHA` marker, rollback hygiene** · task `t-e44a121a65b1`
+  (attempt 1) · **CONTESTED** 2026-09-02T11:30Z after 3 rounds, branch kept unmerged at
+  9e6c0be (base 3c1d804, run r-5b095f6400, 4,313 s) · gates pass and scope kept in all three
+  rounds (3 paths inside the contract: `infra/deploy_control.sh` +397/−59,
+  `packages/kernel/tests/test_deploy_control.py` +542, `DEPLOY_APP_QEVIK_AI.md` +120) ·
+  each round's findings were fixed and each round surfaced a new one in the same area —
+  r1: stale snapshot kept when a target is absent (`:564-566`), failed rollback-marker
+  write still reported ROLLED BACK (`:287-290`); r2: manifest promotion `mv … || [ -f … ]`
+  masked (`:707-708`), symlinks omitted from the manifest (`:171-176`, major); r3: the
+  second `write_marker` on the rollback-incomplete path can fail and leave a stale
+  `state=installed` marker (`:303-306`, major) · the r1 and r3 findings are the same class
+  (marker write failure not treated as provenance failure) at two sites; the fixer fixed
+  the instance, not the class · nothing deployed; no successor enqueued — awaiting the
+  owner's decision (successor with recorded diagnosis, decision reference, or abandonment).
