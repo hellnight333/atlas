@@ -312,3 +312,27 @@ verdict. Empty until then._
   (marker write failure not treated as provenance failure) at two sites; the fixer fixed
   the instance, not the class · nothing deployed; no successor enqueued — awaiting the
   owner's decision (successor with recorded diagnosis, decision reference, or abandonment).
+
+- **T2 (attempt 2) — host manifest check, `DEPLOYED_SHA` provenance under one checked
+  write contract, rollback hygiene** · task `t-9f3ecb58b4ad`, successor of
+  `t-e44a121a65b1` (owner route (a), 2026-09-02; recorded as DQ-012 run 1/15 — the
+  recurrence was class-level, not independent findings) · **LANDED 2b7855c** on main
+  2026-09-02 (base 357a991, run r-ed199810da, 5,336 s, DONE) · 3 rounds: r1 two
+  blocking (provenance probe treated `ssh` exit 255 as absence, :634-637; failed
+  manifest removal not entered in `NOT_RESTORED`, :297-299), r2 two major (console
+  transfer lacked the manifest's exclusions, :531-532; `--rehearse` did not plan the
+  `DEPLOYED_MANIFEST.new` transfer, :584-589), r3 **CLEAN** · gates pass and scope
+  kept every round; same three-path contract (`infra/deploy_control.sh` +516/−…,
+  `packages/kernel/tests/test_deploy_control.py` +872, `DEPLOY_APP_QEVIK_AI.md` +155;
+  1,475 insertions, 68 deletions) · the class invariant holds structurally: every
+  atomic marker write lives inside `provenance_write()` (read-back verified;
+  `test_the_marker_has_exactly_one_writer`), every call site is enumerated and driven
+  to failure (`test_every_provenance_write_has_a_case_below`,
+  `test_a_failed_marker_write_is_never_reported_as_success` × 6 sites: installing,
+  installed, rolling-back, previous-verbatim, rolled-back, rollback-incomplete), and no
+  outcome word or exit code is finalised before its provenance write succeeded · all
+  five attempt-1 findings covered by named tests (stale snapshot / absent target,
+  demotion-first rollback marker, manifest promotion under `set -e`, symlink refusal
+  in preflight, unchecked second marker write) · 46 tests in the file · nothing
+  deployed; the first real deployment remains human-watched after T3, per Step 1
+  item 10.
