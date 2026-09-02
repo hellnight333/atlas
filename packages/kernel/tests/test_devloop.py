@@ -360,6 +360,9 @@ def test_a_builder_that_only_ran_out_of_turns_is_judged_by_the_gates(monkeypatch
     The builder is told to finish and may have done so on its last turn, so
     the tree is judged rather than discarded. The gates still decide — here
     they find nothing changed and fail it, which is the proof they were asked.
+
+    Both questions the gate asks are recorded: the working tree, and then the
+    review unit, which is what a task resuming a branch has its work in.
     """
     driver_mod, driver, ident, task = _driver_for(q, tmp_path)
     monkeypatch.setattr(driver_mod.agents, "build",
@@ -367,11 +370,11 @@ def test_a_builder_that_only_ran_out_of_turns_is_judged_by_the_gates(monkeypatch
     reached = []
     monkeypatch.setattr(
         driver_mod.gates, "changed",
-        lambda **k: (reached.append("changed"),
+        lambda **k: (reached.append("range" if k.get("base_sha") else "tree"),
                      gates.Gate("changed", False, "nothing was changed"))[1])
 
     assert driver.run_task(task) == State.FAILED
-    assert reached == ["changed"], "the turn limit was treated as a verdict"
+    assert reached == ["tree", "range"], "the turn limit was treated as a verdict"
     assert any("nothing was changed" in t["reason"]
                for t in q.transitions(ident)), "the gates did not decide it"
 
@@ -2788,3 +2791,83 @@ def test_the_driver_hands_its_queue_the_repository_it_lands_work_in():
     assert "repo=REPO" in call, (
         "the driver builds its queue without naming the repository, so "
         "`requeue` cannot see that a task's work is already on main")
+
+
+# ------------------- and a requeue that can succeed is not failed on arrival
+#
+# The other half of the same question. A requeue is refused when `main` already
+# carries the work; when it does not, the task comes back to a branch that
+# *does* — every round a task runs is committed before it is reviewed, so an
+# out-of-scope task is contested with its diff on `devloop/<task>` and a clean
+# tree. The repair the ledger prescribes is to widen the contract and requeue,
+# and it only works if the resumed run measures the branch rather than
+# demanding the builder edit something a second time.
+
+
+def test_a_requeued_task_is_not_failed_for_work_its_branch_already_holds(
+        tmp_path, monkeypatch):
+    """The documented repair, end to end, on a real repository.
+
+    Round one writes outside the contract and is contested with the diff
+    committed to its branch. A person widens the contract and requeues. The
+    builder that comes back correctly writes nothing — the work is already
+    there and is now inside the contract — and the run has to reach the review
+    and land, rather than failing the `changed` gate for a clean tree.
+    """
+    import subprocess
+
+    from devloop import driver as drv
+    from devloop.queue import landed_sha
+
+    repo, main_sha = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db", repo=repo)
+    ident = q.add(title="tidy the app", brief="b", origin="human",
+                  paths=["src/"])
+
+    def build_outside_the_contract(task, *, cwd, **_):
+        (cwd / "src" / "app.py").write_text("x = 2\n")
+        (cwd / "docs").mkdir(exist_ok=True)
+        (cwd / "docs" / "drift.md").write_text("outside the contract\n")
+        return drv.agents.Outcome(ok=True, exit_code=0, output="done")
+
+    monkeypatch.setattr(drv.agents, "build", build_outside_the_contract)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+    monkeypatch.setattr(drv.agents, "review", lambda **k: (_ for _ in ()).throw(
+        AssertionError("an out-of-scope diff was sent for review")))
+
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    assert driver.run_task(q.claim(owner="d")) == State.CONTESTED
+    assert q.scope_was_kept(ident) is False
+
+    # The repair, made outside the loop exactly as the ledger entry describes.
+    q.declare_paths(ident, ["src/", "docs/"], actor="ayoub",
+                    reason="the drift is this task's work after all")
+    assert landed_sha(ident, repo=repo) == "", "nothing landed; nothing to refuse"
+    assert q.requeue(ident, actor="ayoub", reason="contract widened") is True
+
+    _builder_that_changes_nothing(monkeypatch, drv)
+    seen: list[str] = []
+
+    def clean_review(**k):
+        seen.append(k["base_sha"])
+        return drv.agents.Outcome(ok=True, exit_code=0, output="",
+                                  data={"verdict": "clean", "findings": []})
+
+    monkeypatch.setattr(drv.agents, "review", clean_review)
+
+    assert driver.run_task(q.claim(owner="d")) == State.DONE, (
+        "the resumed task was ended for a clean tree; its branch carried the "
+        "work, and the requeue the ledger prescribes could only succeed if the "
+        "builder edited something it had no reason to edit")
+    reasons = " ".join(t["reason"] for t in q.transitions(ident))
+    assert "nothing was changed" not in reasons
+    assert seen == [main_sha], "the review was not shown the committed work"
+    [_, second] = q.scope_checks(ident)
+    assert second["verdict"] == "in_scope"
+    assert second["changed"] == ["docs/drift.md", "src/app.py"]
+    # And the work that was already committed is what landed.
+    assert landed_sha(ident, repo=repo) != ""
+    assert (repo / "docs" / "drift.md").read_text() == "outside the contract\n"
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == "main"

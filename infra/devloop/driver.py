@@ -344,7 +344,29 @@ class Driver:
 
             # -- objective gate, before anybody is asked an opinion --------
             self.q.move(ident, State.GATING, reason=f"round {round_no}")
+            # The tree first, and then the range, because the question is
+            # "does this task have work" and a clean tree only answers it for
+            # a task that starts from nothing.
+            #
+            # A resumed task has already committed its rounds to its branch —
+            # `_commit` runs before every review, and an out-of-scope task is
+            # contested *after* that commit. So the repair the out-of-scope
+            # ledger entry prescribes — widen the contract with
+            # `declare-paths`, put the task back with `requeue` — comes back to
+            # a branch that carries the work and a tree that is clean, and a
+            # builder that correctly writes nothing more would have been failed
+            # here for "nothing changed": the requeue could only succeed if the
+            # builder edited something it had no reason to edit.
+            #
+            # So the fallback measures the review unit itself, `base..HEAD` —
+            # the same range the size gate bounds, the scope gate reads, the
+            # reviewer is shown and the squash would take. For a fresh branch
+            # `base` is HEAD and the range is empty, so a builder that did
+            # nothing still fails exactly as before; nothing that had work is
+            # failed for not having written it twice.
             diff = gates.changed(cwd=self.repo)
+            if not diff.passed and not diff.unmeasured:
+                diff = gates.changed(cwd=self.repo, base_sha=base)
             if not diff.passed:
                 # A task that only deploys has nothing to write, and failing it
                 # for that is exactly what stopped t-4f02ee7a36c0: the builder
