@@ -981,6 +981,41 @@ def test_the_round_gate_runs_only_what_the_task_touched(tmp_path, monkeypatch):
     assert driver._selector() == ""
 
 
+def test_a_docs_only_change_runs_the_whole_suite(tmp_path, monkeypatch):
+    """Measured: `-k "00_PROJECT_STATE"` deselects all 4306 tests, exit=5.
+
+    The selector used to be built from every touched path, so a task that
+    changed only `docs/qevik-docs/00_PROJECT_STATE.md` asked pytest for a name
+    no test carries. pytest exits 5 when it selected nothing, `gates.tests`
+    reads any non-zero exit as a failed gate, and the round went to the fixer
+    with "4306 deselected" as its failure scenario — a task with no tests
+    burning its rounds on a suite that never ran a line of it.
+
+    Empty is the documented safe direction: the whole suite runs.
+    """
+    import devloop.driver as drv
+
+    driver = drv.Driver.__new__(drv.Driver)
+    driver.repo = tmp_path
+
+    monkeypatch.setattr(
+        drv.Driver, "_touched",
+        lambda self: ["docs/qevik-docs/00_PROJECT_STATE.md",
+                      "docs/qevik-docs/90_DECISIONS.md",
+                      "README.md"])
+    assert driver._selector() == ""
+
+    # Docs beside code: the code narrows the run, the docs contribute nothing.
+    monkeypatch.setattr(
+        drv.Driver, "_touched",
+        lambda self: ["docs/qevik-docs/00_PROJECT_STATE.md",
+                      "infra/devloop/driver.py",
+                      "packages/kernel/tests/test_devloop.py",
+                      "apps/control/src/index.html",
+                      "infra/devloop/review.schema.json"])
+    assert driver._selector() == "devloop or driver"
+
+
 def test_the_full_suite_still_runs_before_anything_deploys():
     source = Path(INFRA / "devloop" / "driver.py").read_text()
     ship = source[source.index("def _ship("):source.index("def _selector(")]

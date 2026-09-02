@@ -592,12 +592,27 @@ class Driver:
     def _selector(self) -> str:
         """A `-k` expression covering the modules this task changed.
 
-        Built from the changed paths rather than guessed. Empty when nothing
-        recognisable changed, and empty means the whole suite — the safe
+        Built from the changed **Python** paths rather than guessed. Empty when
+        nothing recognisable changed, and empty means the whole suite — the safe
         direction, since a selector matching nothing would pass silently.
+
+        Python only, because every touched path used to feed it. A task that
+        changed only `docs/qevik-docs/00_PROJECT_STATE.md` produced
+        `-k "00_PROJECT_STATE"`, which deselects the entire suite, and pytest
+        exits 5 when it selected nothing: measured on 2026-09-02, "4306
+        deselected, 1 warning in 1.97s", exit=5. `gates.tests` reads any
+        non-zero exit as a failed gate, so a docs-only change went to the fixer
+        with a deselection count as its failure scenario and burned its rounds
+        on work that has no tests. That is the opposite of the failure this
+        docstring promises: not matching nothing and passing silently, but
+        matching nothing and failing loudly.
+
+        A change touching both docs and code still narrows to the code.
         """
         names = set()
         for path in self._touched():
+            if Path(path).suffix != ".py":
+                continue
             stem = Path(path).stem
             if stem.startswith("test_"):
                 stem = stem[len("test_"):]
