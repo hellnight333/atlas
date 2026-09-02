@@ -255,3 +255,15 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-17fc65e5c5b9`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-8214147cda91 -->
+## Contested — Land the deploy-only path without a requeue
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/devloop/driver.py:642-644` [blocking] Revalidate the gated SHA before deploying
+  - `infra/devloop/queue.py:597-602` [major] Reject previously attempted QUEUED rows
+  - `infra/devloop/driver.py:687-689` [blocking] Deploy the tested commit rather than the mutable tree
+
+- **Driver task:** `t-8214147cda91`
+- **Review unit:** `..`
