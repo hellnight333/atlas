@@ -13,6 +13,7 @@ Only decisions that genuinely require the owner. A decision already resolved in
 | ~~DQ-007~~ | ~~Where do email addresses come from?~~ **RESOLVED 2026-08-31** — read them from the pages the audit already fetches. Contact discovery, not permission to send | — | — | Owner | Owner, this session | 2026-08-31 | RESOLVED |
 | DQ-007-old | Where do email addresses come from? | Read `mailto:` from the audited homepage / buy a data source / stay on WhatsApp only / do not do email outreach | None. 412 businesses carry 0 email addresses and no source collects one, so the email channel has no recipients at all. Reading contacts off a business's own website is technically deterministic — the audit already has the HTML — but it is collecting contact details for unsolicited outreach, which is the substance of DQ-005 and not mine to decide | — | Measured 2026-08-31 | 2026-08-31 | OPEN |
 | DQ-005 | Outreach policy for businesses that did not request contact | How Qevik approaches strangers | Partly answered in practice: the health check is now the first action, it asserts only what was observed, and it claims no prior relationship. The remaining question is cadence and scale, not truthfulness | — | ROADMAP §02 unknown list | — | OPEN |
+| DQ-010 | Which write boundary owns an outreach decision | (1) compound repository operations only · (3) wire the Opportunity pipeline's approval decisions back with a subscriber + reconciler · (4) one state machine on the live mission path (message row + event are the approval record). Session-passing / unit of work is analysed and not recommended | Do (1) first regardless; then the owner chooses (3) vs (4). (4) fits what production runs, but it decides that outreach approval is a mission decision and not a kernel approval — which is DQ-005's territory | — | `docs/decisions/ADR-0009-Outreach-Approval-Atomicity.md` | 2026-09-02 | OPEN |
 
 ## Resolved, recorded here so they are not asked again
 
@@ -100,6 +101,45 @@ production population is the second, so a bound would turn it red.
 
 Blocks devloop task `t-9c7566206741`, which is parked and resumes on the
 answer. The loop continues with independent work meanwhile.
+
+## DQ-010 — which write boundary owns an outreach decision
+
+**Open. Not raised as a production decision record.** The analysis is
+`docs/decisions/ADR-0009-Outreach-Approval-Atomicity.md` (Status: Proposed —
+a decision input, not an implementation approval). When the owner wants this
+answerable in app.qevik.ai, the mechanism is `human.raise_request(kind=DECISION)`
+on the production host with the ADR's options 1/3/4 as the keys; that has not
+been done, on purpose — the instruction was analysis only.
+
+Two development-loop tasks on this line ended CONTESTED after three review
+rounds each: `t-b0dfd18dd170` and `t-6057acdb0b35`. **Both are frozen.** They
+are not retried, and no unit of work, transaction coordinator or repository
+redesign is built without an explicit answer here.
+
+What the ADR establishes from `main` at `28edb9c`:
+
+- Every repository method owns its own session; a service that calls two of
+  them has two transactions with a gap. That is the codebase's convention, not
+  a defect in one module.
+- The one window that cannot be repaired from Qevik's records is on the
+  **production** send route — SMTP delivered, message row not yet `sent`; a
+  retry passes every guard and delivers again. It is closed by a guarded
+  claim-before-send using the conditional write that already exists
+  (`b1ee024`), not by any transaction change.
+- A message's status change and the business event attributing it must be one
+  commit — the shape `approve_signal` already uses. Approval ↔ message across
+  the two services is application consistency with a persisted link and an
+  idempotent, guarded follower; today the link is one-directional.
+- On `main` nothing subscribes to `ApprovalRejected` for outreach, and
+  `OpportunityService` is constructed nowhere in production.
+
+The decision: after the compound repository operations (which every option
+needs), does Qevik **bridge** the kernel approval system to the message
+(option 3: subscriber + reconciler, keeps policy/expiry/approver-count) or
+**collapse** it (option 4: the mission route's event + row become the
+approval record, one writer, no seam)? Option 4 fits what production runs;
+it also decides that outreach approval is governed by the mission and not by
+the kernel's approval policies, which is the substance of DQ-005.
 
 <!-- devloop:contested:t-0f8d6a74729c -->
 ## Contested — A mission that did its work is recorded as failed, with no cause
