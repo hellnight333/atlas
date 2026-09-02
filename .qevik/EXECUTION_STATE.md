@@ -169,9 +169,9 @@ end; a session finding it stale should reconcile before trusting it.
 <!-- devloop:begin -->
 ## Development loop
 
-_Written by `infra/devloop/driver.py` at 2026-09-02T00:24:44+00:00. The queue is the source of truth; this is its projection._
+_Written by `infra/devloop/driver.py` at 2026-09-02T00:57:47+00:00. The queue is the source of truth; this is its projection._
 
-- **5 done** · 0 in flight · 7 queued
+- **6 done** · 0 in flight · 6 queued
 - **1 waiting on a person** · 4 contested · 3 blocked
 
 ### Waiting on you
