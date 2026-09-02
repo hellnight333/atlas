@@ -288,3 +288,13 @@ constructed and transferred; it says nothing about what the host runs.
 
 _Appended as each task lands: task id, sha, review rounds, size, scope
 verdict. Empty until then._
+
+- **T1 — sha contract, verified `git archive` export, `--rehearse`** · task `t-1194cbe7823c`
+  (attempt 2; attempt 1 `t-18c738db28b4` CONTESTED after 3 rounds, branch kept unmerged
+  at f1129d9) · landed **a09bae5** on 2026-09-02T10:15Z · run r-e914b67efb, base 82ab9ef ·
+  2 review rounds (r1: 1 blocking P2 — worker-file presence was checked after the copy and
+  restarts, fixed to validate before any host write; r2: CLEAN) · gates changed=pass,
+  tests=pass both rounds · scope: 3 changed paths, all inside the contract
+  (`infra/deploy_control.sh` +352/−53, `packages/kernel/tests/test_deploy_control.py` +681,
+  `docs/qevik-docs/autonomous/DEPLOY_APP_QEVIK_AI.md` +76) · 2,866 s. Not yet run against
+  the host; `--rehearse` against the real host happens after T2 and T3 land.
