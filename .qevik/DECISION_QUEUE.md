@@ -173,3 +173,20 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-b0dfd18dd170`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-6057acdb0b35 -->
+## Contested — Wire approval decisions back to the message, without racing
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `packages/kernel/atlas_kernel/opportunity/service.py:130-144` [blocking] Register the foreclosure handler in the API runtime
+  - `packages/kernel/atlas_kernel/opportunity/service.py:453-458` [blocking] Find decisions by the approval's bound message id
+  - `packages/kernel/atlas_kernel/opportunity/service.py:590-599` [major] Record suppression only when its guarded write lands
+  - `packages/kernel/atlas_kernel/opportunity/gate.py:228-232` [major] Validate that outreach approvals originated from the gate
+  - `packages/kernel/atlas_kernel/opportunity/service.py:335-350` [major] Handle a concurrently completed request before withdrawing it
+  - `packages/kernel/atlas_kernel/opportunity/service.py:417-423` [major] Keep failed decision audits retryable
+  - `packages/kernel/atlas_kernel/opportunity/service.py:742-744` [blocking] Commit suppression and its timeline event atomically
+  - `packages/kernel/atlas_kernel/opportunity/service.py:342-348` [major] Preserve claims when request creation persisted before raising
+
+- **Driver task:** `t-6057acdb0b35`
+- **Review unit:** `..`
