@@ -165,6 +165,10 @@ write_marker() {  # each argument is one key=value line
 # host path>` line per regular file the deploy sends, which is the format
 # `sha256sum --check` reads. rsync's exit code says a transfer ran, not that the
 # right bytes arrived, and this is the difference.
+#
+# `-type f` is exhaustive only because a commit carrying a symlink under a
+# deployed path is refused in the preflight; nothing else the deploy sends is
+# invisible to it.
 manifest_lines() {  # export subtree, absolute host prefix ending in /
   local dir="$1" prefix="$2" rel
   [ -d "$dir" ] || return 0
@@ -416,13 +420,16 @@ fi
 #
 # Symlinks are listed as blobs of mode 120000 whose content is the link text,
 # and `find -type f` does not see them, so both the hash and the count treat
-# them as their own kind. A tracked link under a shipped prefix would otherwise
-# fail every deploy. `core.quotepath=false` likewise keeps a UTF-8 filename
-# listed as itself; a path git still has to quote is not found under the export
-# and counts as a mismatch, which is the safe way for this check to be wrong.
+# them as their own kind -- otherwise a tracked link under a shipped prefix would
+# fail this check for the wrong reason. They are collected and refused below, on
+# their own terms, because the *manifest* cannot measure one.
+# `core.quotepath=false` likewise keeps a UTF-8 filename listed as itself; a path
+# git still has to quote is not found under the export and counts as a mismatch,
+# which is the safe way for this check to be wrong.
 TAB="$(printf '\t')"
 EXPECTED=0
 MISMATCHES=0
+LINKS=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   mode="${line%% *}"
@@ -435,6 +442,7 @@ while IFS= read -r line; do
   EXPECTED=$((EXPECTED + 1))
   got=""
   if [ "$mode" = 120000 ]; then
+    LINKS="${LINKS:+$LINKS }$path"
     if [ -L "$EXPORT/$path" ]; then
       got="$(printf '%s' "$(readlink "$EXPORT/$path")" | git -C "$ROOT" hash-object --stdin)"
     fi
@@ -467,6 +475,24 @@ echo "export verified: $EXPECTED files from $SHA"
 # `set -o pipefail` aborts the script where it stands. After the copies and the
 # restarts, "where it stands" is production written and the rollback below
 # never reached. Before them, it is a refusal that costs nothing.
+#
+# A symlink is one of those things. `rsync -a` ships it as a link, but the
+# manifest below is built with `find -type f`, which cannot see one -- so the
+# link would land on the host as the only shipped byte nothing measures, and a
+# missing or repointed link would pass the host check and still be called
+# `state=installed`. The choice is to record and verify link targets, which is a
+# second host-side mechanism for something no shipped path carries, or to refuse
+# the commit. It is refused: one mechanism, and everything the deploy sends is in
+# the manifest the host checks. The refusal comes after the export check so a
+# *tampered* link is still reported as the mismatch it is.
+if [ -n "$LINKS" ]; then
+  echo "REFUSED: $SHA carries symlink(s) under a deployed path:" >&2
+  for path in $LINKS; do echo "    $path" >&2; done
+  echo "  The host manifest lists regular files only, so a link would reach" >&2
+  echo "  production as bytes the host never measures. Make it a regular file," >&2
+  echo "  or teach the manifest to record and check link targets." >&2
+  exit 1
+fi
 [ -f "$EXPORT/packages/kernel/atlas_kernel/qevik/app.py" ] || {
   echo "REFUSED: $SHA carries no kernel"; exit 1; }
 [ -f "$EXPORT/infra/mission_worker.py" ] || {
@@ -704,7 +730,15 @@ if ! ssh_ "sha256sum --check --quiet --strict '$REMOTE_APP/DEPLOYED_MANIFEST.new
   echo "FAILED: the bytes on the host do not match $SHA"
   rollback_and_report
 fi
-ssh_ "if [ -f '$REMOTE_APP/DEPLOYED_MANIFEST.new' ]; then mv '$REMOTE_APP/DEPLOYED_MANIFEST.new' '$REMOTE_APP/DEPLOYED_MANIFEST'; fi; [ -f '$REMOTE_APP/DEPLOYED_MANIFEST' ]" || {
+# Promotion is mandatory, and chained rather than sequenced: `if …; then mv; fi`
+# followed by `[ -f DEPLOYED_MANIFEST ]` passes on a *failed* `mv` whenever an
+# earlier deploy left a manifest behind -- the old file answers the test -- and
+# the marker below would then record this commit's digest while the durable
+# manifest still describes the previous one. Every link in the chain has to hold.
+ssh_ "[ -f '$REMOTE_APP/DEPLOYED_MANIFEST.new' ] \
+&& mv '$REMOTE_APP/DEPLOYED_MANIFEST.new' '$REMOTE_APP/DEPLOYED_MANIFEST' \
+&& [ -f '$REMOTE_APP/DEPLOYED_MANIFEST' ] \
+&& [ ! -e '$REMOTE_APP/DEPLOYED_MANIFEST.new' ]" || {
   echo "FAILED: the verified manifest could not be kept on the host"; rollback_and_report; }
 echo "host verified: $MANIFEST_FILES files match $SHA"
 

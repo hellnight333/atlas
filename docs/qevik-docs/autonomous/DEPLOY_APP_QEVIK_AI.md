@@ -57,9 +57,10 @@ unit files, the kernel-presence check — comes from there. A checkout or an edi
 in the tree while a copy is in flight therefore cannot change what lands.
 Before anything is used, the export is verified against the commit's own tree:
 each blob `git ls-tree -r <sha>` lists must be present with that blob's id
-(tracked symlinks are hashed as their link text, which is what git stores), and
-the export must hold nothing else. It prints `export verified: <n> files from
-<sha>`.
+(tracked symlinks are hashed as their link text, which is what git stores, so
+one is never mistaken for a mismatch — it is refused on its own terms below),
+and the export must hold nothing else. It prints `export verified: <n> files
+from <sha>`.
 
 **What the commit must carry.** Still in the preflight, before the access check,
 the export is required to hold `packages/kernel/atlas_kernel/qevik/app.py` and
@@ -69,6 +70,18 @@ export perfectly well — the file is simply not in that tree — so this is whe
 it is caught. Fingerprinting later, after the copies and the restarts, would
 abort the run with production already written and the rollback path unreached;
 both refusals are exit 1 and write nothing.
+
+**And what it must not carry: a symlink under a deployed path.** `rsync -a`
+ships a tracked link as a link, but the manifest below is built with `find -type
+f`, which cannot see one — so the link would be the only shipped byte the host
+never measures, and a missing or repointed link would pass the host check and
+still leave `state=installed`. Rather than a second host-side mechanism for
+something no deployed path carries, such a commit is refused (`REFUSED: <sha>
+carries symlink(s) under a deployed path`, exit 1, after the export check so a
+*tampered* link is still reported as the mismatch it is). What the deploy sends
+and what the manifest covers stay the same set.
+`packages/kernel/tests/test_deploy_control.py` asserts the index holds no such
+link, so this refusal costs nothing until someone adds one.
 
 **The host measures itself.** Before the host is touched, a manifest is built
 from the export: one `<sha256>  <absolute host path>` line per shipped regular
@@ -82,7 +95,12 @@ file — the kernel under `/opt/qevik/atlas/packages/kernel/atlas_kernel/`,
 file, a missing tool, an unsupported flag — prints `FAILED: the bytes on the
 host do not match <sha>` and rolls back: a check that could not run is a
 refusal, never a pass. On success the file is promoted to `DEPLOYED_MANIFEST`
-and the script prints `host verified: <n> files match <sha>`.
+and the script prints `host verified: <n> files match <sha>`. The promotion is
+part of the guarantee rather than a tidy-up after it: it is chained (`[ -f
+.new ] && mv … && [ -f DEPLOYED_MANIFEST ]`), because a failed `mv` followed by
+a separate existence test is answered by the *previous* deploy's manifest, and
+the marker would then record this commit's `manifest_sha256` over a durable
+manifest describing the last one. A promotion that fails rolls back.
 
 **The provenance marker** `/opt/qevik/atlas/DEPLOYED_SHA` is a few `key=value`
 lines, written atomically (`DEPLOYED_SHA.tmp`, then `mv`). It describes **bytes

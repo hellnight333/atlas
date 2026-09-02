@@ -33,7 +33,8 @@ TARGET = "qevik-test@127.0.0.1"
 # `cp` and `rsync` are resolved once, here, because the shims must call the real
 # ones by absolute path: the shim directory is first on PATH and `rsync` would
 # otherwise re-enter itself.
-_TOOLS = {name: shutil.which(name) for name in ("git", "rsync", "bash", "shasum", "cp")}
+_TOOLS = {name: shutil.which(name)
+          for name in ("git", "rsync", "bash", "shasum", "cp", "mv")}
 _MISSING = sorted(name for name, found in _TOOLS.items() if not found)
 
 pytestmark = pytest.mark.skipif(
@@ -326,6 +327,22 @@ if [ -f "$CTL/fail_cp_dest" ]; then
   case "$DEST" in *"$MATCH"*) echo "cp: refused by the test" >&2; exit 1 ;; esac
 fi
 exec "{_TOOLS['cp']}" "$@"
+""", executable=True)
+
+    _write(shims / "mv", f"""#!/usr/bin/env bash
+# The real mv, except when the test names a destination it must fail on. Both
+# the manifest promotion and the atomic marker write are a mv, and a failed mv
+# is the only way to observe what the script does when a promotion does not
+# happen -- which is the case a `[ -f ... ]` written after the mv cannot see.
+{common}
+printf 'mv %s\\n' "$*" >> "$CTL/log"
+if [ -f "$CTL/fail_mv_dest" ]; then
+  MATCH="$(cat "$CTL/fail_mv_dest")"
+  DEST=""
+  for a in "$@"; do DEST="$a"; done
+  case "$DEST" in *"$MATCH"*) echo "mv: refused by the test" >&2; exit 1 ;; esac
+fi
+exec "{_TOOLS['mv']}" "$@"
 """, executable=True)
 
     _write(shims / "sleep", f"""#!/usr/bin/env bash
@@ -643,16 +660,52 @@ def test_partial_test_seams_are_refused(world: World):
 # --- tracked symlinks --------------------------------------------------------
 
 
-def test_a_tracked_symlink_verifies_and_ships(world: World):
-    """(A) 120000 blobs are link text, and `find -type f` cannot see them."""
+def test_a_commit_carrying_a_symlink_is_refused(world: World):
+    """(A) `rsync -a` ships a link; `find -type f` cannot put one in the manifest.
+
+    So a shipped link would be the one thing on the host that the host's own
+    check never measures: it could be missing or repointed and the manifest
+    would still verify, leaving an `installed` marker asserting a verification
+    that did not cover the whole payload. The commit is refused instead, in the
+    preflight, before the host is touched.
+    """
     sha = commit(world, symlinks={"apps/control/src/latest.html": "index.html"},
                  message="add a tracked link")
+    before = snapshot(world.fake)
+
     proc = run(world, env=env_for(world, sha=sha))
+    _assert_refused_untouched(world, proc, before, 1)
     out = both(proc)
-    assert proc.returncode == 0, out
+    assert "carries symlink(s) under a deployed path" in out
+    assert "apps/control/src/latest.html" in out
+    # The export itself verified: 120000 blobs are still hashed as their link
+    # text, so this refusal is about what the manifest can measure and not about
+    # the export disagreeing with the commit.
     assert f"export verified: 7 files from {sha}" in out
-    link = world.console / "latest.html"
-    assert link.is_symlink() and os.readlink(link) == "index.html"
+
+    # A rehearsal predicts a real run, so it refuses the same commit rather than
+    # reporting a deploy that would refuse.
+    proc = run(world, "--rehearse", env=env_for(world, sha=sha))
+    _assert_refused_untouched(world, proc, before, 1)
+    assert "carries symlink(s) under a deployed path" in both(proc)
+
+
+def test_this_repository_ships_no_symlink():
+    """The refusal above only stays free of cost while that is true.
+
+    It reads the index rather than the working tree, because what the deploy
+    inspects is a commit: an untracked link lying in `infra/` is not shipped and
+    is not what would be refused.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-s", "--",
+         "packages/kernel/atlas_kernel", "infra", "apps/control/src"],
+        check=True, capture_output=True, text=True).stdout
+    links = [line.partition("\t")[2] for line in listing.splitlines()
+             if line.split()[0] == "120000"]
+    assert not links, (
+        "these tracked files are symlinks under a deployed path, so "
+        f"deploy_control.sh now refuses every commit carrying them: {links}")
 
 
 def test_a_utf8_filename_verifies(world: World):
@@ -892,6 +945,46 @@ def test_a_host_check_that_cannot_run_is_a_refusal_not_a_pass(world: World):
     assert (world.app / "DEPLOYED_SHA").read_text() == previous
     assert not (world.app / "DEPLOYED_MANIFEST.new").exists()
     assert _rolled_back(world)
+
+
+def test_a_manifest_that_cannot_be_promoted_is_never_called_installed(world: World):
+    """The promotion is part of the guarantee, not a tidy-up after it.
+
+    An earlier deploy's `DEPLOYED_MANIFEST` is on the host. If the promoting
+    `mv` fails, a `[ -f DEPLOYED_MANIFEST ]` written *after* it is answered by
+    that older file — so the deploy would go on to write `state=installed` with
+    this commit's `manifest_sha256` while the durable manifest still describes
+    the previous deployment, and every later reader of the marker would be
+    reading a claim nothing on disk supports.
+    """
+    previous = write_previous_provenance(world)
+    previous_manifest = (world.app / "DEPLOYED_MANIFEST").read_text()
+    before = snapshot(world.fake)
+    _write(world.ctl / "fail_mv_dest", str(world.app / "DEPLOYED_MANIFEST"))
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "the verified manifest could not be kept on the host" in out
+    assert "deployed sha=" not in out
+    # The mv really was attempted and really did fail; otherwise this test could
+    # pass without ever exercising the promotion.
+    assert [line for line in world.log()
+            if line.startswith("mv ") and line.rstrip().endswith("DEPLOYED_MANIFEST")], \
+        world.log()
+
+    # The host is back on the previous deployment, and says so.
+    assert "ROLLED BACK:" in out
+    _assert_previous_targets(world, before)
+    assert (world.app / "DEPLOYED_SHA").read_text() == previous
+    assert (world.app / "DEPLOYED_MANIFEST").read_text() == previous_manifest
+    # The marker and the manifest still describe one and the same deployment,
+    # which is exactly what a promotion silently skipped would have broken.
+    marker = read_marker(world)
+    assert marker["sha"] != world.sha, marker
+    assert marker["manifest_sha256"] == manifest_digest(
+        previous_manifest.splitlines()), marker
+    assert not (world.app / "DEPLOYED_MANIFEST.new").exists()
 
 
 # --- a rollback tells the truth ----------------------------------------------
