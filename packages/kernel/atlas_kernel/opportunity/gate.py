@@ -31,8 +31,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..approval.events import ApprovalCancelled, ApprovalExpired, ApprovalRejected
-from ..approval.models import ApprovalContext, ApprovalRequest, ApprovalScope, ApprovalState
-from ..approval.service import ApprovalService
+from ..approval.models import (
+    TERMINAL_APPROVAL_STATES,
+    ApprovalContext,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
+from ..approval.service import ApprovalError, ApprovalService
 from .models import (
     Business,
     Finding,
@@ -181,13 +187,28 @@ class OutreachGate:
         before anybody decided", which is exactly what this is. ``WITHDRAWN`` is
         what distinguishes it from a person cancelling.
 
-        Only ever called on a request this gate raised moments earlier, so one
-        that is no longer pending means somebody answered in between — and the
-        ``ApprovalError`` ``cancel`` raises for that is the honest outcome rather
-        than something to swallow. An answered question must not be quietly
-        withdrawn.
+        **A request somebody answered in between is left exactly as they left
+        it.** This is reached from a failure path — the row could not record
+        that the question was raised — and a decision landing inside that same
+        window is not a second failure to report. There is nothing left to take
+        back: the answer is terminal, the write-back has already closed the row
+        through ``BOUND_MESSAGE``, and cancelling would raise ``ApprovalError``
+        over the top of whatever failure sent us here, replacing an accurate
+        account of what went wrong with "already rejected". An answered question
+        is still never quietly withdrawn — it is not withdrawn at all.
+
+        The request as it now stands is returned either way, so the caller can
+        say which of the two happened. Everything else ``cancel`` refuses — an
+        unknown id, a request still pending — raises, because neither is this
+        race.
         """
-        return self._approvals.cancel(request.id, actor=actor, comment=WITHDRAWN)
+        try:
+            return self._approvals.cancel(request.id, actor=actor, comment=WITHDRAWN)
+        except ApprovalError:
+            answered = self._approvals.get(request.id)
+            if answered is None or answered.state not in TERMINAL_APPROVAL_STATES:
+                raise
+            return answered
 
     def on_foreclosed(
         self, handler: Callable[[ApprovalRequest, str], None]
@@ -207,6 +228,15 @@ class OutreachGate:
         approval in Atlas — a media publication, a credit spend, a roadmap
         decision — and handing those to an outreach write-back would ask it about
         requests that never named a message.
+
+        That narrowing is **routing, and never authority.** ``action`` and
+        ``metadata`` are whatever created the request supplied, and
+        ``POST /approvals`` takes both from its caller — so a request wearing this
+        action shows only that this subscriber is the right one to hand it to. It
+        is no evidence that this gate raised it, and none at all that the message
+        its metadata names was ever asked about. What a decision may actually
+        close is settled against the stored row: ``_must_describe`` here, and
+        ``OpportunityService._message_asked_about`` there.
 
         ``APPROVED`` is not delivered. The way a yes reaches a message is
         ``authorise``, which re-derives the fingerprint first, and a second door

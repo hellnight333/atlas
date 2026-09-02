@@ -13,10 +13,17 @@ Two properties are under test, and they pull in opposite directions on purpose:
 * **The guard holds.** With `expecting`, the update carries the caller's
   belief about the row into the same statement that writes, so a save whose
   premise has expired lands nowhere and says so.
-* **Nothing else moved.** Every existing call site passes no expectation, and
-  the unconditional path is still the unconditional upsert it always was —
-  blind overwrite included. That is *demonstrated* here rather than asserted:
-  the old behaviour is exercised, and the call sites are read.
+* **Nothing else moved.** The unconditional path is still the unconditional
+  upsert it always was — blind overwrite included — and every call site that
+  does carry an expectation was moved there deliberately and says which read it
+  guards. That is *demonstrated* here rather than asserted: the old behaviour is
+  exercised, and the call sites are read.
+
+`close_message` is the guard with a second write bound to it. A message that
+closes and a timeline entry saying why are one fact, and split across two
+transactions the half that lands first is unrecoverable: the row goes terminal,
+the retry finds nothing open to close, and the refusal is missing from the
+funnel for good.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from sqlalchemy import text
 
 from atlas_kernel import db
 from atlas_kernel.db import SessionLocal
-from atlas_kernel.opportunity.models import OutreachMessage, OutreachStatus
+from atlas_kernel.opportunity.models import BusinessEvent, OutreachMessage, OutreachStatus
 from atlas_kernel.opportunity.repository import OpportunityRepository, StaleMessage
 
 
@@ -60,6 +67,12 @@ def business_id():
     with SessionLocal() as session:
         session.execute(
             text("DELETE FROM atlas_outreach_messages WHERE business_id = :b"),
+            {"b": identifier})
+        # And the timeline, because `close_message` writes there too. An entry
+        # left behind would make a later run's "no entry was written" pass or
+        # fail on somebody else's history.
+        session.execute(
+            text("DELETE FROM atlas_business_events WHERE business_id = :b"),
             {"b": identifier})
         session.commit()
 
@@ -259,6 +272,96 @@ def test_the_guarded_write_touches_the_same_columns_as_the_unguarded_one(
     assert after_guarded.body == after_unguarded.body == guarded.body
 
 
+# ------------------------------------ the close that carries its own audit
+
+class _TimelineWriteFails(OpportunityRepository):
+    """A repository whose timeline entry cannot be written.
+
+    Injected at the entry rather than simulated somewhere earlier, because what
+    is under test is where the transaction ends. By the time `close_message`
+    reaches the entry, the guarded update has already run against the session —
+    so if that half can commit on its own, the message goes terminal with
+    nothing on the timeline explaining it, and nothing can add the entry
+    afterwards: every retry reads a row that is no longer open.
+    """
+
+    @staticmethod
+    def _event_row(event: BusinessEvent) -> dict:
+        raise RuntimeError("the timeline write failed")
+
+
+def _entry(business: str, **overrides) -> BusinessEvent:
+    return BusinessEvent(business_id=business, kind="outreach_rejected", **overrides)
+
+
+def _entries(repo: OpportunityRepository, business: str, event_id: str) -> list[BusinessEvent]:
+    return [found for found in repo.timeline(business) if found.id == event_id]
+
+
+def test_a_close_writes_the_row_and_its_entry_together(repo, business_id):
+    """The ordinary case. One call, both writes, one transaction."""
+    draft = repo.save_message(_draft(business_id))
+    event = _entry(business_id, detail={"approval_id": "approval-x"})
+
+    repo.close_message(
+        draft.model_copy(update={"status": OutreachStatus.REJECTED,
+                                 "detail": "rejected by approver"}),
+        expecting=OutreachStatus.DRAFT, event=event)
+
+    after = _stored(repo, business_id, draft.id)
+    assert after is not None and after.status is OutreachStatus.REJECTED
+    assert after.detail == "rejected by approver"
+    assert [found.detail for found in _entries(repo, business_id, event.id)] == [
+        {"approval_id": "approval-x"}]
+
+
+def test_a_row_that_cannot_record_why_it_closed_does_not_close(repo, business_id):
+    """The half that has no repair, and the reason this method exists.
+
+    A guarded save followed by a separate `record_event` can leave the row
+    terminal and the timeline silent, and from there the decision is
+    unrecoverable — the retry finds nothing open to close and returns nothing,
+    for ever, with the funnel permanently short one refusal. Either both land or
+    the question stays live and the caller can try again.
+    """
+    draft = repo.save_message(_draft(business_id))
+    event = _entry(business_id)
+
+    with pytest.raises(RuntimeError, match="timeline write failed"):
+        _TimelineWriteFails().close_message(
+            draft.model_copy(update={"status": OutreachStatus.REJECTED,
+                                     "detail": "rejected by approver"}),
+            expecting=OutreachStatus.DRAFT, event=event)
+
+    after = _stored(repo, business_id, draft.id)
+    assert after is not None and after.status is OutreachStatus.DRAFT, (
+        "the row went terminal without the entry that explains it, and nothing "
+        "can write that entry now")
+    assert after.detail is None
+
+
+def test_a_close_that_loses_the_race_writes_no_entry_either(repo, business_id):
+    """The guard, and the same rule the other way round.
+
+    A refusal decided against a row somebody else has since sent must land
+    nowhere — and a `rejected` entry beside the send that beat it is that same
+    write landing in the one place it does most harm, since the timeline is what
+    the funnel and the no-spam guarantee are read back from.
+    """
+    draft = repo.save_message(_draft(business_id))
+    _somebody_else_sends(repo, draft)
+    event = _entry(business_id)
+
+    with pytest.raises(StaleMessage):
+        repo.close_message(
+            draft.model_copy(update={"status": OutreachStatus.REJECTED}),
+            expecting=OutreachStatus.DRAFT, event=event)
+
+    after = _stored(repo, business_id, draft.id)
+    assert after is not None and after.status is OutreachStatus.SENT
+    assert not _entries(repo, business_id, event.id)
+
+
 # ------------------------------------------- nothing else moved: the old path
 
 def test_a_save_with_no_expectation_still_creates_the_row(repo, business_id):
@@ -358,14 +461,44 @@ def _save_message_calls() -> list[tuple[Path, ast.Call]]:
     return calls
 
 
-def test_no_existing_caller_names_an_expectation():
-    """Read, not assumed. The claim being made about this change is that every
-    call site in the repository is on the unconditional path — which is a fact
-    about the source, so the source is what is checked.
+#: The production call sites deliberately moved onto the guard, and what each
+#: reads before it writes.
+#:
+#: An allowlist rather than a count, because the thing worth knowing is not how
+#: many callers are guarded but *which* — a count agrees with any rewiring that
+#: happens to keep the total. Every entry here was argued for where it lives; a
+#: call site that appears without one is a check-then-write nobody argued for.
+GUARDED_CALLERS: dict[str, str] = {
+    "packages/kernel/atlas_kernel/opportunity/service.py": (
+        "request_approval names the request on a row it just claimed; _claim "
+        "takes the row out of DRAFT so exactly one worker may ask; _release "
+        "gives that claim back; send records a suppression against the status "
+        "it entered with. record_decision is guarded too and does not appear "
+        "here — it goes through close_message, which carries the timeline entry "
+        "into the same transaction."
+    ),
+}
+
+
+def _is_a_test(path: Path) -> bool:
+    """Tests are excluded from the allowlist, and only from it.
+
+    A test that names an expectation is writing an interleaving down by hand,
+    which is the point of these files rather than a call site anybody has to
+    justify. The discipline is about the code that runs.
+    """
+    return path.name.startswith("test_") or "tests" in path.parts
+
+
+def test_every_guarded_caller_was_moved_there_deliberately():
+    """Read, not assumed. Which call sites carry an expectation is a fact about
+    the source, so the source is what is checked.
 
     The moment a caller is rewired onto the guard, this test is the thing that
     says so out loud, and whoever does it has to come back here and say which
-    caller and why."""
+    caller and why. The four in `service.py` were: they are the reads that
+    decide something from a status and then write against it, and each is the
+    race written down at its own call site."""
     calls = _save_message_calls()
     reached = {str(path.relative_to(_repository_root())) for path, _ in calls}
     # Anchored to the four production callers rather than to a count alone. A
@@ -378,7 +511,17 @@ def test_no_existing_caller_names_an_expectation():
         assert caller in reached, (
             f"{caller} calls save_message and the scan did not reach it; this "
             "test proves nothing until it does")
-    named = [f"{path}:{call.lineno}" for path, call in calls
-             if any(keyword.arg == "expecting" for keyword in call.keywords)
-             or len(call.args) > 1]
-    assert not named, f"a caller already passes an expectation: {named}"
+    named = {str(path.relative_to(_repository_root()))
+             for path, call in calls
+             if not _is_a_test(path)
+             and (any(keyword.arg == "expecting" for keyword in call.keywords)
+                  or len(call.args) > 1)}
+    unexplained = sorted(named - set(GUARDED_CALLERS))
+    assert not unexplained, (
+        f"a caller passes an expectation and nothing here says why: "
+        f"{unexplained}. Add it to GUARDED_CALLERS with the read it guards, or "
+        f"leave it on the unconditional path.")
+    # And the other direction: an entry whose caller has been un-guarded is a
+    # claim about the code that is no longer true.
+    assert not sorted(set(GUARDED_CALLERS) - named), (
+        "GUARDED_CALLERS names a file that no longer passes an expectation")

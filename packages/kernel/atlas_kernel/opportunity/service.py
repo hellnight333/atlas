@@ -30,6 +30,12 @@ the statement that updates, so a save whose premise expired lands nowhere and
 raises ``StaleMessage`` instead of overwriting whatever replaced it. The one
 deliberate exception is recording a send that already went out, and ``send``
 says why.
+
+**And the write that closes a message carries its timeline entry with it.**
+``record_decision`` goes through ``close_message``, which commits the row
+transition and the ``REJECTED`` entry in one transaction, because a terminal row
+whose entry never landed can never acquire one: the retry finds nothing open to
+close, and the refusal is missing from the funnel permanently.
 """
 
 from __future__ import annotations
@@ -38,8 +44,16 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from ..approval.models import ApprovalState
 from .detectors.base import DetectorRegistry, DiscoveryResult
-from .gate import BOUND_MESSAGE, FORECLOSED, OutreachGate, OutreachNotApproved, OutreachOutcome
+from .gate import (
+    BOUND_MESSAGE,
+    FORECLOSED,
+    PROPOSAL_FINGERPRINT,
+    OutreachGate,
+    OutreachNotApproved,
+    OutreachOutcome,
+)
 from .metrics import FunnelReport, build_report
 from .models import (
     Business,
@@ -284,6 +298,10 @@ class OpportunityService:
         unlinked, where it blocks a second question rather than inviting one. A
         failure of the write itself is repaired rather than left — the request is
         withdrawn, because a question nobody can reach is worse than no question.
+        A request somebody answered inside that same window has nothing to
+        withdraw: the answer already reached the row, which is *why* the linkage
+        write was refused, and the failure that surfaces is that one rather than
+        a cancellation error raised over the top of it.
 
         An *answer* arriving inside that window is not harmless, and is not
         handled here. The row cannot yet name the request, so the write-back has
@@ -347,7 +365,22 @@ class OpportunityService:
                 # That is the wanted outcome: the claim is released as a decision
                 # rather than left stuck at AWAITING_APPROVAL refusing every
                 # future ask, and `prepare` can make the question afresh.
-                self.gate.withdraw(request)
+                #
+                # Unless somebody answered inside this same window, in which case
+                # the save failed *because* the write-back already closed the row
+                # — and `withdraw` leaves an answered question alone rather than
+                # raising a cancellation error over the top of the failure that
+                # actually happened. The original is what propagates either way.
+                taken_back = self.gate.withdraw(request)
+                if taken_back.state is not ApprovalState.CANCELLED:
+                    log.warning(
+                        "approval %s was %s before message %s could record that "
+                        "it was raised; nothing was withdrawn, because the "
+                        "decision is somebody's and it stands",
+                        request.id,
+                        taken_back.state.value,
+                        asked.id,
+                    )
                 raise
 
         prepared.message = asked
@@ -395,6 +428,15 @@ class OpportunityService:
         ``APPROVED`` is refused rather than written. Marking a message approved is
         ``gate.authorise``'s act, because only ``authorise`` re-derives the
         fingerprint and refuses words that moved since a person read them.
+
+        **The row and its timeline entry are one write.** Not tidiness: of the
+        two ways a pair of separate writes can half-happen, one has no repair.
+        A row that goes terminal without its ``REJECTED`` entry can never
+        acquire one — the retry ``_foreclosed`` promises reads a row that is no
+        longer open, finds nothing to close, and returns ``None`` for ever,
+        leaving the funnel permanently short a refusal and the audit missing the
+        decision. ``repository.close_message`` commits both or neither, so a
+        failure leaves the question live and the retry works.
         """
         if approval.state not in FORECLOSED:
             raise OutreachNotApproved(
@@ -409,16 +451,7 @@ class OpportunityService:
             return None
 
         marked = self.gate.reject(message, approval)
-        try:
-            # `message.status` and not a constant: the row is claimed at
-            # AWAITING_APPROVAL by `request_approval`, and older rows raised
-            # before that existed are still at DRAFT. The expectation is whatever
-            # was actually read a moment ago.
-            repository.save_message(marked, expecting=message.status)
-        except StaleMessage:
-            return None
-
-        self._record(
+        closing = self._event(
             marked.business_id,
             PipelineEventKind.REJECTED,
             {
@@ -430,6 +463,19 @@ class OpportunityService:
             opportunity_id=self._opportunity_behind(marked),
             actor=actor,
         )
+        try:
+            # `message.status` and not a constant: the row is claimed at
+            # AWAITING_APPROVAL by `request_approval`, and older rows raised
+            # before that existed are still at DRAFT. The expectation is whatever
+            # was actually read a moment ago.
+            repository.close_message(marked, expecting=message.status, event=closing)
+        except StaleMessage:
+            return None
+
+        # Only after it committed. The in-memory log is what `report()` reads,
+        # and an entry here for a write that landed nowhere is the same false
+        # funnel the guard exists to prevent, kept in a second place.
+        self.events.append(closing)
         return marked
 
     def _foreclosed(self, approval, actor: str) -> None:
@@ -446,6 +492,12 @@ class OpportunityService:
         which ``outreach.unreviewed`` already reports as asked-and-unanswered
         pointing at the request record — visible, and recoverable by calling this
         again.
+
+        That last clause is a claim about ``record_decision``, and it is true
+        only because the row and its timeline entry commit together. Written as
+        two writes it was false in the case that matters: the row goes terminal,
+        the entry is lost, and calling this again finds nothing open to close.
+        ``close_message`` is what makes the recovery real rather than promised.
         """
         try:
             self.record_decision(approval, actor=actor or "system")
@@ -479,12 +531,34 @@ class OpportunityService:
         is already there while the row's own copy is not. ``gate._must_describe``
         reads both ends for the same reason and accepts either alone.
 
-        The fallback insists the row names **no** approval. A row that names a
-        different one was asked about separately, and closing it here would be the
-        wrong-row closure the binding exists to prevent. Only one live request can
-        find a row unlinked and claimed — ``_claim`` guards on ``DRAFT``, so a
-        second ask is refused while the first holds it — which is what makes the
-        weaker-looking match safe.
+        **The fallback is the weaker end, so it carries three conditions and not
+        one.** ``BOUND_MESSAGE`` is metadata, and metadata is whatever created
+        the request put there: ``POST /approvals`` takes the action and the
+        metadata from its caller, so anything that can reach the kernel API can
+        raise a request wearing this action and naming any message id it knows.
+        Matched on the id alone, that request's rejection would close a row
+        nobody was ever asked about and stamp it "rejected by approver" — a
+        decision no person took, on the message record that is the audit of who
+        was told no. The three conditions are what the real asker has and a
+        forgery does not:
+
+        * The row names **no** approval. One that names a different request was
+          asked about separately, and closing it here would be the wrong-row
+          closure the binding exists to prevent.
+        * The row is **claimed**, at ``AWAITING_APPROVAL``. That is the state
+          ``_claim`` puts it in *before* ``gate.request`` is called, so it holds
+          throughout the window this fallback exists for — and it excludes every
+          ``DRAFT``, which is to say every row nobody has raised a question
+          about at all. Only one live request can hold a row claimed and
+          unlinked, because ``_claim`` guards on ``DRAFT``.
+        * The request records the **fingerprint of this row's proposal**. Not a
+          description of the message — ``_must_describe`` has the argument for
+          why business, proposal, recipient and channel bind nothing — but the
+          digest of the words and the facts under them, which ``gate.request``
+          derives at the moment it asks. A forger naming a message id has no way
+          to produce it without the proposal it was generated from, and the
+          proposal store is write-once, so the value cannot drift underneath a
+          question already asked.
 
         Rows that already record an outcome are passed over rather than closed.
         A message sent before its request was cancelled stays sent.
@@ -503,9 +577,42 @@ class OpportunityService:
         if not raised_about:
             return None
         for message in rows:
-            if message.id == raised_about and not message.approval_id and _undecided(message):
-                return message
+            if message.id != raised_about or message.approval_id:
+                continue
+            if message.status is not OutreachStatus.AWAITING_APPROVAL:
+                continue
+            if not _undecided(message) or not self._raised_these_words(message, approval):
+                continue
+            return message
         return None
+
+    def _raised_these_words(self, message: OutreachMessage, approval) -> bool:
+        """Whether the request carries the fingerprint of *this* row's proposal.
+
+        The half of the fallback binding that a caller of ``POST /approvals``
+        cannot supply. A message id is guessable, quotable from a listing, or
+        simply known; the digest of the words and the findings under them is
+        neither, and it is on the request because ``gate.request`` put it there
+        before anybody was asked.
+
+        Re-derived from the **stored** proposal rather than compared against
+        anything the approval says about itself, which is what makes it a check
+        rather than a restatement. ``save_proposal`` is write-once, so the value
+        cannot have moved since the question was put — this is not
+        ``authorise``'s fingerprint test, which guards against words that
+        changed under an approval, but the same digest used as an identifier.
+
+        ``False`` whenever it cannot be established: no fingerprint recorded, no
+        proposal on the row, no such proposal stored. This is the weaker of the
+        two ways in, and the safe answer for a binding that cannot be shown is
+        no — the row stays at ``AWAITING_APPROVAL``, which ``outreach.unreviewed``
+        reports as asked-and-unanswered rather than losing.
+        """
+        recorded = str(approval.metadata.get(PROPOSAL_FINGERPRINT) or "")
+        if not recorded or not message.proposal_id or self.repository is None:
+            return False
+        proposal = self.repository.get_proposal(message.proposal_id)
+        return proposal is not None and proposal.fingerprint == recorded
 
     def _as_persisted(self, message: OutreachMessage) -> OutreachMessage:
         """The stored row this message is a copy of, or the copy when there is none.
@@ -764,8 +871,35 @@ class OpportunityService:
         websites and support history later — belongs on one timeline keyed by
         the permanent record rather than scattered across whichever pipeline
         happened to be running.
+
+        Durable first, in memory second. ``report()`` reads the in-memory list,
+        and an entry there for a write that failed would report a funnel a
+        restart does not agree with.
         """
-        event = BusinessEvent(
+        event = self._event(
+            business_id, kind, detail, opportunity_id=opportunity_id, actor=actor
+        )
+        if self.repository is not None:
+            self.repository.record_event(event)
+        self.events.append(event)
+        return event
+
+    def _event(
+        self,
+        business_id: str,
+        kind: PipelineEventKind,
+        detail: dict | None = None,
+        *,
+        opportunity_id: str | None = None,
+        actor: str = "system",
+    ) -> BusinessEvent:
+        """The entry, built and written nowhere.
+
+        Split out for the one caller that cannot use ``_record``:
+        ``record_decision`` hands its entry to ``close_message``, which writes it
+        in the same transaction as the row it explains.
+        """
+        return BusinessEvent(
             opportunity_id=opportunity_id,
             business_id=business_id,
             kind=kind,
@@ -773,10 +907,6 @@ class OpportunityService:
             actor=actor,
             at=datetime.now(UTC),
         )
-        self.events.append(event)
-        if self.repository is not None:
-            self.repository.record_event(event)
-        return event
 
 
 class _UnwiredChannel:

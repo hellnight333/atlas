@@ -31,7 +31,12 @@ import httpx
 import pytest
 
 from atlas_kernel import db
-from atlas_kernel.approval.models import ApprovalContext, ApprovalScope, ApprovalState
+from atlas_kernel.approval.models import (
+    ApprovalContext,
+    ApprovalRequest,
+    ApprovalScope,
+    ApprovalState,
+)
 from atlas_kernel.composition_root import create_runtime
 from atlas_kernel.opportunity.detectors.base import DetectorRegistry
 from atlas_kernel.opportunity.detectors.website import WebsiteDetector
@@ -155,6 +160,51 @@ class _ClosesFromAStaleRead(OpportunityService):
 
     def _message_asked_about(self, approval):
         return self.snapshot
+
+
+class _AnsweredWhileLinking(OutreachGate):
+    """A gate whose question is answered before the row can record it.
+
+    The window `request_approval` writes `approval_id` in: the request exists,
+    the row does not name it yet, and an approver looking at the pending list
+    can answer it there. Written as an override because a decision has to land
+    *between* the two writes rather than beside them, and that is not something
+    a caller of `request_approval` can arrange from outside.
+    """
+
+    def request(self, outcome, *, requested_by: str = "atlas"):
+        self.raised = super().request(outcome, requested_by=requested_by)
+        self.decide(self.raised.id, actor="ayoub", comment="not this one")
+        return self.raised
+
+
+class _TimelineWriteFails(OpportunityRepository):
+    """A repository whose timeline entry cannot be written while `failing`.
+
+    `record_decision` writes the row and the entry in one transaction, so this
+    fails both. What the failing call proves is that the row stayed open; what
+    the call after `failing` is cleared proves is that the retry `_foreclosed`
+    promises then works.
+    """
+
+    def __init__(self, *, failing: bool = False) -> None:
+        super().__init__()
+        #: Off during setup. `record_event` writes through the same helper, so a
+        #: repository that failed from birth could not get as far as a message
+        #: to close.
+        self.failing = failing
+
+    def _event_row(self, event):
+        """The entry write, failing while `self.failing` says so.
+
+        Injected here rather than at `close_message` so the transaction is a
+        real one: the guarded update has already run against the session when
+        this raises, which is exactly the interleaving that has to leave nothing
+        behind.
+        """
+        if self.failing:
+            raise RuntimeError("the timeline write failed")
+        return OpportunityRepository._event_row(event)
 
 
 class TestRealApprovalService:
@@ -374,6 +424,41 @@ class TestAskingClaimsTheMessage:
         row = _stored(repository, prepared.message)
         assert row.status is OutreachStatus.APPROVED_FOR_MANUAL_SEND
         assert row.approved_fingerprint == prepared.proposal.fingerprint
+
+    def test_a_question_answered_while_the_row_was_being_linked_reports_that(
+        self,
+    ) -> None:
+        """The window, from the asking end.
+
+        `request_approval` claims the row, creates the request, and writes the
+        id back. A decision landing between the second and the third of those
+        closes the row through `BOUND_MESSAGE` — which is exactly what is meant
+        to happen — and the linkage write is then refused, because its premise
+        expired.
+
+        What must not happen next is a withdrawal. The question was answered;
+        there is nothing to take back, and `cancel` would raise `ApprovalError`
+        over the top of the real failure, reporting a cancellation that failed
+        as though a decision had gone missing when in fact it landed.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        gate = _AnsweredWhileLinking(approvals=runtime.approval_service)
+        gate.decide = runtime.approval_service.reject
+        service.gate = gate
+
+        with pytest.raises(StaleMessage):
+            service.request_approval(prepared)
+
+        answered = runtime.approval_service.get(gate.raised.id)
+        assert answered.state is ApprovalState.REJECTED, (
+            "a person's refusal was recorded as a withdrawal by the asking side"
+        )
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED
+        assert row.approval_id == gate.raised.id
+        assert row.detail == FORECLOSED[ApprovalState.REJECTED]
 
     def test_a_message_already_under_a_request_is_not_put_to_a_second_person(
         self,
@@ -733,6 +818,203 @@ class TestTheDecidingProcessIsWired:
             "nothing in the deciding process wrote the answer back onto the row"
         )
         assert row.detail == FORECLOSED[ApprovalState.REJECTED]
+
+
+class TestARefusalAndItsAuditLandTogether:
+    """A row that goes terminal without its timeline entry can never acquire one.
+
+    `_foreclosed` swallows whatever `record_decision` raises and says the call is
+    repeatable — the decision is durable, the record catching up is not worth
+    losing it over, and a row that missed its write-back stays visible in the
+    review queue. That promise holds only while a failure leaves the row open.
+    Written as two writes it was false in the one case that matters: the row
+    moves, the entry does not, and every retry from then on reads a row that is
+    no longer open, finds nothing to close, and returns `None` — with the
+    refusal permanently missing from the funnel and from the audit of who was
+    told no.
+
+    Built without a bus on purpose. The deciding process has exactly one
+    subscriber; two of them on one bus would repair each other's failures and
+    the property would pass without being true.
+    """
+
+    def _asked(self):
+        """A stored message, claimed and linked, and the refusal about it."""
+        service = _service(RecordingChannel(), None)
+        assert not service.watching, "nothing else may close this row"
+        repository = _TimelineWriteFails()
+        service.repository = repository
+        _, _, prepared = _prepared(service)
+        rejected = ApprovalRequest(
+            title="Contact Al Noor Dental Clinic",
+            action=OUTREACH_ACTION,
+            state=ApprovalState.REJECTED,
+            metadata={
+                "business_id": prepared.message.business_id,
+                BOUND_MESSAGE: prepared.message.id,
+                PROPOSAL_FINGERPRINT: prepared.proposal.fingerprint,
+            },
+        )
+        repository.save_message(
+            prepared.message.model_copy(
+                update={
+                    "status": OutreachStatus.AWAITING_APPROVAL,
+                    "approval_id": rejected.id,
+                }
+            ),
+            expecting=OutreachStatus.DRAFT,
+        )
+        repository.failing = True
+        return service, repository, prepared, rejected
+
+    @staticmethod
+    def _audit(repository, business_id: str, approval_id: str) -> list:
+        """The durable entries this decision wrote.
+
+        Filtered by approval rather than counted, because the seed list resolves
+        to one permanent `Business` and every run of this module adds to the same
+        timeline.
+        """
+        return [
+            event
+            for event in repository.timeline(business_id)
+            if event.detail.get("approval_id") == approval_id
+        ]
+
+    def test_a_decision_whose_audit_fails_leaves_the_question_live(self) -> None:
+        service, repository, prepared, rejected = self._asked()
+
+        service._foreclosed(rejected, "ayoub")  # noqa: SLF001 — the production path
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL, (
+            "the row closed without the entry that explains it, and nothing can "
+            "write that entry now — no retry will find the row open"
+        )
+        assert row.detail is None
+        assert not self._audit(repository, row.business_id, rejected.id)
+        assert PipelineEventKind.REJECTED not in [event.kind for event in service.events]
+
+    def test_the_retry_that_foreclosed_promises_closes_it_and_records_why(
+        self,
+    ) -> None:
+        service, repository, prepared, rejected = self._asked()
+        service._foreclosed(rejected, "ayoub")  # noqa: SLF001 — the production path
+
+        repository.failing = False
+        closed = service.record_decision(rejected, actor="ayoub")
+
+        assert closed is not None, "the recovery `_foreclosed` promises did nothing"
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.REJECTED
+        assert row.detail == FORECLOSED[ApprovalState.REJECTED]
+        entries = self._audit(repository, row.business_id, rejected.id)
+        assert [event.kind for event in entries] == [PipelineEventKind.REJECTED.value]
+        assert entries[0].actor == "ayoub"
+        assert PipelineEventKind.REJECTED in [event.kind for event in service.events]
+
+
+class TestOnlyAQuestionThisGateRaisedClosesAMessage:
+    """Wearing the outreach action is not the same as having asked.
+
+    The write-back is subscribed to one action, which routes the right approvals
+    to it and proves nothing about where they came from. `POST /approvals` takes
+    both the action and the metadata from its caller, and the kernel API is
+    behind a network boundary rather than an authenticated one — so a request
+    naming `opportunity.outreach.send`, any `business_id` and any `message_id`
+    is one HTTP call away, and rejecting it would arrive here as a decision to
+    close that row.
+
+    What that costs is the message record itself: a row stamped "rejected by
+    approver" for a question nobody was ever asked, in the one place Qevik keeps
+    the account of who was told no. So the fallback binding — the one that finds
+    a row from the approval's end — insists on the two things the real asker has
+    and a forgery does not: the row is claimed, and the request carries the
+    fingerprint of the words on it.
+    """
+
+    def _forged(self, approvals, message, **metadata):
+        """A request nothing in the pipeline created, decided by a person.
+
+        Built through the same `create_request` the API endpoint calls, because
+        that is what an unauthorised caller reaches — not a hand-made object
+        that would prove only that the model can be instantiated.
+        """
+        request = approvals.create_request(
+            title="Contact Al Noor Dental Clinic",
+            context=ApprovalContext(action=OUTREACH_ACTION, requested_by="stranger"),
+            metadata={
+                "business_id": message.business_id,
+                BOUND_MESSAGE: message.id,
+                **metadata,
+            },
+        )
+        approvals.reject(request.id, actor="ayoub")
+        return request
+
+    def test_a_draft_nobody_asked_about_is_not_closed_by_a_refusal(self) -> None:
+        """The whole population an outsider could name.
+
+        A `DRAFT` row has had no question raised about it — that is what `DRAFT`
+        means here, and what `outreach.unreviewed` reports it as. Closing one
+        against a refusal records a decision nobody took, and takes the words
+        out of the queue before anybody reads them.
+
+        The forgery is given the *real* fingerprint, so what stops it is the
+        claim and nothing weaker.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        assert _stored(repository, prepared.message).status is OutreachStatus.DRAFT
+
+        self._forged(
+            runtime.approval_service,
+            prepared.message,
+            **{PROPOSAL_FINGERPRINT: prepared.proposal.fingerprint},
+        )
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.DRAFT
+        assert row.approval_id is None
+        assert row.detail is None
+        assert PipelineEventKind.REJECTED not in [event.kind for event in service.events]
+
+    def test_a_claimed_row_is_not_closed_by_a_request_that_cannot_name_its_words(
+        self,
+    ) -> None:
+        """The window itself, which the claim alone does not protect.
+
+        Between `_claim` and the linkage write the row is claimed and unlinked,
+        which is precisely the shape the fallback accepts. What separates the
+        request that actually asked from one naming the same row is the proposal
+        fingerprint: `gate.request` derives it from the words and the findings
+        under them at the moment it asks, and a caller who knows only a message
+        id cannot produce it.
+        """
+        runtime = create_runtime()
+        service, repository = _durable(runtime.approval_service)
+        _, _, prepared = _prepared(service)
+        repository.save_message(
+            prepared.message.model_copy(
+                update={"status": OutreachStatus.AWAITING_APPROVAL}
+            ),
+            expecting=OutreachStatus.DRAFT,
+        )
+
+        self._forged(runtime.approval_service, prepared.message)
+        self._forged(
+            runtime.approval_service,
+            prepared.message,
+            **{PROPOSAL_FINGERPRINT: "not the digest of these words"},
+        )
+
+        row = _stored(repository, prepared.message)
+        assert row.status is OutreachStatus.AWAITING_APPROVAL, (
+            "a request that never asked closed a claimed row"
+        )
+        assert row.approval_id is None
+        assert PipelineEventKind.REJECTED not in [event.kind for event in service.events]
 
 
 class TestARefusalMustBeAboutTheseWords:

@@ -170,6 +170,19 @@ from .tenancy import (
 )
 
 
+#: The one statement that appends to a business's timeline.
+#:
+#: Named rather than copied a second time because `close_message` writes it
+#: inside somebody else's transaction. Two spellings of an append-only write is
+#: how a row ends up in the table with a column the other spelling never set.
+_EVENT_INSERT = """
+INSERT INTO atlas_business_events
+    (id, business_id, factory, kind, opportunity_id, actor, detail, at)
+VALUES (:id, :business_id, :factory, :kind, :opportunity_id, :actor, :detail, :at)
+ON CONFLICT (id) DO NOTHING
+"""
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -1830,9 +1843,9 @@ class OpportunityRepository:
         read. The columns it writes are exactly those the unconditional upsert
         updates on conflict, so this is the same write, guarded.
         """
-        payload = {**message.model_dump(), "status": message.status.value}
         if expecting is not None:
-            return self._save_message_expecting(message, payload, expecting)
+            return self._save_message_expecting(message, expecting)
+        payload = {**message.model_dump(), "status": message.status.value}
         with SessionLocal() as session:
             session.execute(
                 text("""
@@ -1859,10 +1872,27 @@ class OpportunityRepository:
             session.commit()
         return message
 
-    def _save_message_expecting(self, message: OutreachMessage, payload: dict,
+    def _save_message_expecting(self, message: OutreachMessage,
                                 expecting: OutreachStatus | str
                                 ) -> OutreachMessage:
         """The guarded half of `save_message`. See its docstring for why."""
+        with SessionLocal() as session:
+            self._guarded_update(session, message, expecting)
+            session.commit()
+        return message
+
+    def _guarded_update(self, session, message: OutreachMessage,
+                        expecting: OutreachStatus | str) -> None:
+        """The conditional write itself, inside a transaction the caller owns.
+
+        One statement, shared by every guarded path in this file, because two
+        copies of a guard are two guards — and the weaker of them is the one
+        nobody notices until it has already let something through.
+
+        Raises `StaleMessage` **without committing**, so a caller that pairs
+        this with a second write in the same transaction ends up having written
+        neither.
+        """
         expected = (expecting.value if isinstance(expecting, OutreachStatus)
                     else str(expecting).strip())
         known = {status.value for status in OutreachStatus}
@@ -1874,34 +1904,59 @@ class OpportunityRepository:
                 f"{expected!r} is not an outreach status, so no row can be in "
                 f"it and every save naming it would be refused. Known: "
                 f"{', '.join(sorted(known))}.")
+        payload = {**message.model_dump(), "status": message.status.value}
         guarded = {key: payload[key] for key in (
             "id", "status", "approval_id", "approved_fingerprint",
             "provider_message_id", "detail", "sent_at",
             "authorized_automated_at")}
+        done = session.execute(
+            text("""
+            UPDATE atlas_outreach_messages SET
+                status = :status,
+                approval_id = :approval_id,
+                approved_fingerprint = :approved_fingerprint,
+                provider_message_id = :provider_message_id,
+                detail = :detail,
+                sent_at = :sent_at,
+                authorized_automated_at = :authorized_automated_at
+            WHERE id = :id AND status = :expected
+            """),
+            {**guarded, "expected": expected})
+        if not done.rowcount:
+            # Read only to say *what* it lost to. The guarantee is the
+            # predicate above, which has already run and already refused;
+            # this cannot widen anything, and a refusal that cannot name
+            # the state it found is one nobody can act on.
+            found = session.execute(
+                text("SELECT status FROM atlas_outreach_messages "
+                     "WHERE id = :id"), {"id": message.id}).scalar()
+            session.rollback()
+            raise StaleMessage(message.id, expected, found)
+
+    def close_message(self, message: OutreachMessage, *,
+                      expecting: OutreachStatus | str,
+                      event: BusinessEvent) -> OutreachMessage:
+        """Move a message against an expectation and say why, in one transaction.
+
+        A guarded `save_message` followed by `record_event` is two writes that
+        can half-happen, and one of the two halves is unrecoverable. If the row
+        moves and the entry does not, the message is terminal, the timeline is
+        missing the decision, and no retry can repair it: the retry reads a row
+        that is no longer open, finds nothing to close, and the refusal is
+        absent from the funnel for good — an audit of who was told no, silently
+        short by one.
+
+        So the transition and the entry commit together or neither does. A
+        failure leaves the row open and the question live, which is the state
+        the caller already knows how to retry from.
+
+        The same shape `approve_signal` uses, and for the same reason: "two
+        writes that can half-happen would leave either an approval nobody can
+        attribute or a decision that never took effect".
+        """
         with SessionLocal() as session:
-            done = session.execute(
-                text("""
-                UPDATE atlas_outreach_messages SET
-                    status = :status,
-                    approval_id = :approval_id,
-                    approved_fingerprint = :approved_fingerprint,
-                    provider_message_id = :provider_message_id,
-                    detail = :detail,
-                    sent_at = :sent_at,
-                    authorized_automated_at = :authorized_automated_at
-                WHERE id = :id AND status = :expected
-                """),
-                {**guarded, "expected": expected})
-            if not done.rowcount:
-                # Read only to say *what* it lost to. The guarantee is the
-                # predicate above, which has already run and already refused;
-                # this cannot widen anything, and a refusal that cannot name
-                # the state it found is one nobody can act on.
-                found = session.execute(
-                    text("SELECT status FROM atlas_outreach_messages "
-                         "WHERE id = :id"), {"id": message.id}).scalar()
-                session.rollback()
-                raise StaleMessage(message.id, expected, found)
+            self._guarded_update(session, message, expecting)
+            session.execute(text(_EVENT_INSERT), self._event_row(event))
             session.commit()
         return message
 
@@ -1974,27 +2029,23 @@ class OpportunityRepository:
         support ticket can use it.
         """
         with SessionLocal() as session:
-            session.execute(
-                text("""
-                INSERT INTO atlas_business_events
-                    (id, business_id, factory, kind, opportunity_id, actor, detail, at)
-                VALUES (:id, :business_id, :factory, :kind, :opportunity_id, :actor,
-                        :detail, :at)
-                ON CONFLICT (id) DO NOTHING
-                """),
-                {
-                    "id": event.id,
-                    "business_id": event.business_id,
-                    "factory": event.factory,
-                    "kind": str(event.kind),
-                    "opportunity_id": event.opportunity_id,
-                    "actor": event.actor,
-                    "detail": json.dumps(event.detail),
-                    "at": event.at,
-                },
-            )
+            session.execute(text(_EVENT_INSERT), self._event_row(event))
             session.commit()
         return event
+
+    @staticmethod
+    def _event_row(event: BusinessEvent) -> dict:
+        """One timeline entry as `_EVENT_INSERT` wants it."""
+        return {
+            "id": event.id,
+            "business_id": event.business_id,
+            "factory": event.factory,
+            "kind": str(event.kind),
+            "opportunity_id": event.opportunity_id,
+            "actor": event.actor,
+            "detail": json.dumps(event.detail),
+            "at": event.at,
+        }
 
     def timeline(self, business_id: str, *, factory: str | None = None) -> list[BusinessEvent]:
         """One company's whole history, oldest first.
