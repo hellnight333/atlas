@@ -262,7 +262,7 @@ class Driver:
             merged, out = _git("merge", "-q", "--no-edit", "main", cwd=self.repo)
             if merged != 0:
                 _git("merge", "--abort", cwd=self.repo)
-                _git("checkout", "-q", "main", cwd=self.repo)
+                self._return_to_main(ident)
                 self.q.move(ident, State.CONTESTED,
                             reason=f"the parked branch will not take main: "
                                    f"{out[:300]}")
@@ -379,11 +379,27 @@ class Driver:
                     why = (f"the attempt cap: the tests still fail after "
                            f"{attempt} attempt(s), of which {reviews} reached "
                            f"the reviewer — {suite.detail}")
+                    # Committed before the branch is left, and this is the one
+                    # ending where that is not already true: every other exit
+                    # runs after `_commit`, while this one is reached from a
+                    # failing gate with the fixer's edits still in the tree.
+                    # `git checkout main` does not leave work behind — where
+                    # the files match between the two branches it carries the
+                    # edits across, which is exactly the case here, since a
+                    # task whose suite never went green has committed nothing
+                    # and its branch is still `main`'s tip. Rejected work then
+                    # sits in `main`'s working tree, the next fresh task is
+                    # refused for a dirty tree it did not create, and the
+                    # branch a person opens holds none of the attempt.
+                    self._commit(task, reviews + 1,
+                                 note=f"Attempt {attempt}: the tests still "
+                                      f"fail; no reviewer saw this round.")
                     self.q.move(ident, State.CONTESTED,
-                                reason=f"exhausted {why}", detail=why[:500])
+                                reason=f"exhausted {why}", detail=why[:500],
+                                head_sha=head_sha(self.repo))
                     log("CONTESTED", task=ident, why="attempt cap",
                         attempts=attempt, reviews=reviews)
-                    _git("checkout", "-q", "main", cwd=self.repo)
+                    self._return_to_main(ident)
                     return State.CONTESTED
                 fixed = agents.fix(task, [{
                     "severity": "blocking", "file": "(test suite)",
@@ -431,7 +447,7 @@ class Driver:
                             head_sha=sha)
                 projection.park_oversized(self.repo, task, bounded.detail)
                 log("OVERSIZED", task=ident, detail=bounded.detail[:160])
-                _git("checkout", "-q", "main", cwd=self.repo)
+                self._return_to_main(ident)
                 return State.CONTESTED
 
             # -- the contract, measured on the unit that would land --------
@@ -459,7 +475,7 @@ class Driver:
                 projection.park_out_of_scope(self.repo, task, kept.evidence)
                 log("OUT_OF_SCOPE", task=ident, round=round_no, attempt=attempt,
                     undeclared=kept.evidence["undeclared"][:8])
-                _git("checkout", "-q", "main", cwd=self.repo)
+                self._return_to_main(ident)
                 return State.CONTESTED
             log("SCOPE", task=ident, round=round_no, attempt=attempt,
                 detail=kept.detail[:160])
@@ -518,7 +534,7 @@ class Driver:
             if exhausted:
                 # The branch stays. A person reading a contested task needs the
                 # rounds, and `main` never saw them.
-                _git("checkout", "-q", "main", cwd=self.repo)
+                self._return_to_main(ident)
                 self.q.move(ident, State.CONTESTED,
                             reason=f"exhausted {exhausted}",
                             detail=exhausted[:500])
@@ -645,7 +661,24 @@ class Driver:
         log("DONE", task=ident, seconds=int(time.monotonic() - started))
         return State.DONE
 
-    def _commit(self, task: dict, round_no: int) -> None:
+    def _return_to_main(self, task_id: str) -> bool:
+        """Leave the task's branch, and say so when git will not.
+
+        A checkout is not guaranteed to succeed — uncommitted work git cannot
+        carry across refuses it — and a driver that assumes it worked goes on
+        standing on a task branch it believes it left. That is how three
+        infrastructure commits landed on somebody else's branch. So the exit
+        code is read: the run's `finally` will try again, and the record names
+        the branch that was still checked out rather than implying `main`.
+        """
+        code, out = _git("checkout", "-q", "main", cwd=self.repo)
+        if code != 0:
+            log("STUCK_ON_BRANCH", task=task_id,
+                on=_git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)[1],
+                detail=out[:200])
+        return code == 0
+
+    def _commit(self, task: dict, round_no: int, *, note: str = "") -> None:
         """Commit the task's work, and only the task's work.
 
         `git add -A` swept whatever else was in the tree into the review unit,
@@ -657,6 +690,11 @@ class Driver:
         So the tree is required to be clean before a task starts, and anything
         present at that point is the caller's to deal with rather than the
         loop's to adopt.
+
+        `note` is for a commit the gates did **not** pass — the attempt cap
+        preserving a failing round. Without it the message reads exactly like
+        the reviewed rounds above it, and a person reading the branch would
+        take work the suite rejected for work that reached a reviewer.
         """
         # `git add -A` is the uncontrolled staging that put another task's
         # edits into a review unit. Paths are staged explicitly, and anything
@@ -667,7 +705,8 @@ class Driver:
         if code == 0:
             return                       # nothing staged; nothing to commit
         message = (f"{task['title']}\n\n{task['brief'][:1200]}\n\n"
-                   f"devloop task {task['id']}, round {round_no}.\n\n"
+                   f"devloop task {task['id']}, round {round_no}.\n"
+                   + (f"{note[:500]}\n" if note else "") + "\n"
                    "Co-Authored-By: Claude Opus 5 (1M context) "
                    "<noreply@anthropic.com>")
         _git("commit", "-q", "-m", message, cwd=self.repo)

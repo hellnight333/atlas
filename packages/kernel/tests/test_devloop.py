@@ -635,11 +635,18 @@ def test_a_task_that_ends_contested_leaves_main_untouched():
                    "if attempt >= self.limits.build_attempts:"):
         start = run_task.index(anchor)
         section = run_task[start:run_task.index("return State.CONTESTED", start)]
-        assert '"checkout", "-q", "main"' in section, (
+        assert "self._return_to_main(" in section, (
             f"the contested exit at `{anchor}` does not return to main, so its "
             "branch stays checked out and the next task builds on top of "
             "rejected work")
         assert "merge" not in section
+    # And the helper is the checkout rather than a name that promises one — it
+    # runs it and reads the exit code, so a checkout git refused is recorded
+    # instead of assumed.
+    helper = source[source.index("def _return_to_main("):
+                    source.index("def _commit(")]
+    assert '"checkout", "-q", "main"' in helper
+    assert "if code != 0" in helper and "STUCK_ON_BRANCH" in helper
 
 
 def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
@@ -1602,6 +1609,81 @@ def test_tests_that_never_pass_exhaust_the_attempt_cap_not_the_review_cap(
     assert "attempt cap" in (row["detail"] or "")
     assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
                           capture_output=True, text=True).stdout.strip() == "main"
+
+
+def test_work_the_attempt_cap_rejected_stays_on_its_branch(tmp_path,
+                                                            monkeypatch):
+    """The one exit that could be reached with an uncommitted tree.
+
+    Every other contested ending runs after `_commit`, so leaving the branch
+    moves nothing. This one is reached from a failing test gate, where the
+    fixer's edits are still uncommitted — and a task whose suite never went
+    green has committed nothing at all, so its branch is still `main`'s tip and
+    the files match. `git checkout main` carries edits across in exactly that
+    case: rejected work lands in `main`'s working tree, the next fresh task is
+    refused for a dirty tree, and the branch a person opens to read the
+    argument holds none of it.
+
+    So the three things that must be true after the cap: `main`'s tree is
+    clean, `main`'s tip has not moved, and the branch has the last attempt.
+    """
+    import subprocess
+
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+
+    def rev(*args) -> str:
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                              text=True).stdout.strip()
+
+    main_before = rev("rev-parse", "main")
+    q, ident, state, asked = _scripted_run(
+        repo, tmp_path, monkeypatch,
+        limits=drv.Limits(review_rounds=3, build_attempts=4),
+        suites=[gates.Gate("tests", False, "1 failed") for _ in range(9)])
+
+    assert state == State.CONTESTED and asked == []
+    assert rev("branch", "--show-current") == "main"
+    assert rev("status", "--porcelain") == "", (
+        "the rejected work was left in main's working tree: the next task is "
+        "refused for a dirty tree it did not create")
+    assert rev("rev-parse", "main") == main_before, "rejected work reached main"
+    # Four passes through the gates — one build and three fixes — so the branch
+    # must hold the fourth, which is the one the cap stopped.
+    assert rev("show", f"devloop/{ident}:src/work.py") == "x = 4", (
+        "the contested branch does not hold the attempt the cap rejected")
+    assert rev("rev-list", "--count", f"main..devloop/{ident}") == "1"
+    # And the record names the commit, so a person is not left to find it.
+    assert q.get(ident)["head_sha"] == rev("rev-parse", f"devloop/{ident}")
+
+
+def test_a_checkout_git_refused_is_recorded_rather_than_assumed(tmp_path,
+                                                                 capsys):
+    """The other half: leaving the branch is checked, not hoped for.
+
+    git refuses a checkout that would overwrite uncommitted work, and a driver
+    that ignores the exit code carries on believing it stands on `main`. That
+    is how infrastructure commits reached a task branch. The negative control
+    for the fix above: when the checkout cannot happen, the record says which
+    branch is still out.
+    """
+    import subprocess
+
+    from devloop import driver as drv
+
+    repo, _ = _repo_with_a_task_branch(tmp_path, touching=["src/app.py"])
+    # Uncommitted, and on a file that differs between the branches — the one
+    # shape git will not carry across.
+    (repo / "src" / "app.py").write_text("conflicting = True\n")
+
+    driver = drv.Driver(Queue(tmp_path / "s.db"), drv.Limits(), repo=repo)
+    assert driver._return_to_main("t-x") is False
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == "task"
+    assert "STUCK_ON_BRANCH" in capsys.readouterr().out, (
+        "a refused checkout was swallowed; the run has no record that it is "
+        "still on a task branch")
 
 
 def test_a_task_that_runs_out_of_attempts_says_attempts_not_rounds(tmp_path,
