@@ -474,6 +474,57 @@ def test_only_a_dropped_link_is_retried(tmp_path, monkeypatch):
         "a remote command that answered non-zero was retried")
 
 
+def test_a_registry_that_will_not_answer_polls_and_then_rolls_back(tmp_path, monkeypatch):
+    """The worker poll survives a `psql` that answers non-zero.
+
+    `ssh_` now returns a remote command's own status instead of retrying it
+    twelve times, so a transient registry error reaches the two
+    `VAR="$(ssh_ …)"` reads directly. Unguarded, `set -e` would end the run on
+    the first one -- after the kernel, the console, the infra tree and the units
+    have been written and the workers restarted, and before the rollback. This
+    is the whole point at which a deploy must *not* abort silently.
+    """
+    world = build_world(tmp_path, monkeypatch)
+    (world.ctl / "ssh_fail_match").write_text("DISTINCT")
+
+    done = run(world)
+    assert done.returncode == 1, done.stdout + done.stderr
+
+    # The poll spent its stated patience rather than ending on the first answer.
+    attempts = [line for line in log_lines(world) if "DISTINCT" in line]
+    assert len(attempts) == 60, f"the poll ran {len(attempts)} time(s), not 60"
+
+    assert "FAILED: after 180s workers report 'nothing'" in done.stdout
+    assert "the worker registry did not answer" in done.stdout, (
+        "an unread registry was reported as idle workers")
+
+    # And production was put back, which is what an early `set -e` exit skips.
+    kernel = world.host / "app" / "packages" / "kernel" / "atlas_kernel"
+    assert (kernel / "qevik" / "app.py").read_text() == "# stale\n"
+    assert (kernel / "stale.py").exists(), "the rollback did not restore the kernel"
+    assert (world.host / "app" / "infra" / "mission_worker.py").read_text() == (
+        "# stale worker\n")
+
+
+def test_the_registry_note_is_absent_when_the_registry_did_answer(tmp_path, monkeypatch):
+    """The negative control: the note above is not printed by every failure.
+
+    Here the registry answers, and answers a version that is not the shipped
+    fingerprint -- workers really are running other code. The same rollback
+    runs, and the deploy must not blame the read.
+    """
+    world = build_world(tmp_path, monkeypatch)
+    (world.ctl / "worker_version").write_text("0123456789ab")
+
+    done = run(world)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "FAILED: after 180s workers report '0123456789ab'" in done.stdout
+    assert "the worker registry did not answer" not in done.stdout
+
+    kernel = world.host / "app" / "packages" / "kernel" / "atlas_kernel"
+    assert (kernel / "stale.py").exists(), "the rollback did not restore the kernel"
+
+
 # ---------------------------------------------------------- the shims themselves
 
 

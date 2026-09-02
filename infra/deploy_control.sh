@@ -390,14 +390,31 @@ done
 # 180s, stated here for the same reason as the health poll above: a worker that
 # has not re-registered yet is an answer, not a dropped link, so `ssh_` returns
 # it at once instead of retrying it into the patience this loop needs.
+#
+# Both reads are guarded for that same reason. An unguarded `VAR="$(ssh_ …)"` is
+# a simple command under `set -e`, so a single non-zero answer ends the run right
+# here -- after the kernel, the console, the infra tree and the units have all
+# been written and the workers restarted, and *before* the rollback below can
+# run. `ssh_` used to absorb that by retrying every non-zero status twelve times;
+# now that it retries only a dropped link, one transient `psql` error arrives
+# here as a status. So a registry that will not answer is treated as what it is
+# -- an answer that is not the fingerprint, and a reason to keep polling. What
+# decides the deploy is still the fingerprint at the end of the patience, and a
+# read that never answered says so rather than being reported as absent workers.
 REPORTED=""
+UNREADABLE=""
 for attempt in $(seq 1 60); do
-  REPORTED="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT DISTINCT version FROM atlas_workers WHERE id LIKE '%:%' AND version <> '0.0.0'\"" 2>/dev/null | tr -d '\r')"
-  COUNT="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT count(*) FROM atlas_workers WHERE id LIKE '%:%' AND version = '$FINGERPRINT'\"" 2>/dev/null | tr -d '\r')"
+  UNREADABLE=""
+  REPORTED="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT DISTINCT version FROM atlas_workers WHERE id LIKE '%:%' AND version <> '0.0.0'\"" 2>/dev/null | tr -d '\r')" \
+    || { REPORTED=""; UNREADABLE=yes; }
+  COUNT="$(ssh_ "sudo -u postgres psql -d qevik -Atc \"SELECT count(*) FROM atlas_workers WHERE id LIKE '%:%' AND version = '$FINGERPRINT'\"" 2>/dev/null | tr -d '\r')" \
+    || { COUNT=""; UNREADABLE=yes; }
   [ "$REPORTED" = "$FINGERPRINT" ] && [ "${COUNT:-0}" -ge 1 ] && {
     echo "    all $COUNT worker(s) report $FINGERPRINT after $((attempt * 3))s"; break; }
   [ "$attempt" = 60 ] && {
     echo "FAILED: after 180s workers report '${REPORTED:-nothing}', expected '$FINGERPRINT'"
+    [ -n "$UNREADABLE" ] && echo "        the worker registry did not answer on the last attempt;"
+    [ -n "$UNREADABLE" ] && echo "        'nothing' above may be an unread registry, not idle workers."
     echo "        the code running is not the code that was shipped."
     echo "==> putting the previous kernel and infra back"
     ssh_ "rm -rf $REMOTE_APP/packages/kernel/atlas_kernel && cp -a $ROLLBACK_DIR $REMOTE_APP/packages/kernel/atlas_kernel && chown -R qevik:qevik $REMOTE_APP/packages/kernel/atlas_kernel"

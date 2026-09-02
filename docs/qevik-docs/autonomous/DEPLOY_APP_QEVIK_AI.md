@@ -64,6 +64,23 @@ and prints that id everywhere it mentions the commit. The branch/porcelain
 checks stay as fail-safes about the operator's own checkout; they are not
 where the payload comes from.
 
+**The devloop deploy gate does not pass the sha yet, and that is a refusal.**
+`gates.deployed` runs `./infra/deploy_control.sh` with no `QEVIK_DEPLOY_SHA`
+(`infra/devloop/gates.py:331`). So from the moment the sha contract landed until
+ADR-0010 **task 3** lands, every `requires_deploy` task fails its deploy gate at
+the sha check — exit 2, before any host contact, nothing written. That is the
+intended failure direction: the alternative, defaulting to `HEAD`, is exactly
+the working-tree payload this ADR removes, and it would deploy silently under a
+name nobody chose. Task 3 (`driver.py`, `gates.py`, `test_devloop.py`) is where
+the driver captures the landed commit `S` and passes it; those files are outside
+task 1's allowed paths on purpose, so the gap cannot be closed from here.
+
+Until task 3 lands: tasks 1–3 themselves are `requires_deploy=0`, so nothing
+deploys as a side effect of landing them, and the first real deploy is
+human-watched by the rollout plan. **Any other `requires_deploy` task enqueued
+in that window will fail its deploy gate.** Land task 3 first, or run the deploy
+by hand with the sha as shown above.
+
 **The export.** `git archive <sha> -- packages/kernel/atlas_kernel infra
 apps/control/src` is extracted into a private temporary directory that is
 removed on exit. Before anything is sent, every blob in `git ls-tree -r <sha>`
@@ -107,6 +124,16 @@ connection-level failure. Any other status is the remote command's own answer
 and is returned at once, so a deterministic failure costs one round trip
 instead of 165 seconds. The two polls therefore state their own patience: the
 health poll waits 60 × 2 s, the worker fingerprint poll 60 × 3 s.
+
+Both polls also **guard their reads**, because the shorter retry means a
+transient remote error now reaches them as a status instead of as a twelfth
+attempt. An unguarded `VAR="$(ssh_ …)"` is a simple command under `set -e`: one
+non-zero `psql` would end the run inside the fingerprint poll — after the
+kernel, the console, the infra tree and the units were written and the workers
+restarted, and *before* the rollback. Guarded, a registry that will not answer
+is just an answer that is not the fingerprint, the poll keeps its patience, and
+a failure still rolls back. When the last attempt could not read the registry,
+the failure says so rather than reporting idle workers.
 
 **Test seams.** `QEVIK_REMOTE_APP`, `QEVIK_CONSOLE_DIR`, `QEVIK_UNIT_DIR`,
 `QEVIK_ENV_FILE`, `QEVIK_HEALTH_URL` and `QEVIK_ROLLBACK_DIR` redirect the host
