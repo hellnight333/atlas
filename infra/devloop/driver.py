@@ -2,7 +2,9 @@
 """The development loop. Neither agent drives it.
 
     driver.py status                 what the queue holds
-    driver.py enqueue --title ... --brief ... --origin ...
+    driver.py enqueue --title ... --brief ... --path ... [--path ...]
+    driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
+    driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
     driver.py run --once             one task, then stop
@@ -24,10 +26,13 @@ agents and knows nothing about businesses, signals or outreach.
 
 ## The state machine
 
-    QUEUED
+    QUEUED         only with an allowed-path contract; none → BLOCKED
       → BUILDING     Claude, bounded turns, no commit
       → GATING       diff non-empty, tests pass          (objective)
-      → REVIEWING    commit, then Codex on base..HEAD    (read-only, blind)
+                     commit, then every changed path is
+                     inside the contract                 (objective)
+                     outside it → CONTESTED, unreviewed
+      → REVIEWING    Codex on base..HEAD                 (read-only, blind)
           findings → FIXING → GATING → REVIEWING  (at most three rounds)
           three rounds and still contested → CONTESTED
       → DEPLOYING    where the task declares it          (objective)
@@ -38,6 +43,17 @@ agents and knows nothing about businesses, signals or outreach.
 machine or an irreversible action is parked with its boundary written into
 `.qevik/HUMAN_ACTIONS.md` or `.qevik/DECISION_QUEUE.md`, and the loop continues
 with independent work.
+
+## The scope contract
+
+Every task carries the list of paths it may change. The driver compares the
+committed diff against it — after the commit, so the record names an
+immutable sha, and before the review, so no round is spent on work the task
+was not allowed to do — and stores what it declared, what changed, what was
+outside, and the verdict. Landing asks that record the way it asks the review
+record: a head with no in-scope verdict does not merge. The builder is shown
+the list, but the builder is not what enforces it; a diff outside the
+contract is contested whatever the builder said about it.
 
 ## What stops it
 
@@ -65,7 +81,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from devloop import agents, boundary, gates, projection  # noqa: E402
-from devloop.queue import Queue, State, redact  # noqa: E402
+from devloop.queue import Queue, State, allowed_paths, redact  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 LOG = REPO / ".qevik" / "devloop" / "driver.log"
@@ -156,6 +172,20 @@ class Driver:
         """One task through the machine. Returns its terminal state."""
         started = time.monotonic()
         ident = task["id"]
+        # No contract, no run. The scope gate compares the diff against the
+        # task's allowed paths, and a task with none would either pass
+        # vacuously or be judged against a list the driver invented; both are
+        # the unenforced scope this gate replaced. A person declares one and
+        # requeues — `devloop declare-paths` — which is a decision about where
+        # the work is allowed to go, and not the driver's to make.
+        allowed = allowed_paths(task)
+        if not allowed:
+            self.q.move(ident, State.BLOCKED,
+                        reason="no allowed-path contract: the task predates "
+                               "the contract or was enqueued without one; "
+                               "declare the paths it may change and requeue")
+            log("BLOCKED", task=ident, why="no allowed-path contract")
+            return State.BLOCKED
         # A dirty tree would be committed under this task's name and reviewed
         # as its work. Refused rather than adopted: the review unit has to be
         # the task's diff and nothing else.
@@ -328,6 +358,33 @@ class Driver:
             # reviewer, and so a finding names a sha somebody can check out.
             self._commit(task, round_no)
             sha = head_sha(self.repo)
+
+            # -- the contract, measured on the unit that would land --------
+            # After the commit and before the review, on `base..HEAD`: the
+            # same range the reviewer is shown and the squash would take.
+            # Recorded against the sha whatever the verdict, so the landing
+            # gate can ask whether *this* head was measured — the same
+            # question it asks of the review. A diff outside the contract is
+            # contested at once; no round is spent reviewing work the task was
+            # not allowed to do, and no finding could make it landable.
+            kept = gates.scope(cwd=self.repo, base_sha=base, allowed=allowed)
+            if kept.unmeasured:
+                return self._infra(ident, f"scope unmeasured: {kept.detail}")
+            self.q.record_scope(ident, round=round_no, sha=sha,
+                                declared=kept.evidence["declared"],
+                                changed=kept.evidence["changed"],
+                                undeclared=kept.evidence["undeclared"])
+            if not kept.passed:
+                self.q.move(ident, State.CONTESTED,
+                            reason=f"out of scope: {kept.detail}",
+                            head_sha=sha, review_rounds=round_no)
+                projection.park_out_of_scope(self.repo, task, kept.evidence)
+                log("OUT_OF_SCOPE", task=ident, round=round_no,
+                    undeclared=kept.evidence["undeclared"][:8])
+                _git("checkout", "-q", "main", cwd=self.repo)
+                return State.CONTESTED
+            log("SCOPE", task=ident, round=round_no, detail=kept.detail[:160])
+
             self.q.move(ident, State.REVIEWING,
                         reason=f"round {round_no} at {sha[:12]}",
                         head_sha=sha, review_rounds=round_no)
@@ -399,11 +456,24 @@ class Driver:
         # for this task must exist and must have left no blocking finding.
         # A task with no recorded review has not been reviewed, and that is
         # refused rather than assumed.
+        #
+        # The same question is asked of the scope record, for the same reason:
+        # the head about to land must have been measured against the task's
+        # allowed paths and found inside them. A missing record is a refusal,
+        # so no route to this line — today's or a later one — can land a diff
+        # the contract was never compared with.
         if not self.q.review_was_clean(ident):
             self.q.move(ident, State.CONTESTED,
                         reason="refused to land: the recorded review for this "
                                "task is missing or left blocking findings")
             log("REFUSED_TO_LAND", task=ident)
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.CONTESTED
+        if not self.q.scope_was_kept(ident):
+            self.q.move(ident, State.CONTESTED,
+                        reason="refused to land: no scope check found this "
+                               "head inside the task's allowed-path contract")
+            log("REFUSED_TO_LAND", task=ident, why="scope not kept")
             _git("checkout", "-q", "main", cwd=self.repo)
             return State.CONTESTED
         _git("checkout", "-q", "main", cwd=self.repo)
@@ -692,6 +762,18 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--evidence", default="{}")
     add.add_argument("--deploy", action="store_true")
     add.add_argument("--verify-production", action="store_true")
+    add.add_argument("--path", action="append", default=[], required=True,
+                     help="a path, directory (trailing /) or glob the task "
+                          "may change; repeatable, at least one")
+
+    declare = sub.add_parser("declare-paths")
+    declare.add_argument("task")
+    declare.add_argument("--path", action="append", default=[], required=True)
+    declare.add_argument("--reason", default="")
+    declare.add_argument("--actor", default=os.environ.get("USER", "person"))
+
+    show = sub.add_parser("scope")
+    show.add_argument("task")
 
     run = sub.add_parser("run")
     run.add_argument("--once", action="store_true")
@@ -718,11 +800,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "enqueue":
         ident = q.add(title=args.title, brief=args.brief, origin=args.origin,
-                      priority=args.priority,
+                      paths=args.path, priority=args.priority,
                       evidence=json.loads(args.evidence),
                       requires_deploy=args.deploy,
                       requires_prod_check=args.verify_production)
         print(ident)
+        return 0
+
+    if args.command == "declare-paths":
+        declared = q.declare_paths(args.task, args.path, actor=args.actor,
+                                   reason=args.reason)
+        print(f"{args.task} may change: {', '.join(declared)}")
+        return 0
+
+    if args.command == "scope":
+        task = q.get(args.task)
+        if task is None:
+            print(f"no task {args.task}")
+            return 1
+        print(f"declared: {allowed_paths(task) or '(none)'}")
+        checks = q.scope_checks(args.task)
+        if not checks:
+            print("no scope check has measured this task")
+        for one in checks:
+            print(f"round {one['round']} at {one['sha'][:12]} ({one['at'][:19]}):"
+                  f" {one['verdict']}")
+            print(f"  changed:    {one['changed']}")
+            print(f"  undeclared: {one['undeclared']}")
         return 0
 
     if args.command == "inspect":

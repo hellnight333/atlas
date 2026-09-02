@@ -44,10 +44,19 @@ class Finding:
     evidence: dict = field(default_factory=dict)
     requires_deploy: bool = False
     requires_prod_check: bool = False
+    #: The allowed-path contract the task is enqueued under. Module-level,
+    #: because a rule knows which subsystem produced the number and not which
+    #: line will fix it; a person widens it when the work turns out to reach
+    #: further, and the driver refuses the diff until they do.
+    paths: tuple[str, ...] = ()
 
+
+KERNEL = "packages/kernel/atlas_kernel/"
+TESTS = "packages/kernel/tests/"
 
 #: Each rule is a SQL query and a reading of its row. Declared together so a
-#: finding cannot cite a number no query produced.
+#: finding cannot cite a number no query produced — and with the paths the
+#: work is allowed to reach, so a finding cannot enqueue unbounded work.
 RULES: tuple[dict, ...] = (
     {
         "key": "publication-offer-unknown",
@@ -62,6 +71,9 @@ RULES: tuple[dict, ...] = (
                   "recoverable from the delivering mission's recipe, and if it "
                   "is, resolve it on read without rewriting history."),
         "priority": 80,
+        "paths": (KERNEL + "outreach/preparation.py",
+                  KERNEL + "publication/published.py",
+                  KERNEL + "opportunity/repository.py", TESTS),
     },
     {
         "key": "audit-observations-stale",
@@ -79,6 +91,10 @@ RULES: tuple[dict, ...] = (
                   "cadence is simply the backlog, make that visible rather "
                   "than changing it."),
         "priority": 70,
+        "paths": (KERNEL + "opportunity/website_audit.py",
+                  KERNEL + "opportunity/audit_import.py",
+                  KERNEL + "opportunity/repository.py",
+                  KERNEL + "control/sales.py", TESTS),
     },
     {
         "key": "outreach-blocked-not-stated",
@@ -90,6 +106,9 @@ RULES: tuple[dict, ...] = (
                   "about. Establish from the records why each is unreviewed "
                   "and surface it; do not approve, send or delete anything."),
         "priority": 40,
+        "paths": (KERNEL + "outreach/unreviewed.py",
+                  KERNEL + "opportunity/repository.py",
+                  KERNEL + "control/sales.py", TESTS),
     },
     {
         "key": "our-own-failed-checks",
@@ -105,6 +124,9 @@ RULES: tuple[dict, ...] = (
                   "the funnel without appearing as a loss. Establish how many "
                   "and whether the rotation is recovering them."),
         "priority": 60,
+        "paths": (KERNEL + "opportunity/coverage.py",
+                  KERNEL + "opportunity/website_audit.py",
+                  KERNEL + "opportunity/repository.py", TESTS),
     },
 )
 
@@ -159,7 +181,8 @@ def findings() -> list[Finding]:
             key=rule["key"], title=rule["title"], brief=rule["brief"],
             priority=rule["priority"],
             evidence={"query": " ".join(rule["sql"].split()), "row": row},
-            requires_deploy=True, requires_prod_check=False))
+            requires_deploy=True, requires_prod_check=False,
+            paths=tuple(rule["paths"])))
     return found
 
 
@@ -176,8 +199,8 @@ def enqueue_from_production(queue, *, repo: Path) -> int:
         if one.title in open_titles:
             continue
         queue.add(title=one.title, brief=one.brief, origin="production",
-                  priority=one.priority, evidence=one.evidence,
-                  requires_deploy=one.requires_deploy,
+                  paths=list(one.paths), priority=one.priority,
+                  evidence=one.evidence, requires_deploy=one.requires_deploy,
                   requires_prod_check=one.requires_prod_check)
         added += 1
     return added

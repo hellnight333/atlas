@@ -141,6 +141,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     evidence            TEXT NOT NULL DEFAULT '{}',
     requires_deploy     INTEGER NOT NULL DEFAULT 0,
     requires_prod_check INTEGER NOT NULL DEFAULT 0,
+    -- The allowed-path contract, as a JSON list of repo-relative patterns.
+    -- What the task may change; the driver compares the diff against it and
+    -- refuses to land anything outside. NULL only on rows that predate the
+    -- column, and such a row cannot run until somebody declares one.
+    paths               TEXT,
     -- The immutable review unit. `base_sha` is fixed when the build starts;
     -- the diff Codex reviews is base..HEAD and cannot move under it.
     base_sha            TEXT,
@@ -204,6 +209,23 @@ CREATE TABLE IF NOT EXISTS findings (
     at              TEXT NOT NULL
 );
 
+-- Every scope check that ran, on which commit, and what it found. The
+-- declared contract, the paths actually changed and the ones outside the
+-- contract are all kept, so the verdict can be read back and disagreed with
+-- rather than trusted. Keyed on the commit, like a review: the landing gate
+-- asks whether *this* head was measured and kept to its contract.
+CREATE TABLE IF NOT EXISTS scope_checks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     TEXT NOT NULL,
+    round       INTEGER NOT NULL,
+    sha         TEXT NOT NULL,
+    declared    TEXT NOT NULL,
+    changed     TEXT NOT NULL,
+    undeclared  TEXT NOT NULL,
+    verdict     TEXT NOT NULL,
+    at          TEXT NOT NULL
+);
+
 -- One driver invocation, so per-run limits survive a restart.
 CREATE TABLE IF NOT EXISTS runs (
     id              TEXT PRIMARY KEY,
@@ -244,6 +266,61 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+#: A pattern that matches every path is not a contract. Refused at the door
+#: rather than tolerated, because a task allowed to change anything is exactly
+#: the task whose scope nobody checked, wearing a field that says somebody did.
+_VACUOUS = frozenset({"", ".", "/", "*", "**", "./", "*/", "**/"})
+
+
+def contract(paths: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalise an allowed-path contract, or refuse it.
+
+    Each entry is a repo-relative path, a directory (trailing `/`), or a
+    glob. What makes a contract usable is that it bounds something: an empty
+    list, a bare `*`, an absolute path or one that climbs out of the tree are
+    all refused, since none of them names a place inside the repository that
+    the diff can be held to.
+    """
+    if not paths:
+        raise ValueError(
+            "a task must declare the paths it is allowed to change. Scope "
+            "stated only in the brief is scope nobody enforces.")
+    cleaned: list[str] = []
+    for one in paths:
+        if not isinstance(one, str):
+            raise ValueError(f"a path pattern must be a string, not {one!r}")
+        text = one.strip()
+        if text.startswith("./"):
+            text = text[2:]
+        if text in _VACUOUS or text.lstrip("*/") == "":
+            raise ValueError(
+                f"{one!r} allows every path; a contract that bounds nothing "
+                f"is not a contract")
+        if text.startswith("/") or ".." in text.split("/"):
+            raise ValueError(
+                f"{one!r} is not a path inside the repository")
+        if text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def allowed_paths(task: dict) -> list[str]:
+    """The contract a task row carries, or an empty list when it has none.
+
+    A row from before the column exists has NULL here. That is reported as no
+    contract rather than as an empty one so the driver can refuse to run it
+    for the right reason: not that the list is empty, but that nobody set it.
+    """
+    raw = task.get("paths")
+    if not raw:
+        return []
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [one for one in loaded if isinstance(one, str)] if isinstance(loaded, list) else []
+
+
 class Queue:
     """The driver's durable state. One writer at a time, by design.
 
@@ -261,6 +338,21 @@ class Queue:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Columns added after a database was first written.
+
+        `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it
+        was, so a column that arrived later has to be added by hand. A row
+        that predates the column keeps NULL — the honest record that no
+        contract was ever declared for it, which is not the same as an empty
+        one.
+        """
+        have = {row["name"] for row in
+                self._db.execute("PRAGMA table_info(tasks)")}
+        if "paths" not in have:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN paths TEXT")
 
     def close(self) -> None:
         self._db.close()
@@ -285,7 +377,7 @@ class Queue:
 
     # -- tasks ------------------------------------------------------------
 
-    def add(self, *, title: str, brief: str, origin: str,
+    def add(self, *, title: str, brief: str, origin: str, paths: list[str],
             evidence: dict | None = None, priority: int = 50,
             requires_deploy: bool = False, requires_prod_check: bool = False,
             task_id: str = "") -> str:
@@ -294,21 +386,31 @@ class Queue:
         The refusal is the point. Requirement: never generate work merely to
         keep the agents busy — so a task claiming production evidence must
         carry some, and a task with none must say plainly where it came from.
+
+        `paths` is the allowed-path contract, and it is not optional. A task's
+        scope used to live in the prose of its brief, and a builder that
+        wandered out of it was caught only by somebody reading the diff
+        afterwards — one did, and the breach was found after three review
+        rounds had been spent on it. The contract is a list the driver can
+        compare a diff against, so the comparison is made by the loop rather
+        than by whoever remembers to look.
         """
         if origin == "production" and not (evidence or {}):
             raise ValueError(
                 "a task whose origin is production must carry the evidence. "
                 "Work with no evidence behind it is work invented to fill a "
                 "queue, and that is the failure this loop exists to avoid.")
+        declared = contract(paths)
         ident = task_id or f"t-{uuid.uuid4().hex[:12]}"
         with self._write() as db:
             db.execute(
                 "INSERT INTO tasks (id, title, brief, state, origin, priority,"
-                " evidence, requires_deploy, requires_prod_check, created_at,"
-                " updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " evidence, requires_deploy, requires_prod_check, paths,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ident, redact(title), redact(brief), State.QUEUED, origin,
                  int(priority), json.dumps(evidence or {}),
-                 int(requires_deploy), int(requires_prod_check), _now(), _now()))
+                 int(requires_deploy), int(requires_prod_check),
+                 json.dumps(declared), _now(), _now()))
             db.execute(
                 "INSERT INTO transitions (task_id, from_state, to_state, reason,"
                 " actor, at) VALUES (?,?,?,?,?,?)",
@@ -390,6 +492,37 @@ class Queue:
                 " actor, at) VALUES (?,?,?,?,?,?)",
                 (task_id, current["state"] if current else None, to,
                  redact(reason)[:2000], actor, _now()))
+
+    def declare_paths(self, task_id: str, paths: list[str], *,
+                      actor: str, reason: str = "") -> list[str]:
+        """Set or replace the contract on a task that is not in flight.
+
+        This is how a row that predates the contract column gets one, and how
+        a person widens a contract the builder ran into. It leaves a
+        transition naming who set it and to what, so the contract a task was
+        landed under is part of its history rather than a field somebody
+        overwrote.
+        """
+        declared = contract(paths)
+        with self._write() as db:
+            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+                             (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            if row["state"] in State.IN_FLIGHT:
+                raise ValueError(
+                    f"{task_id} is {row['state']}; a contract is not changed "
+                    f"under a task that is being measured against it")
+            db.execute("UPDATE tasks SET paths = ?, updated_at = ? WHERE id = ?",
+                       (json.dumps(declared), _now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, row["state"], row["state"],
+                 redact(f"allowed-path contract set to {declared}"
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
+        return declared
 
     def park(self, task_id: str, *, request_id: str, stage: str, sha: str,
              reason: str, run_id: str = "") -> None:
@@ -507,6 +640,56 @@ class Queue:
             (task_id, row["head_sha"])).fetchone()
         return int(blocking["n"]) == 0
 
+    # -- scope ------------------------------------------------------------
+
+    def record_scope(self, task_id: str, *, round: int, sha: str,
+                     declared: list[str], changed: list[str],
+                     undeclared: list[str]) -> str:
+        """What the driver measured against the contract, on which commit.
+
+        The verdict is derived here from the lists and never passed in, so a
+        record cannot say `in_scope` while naming an undeclared path.
+        """
+        verdict = "in_scope" if not undeclared else "out_of_scope"
+        with self._write() as db:
+            db.execute(
+                "INSERT INTO scope_checks (task_id, round, sha, declared,"
+                " changed, undeclared, verdict, at) VALUES (?,?,?,?,?,?,?,?)",
+                (task_id, round, sha, json.dumps(list(declared)),
+                 json.dumps(list(changed)), json.dumps(list(undeclared)),
+                 verdict, _now()))
+        return verdict
+
+    def scope_was_kept(self, task_id: str) -> bool:
+        """Whether the commit about to land was measured and stayed in scope.
+
+        Keyed on the head commit for the same reason `review_was_clean` is.
+        A head no scope check examined is not in scope: the record has to say
+        so, and a missing record defaults to refusal, because the alternative
+        is a path to `main` that a diff outside the contract can take by
+        arriving at the landing gate through some route the check never saw.
+        """
+        row = self._db.execute(
+            "SELECT head_sha FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or not row["head_sha"]:
+            return False
+        latest = self._db.execute(
+            "SELECT verdict FROM scope_checks WHERE task_id = ? AND sha = ?"
+            " ORDER BY id DESC LIMIT 1", (task_id, row["head_sha"])).fetchone()
+        return bool(latest) and latest["verdict"] == "in_scope"
+
+    def scope_checks(self, task_id: str) -> list[dict]:
+        """Every scope check for a task, oldest first, lists decoded."""
+        out = []
+        for row in self._db.execute(
+                "SELECT * FROM scope_checks WHERE task_id = ? ORDER BY id",
+                (task_id,)):
+            one = dict(row)
+            for key in ("declared", "changed", "undeclared"):
+                one[key] = json.loads(one[key])
+            out.append(one)
+        return out
+
     def findings(self, task_id: str, *, round: int | None = None) -> list[dict]:
         sql = "SELECT * FROM findings WHERE task_id = ?"
         args: tuple = (task_id,)
@@ -573,4 +756,4 @@ class Queue:
             "SELECT * FROM evaluations ORDER BY at")]
 
 
-__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "redact"]
+__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract", "redact"]

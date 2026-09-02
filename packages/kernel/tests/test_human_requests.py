@@ -330,8 +330,8 @@ def test_answering_one_decision_frees_only_its_own_blocked_tasks():
         title="Something else", why="w", created_by="test")
     q = Queue(_Path(tempfile.mkdtemp()) / "s.db")
     try:
-        mine = [q.add(title=f"m{n}", brief="b", origin="human") for n in range(2)]
-        theirs = q.add(title="t", brief="b", origin="human")
+        mine = [q.add(title=f"m{n}", brief="b", origin="human", paths=["infra/"]) for n in range(2)]
+        theirs = q.add(title="t", brief="b", origin="human", paths=["infra/"])
         for ident, request in [(mine[0], answered), (mine[1], answered),
                                (theirs, other)]:
             q.claim(owner="d")

@@ -11,6 +11,7 @@ Prose and outcome are independent variables.
 
 `changed`      the intended diff is not empty
 `tests`        the relevant tests pass, by exit code
+`scope`        every changed path is inside the task's allowed-path contract
 `clean_tree`   the reviewer wrote nothing — proved, not configured
 `deployed`     the deploy script exited zero
 `in_production` a probe against the live system agrees
@@ -24,7 +25,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .queue import redact
@@ -42,6 +43,9 @@ class Gate:
     #: measured has established nothing, and treating it as a pass is how
     #: unverified work ships.
     unmeasured: bool = False
+    #: What the gate measured, in a form a record can keep and a person can
+    #: disagree with — lists of paths, not a sentence about them.
+    evidence: dict = field(default_factory=dict)
 
 
 def _sh(argv: list[str], *, cwd: Path, timeout: int) -> tuple[int, str, bool]:
@@ -152,6 +156,92 @@ def size(*, cwd: Path, base_sha: str) -> Gate:
     return Gate("size", True,
                 f"{files} file(s), {changed} line(s) outside tests"
                 + (f", {in_tests} in tests" if in_tests else ""))
+
+
+def _glob(pattern: str) -> re.Pattern:
+    """A contract glob as a regex. `*` stops at `/`; only `**` crosses it.
+
+    `fnmatch` lets `*` run across directories, so `tests/test_*.py` would
+    quietly cover `tests/deep/nested/test_x.py`. A contract should mean what
+    it looks like it means, so directory-crossing is spelled `**` and nothing
+    else does it.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif ch == "*":
+            out.append("[^/]*")
+            i += 1
+        elif ch == "?":
+            out.append("[^/]")
+            i += 1
+        elif ch == "[":
+            end = pattern.find("]", i + 1)
+            if end < 0:
+                out.append(re.escape(ch))
+                i += 1
+            else:
+                out.append(pattern[i:end + 1])
+                i = end + 1
+        else:
+            out.append(re.escape(ch))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def within(path: str, pattern: str) -> bool:
+    """Whether one changed path falls under one contract entry.
+
+    Three spellings, on purpose kept apart: a trailing `/` is a directory and
+    covers everything beneath it; a glob character makes it a glob, matched
+    against the whole repo-relative path with `*` stopping at `/`; anything
+    else is one exact file.
+    """
+    if pattern.endswith("/"):
+        return path.startswith(pattern)
+    if any(ch in pattern for ch in "*?["):
+        return _glob(pattern).match(path) is not None
+    return path == pattern
+
+
+def scope(*, cwd: Path, base_sha: str, allowed: list[str]) -> Gate:
+    """Every path the commits changed is one the task was allowed to change.
+
+    Measured on the committed range, not the working tree, so the paths this
+    gate examined are the paths the reviewer will see and the ones a squash
+    would land: the record it leaves is about a commit that cannot change
+    under it. Renames are not followed — a file moved out of the contract is a
+    write outside it, and following the rename would report it as inside.
+
+    The contract is compared against what was actually written, by the driver,
+    which is the distinction that makes it enforcement. A brief that says
+    "only the repository" is an instruction to the builder; this gate does not
+    read the brief and does not ask the builder, it reads the diff.
+    """
+    code, out, _ = _sh(["git", "diff", "--name-only", "--no-renames",
+                        f"{base_sha}..HEAD"], cwd=cwd, timeout=60)
+    if code != 0:
+        return Gate("scope", False, f"git failed: {out[:200]}", unmeasured=True,
+                    evidence={"declared": list(allowed)})
+    changed = [line.strip() for line in out.splitlines() if line.strip()]
+    undeclared = [path for path in changed
+                  if not any(within(path, one) for one in allowed)]
+    evidence = {"declared": list(allowed), "changed": changed,
+                "undeclared": undeclared,
+                "verdict": "out_of_scope" if undeclared else "in_scope"}
+    if undeclared:
+        return Gate("scope", False,
+                    f"{len(undeclared)} of {len(changed)} changed path(s) lie "
+                    f"outside the allowed-path contract: "
+                    + ", ".join(undeclared[:8])
+                    + (" …" if len(undeclared) > 8 else ""),
+                    evidence=evidence)
+    return Gate("scope", True,
+                f"{len(changed)} changed path(s), all inside the contract",
+                evidence=evidence)
 
 
 def clean_tree(*, cwd: Path) -> Gate:
@@ -297,7 +387,7 @@ def host_reachable(*, timeout: int = 40) -> Gate:
 
 def required(task: dict) -> tuple[str, ...]:
     """Which gates this task must pass. Declared per task, never inferred."""
-    names = ["changed", "tests", "review"]
+    names = ["changed", "tests", "scope", "review"]
     if task.get("requires_deploy"):
         names.append("deployed")
     if task.get("requires_prod_check"):
@@ -312,4 +402,4 @@ def summarise(gates: list[Gate]) -> str:
 
 
 __all__ = ["Gate", "changed", "clean_tree", "deployed", "in_production",
-           "required", "summarise", "tests"]
+           "required", "scope", "summarise", "tests", "within"]

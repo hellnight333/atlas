@@ -37,7 +37,7 @@ def test_a_claimed_task_whose_driver_died_becomes_runnable_again(q):
     A driver killed between "I took this" and "I finished it" must not hold the
     task for ever. Nothing else in the design recovers from a power cut.
     """
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     assert q.claim(owner="first") is not None
     assert q.claim(owner="second") is None, "two drivers took the same task"
 
@@ -54,7 +54,7 @@ def test_state_survives_reopening_the_database(tmp_path):
     """Process crash, terminal closed, machine restarted: same answer."""
     path = tmp_path / "state.db"
     first = Queue(path)
-    ident = first.add(title="survives", brief="b", origin="human")
+    ident = first.add(title="survives", brief="b", origin="human", paths=["infra/"])
     first.claim(owner="d1")
     first.close()
 
@@ -68,16 +68,16 @@ def test_state_survives_reopening_the_database(tmp_path):
 def test_work_with_no_evidence_cannot_claim_production_origin(q):
     """Never generate work merely to keep the agents busy."""
     with pytest.raises(ValueError, match="invented"):
-        q.add(title="something", brief="b", origin="production")
+        q.add(title="something", brief="b", origin="production", paths=["infra/"])
     # Negative control: with evidence it is accepted.
-    assert q.add(title="something", brief="b", origin="production",
+    assert q.add(title="something", brief="b", origin="production", paths=["infra/"],
                  evidence={"row": {"n": 4}})
 
 
 def test_nothing_secret_reaches_the_database(q):
     ident = q.add(title="deploy with sk-abcdefghijklmnopqrstuvwx12",
                   brief="token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-                  origin="human")
+                  origin="human", paths=["infra/"])
     found = q.get(ident)
     assert "sk-abcdefghijklmnop" not in found["title"]
     assert "ghp_abcdefghijkl" not in found["brief"]
@@ -94,7 +94,7 @@ def test_a_parked_task_is_never_claimed_and_resumes_where_it_stopped(q):
     built and gated. The stage and the commit are written down so a *different*
     driver process can pick it up.
     """
-    ident = q.add(title="needs smtp", brief="b", origin="human")
+    ident = q.add(title="needs smtp", brief="b", origin="human", paths=["infra/"])
     q.claim(owner="d1")
     q.park(ident, request_id="human-credential-smtp", stage=State.GATING,
            sha="abc123", reason="SMTP credential required", run_id="r-1")
@@ -114,7 +114,7 @@ def test_a_parked_task_is_never_claimed_and_resumes_where_it_stopped(q):
 
 def test_one_request_releases_every_task_it_was_blocking(q):
     """A missing credential blocks sending, verification and the proof at once."""
-    ids = [q.add(title=f"t{n}", brief="b", origin="human") for n in range(3)]
+    ids = [q.add(title=f"t{n}", brief="b", origin="human", paths=["infra/"]) for n in range(3)]
     for ident in ids:
         q.claim(owner="d1")
         q.park(ident, request_id="human-credential-smtp", stage=State.BUILDING,
@@ -132,7 +132,7 @@ def test_an_unreachable_control_plane_leaves_a_task_parked(monkeypatch, q):
     unresolved. Treating silence as "go ahead" would resume work on a boundary
     nobody cleared; treating it as "still blocked" is safe and is what happens.
     """
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     q.claim(owner="d1")
     q.park(ident, request_id="human-question-x", stage=State.BUILDING,
            sha="abc", reason="a decision")
@@ -277,7 +277,7 @@ def test_an_empty_diff_fails_the_change_gate(tmp_path):
 
 def test_required_gates_are_declared_not_inferred():
     assert gates.required({"requires_deploy": 0, "requires_prod_check": 0}) == (
-        "changed", "tests", "review")
+        "changed", "tests", "scope", "review")
     assert "deployed" in gates.required({"requires_deploy": 1})
     assert "in_production" in gates.required({"requires_prod_check": 1})
 
@@ -321,7 +321,7 @@ def test_build_records_how_the_run_ended(monkeypatch):
 def _driver_for(q, tmp_path):
     from devloop import driver as driver_mod
 
-    ident = q.add(title="one task", brief="do it", origin="human")
+    ident = q.add(title="one task", brief="do it", origin="human", paths=["infra/"])
     task = q.claim(owner="test")
     return driver_mod, driver_mod.Driver(q, driver_mod.Limits(),
                                          repo=tmp_path), ident, task
@@ -399,7 +399,7 @@ def test_one_task_runs_are_still_accounted_for(monkeypatch, q, tmp_path):
     # And the other half of the accounting: a failed attempt is counted against
     # the run, so a `--once` invocation that failed does not read as a run that
     # did nothing.
-    q.add(title="another", brief="b", origin="human")
+    q.add(title="another", brief="b", origin="human", paths=["infra/"])
     monkeypatch.setattr(driver_mod.Driver, "run_task",
                         lambda self, task: State.FAILED)
     failed_run = driver.loop(max_tasks=6, stop_after_one=True)
@@ -463,7 +463,7 @@ def test_a_task_refuses_to_start_on_a_dirty_tree(tmp_path, monkeypatch):
     import devloop.driver as drv
 
     q = Queue(tmp_path / "s.db")
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     task = q.claim(owner="d")
     def fresh_start(*args, **kwargs):
         # No branch for this task: a fresh start, so whatever is in the tree
@@ -515,13 +515,13 @@ def test_work_under_review_never_lands_on_main(tmp_path):
 
 def test_a_round_that_never_reviewed_can_never_land(q):
     """No recorded review means unreviewed, and unreviewed never lands."""
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     assert q.review_was_clean(ident) is False, (
         "a task nothing reviewed reported itself clean")
 
 
 def test_a_commit_the_reviewer_objected_to_can_never_land(q):
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     q.move(ident, State.REVIEWING, head_sha="aaa", review_rounds=1)
     q.record_review(ident, round=1, sha="aaa", verdict="DEFECTS_FOUND",
                     findings=1)
@@ -545,7 +545,7 @@ def test_a_reopened_task_does_not_inherit_the_old_runs_objections(q):
     run had raised a major finding — against a different commit entirely. It
     failed in the safe direction and was still wrong.
     """
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     q.move(ident, State.REVIEWING, head_sha="old", review_rounds=2)
     q.record_review(ident, round=2, sha="old", verdict="DEFECTS_FOUND",
                     findings=1)
@@ -567,7 +567,7 @@ def test_a_head_nobody_reviewed_can_never_land(q):
     Without a record that a review of *this commit* ran, "no findings" and
     "nobody looked" are the same thing — and the second must never land.
     """
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     q.move(ident, State.REVIEWING, head_sha="reviewed", review_rounds=1)
     q.record_review(ident, round=1, sha="reviewed", verdict="CLEAN", findings=0)
     assert q.review_was_clean(ident) is True
@@ -580,7 +580,7 @@ def test_a_head_nobody_reviewed_can_never_land(q):
 def test_a_minor_finding_does_not_hold_a_task_but_a_major_one_does(q):
     for severity, expected in (("minor", True), ("major", False),
                                ("blocking", False)):
-        ident = q.add(title=f"t-{severity}", brief="b", origin="human")
+        ident = q.add(title=f"t-{severity}", brief="b", origin="human", paths=["infra/"])
         q.move(ident, State.REVIEWING, head_sha="a", review_rounds=1)
         q.record_review(ident, round=1, sha="a", verdict="DEFECTS_FOUND",
                         findings=1)
@@ -684,7 +684,7 @@ def test_a_resumed_task_is_not_refused_for_its_own_leftover_work(tmp_path,
     import devloop.driver as drv
 
     q = Queue(tmp_path / "s.db")
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     task = q.claim(owner="d")
 
     calls = {"checked_out": False}
@@ -1118,7 +1118,7 @@ def test_an_empty_diff_records_what_the_builder_said(tmp_path, monkeypatch):
     import devloop.driver as drv
 
     q = Queue(tmp_path / "s.db")
-    ident = q.add(title="t", brief="b", origin="human")
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
     task = q.claim(owner="d")
 
     monkeypatch.setattr(drv, "_git", lambda *a, **k: (0, ""))
@@ -1224,9 +1224,9 @@ def test_the_driver_checks_size_before_it_asks_for_a_review():
 
 
 def test_work_needing_the_host_is_skipped_while_the_host_is_unreachable(q):
-    needs_host = q.add(title="deploys", brief="b", origin="human",
+    needs_host = q.add(title="deploys", brief="b", origin="human", paths=["infra/"],
                        priority=90, requires_deploy=True)
-    repo_only = q.add(title="repository only", brief="b", origin="human",
+    repo_only = q.add(title="repository only", brief="b", origin="human", paths=["infra/"],
                       priority=50)
 
     taken = q.claim(owner="d", host_reachable=False)
@@ -1239,8 +1239,8 @@ def test_work_needing_the_host_is_skipped_while_the_host_is_unreachable(q):
 
 
 def test_the_loop_stops_when_every_remaining_task_needs_an_unreachable_host(q):
-    q.add(title="deploys", brief="b", origin="human", requires_deploy=True)
-    q.add(title="verifies", brief="b", origin="human", requires_prod_check=True)
+    q.add(title="deploys", brief="b", origin="human", paths=["infra/"], requires_deploy=True)
+    q.add(title="verifies", brief="b", origin="human", paths=["infra/"], requires_prod_check=True)
     assert q.claim(owner="d", host_reachable=False) is None
 
     source = Path(INFRA / "devloop" / "driver.py").read_text()
@@ -1262,3 +1262,405 @@ def test_an_unreachable_host_is_unmeasured_not_a_failure(monkeypatch):
     monkeypatch.setattr(gates, "_sh", lambda *a, **k: (255, "timed out", True))
     g = gates.host_reachable()
     assert g.passed is False and g.unmeasured is True
+
+
+# ============================================================ scope contract
+#
+# The failure this section exists for actually happened too. A task's scope
+# lived in the prose of its brief — "only the repository" — and a builder that
+# also rewrote the service, the schema and a second module was caught by a
+# person reading the diff after three review rounds had been spent on it. The
+# reports that followed said "scope held" for later tasks, and every one of
+# those was somebody looking, not the loop refusing. These make it the loop.
+
+
+@pytest.mark.parametrize("paths", [
+    None, [], ["*"], ["**"], ["."], ["/"], ["./"], ["**/"], ["*/"],
+    ["/etc/passwd"], ["../outside"], ["a/../b"], [""], ["   "],
+])
+def test_a_contract_that_bounds_nothing_is_refused(q, paths):
+    """A task with no contract, or one that allows everything, cannot enter.
+
+    An empty contract is the unenforced scope this gate replaced, wearing a
+    field that says somebody checked. It is refused at the door rather than
+    tolerated at the gate.
+    """
+    with pytest.raises(ValueError):
+        q.add(title="t", brief="b", origin="human", paths=paths)
+
+
+def test_a_contract_is_stored_as_declared(q):
+    from devloop.queue import allowed_paths
+
+    ident = q.add(title="t", brief="b", origin="human",
+                  paths=["./a/b.py", "src/", "tests/test_*.py", "src/"])
+    assert allowed_paths(q.get(ident)) == ["a/b.py", "src/", "tests/test_*.py"]
+
+
+@pytest.mark.parametrize("path,pattern,inside", [
+    ("src/a/b.py", "src/", True),
+    ("src", "src/", False),
+    ("srcs/a.py", "src/", False),
+    ("src/a.py", "src/a.py", True),
+    ("src/a.pyc", "src/a.py", False),
+    ("tests/test_x.py", "tests/test_*.py", True),
+    ("tests/deep/test_x.py", "tests/test_*.py", False),
+    ("tests/deep/test_x.py", "tests/**/test_*.py", True),
+    ("tests/deep/test_x.py", "tests/**", True),
+])
+def test_a_contract_entry_means_what_it_looks_like(path, pattern, inside):
+    """Directory, exact file, glob — and `*` does not cross a directory."""
+    assert gates.within(path, pattern) is inside
+
+
+def _repo_with_a_task_branch(tmp_path, *, touching: list[str]):
+    """A `main` and a task branch whose one commit changed `touching`."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    for argv in (["git", "init", "-q", "-b", "main"],
+                 ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "src" / "app.py").write_text("x = 1\n")
+    (repo / "src" / "keep.py").write_text("y = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                   capture_output=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "checkout", "-qb", "task"], cwd=repo, check=True,
+                   capture_output=True)
+    for rel in touching:
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(target.read_text() + "z = 2\n" if target.exists()
+                          else "z = 2\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "task", "--allow-empty"], cwd=repo,
+                   check=True, capture_output=True)
+    return repo, base
+
+
+def test_the_scope_gate_reads_the_committed_diff_not_the_brief(tmp_path):
+    """The evidence is four lists a person can check against git themselves."""
+    repo, base = _repo_with_a_task_branch(
+        tmp_path, touching=["src/app.py", "tests/test_app.py", "docs/x.md"])
+    g = gates.scope(cwd=repo, base_sha=base, allowed=["src/", "tests/"])
+    assert g.passed is False and g.unmeasured is False
+    assert g.evidence == {
+        "declared": ["src/", "tests/"],
+        "changed": ["docs/x.md", "src/app.py", "tests/test_app.py"],
+        "undeclared": ["docs/x.md"],
+        "verdict": "out_of_scope",
+    }
+    assert "docs/x.md" in g.detail
+
+    kept = gates.scope(cwd=repo, base_sha=base,
+                       allowed=["src/", "tests/", "docs/*.md"])
+    assert kept.passed is True
+    assert kept.evidence["undeclared"] == [] and kept.evidence["verdict"] == "in_scope"
+
+
+def test_a_file_moved_out_of_the_contract_is_a_write_outside_it(tmp_path):
+    """Renames are not followed. A move is a deletion and a creation, and the
+    creation is outside the contract; reporting it as 'src/keep.py, renamed'
+    would hide exactly the write the gate exists to see."""
+    import subprocess
+
+    repo, base = _repo_with_a_task_branch(tmp_path, touching=[])
+    (repo / "elsewhere").mkdir()
+    subprocess.run(["git", "mv", "src/keep.py", "elsewhere/keep.py"], cwd=repo,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "move"], cwd=repo, check=True,
+                   capture_output=True)
+    g = gates.scope(cwd=repo, base_sha=base, allowed=["src/"])
+    assert g.passed is False
+    assert g.evidence["undeclared"] == ["elsewhere/keep.py"]
+
+
+def test_an_unreadable_diff_is_unmeasured_not_in_scope(monkeypatch):
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (128, "not a repo", False))
+    g = gates.scope(cwd=Path("."), base_sha="x", allowed=["src/"])
+    assert g.passed is False and g.unmeasured is True
+
+
+def test_scope_is_a_required_gate_for_every_task():
+    assert "scope" in gates.required({})
+    assert gates.required({}).index("scope") < gates.required({}).index("review")
+
+
+def test_a_head_no_scope_check_measured_can_never_land(q):
+    """The landing gate asks the record, and a missing record is a refusal."""
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    q.move(ident, State.REVIEWING, reason="r", head_sha="abc")
+    q.record_review(ident, round=1, sha="abc", verdict="clean", findings=0)
+    assert q.review_was_clean(ident) is True
+    assert q.scope_was_kept(ident) is False, (
+        "a head nobody measured against the contract was allowed to land")
+
+
+def test_a_head_measured_outside_its_contract_can_never_land(q):
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    q.move(ident, State.REVIEWING, reason="r", head_sha="abc")
+    verdict = q.record_scope(ident, round=1, sha="abc", declared=["src/"],
+                             changed=["src/a.py", "docs/x.md"],
+                             undeclared=["docs/x.md"])
+    assert verdict == "out_of_scope"
+    assert q.scope_was_kept(ident) is False
+    # The record keeps all four facts, decoded, in the order they happened.
+    [check] = q.scope_checks(ident)
+    assert (check["declared"], check["changed"], check["undeclared"],
+            check["verdict"]) == (["src/"], ["src/a.py", "docs/x.md"],
+                                  ["docs/x.md"], "out_of_scope")
+
+
+def test_a_verdict_is_derived_from_the_lists_never_asserted(q):
+    """`record_scope` takes no verdict. A record naming an undeclared path
+    cannot say in_scope, whatever its caller believed."""
+    import inspect
+
+    assert "verdict" not in inspect.signature(q.record_scope).parameters
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    q.move(ident, State.REVIEWING, reason="r", head_sha="abc")
+    assert q.record_scope(ident, round=1, sha="abc", declared=["src/"],
+                          changed=["src/a.py"], undeclared=[]) == "in_scope"
+    assert q.scope_was_kept(ident) is True
+
+
+def test_a_scope_check_on_an_older_head_does_not_cover_the_new_one(q):
+    """Keyed on the sha, like the review: round one kept to its contract, round
+    two did not, and it is round two that is about to land."""
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    q.move(ident, State.REVIEWING, reason="r1", head_sha="aaa")
+    q.record_scope(ident, round=1, sha="aaa", declared=["src/"],
+                   changed=["src/a.py"], undeclared=[])
+    assert q.scope_was_kept(ident) is True
+    q.move(ident, State.REVIEWING, reason="r2", head_sha="bbb")
+    assert q.scope_was_kept(ident) is False
+
+
+def test_landing_is_behind_the_scope_record_as_well_as_the_review():
+    """Structural, like the review guard beside it: the squash-merge is
+    unreachable without the recorded scope verdict for this head."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    ship = source[source.index("def _ship("):source.index("def _touched(")]
+    guard = ship.index("scope_was_kept")
+    merge = ship.index('"merge", "--squash"')
+    assert guard < merge, "the squash-merge is not behind the scope check"
+    assert "CONTESTED" in ship[guard:merge]
+
+
+def test_the_driver_measures_scope_on_the_commit_before_it_asks_for_a_review():
+    """After the commit, so the record names an immutable sha; before the
+    review, so no round is spent on work the task was not allowed to do."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    commit = run_task.index("self._commit(task, round_no)")
+    scope = run_task.index("gates.scope(")
+    record = run_task.index("record_scope(")
+    review = run_task.index("agents.review(")
+    assert commit < scope < record < review, (
+        "scope is not measured on the committed unit before the review")
+    assert "CONTESTED" in run_task[scope:review]
+    assert "park_out_of_scope" in run_task[scope:review]
+
+
+def test_a_task_without_a_contract_is_blocked_before_the_builder_runs(q, tmp_path,
+                                                                     monkeypatch):
+    """A row from before the column has NULL there. It is not run against a
+    contract the driver invents; it is parked for a person to declare one."""
+    from devloop import driver as drv
+
+    ident = q.add(title="legacy", brief="b", origin="human", paths=["src/"])
+    with q._write() as db:
+        db.execute("UPDATE tasks SET paths = NULL WHERE id = ?", (ident,))
+    task = q.claim(owner="test")
+
+    def never(*a, **k):
+        raise AssertionError("the builder ran with no contract")
+
+    monkeypatch.setattr(drv.agents, "build", never)
+    monkeypatch.setattr(drv, "_git", never)
+    driver = drv.Driver(q, drv.Limits(), repo=tmp_path)
+    assert driver.run_task(task) == State.BLOCKED
+    assert q.get(ident)["state"] == State.BLOCKED
+    assert any("allowed-path contract" in t["reason"] for t in q.transitions(ident))
+
+
+def test_a_builder_that_leaves_its_contract_is_contested_unreviewed(tmp_path,
+                                                                    monkeypatch):
+    """End to end on a real repository. The builder writes one file inside the
+    contract and one outside it; the driver commits, measures, records, parks —
+    and never asks for a review, never lands, and leaves `main` untouched."""
+    import subprocess
+
+    from devloop import driver as drv
+
+    repo, base = _repo_with_a_task_branch(tmp_path, touching=[])
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    (repo / ".qevik" / "devloop").mkdir(parents=True)
+    (repo / ".qevik" / "DECISION_QUEUE.md").write_text("# Decisions\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "ledgers"], cwd=repo, check=True,
+                   capture_output=True)
+    main_before = subprocess.run(["git", "rev-parse", "main"], cwd=repo,
+                                 capture_output=True, text=True).stdout.strip()
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="in src only", brief="b", origin="human",
+                  paths=["src/"])
+    task = q.claim(owner="test")
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "app.py").write_text("x = 2\n")
+        (cwd / "docs").mkdir()
+        (cwd / "docs" / "drift.md").write_text("not allowed\n")
+        return drv.agents.Outcome(ok=True, exit_code=0, output="done")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+
+    def never_review(**_):
+        raise AssertionError("an out-of-scope diff was sent for review")
+
+    monkeypatch.setattr(drv.agents, "review", never_review)
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+
+    assert driver.run_task(task) == State.CONTESTED
+
+    row = q.get(ident)
+    assert row["state"] == State.CONTESTED
+    [check] = q.scope_checks(ident)
+    assert check["sha"] == row["head_sha"]
+    assert check["undeclared"] == ["docs/drift.md"]
+    assert check["changed"] == ["docs/drift.md", "src/app.py"]
+    assert check["verdict"] == "out_of_scope"
+    assert q.scope_was_kept(ident) is False
+    assert q.review_was_clean(ident) is False, "no review should exist"
+    assert any(t["reason"].startswith("out of scope:")
+               for t in q.transitions(ident))
+    main_after = subprocess.run(["git", "rev-parse", "main"], cwd=repo,
+                                capture_output=True, text=True).stdout.strip()
+    assert main_after == main_before, "an out-of-scope diff reached main"
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == "main"
+    ledger = (repo / ".qevik" / "DECISION_QUEUE.md").read_text()
+    assert f"<!-- devloop:scope:{ident} -->" in ledger
+    assert "docs/drift.md" in ledger and "src/" in ledger
+
+
+def test_a_builder_inside_its_contract_reaches_the_review(tmp_path, monkeypatch):
+    """Negative control for the test above: the same driver, a builder that
+    stays inside the contract, and the review is asked for."""
+    import subprocess
+
+    from devloop import driver as drv
+
+    repo, base = _repo_with_a_task_branch(tmp_path, touching=[])
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    (repo / ".qevik" / "devloop").mkdir(parents=True)
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="in src only", brief="b", origin="human",
+                  paths=["src/"])
+    task = q.claim(owner="test")
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "app.py").write_text("x = 2\n")
+        return drv.agents.Outcome(ok=True, exit_code=0, output="done")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+    asked = []
+
+    def review(**k):
+        asked.append(k["base_sha"])
+        return drv.agents.Outcome(ok=False, exit_code=1, output="",
+                                  infrastructure_failure=True,
+                                  detail="stop here")
+
+    monkeypatch.setattr(drv.agents, "review", review)
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    driver.run_task(task)
+
+    assert asked == [base], "an in-scope diff was not sent for review"
+    [check] = q.scope_checks(ident)
+    assert check["verdict"] == "in_scope" and check["undeclared"] == []
+    assert q.scope_was_kept(ident) is True
+
+
+def test_the_builder_is_shown_its_contract_but_is_not_the_enforcement():
+    """The prompt lists the paths as a courtesy. The enforcement is the gate,
+    which reads the diff whether or not the builder read the prompt."""
+    task = {"title": "t", "brief": "b", "paths": '["src/", "tests/"]'}
+    prompt = agents.builder_prompt(task)
+    assert "  - src/" in prompt and "  - tests/" in prompt
+    assert "fails the task structurally" in prompt
+    source = Path(INFRA / "devloop" / "gates.py").read_text()
+    scope = source[source.index("def scope("):source.index("def clean_tree(")]
+    assert "brief" not in scope.replace('"only the repository" is an instruction to the builder', "") \
+        .replace("read the brief", "").replace("brief that says", "")
+    assert '"git", "diff", "--name-only", "--no-renames"' in scope
+
+
+def test_every_production_rule_declares_where_its_work_may_go():
+    from devloop import inspection
+
+    for rule in inspection.RULES:
+        assert rule.get("paths"), f"{rule['key']} enqueues unbounded work"
+        # And each is a real contract, not something `add` will refuse later.
+        from devloop.queue import contract
+        assert contract(list(rule["paths"]))
+
+
+def test_a_database_from_before_the_contract_gains_the_column(tmp_path):
+    """Opening an old database adds the column; the old rows keep NULL, which
+    the driver reads as 'no contract' and refuses to run."""
+    import sqlite3
+
+    from devloop.queue import allowed_paths
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE tasks (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL,
+            state TEXT NOT NULL, origin TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 50,
+            evidence TEXT NOT NULL DEFAULT '{}',
+            requires_deploy INTEGER NOT NULL DEFAULT 0,
+            requires_prod_check INTEGER NOT NULL DEFAULT 0,
+            base_sha TEXT, head_sha TEXT,
+            review_rounds INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            blocked_by TEXT, resume_stage TEXT, resume_sha TEXT,
+            driver_run_id TEXT, lease_owner TEXT, lease_expires_at TEXT,
+            detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        INSERT INTO tasks (id, title, brief, state, origin, created_at, updated_at)
+        VALUES ('t-old', 'legacy', 'b', 'QUEUED', 'human', 'x', 'x');
+    """)
+    old.commit(); old.close()
+
+    q = Queue(path)
+    legacy = q.get("t-old")
+    assert legacy["paths"] is None
+    assert allowed_paths(legacy) == []
+    # A new row on the same database carries its contract.
+    fresh = q.add(title="new", brief="b", origin="human", paths=["src/"])
+    assert allowed_paths(q.get(fresh)) == ["src/"]
+    # And a person can set one on the legacy row, with a transition saying so.
+    q.declare_paths("t-old", ["infra/devloop/"], actor="ayoub", reason="from the brief")
+    assert allowed_paths(q.get("t-old")) == ["infra/devloop/"]
+    assert any("allowed-path contract set to" in t["reason"]
+               and t["actor"] == "ayoub" for t in q.transitions("t-old"))
+
+
+def test_a_contract_is_not_changed_under_a_running_task(q):
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    q.claim(owner="d")
+    with pytest.raises(ValueError):
+        q.declare_paths(ident, ["src/", "docs/"], actor="ayoub")

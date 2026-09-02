@@ -174,4 +174,32 @@ def park_contested(repo: Path, task: dict, findings: list[dict]) -> str:
     return marker
 
 
-__all__ = ["BEGIN", "END", "park_boundary", "park_contested", "write"]
+def park_out_of_scope(repo: Path, task: dict, evidence: dict) -> str:
+    """The diff left the paths the task was allowed to change.
+
+    Listed with what was declared and what was written, so the person reading
+    it decides between two real options — widen the contract, or discard the
+    part outside it — rather than being told the loop's guess at which.
+    """
+    marker = f"<!-- devloop:scope:{task['id']} -->"
+    declared = "\n".join(f"  - `{p}`" for p in evidence.get("declared", []))
+    undeclared = "\n".join(f"  - `{p}`" for p in evidence.get("undeclared", []))
+    block = (
+        f"{marker}\n"
+        f"## Out of scope — {redact(task['title'])}\n\n"
+        f"The committed diff changed paths outside the task's allowed-path "
+        f"contract. The work is on `devloop/{task['id']}`, is **not reviewed** "
+        f"and **not on main**.\n\n"
+        f"- **Allowed:**\n{declared}\n"
+        f"- **Changed outside it:**\n{undeclared}\n"
+        f"- **Driver task:** `{task['id']}`\n"
+        f"- **Measured at:** `{(task.get('base_sha') or '')[:12]}..`"
+        f"`{(evidence.get('sha') or task.get('head_sha') or '')[:12]}`\n\n"
+        f"Either widen the contract (`devloop declare-paths`) and requeue, or "
+        f"drop the change outside it. The loop will not decide which.\n")
+    _append_once(repo / ".qevik" / "DECISION_QUEUE.md", marker, block)
+    return marker
+
+
+__all__ = ["BEGIN", "END", "park_boundary", "park_contested",
+           "park_out_of_scope", "write"]

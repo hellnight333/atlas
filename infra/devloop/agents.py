@@ -45,7 +45,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .queue import redact
+from .queue import allowed_paths, redact
 
 HERE = Path(__file__).resolve().parent
 SCHEMA = HERE / "review.schema.json"
@@ -144,6 +144,16 @@ def build(task: dict, *, cwd: Path, max_turns: int, timeout: int) -> Outcome:
                    + (f": {data['subtype']}" if data.get("subtype") else ""))
 
 
+def _contract_lines(task: dict) -> str:
+    """The allowed paths, as the builder is shown them.
+
+    Telling the builder is a courtesy, not the enforcement: the driver
+    measures the committed diff against the same list whether or not the
+    builder read this, and a diff outside it does not land.
+    """
+    return "\n".join(f"  - {one}" for one in allowed_paths(task)) or "  (none)"
+
+
 def builder_prompt(task: dict) -> str:
     """What the builder is told. One task, the boundaries, and nothing else."""
     return f"""Carry out exactly this task in the current repository.
@@ -151,6 +161,14 @@ def builder_prompt(task: dict) -> str:
 TASK: {task['title']}
 
 {task['brief']}
+
+You may change ONLY these paths (a trailing / means the directory; a glob
+matches the whole repo-relative path):
+{_contract_lines(task)}
+The loop compares the committed diff against that list. A change to any other
+path fails the task structurally — it is not reviewed, not merged, and no
+explanation in your summary changes that. If the task cannot be done within
+those paths, change nothing and say BLOCKED: with the paths it would need.
 
 Rules for this run:
 - Implement it fully. Do not write a plan and stop, and do not report progress
@@ -189,6 +207,11 @@ raised the findings below. It did not see your report — only the code.
 
 For each one: fix it, or leave the code alone and write down why the finding is
 wrong. Add a test for anything you fix. Do not commit.
+
+You may change ONLY these paths:
+{_contract_lines(task)}
+A fix outside them fails the task structurally. If a finding can only be
+settled outside those paths, leave it and say so.
 
 A refutation is not a dismissal: the reviewer re-reads the code afterwards and
 raises it again if it still stands."""
