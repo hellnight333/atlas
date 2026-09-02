@@ -284,10 +284,16 @@ mv '$REMOTE_APP/DEPLOYED_SHA.tmp' '$REMOTE_APP/DEPLOYED_SHA'" || {
         echo "    the previous marker could not be put back"
         mark_not_restored provenance; }
     else
+      # A marker that could not be written is a restore that did not happen, the
+      # same as the copy above failing. Without this the host keeps whatever
+      # DEPLOYED_SHA it had -- `state=installing`, or nothing at all -- while
+      # this function goes on to say `ROLLED BACK` and exit 1. `provenance` in
+      # `not_restored=` is what turns that into exit 4.
       write_marker "sha=unknown" "state=rolled-back" "attempted_sha=$SHA" \
         "rolled_back_at=$now" \
         "note=no provenance was recorded before this deploy" \
-        || echo "    the marker could not be written"
+        || { echo "    the marker could not be written"
+             mark_not_restored provenance; }
     fi
   fi
   if [ -n "$NOT_RESTORED" ]; then
@@ -559,10 +565,21 @@ fi
 # `echo kept`: the old line hid a failed `cp` behind `2>/dev/null` and then said
 # the tree had been kept. A target that is absent on the host is said to be
 # absent -- that is a fact about the host, and the rollback treats it as one.
+#
+# The previous run's copy is removed *before* the target is tested, so the saved
+# set is only ever this deploy's pre-state. Keeping it only on the `-e` branch
+# left an earlier deploy's snapshot in place for a target that is absent now,
+# and the rollback -- which asks nothing but "is there a copy?" -- would then
+# restore months-old bytes into a path that held nothing, and report `ROLLED
+# BACK`. Absence is recorded by the *absence of a copy*, which is exactly what
+# `restore_target` reads as "it did not exist before this deploy": exit 3, the
+# target named in `not_restored=`, and exit 4. The units and provenance copies
+# below are already cleared unconditionally for the same reason.
 echo "==> keeping the current tree, so a bad deploy can be undone"
 ssh_ "set -e
 keep() {
-  if [ -e \"\$1\" ]; then rm -rf \"\$2\"; cp -a \"\$1\" \"\$2\"; else echo \"absent: \$1\"; fi
+  rm -rf \"\$2\"
+  if [ -e \"\$1\" ]; then cp -a \"\$1\" \"\$2\"; else echo \"absent: \$1\"; fi
 }
 keep '$REMOTE_APP/packages/kernel/atlas_kernel' '$ROLLBACK_DIR'
 keep '$REMOTE_APP/infra' '${ROLLBACK_DIR}-infra'

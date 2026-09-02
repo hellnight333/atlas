@@ -965,6 +965,67 @@ def test_a_failed_restore_is_never_reported_as_success(world: World):
     assert "kernel" not in marker["restored"].split(",")
 
 
+def test_a_stale_snapshot_is_not_restored_over_a_target_that_was_absent(world: World):
+    """A target absent before this deploy has nothing to restore, and says so.
+
+    An earlier deploy leaves its copy at `<rollback>-console`. If the console is
+    gone from the host when the next deploy runs, keeping only on the `-e`
+    branch would leave that old copy in place — and the rollback, which asks
+    nothing but "is there a copy?", would restore the earlier deploy's bytes
+    into a path that held nothing and report `ROLLED BACK`.
+    """
+    stale = "<h1>console STALE</h1>\n"
+    shutil.rmtree(world.console)
+    _write(world.fake / "opt/qevik/rollback-console/index.html", stale)
+    _write(world.ctl / "health_code", "500")
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 4, out
+    assert "ROLLBACK INCOMPLETE" in out
+    assert "ROLLED BACK:" not in out
+    assert "it did not exist before this deploy" in out
+
+    marker = read_marker(world)
+    assert marker["state"] == "rollback-incomplete"
+    assert "console" in marker["not_restored"].split(","), marker
+    # The targets that *were* there still go back, so this is not a rollback
+    # that simply gave up.
+    assert "kernel" in marker["restored"].split(","), marker
+
+    # The stale copy is gone, and nothing restored it anywhere.
+    assert not (world.fake / "opt/qevik/rollback-console").exists()
+    assert (world.console / "index.html").read_text() != stale
+
+
+def test_a_rollback_marker_that_cannot_be_written_is_not_success(world: World):
+    """The marker is part of the rollback; a marker that failed is exit 4.
+
+    With no earlier marker to put back, the rollback writes `state=rolled-back`
+    itself. If that write fails the host keeps saying `state=installing` — a
+    deploy in flight that is not in flight — so reporting `ROLLED BACK` would be
+    a claim the host contradicts.
+    """
+    _write(world.ctl / "health_code", "500")
+    # Fails exactly the rolled-back marker write: no other remote command this
+    # run sends carries that string.
+    _write(world.ctl / "ssh_fail_match", "state=rolled-back")
+
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 4, out
+    assert "ROLLBACK INCOMPLETE" in out
+    assert "ROLLED BACK:" not in out
+    assert "the marker could not be written" in out
+
+    marker = read_marker(world)
+    assert marker["state"] == "rollback-incomplete"
+    assert "provenance" in marker["not_restored"].split(","), marker
+    assert marker["attempted_sha"] == world.sha
+    # The bytes did go back; it is the provenance that did not.
+    assert _rolled_back(world)
+
+
 def test_a_rollback_copy_that_fails_refuses_before_any_transfer(world: World):
     """(f) A rollback that could not be kept is a refusal, not `echo kept`."""
     previous = write_previous_provenance(world, manifest=False)

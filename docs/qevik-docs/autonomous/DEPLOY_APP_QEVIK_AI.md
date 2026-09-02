@@ -103,17 +103,24 @@ A later health or fingerprint failure does not make an `installed` marker wrong
 
 **Rollback.** Before the first transfer the script keeps every target it writes:
 the kernel, `infra/`, the console, the installed `qevik-*.service` files, and
-the previous marker and manifest. A copy that fails is a refusal (`REFUSED:
-could not keep the current tree`) *before* anything is sent. From that point
-every failure — a transfer that exhausted its retries, the schema step, a chown,
-the unit install, `daemon-reload`, the manifest check, the health poll, the
-worker fingerprint poll — runs one rollback, which restores each target only
-when the copy to replace it exists, re-measures the restored bytes against the
-previous manifest, writes the marker **before** restarting anything, and then
-restarts exactly what a deploy restarts. It ends with `ROLLED BACK: <targets>`
-(exit 1) or `ROLLBACK INCOMPLETE: <not restored>` (exit 4) and never reports a
-failed restore as success. Restoring the units replaces the whole set, so a unit
-this deploy added that the saved set did not contain is removed; nothing is
+the previous marker and manifest. Each saved copy is cleared before the target
+is read, so the saved set is only ever *this* deploy's pre-state — a target that
+is absent on the host is saved as nothing, never as whatever an earlier deploy
+left behind. A copy that fails is a refusal (`REFUSED: could not keep the current
+tree`) *before* anything is sent. From that point every failure — a transfer that
+exhausted its retries, the schema step, a chown, the unit install,
+`daemon-reload`, the manifest check, the health poll, the worker fingerprint poll
+— runs one rollback, which restores each target only when the copy to replace it
+exists, re-measures the restored bytes against the previous manifest, writes the
+marker **before** restarting anything, and then restarts exactly what a deploy
+restarts. It ends with `ROLLED BACK: <targets>` (exit 1) or `ROLLBACK
+INCOMPLETE: <not restored>` (exit 4) and never reports a failed restore as
+success. A target that did not exist before this deploy is one it cannot
+restore: it is named in `not_restored=` and the rollback exits 4, rather than
+being reported as put back. The marker counts as a target too — `provenance` in
+`not_restored=` means the bytes may be back but `DEPLOYED_SHA` does not yet say
+so, and is likewise exit 4. Restoring the units replaces the whole set, so a
+unit this deploy added that the saved set did not contain is removed; nothing is
 enabled or disabled.
 
 **Exit codes**, which the loop and a person both read:
