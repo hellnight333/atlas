@@ -280,3 +280,16 @@ The reviewer raised findings the builder did not settle in three rounds. The wor
 
 - **Driver task:** `t-2825280a3415`
 - **Review unit:** `..`
+
+<!-- devloop:contested:t-18c738db28b4 -->
+## Contested — The deploy payload comes from the commit, not the tree (ADR-0010 Step 1, task 1 of 3)
+
+The reviewer raised findings the builder did not settle in three rounds. The work is committed and **not deployed**.
+
+  - `infra/deploy_control.sh:185-189` [blocking] Pass the landed SHA from the automated deploy gate
+  - `infra/deploy_control.sh:103-105` [major] Guard worker polling from `set -e`
+  - `infra/deploy_control.sh:227-227` [major] Verify symlink blobs without rejecting the export
+  - `infra/deploy_control.sh:65-65` [blocking] Reject a lone test-host marker before using production defaults
+
+- **Driver task:** `t-18c738db28b4`
+- **Review unit:** `..`
