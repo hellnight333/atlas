@@ -39,6 +39,18 @@ agents and knows nothing about businesses, signals or outreach.
       → VERIFYING    where the task declares it          (objective)
       → DONE
 
+A task that only deploys takes the same last three steps with nothing in front
+of them. The builder is told never to deploy and to change nothing it cannot do
+inside its paths, so a task whose whole content is "put what `main` already
+carries on the host" correctly leaves no diff — and the `changed` gate failed it
+for that, which is how t-4f02ee7a36c0 deployed nothing and verified nothing.
+When such a task changes nothing, the driver records the `main` sha it is
+deploying and runs exactly the gates the merged path runs: the whole suite, the
+deploy script's exit code, the production probe. There is no review and no scope
+check, because a review of nothing and a contract measured against nothing are
+both vacuous — and there is no second deploy mechanism: both routes run the same
+`_finish`.
+
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into
 `.qevik/HUMAN_ACTIONS.md` or `.qevik/DECISION_QUEUE.md`, and the loop continues
@@ -303,6 +315,23 @@ class Driver:
             self.q.move(ident, State.GATING, reason=f"round {round_no}")
             diff = gates.changed(cwd=self.repo)
             if not diff.passed:
+                # A task that only deploys has nothing to write, and failing it
+                # for that is exactly what stopped t-4f02ee7a36c0: the builder
+                # is told never to deploy and to change nothing it cannot do
+                # inside its paths, so it correctly left the tree as it found
+                # it, and "nothing changed" ended a task whose whole content
+                # was the deploy.
+                #
+                # Two conditions, both measured rather than assumed. The gate
+                # must have *measured* an empty diff — an unreadable repository
+                # has established nothing and stays a failure — and the branch
+                # must carry nothing beyond `main` either, so a deploy-only
+                # task that did build something still goes through review, scope
+                # and the squash-merge exactly as it does today.
+                if "deployed" in gates.required(task) and not diff.unmeasured:
+                    carried = gates.changed(cwd=self.repo, base_sha="main")
+                    if not carried.passed and not carried.unmeasured:
+                        return self._deploy_only(task, started)
                 # What the builder said, kept with the failure. Without it
                 # "nothing changed" is undiagnosable: a refusal, a crash, a
                 # boundary it did not phrase as one, and an agent that simply
@@ -316,8 +345,8 @@ class Driver:
             # Narrowed to what the task touched. Measured: the full suite is
             # about eleven minutes a round against a two-minute review, so
             # running all of it every round spent roughly a third of each cycle
-            # re-proving code the task never went near. `_ship` still runs the
-            # whole suite before anything deploys, which is where that
+            # re-proving code the task never went near. `_finish` still runs
+            # the whole suite before anything deploys, which is where that
             # guarantee belongs — this narrows the loop, not the evidence.
             suite = gates.tests(cwd=self.repo,
                                 selector=task.get("test_selector")
@@ -443,7 +472,6 @@ class Driver:
     def _ship(self, task: dict, started: float) -> str:
         """Review is clean. Land it, run the remaining gates, then finish."""
         ident = task["id"]
-        needed = gates.required(task)
         # Only now does it reach `main` — as one commit, so the history says
         # "this task, reviewed clean" rather than replaying the argument the
         # builder and the reviewer had on the way there.
@@ -489,8 +517,78 @@ class Driver:
              "Co-Authored-By: Claude Opus 5 (1M context) "
              "<noreply@anthropic.com>", cwd=self.repo)
         _git("branch", "-D", branch, cwd=self.repo)
-        log("LANDED", task=ident, sha=head_sha(self.repo)[:12])
+        landed = head_sha(self.repo)
+        log("LANDED", task=ident, sha=landed[:12])
+        return self._finish(task, started, sha=landed)
 
+    def _deploy_only(self, task: dict, started: float) -> str:
+        """A task whose whole content is the deploy. There is no diff to review.
+
+        t-4f02ee7a36c0 asked for the unreviewed-drafts surface to be deployed
+        and verified in production. The builder is told never to deploy and to
+        change nothing it cannot do inside its paths, so it changed nothing —
+        correctly — and the `changed` gate ended the task FAILED. Nothing was
+        deployed and nothing was verified. Every DONE task before it declared
+        `requires_deploy=0`, which is why the hole stayed invisible: the deploy
+        gates could only be reached by squash-merging a diff, and a deploy of
+        what `main` already carries has no diff to merge.
+
+        So the diff is replaced by the one fact a person needs afterwards —
+        which `main` sha went to the host — and the gates that follow are the
+        same ones, in the same order, run by the same `_finish`. There is no
+        review and no scope check because there is nothing to review and
+        nothing to measure: both would be vacuous, and a vacuous pass recorded
+        against a head is worse than no record at all.
+        """
+        ident = task["id"]
+        branch = f"devloop/{ident}"
+
+        # Structural, not incidental. This is the one path that deploys without
+        # a review, so it must be impossible to reach it while anything a
+        # reviewer has not seen exists. The caller established both of these
+        # before delegating here, and both are asked again — of git, not of the
+        # caller — for the same reason `_ship` re-asks the review record before
+        # it merges: "only reachable from" is a property of today's control
+        # flow, and the guard has to live in the code that acts.
+        pending = gates.changed(cwd=self.repo)
+        carried = gates.changed(cwd=self.repo, base_sha="main")
+        if (pending.passed or carried.passed
+                or pending.unmeasured or carried.unmeasured):
+            self.q.move(ident, State.CONTESTED,
+                        reason="refused to deploy without a review: this task "
+                               "branch is not identical to main "
+                               f"({pending.detail[:120]} | "
+                               f"{carried.detail[:120]})")
+            log("REFUSED_TO_DEPLOY", task=ident)
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.CONTESTED
+
+        # `deploy_control.sh` copies the working tree and refuses to run from
+        # anywhere but a clean `main` — so this is not merely tidy, it is what
+        # makes the deploy possible at all.
+        _git("checkout", "-q", "main", cwd=self.repo)
+        # `-d`, not `-D`: an empty branch deletes and a branch holding anything
+        # unmerged refuses to, so this cannot be the line that throws work away.
+        _git("branch", "-d", branch, cwd=self.repo)
+        sha = head_sha(self.repo)
+        self.q.move(ident, State.GATING, head_sha=sha,
+                    reason=f"nothing to build: this task deploys what main "
+                           f"already carries, at {sha}")
+        log("DEPLOY_ONLY", task=ident, sha=sha[:12],
+            note="no diff to review; deploying what main already carries")
+        return self._finish(task, started, sha=sha)
+
+    def _finish(self, task: dict, started: float, *, sha: str) -> str:
+        """The gates that run on `main`, and the state they leave a task in.
+
+        One deploy mechanism, reached two ways: work that was reviewed and
+        squash-merged, and a task that had nothing to merge because `main`
+        already carries what it deploys. Both run the whole suite, then the
+        deploy script's own exit code, then the production probe — in that
+        order, each recorded against the sha that is going to the host.
+        """
+        ident = task["id"]
+        needed = gates.required(task)
         if "deployed" in needed:
             # The whole suite before anything leaves this machine. A narrowed
             # run is a real gate for a narrow change and is not enough to
@@ -502,13 +600,16 @@ class Driver:
                 self.q.move(ident, State.CONTESTED,
                             reason=f"full suite fails: {whole.detail}")
                 return State.CONTESTED
-            self.q.move(ident, State.DEPLOYING, reason=whole.detail)
-            log("DEPLOYING", task=ident)
+            self.q.move(ident, State.DEPLOYING,
+                        reason=f"{sha[:12]}: full suite {whole.detail}")
+            log("DEPLOYING", task=ident, sha=sha[:12])
             shipped = gates.deployed(cwd=self.repo)
             if shipped.unmeasured:
                 return self._infra(ident, shipped.detail)
             if not shipped.passed:
-                self.q.move(ident, State.FAILED, reason=shipped.detail)
+                self.q.move(ident, State.FAILED,
+                            reason=f"{sha[:12]}: the deploy failed: "
+                                   f"{shipped.detail}")
                 log("FAILED", task=ident, why="deploy failed")
                 return State.FAILED
 
@@ -523,20 +624,24 @@ class Driver:
                             reason="production verification required and no "
                                    "probe was supplied")
                 return State.CONTESTED
-            self.q.move(ident, State.VERIFYING)
-            log("VERIFYING", task=ident)
+            self.q.move(ident, State.VERIFYING,
+                        reason=f"probing {sha[:12]} in production")
+            log("VERIFYING", task=ident, sha=sha[:12])
             live = gates.in_production(cwd=self.repo, probe=probe)
             if live.unmeasured:
                 return self._infra(ident, live.detail)
             if not live.passed:
-                self.q.move(ident, State.FAILED, reason=live.detail)
+                self.q.move(ident, State.FAILED,
+                            reason=f"{sha[:12]}: production did not agree: "
+                                   f"{live.detail}")
                 log("FAILED", task=ident, why="production did not agree")
                 return State.FAILED
 
         self.q.move(ident, State.DONE,
-                    reason=f"gates: {', '.join(needed)}",
+                    reason=f"gates: {', '.join(needed)} at {sha}",
                     detail=f"completed in {int(time.monotonic() - started)}s")
-        log("DONE", task=ident, seconds=int(time.monotonic() - started))
+        log("DONE", task=ident, sha=sha[:12],
+            seconds=int(time.monotonic() - started))
         return State.DONE
 
     def _commit(self, task: dict, round_no: int) -> None:

@@ -983,10 +983,12 @@ def test_the_round_gate_runs_only_what_the_task_touched(tmp_path, monkeypatch):
 
 def test_the_full_suite_still_runs_before_anything_deploys():
     source = Path(INFRA / "devloop" / "driver.py").read_text()
-    ship = source[source.index("def _ship("):source.index("def _selector(")]
-    assert "gates.tests(cwd=self.repo)" in ship, (
+    finish = source[source.index("def _finish("):source.index("def _commit(")]
+    assert "gates.tests(cwd=self.repo)" in finish, (
         "the deploy path runs a narrowed suite; a narrow gate is not enough to "
         "put code on a live host")
+    assert finish.index("gates.tests(cwd=self.repo)") < finish.index("gates.deployed("), (
+        "the deploy runs before the suite that is supposed to gate it")
 
 
 def test_finding_paths_are_relative_to_the_tree_that_was_reviewed():
@@ -1802,3 +1804,290 @@ def test_a_contract_is_not_changed_under_a_running_task(q):
     q.claim(owner="d")
     with pytest.raises(ValueError):
         q.declare_paths(ident, ["src/", "docs/"], actor="ayoub")
+
+
+# ================================== a task whose whole content is the deploy
+#
+# t-4f02ee7a36c0 — "Deploy and verify the unreviewed-drafts surface",
+# requires_deploy=1, requires_prod_check=1 — could not pass through the loop.
+# The builder is told never to deploy and to change nothing it cannot do inside
+# its paths, so it changed nothing, and the `changed` gate ended the task
+# FAILED "nothing changed". Nothing was deployed and nothing was verified.
+#
+# Every DONE task before it declared requires_deploy=0, which is why the hole
+# stayed invisible: the deploy gates were reachable only after a builder's diff
+# had been committed, scope-checked, reviewed and squash-merged — and a deploy
+# of what `main` already carries has no diff to merge.
+
+
+def _repo_on_main(tmp_path):
+    """A repository with one commit on `main` and nothing uncommitted."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    for argv in (["git", "init", "-q", "-b", "main"],
+                 ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+    (repo / "src" / "app.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "what main already carries"],
+                   cwd=repo, check=True, capture_output=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                         capture_output=True, text=True).stdout.strip()
+    return repo, sha
+
+
+def _builder_that_changes_nothing(monkeypatch, drv):
+    """The builder as it actually behaves on a deploy-only task.
+
+    It is told never to deploy and to change nothing if the task cannot be done
+    inside its paths, so on a task whose content is "put what `main` already
+    carries on the host" it correctly leaves the tree exactly as it found it.
+    """
+    monkeypatch.setattr(drv.agents, "build", lambda *a, **k: drv.agents.Outcome(
+        ok=True, exit_code=0,
+        output="Nothing to change: main already carries this surface."))
+
+
+def _deploy_only_run(tmp_path, monkeypatch, *, deploys=True, probes=True,
+                     requires_deploy=True):
+    """Drive the driver over a stubbed builder that changes nothing.
+
+    Returns everything the assertions need: the queue, the task id, the `main`
+    sha that was there before the run, the terminal state, and the list the
+    stubbed gates appended their own names to as they were called.
+    """
+    from devloop import driver as drv
+
+    repo, main_sha = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="deploy and verify the unreviewed-drafts surface",
+                  brief="deploy what main already carries, then verify it",
+                  origin="human", paths=["infra/devloop/"],
+                  requires_deploy=requires_deploy, requires_prod_check=True,
+                  evidence={"production_probe": "print('PROVED')"})
+    task = q.claim(owner="test")
+    _builder_that_changes_nothing(monkeypatch, drv)
+
+    called: list[str] = []
+
+    def suite(**kwargs):
+        called.append("tests" if not kwargs.get("selector") else "narrowed")
+        return gates.Gate("tests", True, "412 passed in 600s")
+
+    def deployed(**_):
+        called.append("deployed")
+        return gates.Gate("deployed", deploys,
+                          "control plane answered" if deploys
+                          else "deploy_control.sh exited 2")
+
+    def in_production(**kwargs):
+        called.append("in_production")
+        assert kwargs["probe"] == "print('PROVED')"
+        return gates.Gate("in_production", probes,
+                          "PROVED" if probes else "NOT PROVED")
+
+    def never_review(**_):
+        raise AssertionError("a deploy with no diff was sent for review")
+
+    monkeypatch.setattr(drv.gates, "tests", suite)
+    monkeypatch.setattr(drv.gates, "deployed", deployed)
+    monkeypatch.setattr(drv.gates, "in_production", in_production)
+    monkeypatch.setattr(drv.agents, "review", never_review)
+
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    return q, ident, main_sha, driver.run_task(task), called, repo
+
+
+def test_a_deploy_only_task_runs_the_gates_without_inventing_a_diff(tmp_path,
+                                                                    monkeypatch):
+    """The full suite, the deploy and the probe, in that order, on `main`.
+
+    Not a second deploy mechanism: the same three gates the merged path runs,
+    in the same order, from the same `_finish`. What replaces the diff is the
+    record of which sha went to the host.
+    """
+    q, ident, main_sha, outcome, called, repo = _deploy_only_run(tmp_path,
+                                                                 monkeypatch)
+    assert outcome == State.DONE, (
+        "a task that only deploys still cannot pass through the loop")
+    assert called == ["tests", "deployed", "in_production"], (
+        f"the gates ran as {called}; a narrowed suite, a skipped deploy or a "
+        "probe before the deploy are each a weaker gate than the merged path")
+
+    row = q.get(ident)
+    assert row["state"] == State.DONE
+    assert row["head_sha"] == main_sha, (
+        "the sha that was deployed was not written down, so nobody can say "
+        "afterwards what is on the host")
+
+    reasons = {t["to_state"]: t["reason"] for t in q.transitions(ident)}
+    assert main_sha in reasons[State.DONE], (
+        "the DONE transition does not name the deployed sha")
+    assert main_sha in reasons[State.GATING], (
+        "nothing records which sha this task decided to deploy")
+    assert "412 passed" in reasons[State.DEPLOYING], (
+        "the deploy transition does not carry the suite's own detail")
+    assert main_sha[:12] in reasons[State.DEPLOYING]
+    assert main_sha[:12] in reasons[State.VERIFYING]
+
+    # No review and no scope check, because there is nothing to review and
+    # nothing to measure — and, so that this can never be mistaken for a head
+    # that passed them, the landing gates still refuse it.
+    assert q.scope_checks(ident) == []
+    assert q.scope_was_kept(ident) is False
+    assert q.review_was_clean(ident) is False
+
+    # And `main` is where it was left: the deploy script copies the working
+    # tree and refuses to run from anywhere else.
+    import subprocess
+
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == "main"
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == main_sha
+    assert f"devloop/{ident}" not in subprocess.run(
+        ["git", "branch"], cwd=repo, capture_output=True, text=True).stdout
+
+
+@pytest.mark.parametrize("deploys,probes,ran", [
+    (False, True, ["tests", "deployed"]),
+    (True, False, ["tests", "deployed", "in_production"]),
+])
+def test_a_deploy_only_task_still_fails_when_a_gate_refuses(tmp_path, monkeypatch,
+                                                            deploys, probes, ran):
+    """No diff is not a licence to skip anything.
+
+    A deploy that exits non-zero, or a probe production disagrees with, ends
+    the task FAILED exactly as it would after a merge — and a refused deploy
+    never reaches the probe.
+    """
+    q, ident, main_sha, outcome, called, _ = _deploy_only_run(
+        tmp_path, monkeypatch, deploys=deploys, probes=probes)
+    assert outcome == State.FAILED
+    assert q.get(ident)["state"] == State.FAILED
+    assert called == ran
+    reasons = " ".join(t["reason"] for t in q.transitions(ident))
+    assert main_sha[:12] in reasons, "the failure does not name the sha it tried"
+
+
+def test_a_task_that_does_not_deploy_and_changes_nothing_still_fails(tmp_path,
+                                                                     monkeypatch):
+    """The gate that catches the commonest silent failure keeps catching it.
+
+    An agent that reports success having written nothing is still a failure —
+    the deploy declaration is what makes an empty diff legitimate, and a task
+    that declares no deploy has simply not been carried out.
+    """
+    q, ident, _, outcome, called, _ = _deploy_only_run(tmp_path, monkeypatch,
+                                                       requires_deploy=False)
+    assert outcome == State.FAILED
+    assert called == [], "a task that declares no deploy reached the deploy gates"
+    reasons = " ".join(t["reason"] for t in q.transitions(ident))
+    assert "nothing was changed" in reasons
+    assert "main already carries this surface" in reasons, (
+        "the builder's own words were not kept with the failure")
+
+
+def test_a_deploy_only_task_that_did_build_something_is_still_reviewed(tmp_path,
+                                                                       monkeypatch):
+    """Negative control, and the boundary of the whole change.
+
+    `requires_deploy=1` does not by itself buy a task a way past the review.
+    The moment the builder writes anything, the task takes today's path —
+    commit, scope, review — and nothing is deployed until that has finished.
+    """
+    from devloop import driver as drv
+
+    repo, main_sha = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="deploys, and builds", brief="b", origin="human",
+                  paths=["src/"], requires_deploy=True)
+    task = q.claim(owner="test")
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "app.py").write_text("x = 2\n")
+        return drv.agents.Outcome(ok=True, exit_code=0, output="done")
+
+    asked: list[str] = []
+
+    def review(**k):
+        asked.append(k["base_sha"])
+        return drv.agents.Outcome(ok=False, exit_code=1, output="",
+                                  infrastructure_failure=True, detail="stop here")
+
+    def never_deploy(**_):
+        raise AssertionError("an unreviewed diff was deployed")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.agents, "review", review)
+    monkeypatch.setattr(drv.gates, "deployed", never_deploy)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+
+    drv.Driver(q, drv.Limits(), repo=repo).run_task(task)
+    assert asked == [main_sha], "a deploy-only task skipped the review it needed"
+    [check] = q.scope_checks(ident)
+    assert check["verdict"] == "in_scope"
+
+
+def test_the_deploy_without_a_review_is_refused_when_anything_is_pending(tmp_path,
+                                                                        monkeypatch):
+    """Structural: the guard lives in the code that deploys.
+
+    `_deploy_only` is only reachable today from a measured-empty diff on a
+    branch identical to `main`. That is a property of the caller, and a second
+    caller would make it a property of nobody — so the method asks git itself,
+    and refuses rather than deploying work no reviewer has seen.
+    """
+    from devloop import driver as drv
+
+    repo, main_sha = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"],
+                  requires_deploy=True)
+    q.claim(owner="test")
+    (repo / "src" / "unreviewed.py").write_text("nobody has seen this\n")
+
+    def never_deploy(**_):
+        raise AssertionError("uncommitted work was deployed without a review")
+
+    monkeypatch.setattr(drv.gates, "deployed", never_deploy)
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    assert driver._deploy_only(q.get(ident), 0.0) == State.CONTESTED
+    assert any("refused to deploy" in t["reason"] for t in q.transitions(ident))
+
+
+def test_both_ways_to_a_deploy_run_the_same_gates_in_the_same_order():
+    """One deploy mechanism, not two.
+
+    The reviewed-and-merged path and the deploy-only path both end in
+    `_finish`, so a gate cannot be added to one and forgotten in the other.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    ship = source[source.index("def _ship("):source.index("def _deploy_only(")]
+    deploy_only = source[source.index("def _deploy_only("):source.index("def _finish(")]
+    finish = source[source.index("def _finish("):source.index("def _commit(")]
+
+    assert "self._finish(" in ship and "self._finish(" in deploy_only, (
+        "a deploy path bypasses the shared gates")
+    for other in ("gates.deployed(", "gates.in_production("):
+        assert other not in ship and other not in deploy_only, (
+            f"{other} is called outside `_finish`; there are two deploy "
+            "mechanisms now, and only one of them is tested")
+
+    # The whole suite, then the deploy, then the probe. A narrowed run is a
+    # real gate for a narrow change and is not enough to put code on a host.
+    assert "gates.tests(cwd=self.repo)" in finish
+    assert (finish.index("gates.tests(cwd=self.repo)")
+            < finish.index("gates.deployed(")
+            < finish.index("gates.in_production(")), (
+        "the deploy gates do not run in the order the loop depends on")
+
+    # And the deploy-only path neither reviews nor merges: there is nothing to
+    # review, and a merge of nothing would be a commit nobody asked for.
+    for forbidden in ("agents.review(", '"merge"', "gates.scope("):
+        assert forbidden not in deploy_only, (
+            f"the deploy-only path calls {forbidden}")
