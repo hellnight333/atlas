@@ -1919,6 +1919,116 @@ def test_a_terminal_task_is_a_record_and_is_never_declared_deploy_only(q, state)
         "a terminal row was changed by a declaration that raised"
 
 
+def test_a_requeued_task_is_not_declared_deploy_only(q):
+    """QUEUED is not the same as untouched, which is the hole this closes.
+
+    `_infra` requeues a task from whatever stage the tooling failed at, so a
+    row can be QUEUED while carrying its attempts, its review rounds, the
+    review unit it was being measured on and the branch those rounds were
+    committed to. Declaring it deploy-only is the terminal rewrite without the
+    ending: the row would finish DONE recording `gates: tests, deployed` — no
+    review runs on that path — while its own transitions show two review rounds
+    against a branch the deploy never looks at, and the commits on that branch
+    are dropped, because what ships is `main` and `main` has not got them.
+    """
+    from devloop.queue import declares_deploy_only
+
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
+    q.claim(owner="d")
+    q.move(ident, State.REVIEWING, reason="round 2", review_rounds=2,
+           base_sha="a" * 40, head_sha="b" * 40)
+    # Exactly what `_infra` does when the reviewer's tooling fails mid-round.
+    q.move(ident, State.QUEUED, reason="infrastructure failure: codex timed out")
+    assert q.get(ident)["state"] == State.QUEUED
+
+    with pytest.raises(ValueError) as refused:
+        q.declare_deploy_only(ident, actor="ayoub")
+    said = str(refused.value)
+    assert "already been run" in said
+    assert "2 review round(s)" in said, \
+        "the refusal does not name the evidence it found"
+    assert "new deploy-only task" in said, \
+        "the refusal does not say where a redeploy actually goes"
+    assert declares_deploy_only(q.get(ident)) is False, \
+        "a requeued row was repurposed by a declaration that raised"
+
+
+def test_a_task_requeued_before_it_built_anything_is_still_not_fresh(q):
+    """The claim alone is enough, and deliberately so.
+
+    A task requeued for a dirty working tree has no review rounds and no
+    review unit — but it has been claimed, and `claim` is the only writer of
+    `attempts`. Refusing on that is what makes the guard hold for a field
+    nobody thought to enumerate, and the remedy is the cheap one the message
+    names: enqueue a new row.
+    """
+    from devloop.queue import declares_deploy_only
+
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
+    q.claim(owner="d")
+    q.move(ident, State.QUEUED, reason="the working tree was not clean")
+
+    with pytest.raises(ValueError, match="already been run"):
+        q.declare_deploy_only(ident, actor="ayoub")
+    assert declares_deploy_only(q.get(ident)) is False
+
+
+def test_a_task_released_from_a_human_boundary_is_not_declared_deploy_only(q):
+    """The other route back to QUEUED. A parked task keeps the stage and the
+    commit it is to resume from, and `release` moves it to QUEUED with both
+    still on the row — so this one is refused for the same reason."""
+    from devloop.queue import declares_deploy_only
+
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
+    q.claim(owner="d")
+    q.park(ident, request_id="hr-1", stage=State.REVIEWING, sha="c" * 40,
+           reason="needs a credential")
+    q.release(ident, because="the credential arrived")
+    assert q.get(ident)["state"] == State.QUEUED
+
+    with pytest.raises(ValueError) as refused:
+        q.declare_deploy_only(ident, actor="ayoub")
+    assert "parked at REVIEWING" in str(refused.value)
+    assert declares_deploy_only(q.get(ident)) is False
+
+
+def test_evidence_of_a_run_is_empty_only_for_a_row_that_never_ran(q):
+    from devloop.queue import evidence_of_a_run
+
+    ident = q.add(title="t", brief="b", origin="human", paths=["infra/"])
+    assert evidence_of_a_run(q.get(ident)) == [], \
+        "a freshly enqueued task reads as having been run"
+    # A row from a database that predates one of these columns reports what it
+    # has rather than raising.
+    assert evidence_of_a_run({}) == []
+    assert evidence_of_a_run({"attempts": None, "review_rounds": None}) == []
+
+    # Each field on its own is enough, so no one of them carries the guard.
+    for row, expected in (({"attempts": 1}, "claimed 1 time(s)"),
+                          ({"review_rounds": 2}, "2 review round(s) already run"),
+                          ({"base_sha": "d" * 40}, "a review unit based at dddd"),
+                          ({"head_sha": "e" * 40}, "work committed at eeee"),
+                          ({"resume_sha": "f" * 40}, "parked work at ffff"),
+                          ({"resume_stage": "FIXING"}, "parked at FIXING")):
+        found = evidence_of_a_run(row)
+        assert found and found[0].startswith(expected), \
+            f"{row} is not read as evidence that the task ran: {found}"
+
+
+def test_the_deploy_only_declaration_and_the_requeue_are_the_same_question(q):
+    """Structural: the guard is only right while `_infra` still requeues.
+
+    If `_infra` ever stopped moving a task back to QUEUED — parking or failing
+    it instead — this refusal would be guarding a shape that can no longer
+    happen, and somebody reading it would be entitled to delete it. It can
+    happen, so it stays.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    infra = source[source.index("def _infra("):source.index("# -- the loop")]
+    assert "State.QUEUED" in infra, \
+        "_infra no longer requeues; the deploy-only freshness guard is stale"
+
+
 def test_a_task_in_flight_is_not_declared_deploy_only_under_the_driver(q):
     """Same rule as the contract: the driver is running the row as it stood
     when it claimed it, and a task cannot become one that builds nothing while

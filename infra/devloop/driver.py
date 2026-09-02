@@ -5,7 +5,7 @@
     driver.py enqueue --title ... --brief ... --path ... [--path ...]
     driver.py enqueue ... --deploy-only     ship what main carries, build nothing
     driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
-    driver.py declare-deploy-only <task>    same, for a QUEUED row only
+    driver.py declare-deploy-only <task>    same, for a QUEUED row never run
     driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
@@ -1022,8 +1022,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "declare-deploy-only":
         # The refusal is the interesting half. A person reaching for this on a
-        # task that already ended is told, in the error, that the record stays
-        # a record and that a redeploy is a new task.
+        # task that already ended — or on one requeued mid-build, which is
+        # QUEUED and still not a fresh row — is told, in the error, what
+        # evidence the row carries and that a redeploy is a new task.
         try:
             q.declare_deploy_only(args.task, actor=args.actor,
                                   reason=args.reason)

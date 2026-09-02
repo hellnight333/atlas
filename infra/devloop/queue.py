@@ -37,6 +37,14 @@ new work, so it gets a new row — including the commonest case, redeploying
 what `main` already carries, which is enqueued as a fresh deploy-only task
 rather than reanimated out of an old one. `declare_deploy_only` refuses every
 non-QUEUED row for exactly this reason.
+
+It refuses more than that, because the same rewrite has a quieter route in.
+QUEUED does not mean untouched: `_infra` requeues a task from whatever stage
+the tooling failed at, and `release` requeues one parked mid-review, so a
+QUEUED row can carry attempts, review rounds, a review unit and a branch of
+committed work. Repurposing *that* row is the terminal case without the
+ending, so the declaration requires a row that has never been run —
+`evidence_of_a_run` is what asks.
 """
 
 from __future__ import annotations
@@ -354,6 +362,46 @@ def declares_deploy_only(task: dict) -> bool:
     return bool(task.get("deploy_only"))
 
 
+def evidence_of_a_run(task: dict) -> list[str]:
+    """What this row shows of having been run, in words. Empty if it never was.
+
+    QUEUED is not the same as untouched, and that difference is the whole
+    reason this exists. `_infra` requeues a task the moment the tooling fails,
+    from any stage it had reached — including the fourth line of a third review
+    round — and `release` requeues one that was parked mid-review. Either way
+    the row goes back to QUEUED still carrying its attempts, its review rounds,
+    the base and head of the review unit it was being measured on, and the
+    `devloop/<id>` branch those rounds were committed to.
+
+    `attempts` is the one that cannot be evaded, because `claim` is the only
+    writer of it and every other field here is written by a driver that had
+    already claimed the row. The rest are listed anyway, so a refusal can name
+    what it actually found rather than a counter, and so a future writer that
+    sets one of them without going through `claim` is still caught.
+
+    Takes the same task mapping every other reader here takes, and reads it
+    with `get` so a row from a database that predates one of these columns
+    reports what it has rather than raising.
+    """
+    found: list[str] = []
+    attempts = task.get("attempts") or 0
+    if attempts:
+        found.append(f"claimed {attempts} time(s)")
+    rounds = task.get("review_rounds") or 0
+    if rounds:
+        found.append(f"{rounds} review round(s) already run")
+    for name, said in (("base_sha", "a review unit based at"),
+                       ("head_sha", "work committed at"),
+                       ("resume_sha", "parked work at")):
+        sha = task.get(name)
+        if sha:
+            found.append(f"{said} {str(sha)[:12]}")
+    stage = task.get("resume_stage")
+    if stage:
+        found.append(f"parked at {stage}")
+    return found
+
+
 class Queue:
     """The driver's durable state. One writer at a time, by design.
 
@@ -592,9 +640,30 @@ class Queue:
         In flight is refused for the same reason a contract is not changed
         under a running task: the driver is already measuring the row as it
         stood when it claimed it.
+
+        QUEUED is necessary and not sufficient, because QUEUED does not mean
+        untouched. `_infra` requeues a task from whatever stage the tooling
+        failed at, and `release` requeues one that was parked mid-review; both
+        leave a QUEUED row still carrying its attempts, its review rounds, the
+        base and head of the review unit it was measured on, and the
+        `devloop/<id>` branch its rounds were committed to. Declaring *that*
+        row deploy-only is the same rewrite the terminal states refuse, only
+        with the evidence still attached and no ending to make it obvious: the
+        row would finish DONE recording `gates: tests, deployed` — no review
+        ran, because `_deploy_only` runs none — while its own transitions show
+        three review rounds against a branch this run never looked at, and the
+        commits on that branch are silently dropped, since what deploys is
+        `main` and `main` does not have them.
+
+        So the row has to be one that has never been run, and
+        `evidence_of_a_run` is what decides. `attempts` alone would settle it —
+        `claim` is its only writer, and every other field is written by a
+        driver that had already claimed the row — but the refusal names what it
+        found, because "this task has three review rounds on a branch" is a
+        thing a person can act on and "attempts = 2" is not.
         """
         with self._write() as db:
-            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+            row = db.execute("SELECT * FROM tasks WHERE id = ?",
                              (task_id,)).fetchone()
             if row is None:
                 raise KeyError(task_id)
@@ -607,6 +676,18 @@ class Queue:
                     f"is being run as it stood when it was claimed. "
                     f"Redeploying what main carries is new work: enqueue it as "
                     f"a new deploy-only task.")
+            already = evidence_of_a_run(dict(row))
+            if already:
+                raise ValueError(
+                    f"{task_id} is QUEUED but has already been run: "
+                    f"{'; '.join(already)}. A requeued task is not a fresh "
+                    f"one — its rounds, its review unit and its branch are "
+                    f"still attached, and a task that builds nothing would "
+                    f"leave every one of them describing work it no longer "
+                    f"does. That is the same record of what happened that a "
+                    f"terminal row is, without the ending. Redeploying what "
+                    f"main carries is new work: enqueue it as a new "
+                    f"deploy-only task.")
             db.execute(
                 "UPDATE tasks SET deploy_only = 1, requires_deploy = 1,"
                 " updated_at = ? WHERE id = ?", (_now(), task_id))
@@ -852,4 +933,4 @@ class Queue:
 
 
 __all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract",
-           "declares_deploy_only", "redact"]
+           "declares_deploy_only", "evidence_of_a_run", "redact"]
