@@ -29,9 +29,11 @@ agents and knows nothing about businesses, signals or outreach.
     QUEUED         only with an allowed-path contract; none → BLOCKED
       → BUILDING     Claude, bounded turns, no commit
       → GATING       diff non-empty, tests pass          (objective)
-                     commit, then every changed path is
-                     inside the contract                 (objective)
-                     outside it → CONTESTED, unreviewed
+                     commit, then the committed range is
+                     small enough to converge on, and
+                     every changed path is inside the
+                     contract                            (objective)
+                     too large, or outside it → CONTESTED, unreviewed
       → REVIEWING    Codex on base..HEAD                 (read-only, blind)
           findings → FIXING → GATING → REVIEWING  (at most three rounds)
           three rounds and still contested → CONTESTED
@@ -54,6 +56,12 @@ outside, and the verdict. Landing asks that record the way it asks the review
 record: a head with no in-scope verdict does not merge. The builder is shown
 the list, but the builder is not what enforces it; a diff outside the
 contract is contested whatever the builder said about it.
+
+The size gate is measured at the same point, for the same reason. A round's
+work is not in `base..HEAD` until it is committed, so a size check that runs
+earlier measures the *previous* round, and on round one measures nothing at
+all. Both gates answer about the range that would land, or they answer about
+the wrong thing.
 
 ## What stops it
 
@@ -342,22 +350,37 @@ class Driver:
                     return self._infra(ident, fixed.detail)
                 continue
 
-            # Too large to finish, before a reviewer spends rounds proving it.
-            bounded = gates.size(cwd=self.repo, base_sha=base)
-            if not bounded.passed and not bounded.unmeasured:
-                self.q.move(ident, State.CONTESTED,
-                            reason=f"oversized: {bounded.detail}",
-                            head_sha=head_sha(self.repo))
-                projection.park_oversized(self.repo, task, bounded.detail)
-                log("OVERSIZED", task=ident, detail=bounded.detail[:160])
-                _git("checkout", "-q", "main", cwd=self.repo)
-                return State.CONTESTED
-
             # -- the immutable review unit --------------------------------
             # Committed *before* review so the diff cannot move under the
             # reviewer, and so a finding names a sha somebody can check out.
             self._commit(task, round_no)
             sha = head_sha(self.repo)
+
+            # Too large to finish, before a reviewer spends rounds proving it —
+            # and measured on the committed range, for the same reason the
+            # scope gate below is.
+            #
+            # It ran before the commit, so `base..HEAD` held every round
+            # *except* the one just written: the gate was one round stale, and
+            # on round one it compared `base` with itself and could not fail at
+            # all. Measured on t-7f9d5d633396, whose rounds saw 0, then 715,
+            # then 788 non-test lines while the diff that actually landed was
+            # 812 — past the limit, and never measured by anything.
+            bounded = gates.size(cwd=self.repo, base_sha=base)
+            if bounded.unmeasured:
+                # A gate that measured nothing has established nothing — the
+                # same refusal `tests` and `scope` make. It is also the guard
+                # that keeps the mistake above from ever being silent again: an
+                # empty range is unmeasured, never "small enough".
+                return self._infra(ident, f"size unmeasured: {bounded.detail}")
+            if not bounded.passed:
+                self.q.move(ident, State.CONTESTED,
+                            reason=f"oversized: {bounded.detail}",
+                            head_sha=sha)
+                projection.park_oversized(self.repo, task, bounded.detail)
+                log("OVERSIZED", task=ident, detail=bounded.detail[:160])
+                _git("checkout", "-q", "main", cwd=self.repo)
+                return State.CONTESTED
 
             # -- the contract, measured on the unit that would land --------
             # After the commit and before the review, on `base..HEAD`: the

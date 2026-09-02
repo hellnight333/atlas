@@ -125,6 +125,12 @@ def size(*, cwd: Path, base_sha: str) -> Gate:
     is only known once it is written — the routing task was scoped as one
     config change and arrived as thirty-eight files.
 
+    `base_sha..HEAD` is the committed range: the unit the reviewer is shown and
+    the squash would land. **The caller must therefore commit the round's work
+    before asking.** Measured earlier, this range holds every round except the
+    one just written — see the note in `driver.run_task`, and the empty-range
+    refusal below, which is what stops that mistake from reading as a pass.
+
     Failing here is not a defect in the work. It means the task was drawn too
     wide, and the driver requeues it to be split rather than spending three
     review rounds discovering the same thing.
@@ -146,16 +152,29 @@ def size(*, cwd: Path, base_sha: str) -> Gate:
             in_tests += lines
         else:
             changed += lines
+    evidence = {"files": files, "non_test_lines": changed,
+                "test_lines": in_tests}
+    # An empty range is not a small change; it is a change this gate never
+    # saw. Reporting it as a pass is how the gate satisfied itself with its own
+    # absence — round one measured `base` against `base`, found nothing, and
+    # said "small enough" about work that had not been committed yet.
+    if not files:
+        return Gate("size", False,
+                    f"nothing is committed in {base_sha[:12]}..HEAD, so no "
+                    f"size was measured. An empty range says nothing about how "
+                    f"large this round is; commit the work before asking.",
+                    unmeasured=True, evidence=evidence)
     if files > TOO_MANY_FILES or changed > TOO_MANY_LINES:
         return Gate("size", False,
                     f"{files} files and {changed} lines outside tests is more "
                     f"than one run can review and converge on (limits: "
                     f"{TOO_MANY_FILES} files, {TOO_MANY_LINES} non-test "
                     f"lines). Split it at a real boundary rather than spending "
-                    f"rounds on it.")
+                    f"rounds on it.", evidence=evidence)
     return Gate("size", True,
                 f"{files} file(s), {changed} line(s) outside tests"
-                + (f", {in_tests} in tests" if in_tests else ""))
+                + (f", {in_tests} in tests" if in_tests else ""),
+                evidence=evidence)
 
 
 def _glob(pattern: str) -> re.Pattern:
@@ -402,4 +421,4 @@ def summarise(gates: list[Gate]) -> str:
 
 
 __all__ = ["Gate", "changed", "clean_tree", "deployed", "in_production",
-           "required", "scope", "summarise", "tests", "within"]
+           "required", "scope", "size", "summarise", "tests", "within"]

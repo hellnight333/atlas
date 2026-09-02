@@ -1215,6 +1215,210 @@ def test_the_driver_checks_size_before_it_asks_for_a_review():
     assert "park_oversized" in run_task
 
 
+# ---------------------------------- measured against the work, not the last
+#
+# The gate ran on `base..HEAD` *before* the round was committed, so the range
+# it measured held every round except the one just written. It was one round
+# stale, and on round one it compared `base` with itself and could not fail.
+#
+# t-7f9d5d633396 paid for it: round 1 measured 0 non-test lines, round 2 saw
+# round 1's 715, round 3 saw round 2's 788 — and the 812 that landed on `main`
+# was past the 800-line limit and had never been measured by anything.
+
+
+def test_an_empty_range_measured_nothing_and_is_not_a_small_change(monkeypatch):
+    """A check satisfied by its own absence, refused where it starts.
+
+    `base..HEAD` is empty until the round is committed, and an empty diff is
+    not a small change — it is a change this gate never saw. Called a pass, it
+    is what made round one unfailable, so it is `unmeasured` instead: the
+    driver treats that as an infrastructure failure rather than as consent.
+    """
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, "", False))
+    g = gates.size(cwd=Path("."), base_sha="a" * 40)
+    assert g.passed is False and g.unmeasured is True
+    assert g.evidence == {"files": 0, "non_test_lines": 0, "test_lines": 0}
+
+
+def test_the_size_gate_records_the_counts_it_judged_on(monkeypatch):
+    """Numbers a person can disagree with, not a sentence about them."""
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (
+        0, "500\t12\tsrc/a.py\n40\t0\tpackages/kernel/tests/test_a.py", False))
+    g = gates.size(cwd=Path("."), base_sha="x")
+    assert g.evidence == {"files": 2, "non_test_lines": 512, "test_lines": 40}
+
+
+def test_the_driver_measures_size_on_the_commit_it_has_just_made():
+    """A round's work is not in `base..HEAD` until it is committed.
+
+    So the size gate sits where the scope gate sits — after the commit, before
+    the review — and for the same reason: both answer about the range that
+    would land, or they answer about the wrong thing.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    commit = run_task.index("self._commit(task, round_no)")
+    measured = run_task.index("gates.size(")
+    review = run_task.index("agents.review(")
+    assert commit < measured < review, (
+        "size is measured before the round is committed, so it reads the "
+        "previous round's diff and round one measures nothing at all")
+    # And a size nothing could measure is refused rather than passed over.
+    assert "size unmeasured" in run_task[measured:review]
+
+
+def _repo_ready_for_a_run(tmp_path):
+    """A repository sitting on `main`, with the ledger the driver parks into.
+
+    (`_repo_with_a_task_branch` is defined with the scope tests below, which is
+    where the repository helpers live.)
+    """
+    import subprocess
+
+    repo, _ = _repo_with_a_task_branch(tmp_path, touching=[])
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    (repo / ".qevik" / "devloop").mkdir(parents=True)
+    (repo / ".qevik" / "DECISION_QUEUE.md").write_text("# Decisions\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "ledgers"], cwd=repo, check=True,
+                   capture_output=True)
+    return repo
+
+
+def _one_round(repo, tmp_path, monkeypatch, *, build):
+    """One task through the real driver on a real repository.
+
+    The reviewer records what it was asked about and then stops the run: what
+    these tests are about is everything that happens before anybody is asked
+    an opinion.
+    """
+    from devloop import driver as drv
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="one module", brief="b", origin="human", paths=["src/"])
+    task = q.claim(owner="test")
+    reviewed: list[str] = []
+
+    def review(**k):
+        reviewed.append(k["base_sha"])
+        return agents.Outcome(ok=False, exit_code=1, output="",
+                              infrastructure_failure=True, detail="stop here")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.agents, "review", review)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+    state = drv.Driver(q, drv.Limits(), repo=repo).run_task(task)
+    return q, ident, state, reviewed
+
+
+def test_an_oversized_first_round_is_stopped_before_anybody_reviews_it(
+        tmp_path, monkeypatch):
+    """The negative control: the case that was impossible to fail.
+
+    Round one, nine hundred non-test lines, on a real repository. Run against
+    the gate as it was, this measured an empty range, called it small enough,
+    and sent all nine hundred lines to the reviewer — which is how 812 reached
+    `main` past an 800-line limit with no gate objecting.
+    """
+    import subprocess
+
+    repo = _repo_ready_for_a_run(tmp_path)
+
+    def rev(*args) -> str:
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                              text=True).stdout.strip()
+
+    main_before = rev("rev-parse", "main")
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "sprawl.py").write_text(
+            "\n".join(f"line_{n} = {n}" for n in range(900)) + "\n")
+        return agents.Outcome(ok=True, exit_code=0, output="done")
+
+    q, ident, state, reviewed = _one_round(repo, tmp_path, monkeypatch,
+                                           build=build)
+
+    assert state == State.CONTESTED
+    assert reviewed == [], "an oversized round was sent for review"
+    row = q.get(ident)
+    assert row["state"] == State.CONTESTED
+    [oversized] = [t["reason"] for t in q.transitions(ident)
+                   if t["reason"].startswith("oversized:")]
+    # The number is the whole point. The gate saw *this* round's nine hundred
+    # lines; the stale gate saw the zero of an empty range.
+    assert "900 lines outside tests" in oversized
+    assert row["review_rounds"] == 0, "it was not stopped on the first round"
+
+    # The work is committed on the task branch — which is what the ledger entry
+    # promises a person will find there, and what an uncommitted round could
+    # not have offered.
+    assert rev("rev-parse", f"devloop/{ident}") == row["head_sha"]
+    assert rev("rev-list", "--count", f"main..devloop/{ident}") == "1"
+    assert rev("rev-parse", "main") == main_before, "an oversized diff reached main"
+    assert rev("branch", "--show-current") == "main"
+    ledger = (repo / ".qevik" / "DECISION_QUEUE.md").read_text()
+    assert f"<!-- devloop:oversized:{ident} -->" in ledger
+    assert "Split it at a real boundary" in ledger
+
+
+def test_a_bounded_first_round_is_measured_and_reaches_the_review(tmp_path,
+                                                                  monkeypatch):
+    """The other half of the control: the gate is not simply refusing rounds.
+
+    Same driver, same repository, forty lines — measured on the same committed
+    range, passed, and the reviewer is asked about exactly that range.
+    """
+    import subprocess
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    main_before = subprocess.run(["git", "rev-parse", "main"], cwd=repo,
+                                 capture_output=True, text=True).stdout.strip()
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "small.py").write_text(
+            "\n".join(f"line_{n} = {n}" for n in range(40)) + "\n")
+        return agents.Outcome(ok=True, exit_code=0, output="done")
+
+    q, ident, _, reviewed = _one_round(repo, tmp_path, monkeypatch, build=build)
+
+    assert reviewed == [main_before], (
+        "a round well inside the limit was not reviewed, or was reviewed "
+        "against a range other than the one that was sized")
+    assert not any(t["reason"].startswith("oversized:")
+                   for t in q.transitions(ident))
+
+
+def test_a_size_the_driver_could_not_measure_is_never_a_pass(tmp_path,
+                                                             monkeypatch):
+    """An unmeasured size gate requeues the task; it does not wave it through.
+
+    This is what stops the defect returning quietly. Move the gate back ahead
+    of the commit and round one measures an empty range — which is unmeasured,
+    so the loop reports broken tooling instead of reviewing and landing work
+    that nothing ever sized.
+    """
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    monkeypatch.setattr(drv.gates, "size", lambda **k: gates.Gate(
+        "size", False, "nothing is committed in x..HEAD", unmeasured=True))
+
+    def build(task, *, cwd, **_):
+        (cwd / "src" / "small.py").write_text("x = 2\n")
+        return agents.Outcome(ok=True, exit_code=0, output="done")
+
+    q, ident, state, reviewed = _one_round(repo, tmp_path, monkeypatch,
+                                           build=build)
+
+    assert state == State.FAILED and reviewed == [], (
+        "work whose size nothing could measure was sent for review")
+    assert q.get(ident)["state"] == State.QUEUED, "the task was not requeued"
+    assert any("infrastructure failure" in t["reason"]
+               and "size unmeasured" in t["reason"]
+               for t in q.transitions(ident))
+
+
 # ===================================== work the loop can actually finish
 #
 # The link to the control plane drops for long stretches — TCP connects and the
