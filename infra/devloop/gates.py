@@ -13,7 +13,8 @@ Prose and outcome are independent variables.
 `tests`        the relevant tests pass, by exit code
 `scope`        every changed path is inside the task's allowed-path contract
 `clean_tree`   the reviewer wrote nothing — proved, not configured
-`deployed`     the deploy script exited zero
+`deployed`     the deploy script exited zero, for one named commit
+`provenance`   the host's own marker says it installed that commit
 `in_production` a probe against the live system agrees
 
 A task that requires deployment and does not pass `deployed` never reaches
@@ -24,11 +25,30 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
+import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .queue import redact
+
+#: Where the deploy script records what the host holds. Read back, never
+#: written from here.
+MARKER = "/opt/qevik/atlas/DEPLOYED_SHA"
+
+#: A full commit id and nothing else. A short sha, a branch name or an empty
+#: string is not a commit to deploy.
+_FULL_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+
+#: A whole `key=value` line of the marker. Whole lines only: a marker is
+#: parsed, never searched, so a sha appearing inside some other field can
+#: never be mistaken for the authoritative one.
+_MARKER_LINE = re.compile(r"\A([A-Za-z0-9_]+)=(.*)\Z")
+
+#: How long to wait between provenance reads that could not reach the host.
+_RETRY_PAUSE_S = 10
 
 
 @dataclass
@@ -48,15 +68,46 @@ class Gate:
     evidence: dict = field(default_factory=dict)
 
 
-def _sh(argv: list[str], *, cwd: Path, timeout: int) -> tuple[int, str, bool]:
+def _sh(argv: list[str], *, cwd: Path, timeout: int,
+        env: dict[str, str] | None = None) -> tuple[int, str, bool]:
+    """Run a command and answer with its exit code, its output, and whether it
+    ran out of time.
+
+    `env` is not a merge into the operator's environment. When it is given the
+    child gets this process's environment **with every `QEVIK_*` variable
+    removed** and then `env` applied, so a test seam or a `QEVIK_TEST_HOST=1`
+    left in the shell that started the driver cannot reach a production deploy.
+    Omitted, the child inherits the environment unchanged.
+
+    The child also runs in its own process group, and a timeout kills the whole
+    group. `subprocess.run`'s timeout kills only the direct child, which for the
+    deploy script leaves its `rsync`/`ssh` still writing to the host after the
+    driver has given up and called the gate unmeasured.
+    """
+    child_env = None
+    if env is not None:
+        child_env = {name: value for name, value in os.environ.items()
+                     if not name.startswith("QEVIK_")}
+        child_env.update(env)
     try:
-        done = subprocess.run(argv, cwd=str(cwd), stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=child_env, start_new_session=True)
     except FileNotFoundError as missing:
         return 127, str(missing), False
+    try:
+        out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:                     # pragma: no cover
+            proc.kill()
         return 124, f"timed out after {timeout}s", True
-    return done.returncode, redact((done.stdout or "") + (done.stderr or "")), False
+    return proc.returncode, redact((out or "") + (err or "")), False
 
 
 def changed(*, cwd: Path, base_sha: str | None = None) -> Gate:
@@ -321,20 +372,111 @@ def tests(*, cwd: Path, selector: str = "", timeout: int = 2400) -> Gate:
     return Gate("tests", True, tail[:300])
 
 
-def deployed(*, cwd: Path, timeout: int = 900) -> Gate:
-    """The deploy script's own verdict.
+def deployed(*, cwd: Path, sha: str, timeout: int = 3600) -> Gate:
+    """The deploy script's own verdict, for one named commit.
 
-    `deploy_control.sh` installs, restarts, waits for the service to answer and
+    `deploy_control.sh` builds its payload from `QEVIK_DEPLOY_SHA` — never from
+    the working tree — installs, restarts, waits for the service to answer and
     puts the previous tree back if it does not. Its exit code is therefore a
     real gate rather than a report that files were copied.
+
+    The sha is checked here before anything runs, because a deploy script asked
+    to ship nothing in particular is the failure this gate exists to prevent.
+
+    3600 s is above the script's own worst case — twelve retries with their
+    sleeps on every remote step plus both polls' full patience, about fifty
+    minutes — and inside the lease the driver renews immediately before calling.
+    A script still running after that is on a dead link: the answer is
+    unmeasured, never a failed deploy.
     """
+    if not _FULL_SHA.match(sha or ""):
+        return Gate("deployed", False, "no commit to deploy",
+                    evidence={"sha": sha})
     code, out, timed_out = _sh(["./infra/deploy_control.sh"], cwd=cwd,
-                               timeout=timeout)
+                               timeout=timeout,
+                               env={"QEVIK_DEPLOY_SHA": sha})
     if timed_out:
         return Gate("deployed", False, f"the deploy did not finish in {timeout}s",
-                    unmeasured=True)
+                    unmeasured=True, evidence={"sha": sha, "exit": code})
     tail = "\n".join(out.strip().splitlines()[-3:])
-    return Gate("deployed", code == 0, tail[:400])
+    return Gate("deployed", code == 0, tail[:400],
+                evidence={"sha": sha, "exit": code})
+
+
+def _ssh_argv(remote: str) -> list[str]:
+    """The one way this module reaches the control plane.
+
+    Shared by `in_production` and `provenance` so the key, the host and the
+    connection options are stated once. What either gate *runs* and how either
+    one *decides* stays its own.
+    """
+    key = Path.home() / ".ssh" / "naml_hetzner"
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+            "-o", "ConnectionAttempts=4", "-i", str(key),
+            "root@2.28.62.83", remote]
+
+
+def provenance(*, sha: str, timeout: int = 120) -> Gate:
+    """What the host says it is holding, read back from its own marker.
+
+    The deploy gate answers "the script exited zero". That is not the same
+    claim as "the host holds `S`": the marker is written when the content is
+    installed and verified on disk, and only `state=installed` means it. So the
+    driver reads the marker before any production verification is allowed to
+    say anything about `S`.
+
+    Parsed, never searched. Every whole `key=value` line is taken, and a key
+    that appears more than once makes the gate **fail** — the marker has
+    exactly one writer and never legitimately repeats a key, so a repetition is
+    a malformed or tampered marker, and last-value-wins would let
+    `state=rolled-back` followed by `state=installed` pass.
+
+    A host that cannot be reached is unmeasured, never failed, and is retried
+    twice before that is concluded.
+    """
+    argv = _ssh_argv(f"cat {MARKER} 2>/dev/null || echo 'state=missing'")
+    code, out = 0, ""
+    for attempt in range(3):
+        code, out, timed_out = _sh(argv, cwd=Path.home(), timeout=timeout)
+        if not (timed_out or code in (255, 124, 127)):
+            break
+        if attempt < 2:
+            time.sleep(_RETRY_PAUSE_S)
+    else:
+        return Gate("provenance", False,
+                    f"could not reach the host: {out[:200]}", unmeasured=True,
+                    evidence={"expected": sha, "marker": {}})
+    if code != 0:
+        return Gate("provenance", False,
+                    f"no provenance recorded on the host ({code})",
+                    evidence={"expected": sha, "marker": {}})
+
+    pairs = []
+    for line in out.splitlines():
+        found = _MARKER_LINE.match(line.strip())
+        if found:
+            pairs.append((found.group(1), found.group(2).strip()))
+    repeated = sorted({key for key, count in Counter(k for k, _ in pairs).items()
+                       if count > 1})
+    if repeated:
+        # Fails closed, and before any comparison: a marker that says two
+        # things has not said either of them.
+        return Gate("provenance", False,
+                    "malformed provenance: duplicate " + ", ".join(repeated),
+                    evidence={"expected": sha, "duplicates": repeated,
+                              "marker": {}})
+    marker = dict(pairs)
+    if marker.get("sha") == sha and marker.get("state") == "installed":
+        return Gate("provenance", True,
+                    f"the host holds {sha[:12]}, state=installed",
+                    evidence={"expected": sha, "marker": marker})
+    if not marker.get("sha") or marker.get("state") == "missing":
+        detail = "no provenance recorded on the host"
+    else:
+        detail = (f"host holds sha={marker.get('sha', '')} "
+                  f"state={marker.get('state', '')}, expected {sha} installed")
+    return Gate("provenance", False, detail,
+                evidence={"expected": sha, "marker": marker})
 
 
 def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
@@ -354,10 +496,7 @@ def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
     remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
               "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'PROBE'\n"
               f"{probe}\nPROBE")
-    code, out, timed_out = _sh(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-         "-o", "ConnectionAttempts=4", "-i", str(key),
-         "root@2.28.62.83", remote], cwd=cwd, timeout=timeout)
+    code, out, timed_out = _sh(_ssh_argv(remote), cwd=cwd, timeout=timeout)
     if timed_out or code == 255:
         return Gate("in_production", False,
                     f"could not reach the host: {out[:200]}", unmeasured=True)
@@ -420,5 +559,6 @@ def summarise(gates: list[Gate]) -> str:
         for g in gates)
 
 
-__all__ = ["Gate", "changed", "clean_tree", "deployed", "in_production",
-           "required", "scope", "size", "summarise", "tests", "within"]
+__all__ = ["Gate", "MARKER", "changed", "clean_tree", "deployed",
+           "in_production", "provenance", "required", "scope", "size",
+           "summarise", "tests", "within"]

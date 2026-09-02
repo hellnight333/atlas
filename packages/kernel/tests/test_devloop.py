@@ -2041,3 +2041,901 @@ def test_a_contract_is_not_changed_under_a_running_task(q):
     q.claim(owner="d")
     with pytest.raises(ValueError):
         q.declare_paths(ident, ["src/", "docs/"], actor="ayoub")
+
+
+# ================================= the loop ships the commit it tested
+#
+# `_ship` used to log the landed sha and then discard it: the full suite ran on
+# whatever the working tree held at that moment, `./infra/deploy_control.sh` was
+# called with nothing but a `cwd`, and nothing afterwards asked the host what it
+# had actually installed. "The deploy shipped what was tested" was a property of
+# nobody touching the tree for about fifteen minutes, and it was unmeasured.
+#
+# Every test below drives the real `_ship` against a real repository and a real
+# queue, with one controlled drift at a time.
+
+
+def _git_in(repo, *args: str) -> str:
+    """A git command the test expects to succeed."""
+    import subprocess
+
+    done = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True)
+    assert done.returncode == 0, \
+        f"git {' '.join(args)}: {done.stdout}{done.stderr}"
+    return done.stdout.strip()
+
+
+def _rejecting_hook(repo, body: str = "") -> None:
+    """A `pre-commit` hook that fails the squash commit, as a signing failure,
+    a lint hook or a `commit-msg` rule would."""
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\n" + body + "exit 1\n")
+    hook.chmod(0o755)
+
+
+def _ready_to_ship(tmp_path, *, deploy=True, prod=False, evidence=None,
+                   work=None):
+    """A repository whose task branch is reviewed clean and ready to land.
+
+    Everything `_ship` asks the record for is real: a review of this exact head
+    with no findings, and a scope check on the same head that stayed inside the
+    contract. Without both, `_ship` refuses before it reaches anything here.
+    """
+    from types import SimpleNamespace
+
+    from devloop import driver as drv
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    for argv in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t"),
+                 ("config", "user.name", "t"),
+                 ("config", "commit.gpgsign", "false")):
+        _git_in(repo, *argv)
+    (repo / "src" / "app.py").write_text("x = 1\n")
+    (repo / "src" / "keep.py").write_text("y = 1\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "base")
+
+    queue = Queue(tmp_path / "s.db")
+    ident = queue.add(title="ships it", brief="the brief", origin="human",
+                      paths=["src/"], evidence=evidence or {},
+                      requires_deploy=deploy, requires_prod_check=prod)
+    queue.claim(owner="test")
+    branch = f"devloop/{ident}"
+    _git_in(repo, "checkout", "-q", "-b", branch)
+    if work is None:
+        (repo / "src" / "app.py").write_text("x = 2\n")
+    else:
+        work(repo)
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "the task's work")
+    head = _git_in(repo, "rev-parse", "HEAD")
+    _git_in(repo, "checkout", "-q", "main")
+
+    queue.move(ident, State.REVIEWING, reason="round 1", head_sha=head,
+               review_rounds=1)
+    queue.record_review(ident, round=1, sha=head, verdict="CLEAN", findings=0)
+    queue.record_scope(ident, round=1, sha=head, declared=["src/"],
+                       changed=["src/app.py"], undeclared=[])
+    return SimpleNamespace(
+        drv=drv, q=queue, ident=ident, branch=branch, repo=repo, head=head,
+        base=_git_in(repo, "rev-parse", "main"), task=queue.get(ident),
+        driver=drv.Driver(queue, drv.Limits(), repo=repo))
+
+
+def _nothing_deploys(monkeypatch) -> None:
+    """Every host-facing gate, wired to fail the test if anything reaches it."""
+    def refuse(**_):
+        raise AssertionError("a commit that drifted from the suite was deployed")
+
+    monkeypatch.setattr(gates, "deployed", refuse)
+    monkeypatch.setattr(gates, "provenance", refuse)
+    monkeypatch.setattr(gates, "in_production", refuse)
+
+
+def _nothing_is_tested(monkeypatch) -> None:
+    """For the landing failures: nothing may get as far as the suite."""
+    def refuse(**_):
+        raise AssertionError("a failed landing reached the full suite")
+
+    monkeypatch.setattr(gates, "tests", refuse)
+
+
+def _passing_suite(monkeypatch, *, then=None):
+    def suite(**_):
+        if then is not None:
+            then()
+        return gates.Gate("tests", True, "12 passed in 60s")
+
+    monkeypatch.setattr(gates, "tests", suite)
+
+
+def _ship(ready) -> str:
+    import time as clock
+
+    return ready.driver._ship(ready.task, clock.monotonic())
+
+
+def _reasons(ready) -> str:
+    return " | ".join(t["reason"] for t in ready.q.transitions(ready.ident))
+
+
+def test_a_commit_that_lands_while_the_suite_runs_cannot_ship(tmp_path,
+                                                              monkeypatch):
+    """The window the old code could not see.
+
+    The suite runs for about eleven minutes. Anything that commits to `main` in
+    that time becomes part of what the deploy script copies, and the suite that
+    passed did not measure it.
+    """
+    ready = _ready_to_ship(tmp_path)
+
+    def meanwhile():
+        (ready.repo / "src" / "interloper.py").write_text("z = 1\n")
+        _git_in(ready.repo, "add", "-A")
+        _git_in(ready.repo, "commit", "-qm", "somebody else's commit")
+
+    _passing_suite(monkeypatch, then=meanwhile)
+    _nothing_deploys(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert ready.q.get(ready.ident)["state"] == State.CONTESTED
+    reasons = _reasons(ready)
+    assert "refused to deploy" in reasons and "HEAD is" in reasons
+
+
+def test_a_tree_dirtied_while_the_suite_runs_cannot_ship(tmp_path, monkeypatch):
+    """The deploy script copies the tree, so an uncommitted edit ships too."""
+    ready = _ready_to_ship(tmp_path)
+    _passing_suite(monkeypatch,
+                   then=lambda: (ready.repo / "src" / "stray.py").write_text("q\n"))
+    _nothing_deploys(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert "refused to deploy" in _reasons(ready)
+    assert "working tree is not clean" in _reasons(ready)
+
+
+def test_a_commit_no_longer_on_main_cannot_ship(tmp_path, monkeypatch):
+    """HEAD is still the tested commit and the tree is clean — and `main` has
+    moved out from under it, so the commit is no longer what `main` says the
+    project is. The deploy script refuses a non-ancestor too; the driver must
+    not get that far."""
+    ready = _ready_to_ship(tmp_path)
+
+    def rewind():
+        _git_in(ready.repo, "checkout", "-q", "--detach")
+        _git_in(ready.repo, "branch", "-f", "main", "HEAD~1")
+
+    _passing_suite(monkeypatch, then=rewind)
+    _nothing_deploys(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert "no longer an ancestor of main" in _reasons(ready)
+
+
+# ---------------------------------------- a landing that failed (DQ-013)
+#
+# Three review rounds of attempt 1 were one chain about this path: the squash
+# commit was rejected and `main` was left dirty (the loop wedged), then the fix
+# reset `main` hard (destroying edits the branch did not hold), then the
+# cleanliness check ahead of that reset turned out to be racy. DQ-013 settles
+# it: preservation outranks liveness, the proof is content-based, and there is
+# no lock.
+
+
+def test_a_rejected_squash_commit_is_settled_from_the_branchs_own_content(
+        tmp_path, monkeypatch):
+    """F1. A hook, a signing failure or a commit-time error leaves the squash
+    staged on `main`. Left there, the next task's clean-tree check refuses and
+    the loop is wedged over work the branch still holds."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    reasons = _reasons(ready)
+    assert "refused to land" in reasons
+    assert f"main restored to {ready.base}" in reasons
+    assert _git_in(ready.repo, "status", "--porcelain") == "", \
+        "main was left dirty, which wedges the next task's clean-tree check"
+    assert _git_in(ready.repo, "rev-parse", "main") == ready.base
+    assert _git_in(ready.repo, "rev-parse", ready.branch) == ready.head, \
+        "the reviewed work was deleted along with the failed landing"
+
+
+def test_a_conflicted_squash_is_preserved_rather_than_settled(tmp_path,
+                                                              monkeypatch):
+    """The merge itself fails. A conflicted path is not the branch's blob, so
+    it is not provably the task's own squash state and nothing is touched."""
+    ready = _ready_to_ship(tmp_path)
+    (ready.repo / "src" / "app.py").write_text("x = 99\n")
+    _git_in(ready.repo, "add", "-A")
+    _git_in(ready.repo, "commit", "-qm", "main moved")
+    moved = _git_in(ready.repo, "rev-parse", "main")
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    reasons = _reasons(ready)
+    assert "src/app.py: conflicted" in reasons
+    assert "not provably only the squash" in reasons
+    assert "<<<<<<<" in (ready.repo / "src" / "app.py").read_text(), \
+        "the conflict was cleaned up rather than left for a person"
+    assert _git_in(ready.repo, "rev-parse", "main") == moved
+
+
+def test_a_hook_that_rewrites_a_file_before_rejecting_loses_nothing(tmp_path,
+                                                                    monkeypatch):
+    """F2. `git reset --hard HEAD` was the r1 fix, and it discards exactly this:
+    content the task branch does not hold. A formatter that rewrites and then
+    rejects is an ordinary pre-commit hook."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo, 'echo "# rewritten by the hook" >> src/app.py\n')
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert "# rewritten by the hook" in (ready.repo / "src" / "app.py").read_text()
+    assert _git_in(ready.repo, "status", "--porcelain") != ""
+    reasons = _reasons(ready)
+    assert "not provably only the squash" in reasons
+    assert "src/app.py: content differs from the branch" in reasons
+    assert ready.head in reasons, "the reason does not say where the work is"
+    assert _git_in(ready.repo, "rev-parse", "main") == ready.base
+    assert _git_in(ready.repo, "rev-parse", ready.branch) == ready.head
+    assert ready.q.get(ready.ident)["state"] == State.BLOCKED
+
+
+def test_work_that_appeared_in_the_window_is_preserved(tmp_path, monkeypatch):
+    """F3. The r2 fix checked `status` *before* the squash, which proves nothing
+    about the tree afterwards. The proof is content-based instead: an untracked
+    file nobody declared is outside the squash set whenever it arrived, so
+    nothing is destroyed and nothing is restored either."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo, 'echo "an operator note" > NOTES.md\n')
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert (ready.repo / "NOTES.md").read_text() == "an operator note\n"
+    assert "NOTES.md: outside the squash" in _reasons(ready)
+    # And the squash set was left exactly as found: a tree that could not be
+    # proved is not partially cleaned up either.
+    assert (ready.repo / "src" / "app.py").read_text() == "x = 2\n"
+
+
+def test_an_edit_to_a_file_outside_the_squash_is_preserved(tmp_path, monkeypatch):
+    """The same rule for a tracked file: `src/keep.py` is not in the squash set,
+    so an edit to it is somebody else's and is never discarded."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo, 'echo "y = 2" >> src/keep.py\n')
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert "y = 2" in (ready.repo / "src" / "keep.py").read_text()
+    assert "src/keep.py: outside the squash" in _reasons(ready)
+
+
+def test_a_path_the_branch_deleted_is_restored_from_main(tmp_path, monkeypatch):
+    """The cleanup has to put back what the squash removed, without a reset."""
+    ready = _ready_to_ship(
+        tmp_path, work=lambda repo: (repo / "src" / "keep.py").unlink())
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert (ready.repo / "src" / "keep.py").read_text() == "y = 1\n"
+    assert _git_in(ready.repo, "status", "--porcelain") == ""
+    assert _git_in(ready.repo, "rev-parse", "main") == ready.base
+
+
+def test_a_path_the_branch_added_is_removed_by_the_cleanup(tmp_path, monkeypatch):
+    """And take back out what the squash added — index and worktree both, since
+    an untracked leftover is what the next task's clean-tree check trips on."""
+    ready = _ready_to_ship(
+        tmp_path,
+        work=lambda repo: (repo / "src" / "added.py").write_text("new = 1\n"))
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert not (ready.repo / "src" / "added.py").exists()
+    assert _git_in(ready.repo, "status", "--porcelain") == ""
+
+
+def test_an_added_path_the_hook_rewrote_is_preserved(tmp_path, monkeypatch):
+    """The same added path, with content the branch does not hold: removing it
+    would destroy the hook's version, so it stays and a person decides."""
+    ready = _ready_to_ship(
+        tmp_path,
+        work=lambda repo: (repo / "src" / "added.py").write_text("new = 1\n"))
+    _rejecting_hook(ready.repo, 'echo "touched = 1" >> src/added.py\n')
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert "touched = 1" in (ready.repo / "src" / "added.py").read_text()
+    assert "src/added.py: content differs from the branch" in _reasons(ready)
+
+
+def test_a_mode_change_with_no_content_change_is_preserved(tmp_path, monkeypatch):
+    """R1. Git tracks one permission bit and it is real work: `chmod +x` with no
+    edit to a byte is a change `status` reports and a commit keeps.
+
+    A blob-only proof cannot see it — the blob is unchanged, that being the
+    point — so the path reads as "exactly what the branch holds" and the restore
+    reverts the mode to the base's. The proof compares modes as well, and this
+    is a `chmod` the index never saw, so the on-disk mode is what catches it."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo, "chmod +x src/app.py\n")
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert (ready.repo / "src" / "app.py").stat().st_mode & 0o100, \
+        "the cleanup reverted a mode change the branch does not hold"
+    reasons = _reasons(ready)
+    assert "src/app.py: mode differs from the branch" in reasons
+    assert "not provably only the squash" in reasons
+    assert _git_in(ready.repo, "rev-parse", "main") == ready.base
+    assert _git_in(ready.repo, "rev-parse", ready.branch) == ready.head
+
+
+def test_a_staged_mode_change_is_preserved(tmp_path, monkeypatch):
+    """The same edit, this time staged before the commit was rejected: the index
+    mode now disagrees with the branch even though the blob still matches."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo,
+                    "chmod +x src/app.py\ngit update-index --chmod=+x src/app.py\n")
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.BLOCKED
+    assert "src/app.py: index disagrees (mode 100755" in _reasons(ready)
+    assert _git_in(ready.repo, "ls-files", "-s", "--", "src/app.py").startswith(
+        "100755"), "a staged mode change was discarded by the cleanup"
+
+
+def test_a_mode_the_branch_holds_does_not_block_the_cleanup(tmp_path, monkeypatch):
+    """The negative control: an executable file the *branch itself* made
+    executable is what the branch holds, so the proof passes and the cleanup
+    runs. Without this the mode check could pass its own test by refusing
+    everything."""
+    def work(repo):
+        (repo / "src" / "run.sh").write_text("#!/bin/sh\necho hi\n")
+        (repo / "src" / "run.sh").chmod(0o755)
+
+    ready = _ready_to_ship(tmp_path, work=work)
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+
+    assert _ship(ready) == State.CONTESTED
+    assert not (ready.repo / "src" / "run.sh").exists()
+    assert _git_in(ready.repo, "status", "--porcelain") == ""
+
+
+def _edit_during_the_cleanup(ready, monkeypatch, *, when: str, edit) -> None:
+    """Run `edit` the moment the cleanup writes `when` — the window between a
+    path's proof and a *later* path's write, which is exactly the window a
+    single up-front proof pass leaves open."""
+    real = ready.drv._git
+    fired = []
+
+    def spy(*args, **kwargs):
+        done = real(*args, **kwargs)
+        if args[:1] == ("checkout",) and args[-1] == when and not fired:
+            fired.append(True)
+            edit(ready.repo)
+        return done
+
+    monkeypatch.setattr(ready.drv, "_git", spy)
+
+
+def test_an_edit_arriving_mid_cleanup_is_not_overwritten(tmp_path, monkeypatch):
+    """R2. The proof pass finishes before the first path is touched, so by the
+    time the loop reaches path N the proof of path N is as old as every restore
+    before it — seconds of subprocess calls, not an instant.
+
+    Here the operator writes to `src/keep.py` while `src/app.py` is being
+    restored. Re-proving each path immediately before its own write catches it;
+    a single up-front pass would have checked out over the top of it."""
+    def work(repo):
+        (repo / "src" / "app.py").write_text("x = 2\n")
+        (repo / "src" / "keep.py").write_text("y = 2\n")
+
+    ready = _ready_to_ship(tmp_path, work=work)
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+    _edit_during_the_cleanup(
+        ready, monkeypatch, when="src/app.py",
+        edit=lambda repo: (repo / "src" / "keep.py").write_text("y = 3\n"))
+
+    assert _ship(ready) == State.BLOCKED
+    assert (ready.repo / "src" / "keep.py").read_text() == "y = 3\n", \
+        "an edit made during the cleanup was checked out over the top of"
+    reasons = _reasons(ready)
+    assert "src/keep.py: content differs from the branch" in reasons
+    assert "it changed while the cleanup was running" in reasons
+    assert "already restored the first 1 of 2 path(s)" in reasons, \
+        "the reason does not say the cleanup stopped part-way"
+    assert _git_in(ready.repo, "rev-parse", ready.branch) == ready.head
+
+
+def test_a_file_created_mid_cleanup_is_not_deleted(tmp_path, monkeypatch):
+    """The same window, on the other destructive arm: `os.remove` of a path the
+    branch added. The operator's content arrives after that path was proved and
+    before it is deleted, so the delete must not happen.
+
+    The added path is named to sort *after* `src/app.py`, because the cleanup
+    walks the squash set in `git diff --name-only` order and the window under
+    test is the one that opens once an earlier path has been written."""
+    def work(repo):
+        (repo / "src" / "app.py").write_text("x = 2\n")
+        (repo / "src" / "zadded.py").write_text("new = 1\n")
+
+    ready = _ready_to_ship(tmp_path, work=work)
+    _rejecting_hook(ready.repo)
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+    _edit_during_the_cleanup(
+        ready, monkeypatch, when="src/app.py",
+        edit=lambda repo: (repo / "src" / "zadded.py").write_text("mine = 1\n"))
+
+    assert _ship(ready) == State.BLOCKED
+    assert (ready.repo / "src" / "zadded.py").read_text() == "mine = 1\n", \
+        "a file written during the cleanup was deleted by it"
+    assert "src/zadded.py: content differs from the branch" in _reasons(ready)
+
+
+def test_the_cleanup_reproves_each_path_against_the_live_tree():
+    """Structural, because the window is a property of *where* the proof runs,
+    not of any one path: a cleanup that trusts the up-front pass is racy however
+    the pass is written."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    settle = source[source.index("def _settle_failed_landing("):
+                    source.index("def _not_the_branchs(")]
+    body = settle[settle.index("if not proof:\n            # Proven"):]
+    assert body.index("_not_the_branchs(") < body.index('_git("checkout"'), (
+        "the cleanup writes before it re-proves the path it is writing to")
+    assert body.index("_not_the_branchs(") < body.index("os.remove("), (
+        "the cleanup deletes before it re-proves the path it is deleting")
+
+
+def test_the_shipping_path_holds_no_destructive_reset():
+    """Structural, because DQ-013 §2 is a rule about the code and not about one
+    call site. A reset, a `clean` or a `checkout -- .` acts on everything in the
+    tree, including whatever nothing here has proved anything about."""
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    for forbidden in ('_git("reset"', '_git("clean"', '_git("checkout", "--", "."'):
+        assert forbidden not in source, (
+            f"{forbidden} is back in the driver: a failed landing would destroy "
+            f"work no gate has proved belongs to the task")
+    settle = source[source.index("def _settle_failed_landing("):]
+    assert "DQ-013" in settle[:settle.index('"""', settle.index('"""') + 3)], (
+        "the rule governing this path is not quoted where the diff is read")
+
+
+def test_the_blocked_reason_of_a_preserved_landing_is_durable(tmp_path,
+                                                              monkeypatch):
+    """A person reads the queue, not this process's stdout."""
+    ready = _ready_to_ship(tmp_path)
+    _rejecting_hook(ready.repo, 'echo "# rewritten" >> src/app.py\n')
+    _nothing_deploys(monkeypatch)
+    _nothing_is_tested(monkeypatch)
+    _ship(ready)
+
+    newest = ready.q.transitions(ready.ident)[-1]
+    assert newest["to_state"] == State.BLOCKED
+    assert "remaining:" in newest["reason"]
+    assert ready.head in newest["reason"] and ready.base in newest["reason"]
+    assert ready.q.get(ready.ident)["state"] == State.BLOCKED
+
+
+# ------------------------------------------- what actually reaches the host
+
+
+def test_the_deploy_is_given_the_commit_the_suite_passed_on(tmp_path,
+                                                            monkeypatch):
+    """The whole point. Today the gate is called with a `cwd` and nothing else,
+    so the script ships whatever the tree holds at that moment."""
+    ready = _ready_to_ship(tmp_path)
+    asked: list[dict] = []
+    _passing_suite(monkeypatch)
+    monkeypatch.setattr(gates, "deployed", lambda **k: (
+        asked.append(k), gates.Gate("deployed", True, "installed",
+                                    evidence={"sha": k["sha"], "exit": 0}))[1])
+    monkeypatch.setattr(gates, "provenance", lambda **k: gates.Gate(
+        "provenance", True, "state=installed",
+        evidence={"expected": k["sha"], "marker": {"sha": k["sha"]}}))
+
+    assert _ship(ready) == State.DONE
+    landed = _git_in(ready.repo, "rev-parse", "main")
+    assert len(asked) == 1 and asked[0]["sha"] == landed
+    assert any(t["reason"].startswith(f"deploying {landed};")
+               for t in ready.q.transitions(ready.ident))
+
+    # The sha is recorded where it does not collide with the review key.
+    done = ready.q.transitions(ready.ident)[-1]
+    assert done["to_state"] == State.DONE
+    assert f"deployed {landed}" in done["reason"]
+    assert "provenance installed" in done["reason"]
+    assert ready.q.get(ready.ident)["head_sha"] == ready.head, (
+        "the landed sha overwrote the head the review and scope records are "
+        "keyed by, so a landed task now looks unreviewed")
+
+
+def test_a_host_that_does_not_hold_the_commit_never_reaches_production(
+        tmp_path, monkeypatch):
+    """The deploy script's exit code says it finished; the marker says what is
+    on disk. They are not the same claim."""
+    ready = _ready_to_ship(tmp_path, prod=True,
+                           evidence={"production_probe": "print('PROVED')"})
+    _passing_suite(monkeypatch)
+    monkeypatch.setattr(gates, "deployed", lambda **k: gates.Gate(
+        "deployed", True, "installed", evidence={"sha": k["sha"], "exit": 0}))
+    monkeypatch.setattr(gates, "provenance", lambda **k: gates.Gate(
+        "provenance", False,
+        f"host holds sha={'c' * 40} state=installed, expected {k['sha']} "
+        f"installed", evidence={"expected": k["sha"], "marker": {}}))
+
+    def never(**_):
+        raise AssertionError("production was asked about a host holding "
+                             "something else")
+
+    monkeypatch.setattr(gates, "in_production", never)
+
+    assert _ship(ready) == State.FAILED
+    assert ready.q.get(ready.ident)["state"] == State.FAILED
+    assert "provenance does not say" in _reasons(ready)
+
+
+# ------------------------------- the probe, bracketed by the marker it needs
+#
+# One marker read *before* the probe proves the host held S at that moment and
+# nothing about what answered the probe. The probe is therefore read the way
+# the suite is: the host is asked again afterwards, before the verdict is used,
+# and must still be holding S.
+
+
+def _deploy_and_probe(monkeypatch, *, marker, probe):
+    """The gates below the landing, wired from two callables."""
+    _passing_suite(monkeypatch)
+    monkeypatch.setattr(gates, "deployed", lambda **k: gates.Gate(
+        "deployed", True, "installed", evidence={"sha": k["sha"], "exit": 0}))
+    monkeypatch.setattr(gates, "provenance", marker)
+    monkeypatch.setattr(gates, "in_production", probe)
+
+
+def _installed(sha: str) -> "gates.Gate":
+    return gates.Gate("provenance", True, f"the host holds {sha[:12]}, "
+                      f"state=installed",
+                      evidence={"expected": sha, "marker": {"sha": sha}})
+
+
+def _holds_something_else(sha: str) -> "gates.Gate":
+    other = "c" * 40
+    return gates.Gate("provenance", False,
+                      f"host holds sha={other} state=installed, expected {sha} "
+                      f"installed",
+                      evidence={"expected": sha, "marker": {"sha": other}})
+
+
+def _probing_task(tmp_path, **kw):
+    return _ready_to_ship(tmp_path, prod=True,
+                          evidence={"production_probe": "print('PROVED')"},
+                          **kw)
+
+
+def test_the_marker_is_read_before_and_after_the_probe(tmp_path, monkeypatch):
+    """The happy path states the bracket: two reads of the same sha, one on
+    either side of the probe."""
+    ready = _probing_task(tmp_path)
+    order: list[str] = []
+
+    def marker(**k):
+        order.append(f"provenance {k['sha']}")
+        return _installed(k["sha"])
+
+    def probe(**_):
+        order.append("probe")
+        return gates.Gate("in_production", True, "PROVED")
+
+    _deploy_and_probe(monkeypatch, marker=marker, probe=probe)
+
+    assert _ship(ready) == State.DONE
+    landed = _git_in(ready.repo, "rev-parse", "main")
+    assert order == [f"provenance {landed}", "probe", f"provenance {landed}"]
+
+
+def test_a_probe_answered_by_other_bytes_is_not_verification(tmp_path,
+                                                             monkeypatch):
+    """The window this exists for. Another deployment lands after the marker is
+    read and before the probe finishes, so `PROVED` describes whatever that
+    deployment installed. Recording it as verification of the landed commit
+    would mark the task DONE on a measurement of somebody else's code."""
+    ready = _probing_task(tmp_path)
+    reads: list[str] = []
+
+    def marker(**k):
+        reads.append(k["sha"])
+        return _installed(k["sha"]) if len(reads) == 1 \
+            else _holds_something_else(k["sha"])
+
+    _deploy_and_probe(monkeypatch, marker=marker,
+                      probe=lambda **_: gates.Gate("in_production", True,
+                                                   "PROVED"))
+
+    assert _ship(ready) == State.BLOCKED
+    landed = _git_in(ready.repo, "rev-parse", "main")
+    row = ready.q.get(ready.ident)
+    assert row["state"] == State.BLOCKED, \
+        "a probe of another version was accepted as verification of the landing"
+    assert len(reads) == 2, "the marker was not read back after the probe"
+    reasons = _reasons(ready)
+    assert f"no longer holds {landed}" in reasons
+    assert f"QEVIK_DEPLOY_SHA={landed}" in reasons
+    assert not any(t["to_state"] == State.DONE
+                   for t in ready.q.transitions(ready.ident))
+
+
+def test_a_failing_probe_from_other_bytes_is_not_the_tasks_failure(tmp_path,
+                                                                   monkeypatch):
+    """The recheck is read before the verdict is, so it catches the mirror case
+    too: a probe that failed against another deployment's code must not be
+    recorded as this commit failing in production."""
+    ready = _probing_task(tmp_path)
+    reads: list[str] = []
+
+    def marker(**k):
+        reads.append(k["sha"])
+        return _installed(k["sha"]) if len(reads) == 1 \
+            else _holds_something_else(k["sha"])
+
+    _deploy_and_probe(monkeypatch, marker=marker,
+                      probe=lambda **_: gates.Gate("in_production", False,
+                                                   "NOT PROVED"))
+
+    assert _ship(ready) == State.BLOCKED, \
+        "the task was blamed for a probe that measured other bytes"
+    assert "no longer holds" in _reasons(ready)
+
+
+def test_a_marker_unreadable_after_the_probe_is_not_a_pass(tmp_path,
+                                                           monkeypatch):
+    """A host that cannot be reached after the probe leaves the probe's answer
+    unattributable. Unmeasured is never a pass, and after the landing it is
+    BLOCKED rather than a requeue."""
+    ready = _probing_task(tmp_path)
+    reads: list[str] = []
+
+    def marker(**k):
+        reads.append(k["sha"])
+        if len(reads) == 1:
+            return _installed(k["sha"])
+        return gates.Gate("provenance", False,
+                          "could not reach the host: timed out",
+                          unmeasured=True,
+                          evidence={"expected": k["sha"], "marker": {}})
+
+    _deploy_and_probe(monkeypatch, marker=marker,
+                      probe=lambda **_: gates.Gate("in_production", True,
+                                                   "PROVED"))
+
+    assert _ship(ready) == State.BLOCKED
+    reasons = _reasons(ready)
+    assert "provenance after the probe" in reasons
+    assert "could not reach the host" in reasons
+
+
+def test_a_production_check_without_a_deploy_reads_no_marker(tmp_path,
+                                                             monkeypatch):
+    """The bracket belongs to a task that installed something. A task that only
+    verifies production never wrote the marker, which names whatever the host
+    was already holding — asking it about this commit would refuse for a reason
+    that has nothing to do with the probe."""
+    ready = _probing_task(tmp_path, deploy=False)
+
+    def never(**_):
+        raise AssertionError("the marker was read for a task that never "
+                             "deployed")
+
+    _passing_suite(monkeypatch)
+    monkeypatch.setattr(gates, "deployed", never)
+    monkeypatch.setattr(gates, "provenance", never)
+    monkeypatch.setattr(gates, "in_production",
+                        lambda **_: gates.Gate("in_production", True, "PROVED"))
+
+    assert _ship(ready) == State.DONE
+
+
+def test_a_post_landing_gate_nobody_could_measure_is_not_a_rebuild(tmp_path,
+                                                                   monkeypatch):
+    """`_infra` requeues, and after the landing that is a rebuild: the branch is
+    gone and the work is already on `main`, so the next run builds the same task
+    again from scratch."""
+    ready = _ready_to_ship(tmp_path)
+    _passing_suite(monkeypatch)
+    monkeypatch.setattr(gates, "deployed", lambda **k: gates.Gate(
+        "deployed", True, "installed", evidence={"sha": k["sha"], "exit": 0}))
+    monkeypatch.setattr(gates, "provenance", lambda **k: gates.Gate(
+        "provenance", False, "could not reach the host: timed out",
+        unmeasured=True, evidence={"expected": k["sha"], "marker": {}}))
+
+    assert _ship(ready) == State.BLOCKED
+    landed = _git_in(ready.repo, "rev-parse", "main")
+    row = ready.q.get(ready.ident)
+    assert row["state"] == State.BLOCKED, "the task was requeued for a rebuild"
+    reasons = _reasons(ready)
+    assert f"landed as {landed}" in reasons
+    assert f"QEVIK_DEPLOY_SHA={landed}" in reasons
+
+
+# ------------------------------------------------------ the gates themselves
+
+
+def test_a_deploy_with_no_commit_to_ship_runs_nothing(monkeypatch):
+    """A gate that cannot name what it would deploy must not start a deploy."""
+    def never(*a, **k):
+        raise AssertionError("the deploy script ran without a commit")
+
+    monkeypatch.setattr(gates, "_sh", never)
+    for bad in ("", "main", "abc123", "z" * 40, "A" * 40):
+        g = gates.deployed(cwd=Path("."), sha=bad)
+        assert g.passed is False and g.detail == "no commit to deploy", bad
+
+
+def test_the_deploy_gate_passes_the_sha_and_nothing_else(monkeypatch):
+    seen: dict = {}
+
+    def capture(argv, **kwargs):
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return 0, "installed and verified", False
+
+    monkeypatch.setattr(gates, "_sh", capture)
+    sha = "a" * 40
+    g = gates.deployed(cwd=Path("."), sha=sha)
+    assert g.passed is True
+    assert seen["argv"] == ["./infra/deploy_control.sh"]
+    assert seen["env"] == {"QEVIK_DEPLOY_SHA": sha}, (
+        "the deploy child is handed something other than the one sha")
+    assert seen["timeout"] >= 3600, (
+        "the gate gives up before the script's own worst case, and a deploy "
+        "still writing to the host would be killed mid-copy")
+    assert g.evidence == {"sha": sha, "exit": 0}
+
+
+def test_the_deploy_child_sees_only_the_sha_it_was_given(tmp_path, monkeypatch):
+    """A `QEVIK_TEST_HOST=1` left in the operator's shell would redirect a
+    production deploy at its test seams. It cannot reach the child."""
+    monkeypatch.setenv("QEVIK_TEST_HOST", "1")
+    argv = ["sh", "-c", "echo $QEVIK_DEPLOY_SHA-$QEVIK_TEST_HOST"]
+
+    code, out, _ = gates._sh(argv, cwd=tmp_path, timeout=30,
+                             env={"QEVIK_DEPLOY_SHA": "abc"})
+    assert code == 0 and out.strip() == "abc-"
+
+    # Negative control: without `env` nothing is filtered and behaviour is
+    # exactly what it was.
+    _, inherited, _ = gates._sh(argv, cwd=tmp_path, timeout=30)
+    assert inherited.strip() == "-1"
+
+
+def test_a_timed_out_child_does_not_outlive_the_gate(tmp_path):
+    """`subprocess.run`'s timeout kills the direct child only. For the deploy
+    that leaves `ssh`/`rsync` writing to the host after the driver has given up
+    and called the gate unmeasured."""
+    import os
+    import time as clock
+
+    pidfile = tmp_path / "PIDFILE"
+    code, _, timed_out = gates._sh(
+        ["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"; wait'],
+        cwd=tmp_path, timeout=1)
+    assert timed_out is True and code == 124
+
+    stray = int(pidfile.read_text().strip())
+    for _ in range(100):
+        try:
+            os.kill(stray, 0)
+        except (ProcessLookupError, PermissionError):
+            break
+        clock.sleep(0.05)
+    else:
+        raise AssertionError(
+            f"pid {stray} outlived the timeout: the gate reported unmeasured "
+            f"while its grandchild was still writing to the host")
+
+
+_S = "a" * 40
+_OTHER = "b" * 40
+
+
+@pytest.mark.parametrize("marker,passes,in_detail", [
+    (f"sha={_S}\nstate=installed", True, ""),
+    (f"sha={_S}\ninstalled_at=2026-09-02T10:00Z\nstate=installed", True, ""),
+    (f"sha={_S}\nstate=rolled-back", False, "rolled-back"),
+    (f"sha={_S}\nstate=installing", False, "installing"),
+    (f"sha={_OTHER}\nstate=installed", False, _OTHER),
+    ("state=missing", False, "no provenance recorded on the host"),
+    ("", False, "no provenance recorded on the host"),
+    # The sha is in the text, and not on the line that decides. A substring
+    # search would pass this; a parser cannot.
+    (f"attempted_sha={_S}\nsha={_OTHER}\nstate=installed", False, _OTHER),
+])
+def test_provenance_is_read_from_the_marker_lines(monkeypatch, marker, passes,
+                                                  in_detail):
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, marker, False))
+    g = gates.provenance(sha=_S)
+    assert g.passed is passes and g.unmeasured is False
+    assert in_detail in g.detail
+    if not passes:
+        assert _S in g.detail or "no provenance" in g.detail
+
+
+@pytest.mark.parametrize("marker,duplicate", [
+    (f"sha={_S}\nstate=rolled-back\nstate=installed", "state"),
+    (f"sha={_OTHER}\nsha={_S}\nstate=installed", "sha"),
+    (f"sha={_S}\nstate=installed\ninstalled_at=x\ninstalled_at=y",
+     "installed_at"),
+    # A duplicate that agrees with itself is still a duplicate: the marker has
+    # exactly one writer and never legitimately repeats a key.
+    (f"sha={_S}\nstate=installed\nstate=installed", "state"),
+])
+def test_a_marker_that_says_a_thing_twice_fails_closed(monkeypatch, marker,
+                                                       duplicate):
+    """The parser defect from attempt 1's third round. Built into a dict, the
+    last value wins — so `state=rolled-back` followed by `state=installed`
+    passed, and a host that had rolled back read as a host holding the commit."""
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: (0, marker, False))
+    g = gates.provenance(sha=_S)
+    assert g.passed is False, "a contradictory marker passed"
+    assert g.unmeasured is False, (
+        "a marker that was read and is malformed is a failure, not an "
+        "unmeasured gate")
+    assert g.detail == f"malformed provenance: duplicate {duplicate}"
+    assert g.evidence["duplicates"] == [duplicate]
+
+
+def test_a_host_that_cannot_be_read_is_retried_and_then_unmeasured(monkeypatch):
+    monkeypatch.setattr(gates, "_RETRY_PAUSE_S", 0)
+    tries: list[int] = []
+
+    def unreachable(*a, **k):
+        tries.append(1)
+        return 255, "ssh: connect to host port 22: Operation timed out", False
+
+    monkeypatch.setattr(gates, "_sh", unreachable)
+    g = gates.provenance(sha=_S)
+    assert g.unmeasured is True and g.passed is False
+    assert "could not reach the host" in g.detail
+    assert len(tries) == 3, "one unreachable read was treated as an answer"
+
+    # And a read that succeeds on the second attempt is not an infrastructure
+    # failure.
+    answers = [(255, "timed out", False), (0, f"sha={_S}\nstate=installed", False)]
+    monkeypatch.setattr(gates, "_sh", lambda *a, **k: answers.pop(0))
+    assert gates.provenance(sha=_S).passed is True
+
+
+def test_provenance_and_production_reach_the_host_the_same_way(monkeypatch):
+    """One argv helper, so the key, the host and the connection options cannot
+    drift apart between the two gates that use them."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(gates, "_sh",
+                        lambda argv, **k: (seen.append(argv), (0, "", False))[1])
+    gates.provenance(sha=_S)
+    gates.in_production(cwd=Path("."), probe="print('PROVED')")
+    assert len(seen) == 2, "one of the two gates did not run"
+    assert seen[0][:-1] == seen[1][:-1], (
+        f"the two gates reach the host differently: {seen[0][:-1]} vs "
+        f"{seen[1][:-1]}")
+    assert seen[0][-1].startswith(f"cat {gates.MARKER} "), seen[0][-1]

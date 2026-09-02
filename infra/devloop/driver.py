@@ -78,6 +78,7 @@ import argparse
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -142,6 +143,61 @@ def _git(*args: str, cwd: Path = REPO) -> tuple[int, str]:
     done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
                           text=True, stdin=subprocess.DEVNULL)
     return done.returncode, (done.stdout + done.stderr).strip()
+
+
+def _git_raw(*args: str, cwd: Path = REPO) -> tuple[int, str]:
+    """`_git` without the strip, for output whose first column is a space.
+
+    `git status --porcelain` prints two status characters then a space, and
+    `_git`'s strip removes the leading space of the **first line only** — the
+    bug documented on `_touched`, which cost three runs there. Status is parsed
+    by column below, so it is read with the columns intact.
+    """
+    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True, stdin=subprocess.DEVNULL)
+    return done.returncode, done.stdout + done.stderr
+
+
+def _porcelain(text: str) -> list[tuple[str, str]]:
+    """`(XY, path)` for each entry of `git status --porcelain` output."""
+    entries = []
+    for line in text.splitlines():
+        if len(line) > 3 and line[2] == " ":
+            entries.append((line[:2], line[3:]))
+    return entries
+
+
+def _tree_entry(text: str) -> tuple[str, str]:
+    """`(mode, blob)` for a one-path `git ls-tree`, `("", "")` for no entry.
+
+    A line is `<mode> SP <type> SP <sha> TAB <path>`; the path is split off
+    first so a quoted or space-bearing name cannot shift the columns. Anything
+    that is not a plain blob — a submodule gitlink, a subtree — reads as absent,
+    which is the conservative answer: the caller then has to prove the path is
+    gone from the worktree, and a submodule directory is not.
+    """
+    lines = text.splitlines()
+    left = lines[0].split("\t", 1)[0].split() if lines else []
+    return (left[0], left[2]) if len(left) == 3 and left[1] == "blob" else ("", "")
+
+
+def _worktree_mode(path: Path) -> str:
+    """The git tree mode a worktree path would be recorded with.
+
+    Git stores one bit of permission, from the owner's execute bit, and it is
+    tracked: a `chmod +x` with no content change is a real edit that shows up in
+    `git status` and survives a commit. `""` for anything git would not record
+    as a file here — absent, a directory, a device.
+    """
+    try:
+        st = path.lstat()
+    except OSError:
+        return ""
+    if stat.S_ISLNK(st.st_mode):
+        return "120000"
+    if not stat.S_ISREG(st.st_mode):
+        return ""
+    return "100755" if st.st_mode & stat.S_IXUSR else "100644"
 
 
 def head_sha(cwd: Path = REPO) -> str:
@@ -499,41 +555,112 @@ class Driver:
             log("REFUSED_TO_LAND", task=ident, why="scope not kept")
             _git("checkout", "-q", "main", cwd=self.repo)
             return State.CONTESTED
-        _git("checkout", "-q", "main", cwd=self.repo)
+        # The exit code of the checkout, which used to be ignored. A checkout
+        # that failed leaves the branch tip as HEAD, and everything below —
+        # including the sha this task would deploy — would then be about the
+        # unlanded branch rather than about `main`.
+        moved, out = _git("checkout", "-q", "main", cwd=self.repo)
+        if moved != 0:
+            self.q.move(ident, State.CONTESTED,
+                        reason=f"refused to land: could not check out main: "
+                               f"{out[:300]}")
+            log("REFUSED_TO_LAND", task=ident, why="checkout main failed")
+            return State.CONTESTED
+        # A clean `main` before the squash is what makes "the task's own squash
+        # state" a well-defined set of paths. It is not a lock, and it is not
+        # claimed as one: it is the baseline the settlement below compares
+        # against. Anything already here belongs to somebody else and this task
+        # will not commit on top of it.
+        readable, dirty = _git("status", "--porcelain", cwd=self.repo)
+        if readable != 0 or dirty:
+            self.q.move(ident, State.CONTESTED,
+                        reason=f"refused to land: main was not clean before the "
+                               f"squash: {dirty[:300]}")
+            log("REFUSED_TO_LAND", task=ident, why="main not clean")
+            return State.CONTESTED
+        # `main`'s tip before the squash: the state a proven cleanup restores.
+        landing_base = head_sha(self.repo)
         merged, out = _git("merge", "--squash", branch, cwd=self.repo)
         if merged != 0:
+            return self._settle_failed_landing(ident, branch, landing_base,
+                                               output=out)
+        committed, out = _git(
+            "commit", "-q", "-m",
+            f"{task['title']}\n\n{task['brief'][:900]}\n\n"
+            f"devloop task {ident}; reviewer clean after "
+            f"{task.get('review_rounds') or 1} round(s).\n\n"
+            "Co-Authored-By: Claude Opus 5 (1M context) "
+            "<noreply@anthropic.com>", cwd=self.repo)
+        if committed != 0:
+            return self._settle_failed_landing(ident, branch, landing_base,
+                                               output=out)
+        on = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo)[1]
+        if on != "main":
             self.q.move(ident, State.CONTESTED,
-                        reason=f"the reviewed work would not land: {out[:300]}")
+                        reason=f"refused to land: HEAD is on {on}, not main, so "
+                               f"the commit that was just made is not what "
+                               f"would deploy")
+            log("REFUSED_TO_LAND", task=ident, why=f"HEAD on {on}")
             return State.CONTESTED
-        _git("commit", "-q", "-m",
-             f"{task['title']}\n\n{task['brief'][:900]}\n\n"
-             f"devloop task {ident}; reviewer clean after "
-             f"{task.get('review_rounds') or 1} round(s).\n\n"
-             "Co-Authored-By: Claude Opus 5 (1M context) "
-             "<noreply@anthropic.com>", cwd=self.repo)
+        # S — the immutable commit that passed gates and review, and the only
+        # thing that may be deployed. Captured once, here, and carried through
+        # every gate below rather than re-read from a tree that can move.
+        shipping = head_sha(self.repo)
         _git("branch", "-D", branch, cwd=self.repo)
-        log("LANDED", task=ident, sha=head_sha(self.repo)[:12])
+        log("LANDED", task=ident, sha=shipping)
 
         if "deployed" in needed:
             # The whole suite before anything leaves this machine. A narrowed
             # run is a real gate for a narrow change and is not enough to
             # deploy on.
+            self.q.renew(ident)
+            drift = self._tree_is(shipping)
+            if drift:
+                return self._refuse_to_deploy(ident, drift)
             whole = gates.tests(cwd=self.repo)
+            # Asked immediately, before the suite's own verdict is read: a
+            # suite that ran against something other than S has not measured S,
+            # whatever it concluded.
+            drift = self._tree_is(shipping)
+            if drift:
+                return self._refuse_to_deploy(ident, drift)
             if whole.unmeasured:
                 return self._infra(ident, f"full suite unmeasured: {whole.detail}")
             if not whole.passed:
                 self.q.move(ident, State.CONTESTED,
                             reason=f"full suite fails: {whole.detail}")
                 return State.CONTESTED
-            self.q.move(ident, State.DEPLOYING, reason=whole.detail)
-            log("DEPLOYING", task=ident)
-            shipped = gates.deployed(cwd=self.repo)
+            self.q.move(ident, State.DEPLOYING,
+                        reason=f"deploying {shipping}; {whole.detail}")
+            log("DEPLOYING", task=ident, sha=shipping)
+            self.q.renew(ident)
+            drift = self._tree_is(shipping)
+            if drift:
+                return self._refuse_to_deploy(ident, drift)
+            shipped = gates.deployed(cwd=self.repo, sha=shipping)
             if shipped.unmeasured:
-                return self._infra(ident, shipped.detail)
+                return self._blocked_after_landing(ident, shipping, "the deploy",
+                                                   shipped.detail)
             if not shipped.passed:
                 self.q.move(ident, State.FAILED, reason=shipped.detail)
                 log("FAILED", task=ident, why="deploy failed")
                 return State.FAILED
+            # What the script exited is not what the host holds. The marker is
+            # written only when the content is installed and verified on disk,
+            # so it is read back before production verification is allowed to
+            # say anything about S.
+            live = gates.provenance(sha=shipping)
+            if live.unmeasured:
+                return self._blocked_after_landing(ident, shipping,
+                                                   "the host's provenance",
+                                                   live.detail)
+            if not live.passed:
+                self.q.move(ident, State.FAILED,
+                            reason=f"deployed but the host's provenance does not "
+                                   f"say {shipping}: {live.detail}")
+                log("FAILED", task=ident, why="provenance disagrees")
+                return State.FAILED
+            log("PROVENANCE", task=ident, sha=shipping, state="installed")
 
         if "in_production" in needed:
             probe = (json.loads(task.get("evidence") or "{}")
@@ -548,19 +675,297 @@ class Driver:
                 return State.CONTESTED
             self.q.move(ident, State.VERIFYING)
             log("VERIFYING", task=ident)
-            live = gates.in_production(cwd=self.repo, probe=probe)
-            if live.unmeasured:
-                return self._infra(ident, live.detail)
-            if not live.passed:
-                self.q.move(ident, State.FAILED, reason=live.detail)
+            proved = gates.in_production(cwd=self.repo, probe=probe)
+            if proved.unmeasured:
+                # BLOCKED, not requeued, for the same reason as the two gates
+                # above: this is after the landing, the branch is gone, and
+                # `_infra` would send the task back to QUEUED to be rebuilt
+                # from scratch on a new branch over work that is already on
+                # `main`.
+                return self._blocked_after_landing(ident, shipping,
+                                                   "production verification",
+                                                   proved.detail)
+            if "deployed" in needed:
+                # The probe is bracketed the way the suite is, and for the same
+                # reason. The marker was read *before* the probe started, so on
+                # its own it proves the host held S at that moment and nothing
+                # about what answered the probe: a deploy or a rollback landing
+                # in the window would have the probe measure other bytes, and
+                # its verdict — passing or failing — would then be recorded
+                # against S. So the marker is read again, before the verdict is
+                # read, and must still name S installed.
+                #
+                # Only when this task deployed. A task that requires production
+                # verification without a deploy never established provenance
+                # for S, and the marker names whatever the host was already
+                # holding; there is nothing to bracket and its answer would be
+                # a refusal for an unrelated reason.
+                still = gates.provenance(sha=shipping)
+                if still.unmeasured:
+                    return self._blocked_after_landing(
+                        ident, shipping, "the host's provenance after the probe",
+                        still.detail)
+                if not still.passed:
+                    return self._blocked_after_landing(
+                        ident, shipping, "production verification",
+                        f"the probe ran but the host no longer holds "
+                        f"{shipping}: {still.detail}")
+                log("PROVENANCE", task=ident, sha=shipping, state="probed")
+            if not proved.passed:
+                self.q.move(ident, State.FAILED, reason=proved.detail)
                 log("FAILED", task=ident, why="production did not agree")
                 return State.FAILED
 
-        self.q.move(ident, State.DONE,
-                    reason=f"gates: {', '.join(needed)}",
+        # The sha lives in the transition record, not in `tasks.head_sha` —
+        # that column is the key the review and scope records are looked up by,
+        # and overwriting it would make the landed commit look unreviewed.
+        landed = (f"gates: {', '.join(needed)}; deployed {shipping}; "
+                  f"provenance installed" if "deployed" in needed
+                  else f"gates: {', '.join(needed)}")
+        self.q.move(ident, State.DONE, reason=landed,
                     detail=f"completed in {int(time.monotonic() - started)}s")
         log("DONE", task=ident, seconds=int(time.monotonic() - started))
         return State.DONE
+
+    def _settle_failed_landing(self, ident: str, branch: str, base: str, *,
+                               output: str = "") -> str:
+        """The squash merge or the squash commit failed. Settle `main` — or
+        preserve it and stop.
+
+        Governed by **DQ-013** (owner, 2026-09-02), quoted because the diff is
+        reviewed without the brief:
+
+          (1) The DevLoop is a single-driver, serial executor. Do not introduce
+              a repository lock to defend against a hypothetical second driver;
+              a lock is outside the execution model and does not protect
+              against a human edit anyway.
+          (2) The shipping path never automatically runs `git reset --hard` —
+              or any equivalent destructive reset (`checkout -- .`, `clean -f`,
+              `restore --worktree` over paths it has not proven) — against
+              `main` as recovery from a failed squash/commit.
+          (3) Preservation of unknown work takes priority over automatic loop
+              liveness. If, after a failed squash or commit, the repository
+              state cannot be PROVEN to contain only DevLoop-generated squash
+              state, nothing is destroyed: preserve the state, move the task to
+              BLOCKED, and emit explicit evidence of what remains and why a
+              person is required.
+          (4) A non-destructive cleanup proven safe and limited strictly to
+              DevLoop-generated squash state may be used; otherwise BLOCKED is
+              the correct terminal outcome.
+
+        **The proof is content-based, not time-based**, and that is what makes
+        it safe without a lock. A `status` check taken before the squash proves
+        nothing about the tree afterwards — an edit landing in the window
+        between the two would be destroyed by a cleanup that trusted it. So
+        nothing here trusts a moment: every path that would be touched is
+        compared with what the task branch holds *now* — content and mode both,
+        since a `chmod` is tracked work a blob comparison cannot see. An edit
+        either touches a path outside the squash set — not provable, BLOCKED —
+        or moves a squash path's content or mode away from the branch's — not
+        provable, BLOCKED — or leaves the file identical to what the branch
+        holds, in which case restoring it loses nothing.
+
+        **The remaining window, stated rather than papered over.** Each path is
+        re-proved immediately before it is written, not once for all paths up
+        front, so an edit arriving *during* the cleanup is caught and the
+        cleanup stops where it stands (BLOCKED, saying how far it had got)
+        rather than being overwritten by a proof that has gone stale behind it.
+        What is left is the gap between a path's last check and its own write.
+        Closing that needs exclusive access to the working tree, which is the
+        repository lock DQ-013 §1 rules out — and which would not bind an
+        operator's editor in any case, since a lock only binds processes that
+        agree to take it. The narrowing is real; the claim is not that the gap
+        is zero.
+
+        The branch is never deleted on this path: it holds the reviewed work,
+        and it is the only place that still does.
+        """
+        proof = ""                       # the first thing that failed to prove
+        code, listed = _git("diff", "--name-only", "--no-renames",
+                            f"{base}..{branch}", cwd=self.repo)
+        squashed = [line.strip() for line in listed.splitlines() if line.strip()]
+        if code != 0:
+            proof = f"the squash set could not be read from git: {listed[:160]}"
+
+        # A moved HEAD is not provable: `base` is no longer what a restore
+        # would restore to.
+        if not proof:
+            at = head_sha(self.repo)
+            if at != base:
+                proof = f"HEAD is at {at[:12]}, not {base[:12]}"
+
+        # Renames are switched off so this list is drawn the same way the
+        # squash set is: a rename is a delete and an add, and both must prove.
+        seen, status = _git_raw("status", "--porcelain", "--untracked-files=all",
+                                "--no-renames", cwd=self.repo)
+        if not proof and seen != 0:
+            proof = f"the working tree could not be read: {status.strip()[:160]}"
+        if not proof:
+            inside = set(squashed)
+            for mark, path in _porcelain(status):
+                if "U" in mark or mark in ("AA", "DD"):
+                    proof = f"{path}: conflicted"
+                    break
+                if path not in inside:
+                    proof = f"{path}: outside the squash"
+                    break
+
+        # Every path the cleanup would touch, against what the branch holds.
+        modes = _git("config", "--get", "core.fileMode",
+                     cwd=self.repo)[1].strip().lower() != "false"
+        if not proof:
+            for path in squashed:
+                proof = self._not_the_branchs(path, branch, modes=modes)
+                if proof:
+                    break
+
+        restored = 0
+        if not proof:
+            # Proven, so the cleanup is allowed — and it is limited to the
+            # squash set, path by path, from `base`'s own content. No
+            # `reset --hard`, no `checkout -- .`, no `clean`: those act on
+            # everything, including whatever nobody here has proved anything
+            # about.
+            for path in squashed:
+                # Re-proved here, immediately before the write, and not left to
+                # the pass above: that pass finishes before the first path is
+                # touched, so by the time the loop reaches path N its proof is
+                # as old as every restore that came before it. Anything that
+                # changes during the cleanup's own run is caught rather than
+                # overwritten, and the cleanup stops where it is.
+                proof = self._not_the_branchs(path, branch, modes=modes)
+                if proof:
+                    proof += " (it changed while the cleanup was running)"
+                    break
+                if _git("rev-parse", "--verify", "--quiet", f"{base}:{path}",
+                        cwd=self.repo)[0] == 0:
+                    _git("checkout", base, "--", path, cwd=self.repo)
+                else:
+                    _git("rm", "-q", "--cached", "--", path, cwd=self.repo)
+                    try:
+                        os.remove(self.repo / path)
+                    except OSError:
+                        pass
+                restored += 1
+            seen, status = _git_raw("status", "--porcelain",
+                                    "--untracked-files=all", "--no-renames",
+                                    cwd=self.repo)
+            if not proof and seen == 0 and not status.strip():
+                self.q.move(ident, State.CONTESTED,
+                            reason=f"refused to land: the squash would not "
+                                   f"commit: {output[:300]}; main restored to "
+                                   f"{base} from the branch's own content "
+                                   f"({len(squashed)} path(s))")
+                log("REFUSED_TO_LAND", task=ident, why="commit failed")
+                return State.CONTESTED
+            proof = proof or "the cleanup did not settle the tree"
+
+        # Not provable, or the cleanup stopped part-way, or it left something
+        # behind. Nothing is discarded: what is here may be somebody's only copy.
+        remaining = status.strip()
+        head = _git("rev-parse", branch, cwd=self.repo)[1]
+        part = (f"; the cleanup had already restored the first {restored} of "
+                f"{len(squashed)} path(s) from {base} before it stopped"
+                if restored else "")
+        self.q.move(ident, State.BLOCKED,
+                    reason=f"landing failed and main is not provably only the "
+                           f"squash: {proof}{part}; remaining: {remaining[:600]}; "
+                           f"the task branch {branch} holds the reviewed work at "
+                           f"{head}; a person must inspect main (expected tip "
+                           f"{base}), keep or discard the remaining changes by "
+                           f"hand, and re-enqueue or supersede this task")
+        log("BLOCKED", task=ident, why="failed landing preserved on main",
+            remaining=len(_porcelain(status)))
+        return State.BLOCKED
+
+    def _not_the_branchs(self, path: str, branch: str, *, modes: bool) -> str:
+        """Why `path` is not, *right now*, exactly what `branch` holds — empty
+        when it is. One line, naming the path, for the BLOCKED reason.
+
+        "Exactly" is content **and** mode. Git records one permission bit, from
+        the owner's execute bit, and it is tracked work: `chmod +x` with no edit
+        to a byte is a change `git status` reports, a commit keeps, and
+        `git checkout <base> -- <path>` silently reverts. A proof that compared
+        blobs alone would accept such a path — the blob is unchanged, that being
+        the whole point — and the restore would then discard the one thing that
+        had actually changed. So the branch's tree mode is compared against both
+        the index and the file on disk; the index alone would not do it, because
+        a bare `chmod` never reaches the index.
+
+        `modes` is false only where git itself is configured not to trust the
+        filesystem's permission bits (`core.fileMode=false`), where a `chmod` is
+        not an edit git would have kept either.
+        """
+        want, blob = _tree_entry(_git("ls-tree", branch, "--", path,
+                                      cwd=self.repo)[1])
+        on_disk = self.repo / path
+        staged = _git("ls-files", "-s", "--", path, cwd=self.repo)[1].split()
+        if blob:
+            if not on_disk.is_file():
+                return f"{path}: content differs from the branch (absent)"
+            if _git("hash-object", "--", path, cwd=self.repo)[1] != blob:
+                return f"{path}: content differs from the branch"
+            if len(staged) < 3 or staged[1] != blob or staged[2] != "0":
+                return f"{path}: index disagrees"
+            if staged[0] != want:
+                return (f"{path}: index disagrees (mode {staged[0]}, "
+                        f"not the branch's {want})")
+            found = _worktree_mode(on_disk)
+            if modes and found != want:
+                return (f"{path}: mode differs from the branch "
+                        f"({found or 'unreadable'}, not {want})")
+        elif on_disk.exists() or on_disk.is_symlink():
+            return (f"{path}: content differs from the branch "
+                    f"(the branch deleted it and it is still here)")
+        elif staged:
+            return f"{path}: index disagrees"
+        return ""
+
+    def _tree_is(self, sha: str) -> str:
+        """Whether the repository still holds exactly the commit that was tested.
+
+        Empty when everything agrees. Otherwise one line naming what does not —
+        which is the whole answer the caller needs, because every disagreement
+        means the same thing: what is about to deploy is not what was measured.
+        """
+        code, at = _git("rev-parse", "HEAD", cwd=self.repo)
+        if code != 0:
+            return f"git could not read HEAD: {at[:200]}"
+        if at != sha:
+            return f"HEAD is {at[:12]}, not the landed commit {sha[:12]}"
+        code, dirty = _git("status", "--porcelain", cwd=self.repo)
+        if code != 0:
+            return f"git could not read the working tree: {dirty[:200]}"
+        if dirty:
+            return f"the working tree is not clean: {dirty[:200]}"
+        if _git("merge-base", "--is-ancestor", sha, "main", cwd=self.repo)[0] != 0:
+            return f"{sha[:12]} is no longer an ancestor of main"
+        return ""
+
+    def _refuse_to_deploy(self, task_id: str, why: str) -> str:
+        """The tree drifted from the commit that was tested. Never a deploy."""
+        self.q.move(task_id, State.CONTESTED,
+                    reason=f"refused to deploy: {why}"[:500])
+        log("REFUSED_TO_DEPLOY", task=task_id, why=why[:200])
+        return State.CONTESTED
+
+    def _blocked_after_landing(self, task_id: str, sha: str, gate: str,
+                               detail: str) -> str:
+        """A gate that could not be measured *after* the work landed.
+
+        `_infra` requeues, and requeuing here is a rebuild: `_ship` has already
+        deleted the branch, so the next run would build the same task again
+        from scratch on top of the commit that already holds it. What is
+        actually unknown is narrow and a person can settle it in a minute, so
+        the reason says exactly what is known and what to check.
+        """
+        self.q.move(task_id, State.BLOCKED,
+                    reason=f"landed as {sha}; {gate} could not be measured: "
+                           f"{detail}; the branch is gone and the work is on "
+                           f"main — a person checks {gates.MARKER} and "
+                           f"redeploys with QEVIK_DEPLOY_SHA={sha} if needed")
+        log("BLOCKED", task=task_id, why="post-landing gate unmeasured")
+        return State.BLOCKED
 
     def _commit(self, task: dict, round_no: int) -> None:
         """Commit the task's work, and only the task's work.
