@@ -216,7 +216,23 @@ MISMATCH=0
 while read -r mode type object path; do
   [ "$type" = blob ] || continue
   EXPECTED=$((EXPECTED + 1))
-  got="$(git -C "$ROOT" hash-object "$EXPORT/$path" 2>/dev/null || true)"
+  # A symlink is a blob too -- mode 120000, whose content is the target text and
+  # nothing else. `hash-object` on the path would *follow* the link and hash
+  # whatever it points at, so it is read as a link and hashed as the bytes the
+  # commit actually holds. The kind is checked both ways: a link where the commit
+  # has a file, or a file where it has a link, is not this commit even if the
+  # bytes happen to agree.
+  if [ "$mode" = 120000 ]; then
+    if [ -L "$EXPORT/$path" ]; then
+      got="$(printf '%s' "$(readlink "$EXPORT/$path")" | git -C "$ROOT" hash-object --stdin)"
+    else
+      got=""
+    fi
+  elif [ -L "$EXPORT/$path" ]; then
+    got=""
+  else
+    got="$(git -C "$ROOT" hash-object "$EXPORT/$path" 2>/dev/null || true)"
+  fi
   if [ "$got" != "$object" ]; then
     MISMATCH=$((MISMATCH + 1))
     echo "    export mismatch ($mode): $path" >&2
@@ -224,7 +240,11 @@ while read -r mode type object path; do
 done <<EOF
 $(git -C "$ROOT" ls-tree -r "$SHA" -- packages/kernel/atlas_kernel infra apps/control/src)
 EOF
-FOUND="$(find "$EXPORT" -type f | wc -l | tr -d ' ')"
+# `-type l` for the same reason: `git archive` writes a symlink as a symlink and
+# `rsync -a` preserves it, so a link the commit carries is a blob that was
+# extracted. Counting only regular files here would reject every valid commit
+# that holds one.
+FOUND="$(find "$EXPORT" \( -type f -o -type l \) | wc -l | tr -d ' ')"
 if [ "$MISMATCH" -ne 0 ] || [ "$FOUND" -ne "$EXPECTED" ]; then
   echo "REFUSED: the export does not match $SHA" >&2
   echo "  $EXPECTED file(s) in the commit, $FOUND extracted, $MISMATCH mismatched." >&2

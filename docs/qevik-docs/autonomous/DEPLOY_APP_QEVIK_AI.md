@@ -84,9 +84,14 @@ by hand with the sha as shown above.
 **The export.** `git archive <sha> -- packages/kernel/atlas_kernel infra
 apps/control/src` is extracted into a private temporary directory that is
 removed on exit. Before anything is sent, every blob in `git ls-tree -r <sha>`
-for those prefixes is compared with `git hash-object` of the extracted file,
-and the number of regular files under the export must equal the number of
-blobs. The run prints `export verified: <n> files from <sha>`. Every shipped
+for those prefixes is compared with the hash of the extracted path, and the
+number of extracted files must equal the number of blobs. A symlink is a blob
+too — mode 120000, whose content is the target text — so it is counted like any
+other and hashed as the link rather than as the file it points at; hashing the
+path would follow the link, and counting only regular files would reject every
+valid commit that carries one. A path whose kind disagrees with the commit's
+mode is a mismatch even if the bytes agree. The run prints
+`export verified: <n> files from <sha>`. Every shipped
 read — the kernel, the console, the infra tree, the unit files, the worker
 fingerprint, the kernel-presence check — comes from that export.
 

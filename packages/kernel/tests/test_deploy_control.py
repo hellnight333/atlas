@@ -191,8 +191,13 @@ def _write_all(root: Path, files: dict) -> None:
         path.write_text(body)
 
 
-def build_world(tmp_path: Path, monkeypatch, extra: dict | None = None) -> World:
-    """A temp repository holding commit S, a fake host, and the PATH shims."""
+def build_world(tmp_path: Path, monkeypatch, extra: dict | None = None,
+                links: dict | None = None) -> World:
+    """A temp repository holding commit S, a fake host, and the PATH shims.
+
+    `links` maps a repository path to a symlink target, committed as a mode
+    120000 blob -- the shape `test_a_tracked_symlink_*` needs.
+    """
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
     _git(repo, "init", "-q", "-b", "main")
@@ -201,8 +206,12 @@ def build_world(tmp_path: Path, monkeypatch, extra: dict | None = None) -> World
     _git(repo, "config", "commit.gpgsign", "false")
 
     _write_all(repo, dict(S_FILES, **(extra or {})))
-    # Copied, never symlinked: a symlink is an untracked path, and the export
-    # verification counts every regular file it extracts.
+    for rel, target in (links or {}).items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+    # Copied, never symlinked: the run under test must execute the script this
+    # repository holds, not whatever a link resolves to at the time.
     (repo / "infra").mkdir(exist_ok=True)
     shutil.copyfile(SCRIPT, repo / "infra" / "deploy_control.sh")
     (repo / "infra" / "deploy_control.sh").chmod(0o755)
@@ -387,6 +396,53 @@ def test_an_export_that_does_not_match_the_commit_is_refused(tmp_path, monkeypat
 
     done = run(world)
     assert done.returncode == 3, done.stdout + done.stderr
+    assert "does not match" in done.stderr
+    assert log_lines(world) == [], "the host was contacted with an unverified export"
+    assert snapshot(world.fake) == before
+
+
+def test_a_commit_carrying_a_symlink_verifies_and_ships(tmp_path, monkeypatch):
+    """A symlink is a blob of mode 120000, not a file that failed to extract.
+
+    `ls-tree` counts it, so the verifier must too: `find -type f` skips it, and
+    `hash-object` on the path follows the link and hashes whatever it points at
+    rather than the target text git stores. Checked either of those ways, every
+    otherwise valid commit holding a tracked link under a shipped prefix is
+    rejected as an export mismatch -- while `git archive` ships the link and
+    `rsync -a` puts it on the host perfectly well, as this run shows.
+    """
+    world = build_world(tmp_path, monkeypatch,
+                        links={"apps/control/src/latest.html": "index.html"})
+
+    done = run(world)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    # The link is one of the counted blobs: the five S_FILES, the copied
+    # deploy_control.sh, and the link itself.
+    verified = re.search(r"export verified: (\d+) files", done.stdout)
+    assert verified and int(verified.group(1)) == len(S_FILES) + 2, done.stdout
+
+    landed = world.host / "console" / "latest.html"
+    assert landed.is_symlink(), "the link reached the host as a copy, not a link"
+    assert os.readlink(landed) == "index.html"
+
+
+def test_a_symlink_missing_from_the_export_is_still_refused(tmp_path, monkeypatch):
+    """The negative control: counting links did not stop the verifier checking them.
+
+    `export-ignore` drops the link from `git archive` while `ls-tree` still
+    lists it, so the run must fail on the blob it cannot account for -- and name
+    the mode, not silently pass because the count happened to work out.
+    """
+    world = build_world(
+        tmp_path, monkeypatch,
+        extra={".gitattributes": "apps/control/src/latest.html export-ignore\n"},
+        links={"apps/control/src/latest.html": "index.html"})
+    before = snapshot(world.fake)
+
+    done = run(world)
+    assert done.returncode == 3, done.stdout + done.stderr
+    assert "export mismatch (120000): apps/control/src/latest.html" in done.stderr
     assert "does not match" in done.stderr
     assert log_lines(world) == [], "the host was contacted with an unverified export"
     assert snapshot(world.fake) == before
