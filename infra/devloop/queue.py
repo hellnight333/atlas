@@ -151,7 +151,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     base_sha            TEXT,
     head_sha            TEXT,
     review_rounds       INTEGER NOT NULL DEFAULT 0,
+    -- How many times this task has been *claimed*. Bumped by `claim`, and not
+    -- a measure of work done: a task claimed, requeued by an infrastructure
+    -- failure and claimed again has two attempts and may have run no gate.
     attempts            INTEGER NOT NULL DEFAULT 0,
+    -- How many times it has been through the gates, across every run. The
+    -- driver's attempt cap is read from here rather than from a counter local
+    -- to one invocation, because the tooling failing under a task requeues it,
+    -- and a cap that restarts on the next claim bounds nothing.
+    gate_attempts       INTEGER NOT NULL DEFAULT 0,
     -- The human request this task waits on, by the canonical id the control
     -- plane derives. Not a copy of the request: the id is the reference, and
     -- the request itself lives where every other human action lives.
@@ -353,6 +361,14 @@ class Queue:
                 self._db.execute("PRAGMA table_info(tasks)")}
         if "paths" not in have:
             self._db.execute("ALTER TABLE tasks ADD COLUMN paths TEXT")
+        if "gate_attempts" not in have:
+            # Zero, not NULL, and that is the honest value: rows written before
+            # the column existed were never counted, so the record cannot say
+            # how many gate passes they had. Starting them at zero gives such a
+            # task one more full set of attempts and never fewer, which is the
+            # direction that cannot strand work a person is waiting on.
+            self._db.execute("ALTER TABLE tasks ADD COLUMN gate_attempts"
+                             " INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self._db.close()
@@ -603,6 +619,30 @@ class Queue:
                      one.get("file", ""), redact(one.get("claim", "")),
                      redact(one.get("why_it_matters", "")),
                      redact(one.get("failure_scenario", "")), sha, _now()))
+
+    def review_rounds_spent(self, task_id: str) -> int:
+        """How many review rounds this task has actually cost, across all runs.
+
+        Read from `reviews`, which is written only once a reviewer has returned
+        a verdict — never from `tasks.review_rounds`, which is set to the
+        *provisional* round number on the way in to the review and so counts a
+        reviewer that timed out as a round of disagreement.
+
+        The driver resumes its review counter from this, so the cap bounds the
+        task rather than one invocation of it, and so the next round is numbered
+        past every round already recorded: round numbers name the review file
+        and the `reviews` row, and reusing one overwrites the earlier round's
+        evidence.
+
+        `max` of the count and the highest round, because both properties are
+        needed and a database written before the counter was durable can hold
+        two rounds numbered 1. The count is what the cap should charge; the
+        highest round is what the next number must clear.
+        """
+        row = self._db.execute(
+            "SELECT count(*) AS n, coalesce(max(round), 0) AS hi"
+            " FROM reviews WHERE task_id = ?", (task_id,)).fetchone()
+        return max(int(row["n"]), int(row["hi"])) if row else 0
 
     def review_was_clean(self, task_id: str) -> bool:
         """Whether the commit about to land was reviewed and left nothing blocking.

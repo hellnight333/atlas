@@ -1752,6 +1752,198 @@ def test_a_contested_task_no_reviewer_saw_is_not_written_up_as_a_disagreement(
         repo / ".qevik" / "EXECUTION_STATE.md").read_text()
 
 
+# ------------------------------------- and the caps bound the task, not the run
+#
+# Every one of the tests above runs `run_task` once. The loop does not: an
+# infrastructure failure requeues the task and the next claim runs `run_task`
+# again on the same branch. Counters that start at zero there give each retry a
+# fresh set of caps, renumber the rounds back over the evidence the earlier ones
+# left, and let the reason say "0 reached the reviewer" against a record holding
+# reviews.
+
+
+def _one_invocation(repo, q, monkeypatch, *, limits, reviews=None, fixes=None,
+                    suite=None, written=None):
+    """One `run_task` over an already-queued task, with the agents scripted.
+
+    `reviews` and `fixes` are consumed one entry per call, and an exhausted list
+    — or a `None` entry standing in for a call the test does not care about —
+    falls back to a reviewer that objects and an agent that worked. So a test
+    says only which call the tooling fails on. `suite` is a callable, not a
+    list, because a suite that never goes green has to keep failing across both
+    invocations rather than quietly turning green at the point being measured.
+
+    Returns the terminal state and the review file the driver named for each
+    review it asked for: the round number is in that name, so a round written
+    twice over an earlier one's evidence is visible rather than inferred.
+    """
+    from devloop import driver as drv
+
+    task = q.claim(owner="test")
+    assert task is not None, "the task was not runnable"
+    reviews, fixes = reviews or [], fixes or []
+    asked: list[str] = []
+    # Shared across invocations so every pass leaves the tree genuinely
+    # changed; otherwise `changed` fails the task before any of this is reached.
+    counter = written if written is not None else [0]
+
+    def touch(cwd):
+        counter[0] += 1
+        (cwd / "src" / "work.py").write_text(f"x = {counter[0]}\n")
+
+    def build(task, *, cwd, **_):
+        touch(cwd)
+        return agents.Outcome(ok=True, exit_code=0, output="built")
+
+    def fix(task, findings, *, cwd, **_):
+        scripted = fixes.pop(0) if fixes else None
+        if scripted is not None:
+            return scripted
+        touch(cwd)
+        return agents.Outcome(ok=True, exit_code=0, output="fixed")
+
+    def review(**k):
+        asked.append(Path(k["out_file"]).name)
+        scripted = reviews.pop(0) if reviews else None
+        return scripted if scripted is not None else agents.Outcome(
+            ok=True, exit_code=0,
+            data={"verdict": "DEFECTS_FOUND", "findings": [_BLOCKING]})
+
+    def tests(**k):
+        return suite() if suite else gates.Gate("tests", True, "1 passed")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.agents, "fix", fix)
+    monkeypatch.setattr(drv.agents, "review", review)
+    monkeypatch.setattr(drv.gates, "tests", tests)
+    return drv.Driver(q, limits, repo=repo).run_task(task), asked
+
+
+def test_the_review_cap_is_not_reset_by_the_task_being_requeued(tmp_path,
+                                                                 monkeypatch):
+    """A reviewer that timed out must not buy the task three more reviews.
+
+    Two rounds, the second of which the reviewer never returns from, so the
+    task is requeued and re-run on the same branch. The cap is three reviews
+    for the task: one has been recorded, so exactly two more may be asked for,
+    and they are rounds two and three — not a second round one written over the
+    first round's review file and `reviews` row.
+    """
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="counting across runs", brief="b", origin="human",
+                  paths=["src/"])
+    limits = drv.Limits(review_rounds=3, build_attempts=5)
+    written = [0]
+
+    first, asked_first = _one_invocation(
+        repo, q, monkeypatch, limits=limits, written=written,
+        reviews=[None, agents.Outcome(ok=False, exit_code=1, output="",
+                                      infrastructure_failure=True,
+                                      detail="the reviewer timed out")])
+    # `None` is not an outcome — the first entry is only a placeholder so the
+    # failure lands on the second review. Replaced by the default objection.
+    assert first == State.FAILED and q.get(ident)["state"] == State.QUEUED, (
+        "an infrastructure failure did not requeue the task")
+    assert q.review_rounds_spent(ident) == 1, (
+        "the round the reviewer never answered was recorded as a review")
+
+    second, asked_second = _one_invocation(repo, q, monkeypatch, limits=limits,
+                                           written=written)
+
+    assert second == State.CONTESTED
+    assert asked_second == [f"review-{ident}-2.json", f"review-{ident}-3.json"], (
+        f"the resumed run renumbered its rounds: {asked_second} — round one's "
+        "review file and `reviews` row are written over by the retry")
+    assert q.review_rounds_spent(ident) == 3, (
+        "the task was reviewed more times than the cap allows: the counter "
+        "restarted when the task was requeued")
+    reason = _exhaustion_reason(q, ident)
+    assert "review cap" in reason
+    assert "3 review round(s)" in reason and "4 attempt(s)" in reason, (
+        f"the reason counts only the last invocation: {reason}")
+    assert q.get(ident)["gate_attempts"] == 4, (
+        "the gate passes of the interrupted run were forgotten")
+    assert "3 review round(s), across 4 attempt(s)" in (
+        repo / ".qevik" / "DECISION_QUEUE.md").read_text()
+    # The first invocation did ask twice; the point is that the second did not
+    # start over from round one.
+    assert asked_first == [f"review-{ident}-1.json", f"review-{ident}-2.json"]
+
+
+def test_the_attempt_cap_is_not_reset_by_the_task_being_requeued(tmp_path,
+                                                                  monkeypatch):
+    """The other cap, on the ending no reviewer ever sees.
+
+    A suite that never goes green, interrupted by a fixer that fails on the
+    tooling. Four attempts are allowed for the task; two were spent before the
+    requeue, so the resumed run gets two — not four — and the record says four
+    attempts rather than the four the last invocation happened to count.
+    """
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="never goes green", brief="b", origin="human",
+                  paths=["src/"])
+    limits = drv.Limits(review_rounds=3, build_attempts=4)
+    written, gated = [0], []
+
+    def failing(**k):
+        gated.append(1)
+        return gates.Gate("tests", False, "1 failed")
+
+    first, asked_first = _one_invocation(
+        repo, q, monkeypatch, limits=limits, written=written, suite=failing,
+        # The fixer's tooling dies on its first call, one gate pass in. It
+        # leaves the tree alone, which is what an agent that never ran does.
+        fixes=[agents.Outcome(ok=False, exit_code=1, output="",
+                              infrastructure_failure=True,
+                              detail="the fixer could not start")])
+
+    assert first == State.FAILED and q.get(ident)["state"] == State.QUEUED
+    assert asked_first == [] and q.get(ident)["gate_attempts"] == 1
+
+    second, asked_second = _one_invocation(repo, q, monkeypatch, limits=limits,
+                                           written=written, suite=failing)
+
+    assert second == State.CONTESTED and asked_second == []
+    assert len(gated) == 4, (
+        f"the gates ran {len(gated)} times for a cap of four attempts: the "
+        "requeue bought the task a fresh set")
+    assert q.get(ident)["gate_attempts"] == 4
+    reason = _exhaustion_reason(q, ident)
+    assert "attempt cap" in reason and "review cap" not in reason
+    assert "4 attempt(s)" in reason and "0 reached the reviewer" in reason, (
+        f"the reason counts only the last invocation: {reason}")
+
+
+def test_the_round_count_the_caps_resume_from_is_the_one_that_happened(q):
+    """`tasks.review_rounds` is the provisional number; `reviews` is the fact.
+
+    The driver writes the round number on the way *in* to the review, so a
+    reviewer that timed out leaves the task row claiming a round nobody
+    performed. Resuming from that row would charge the task for reviews it
+    never had and skip a round number that holds no evidence.
+    """
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"])
+    assert q.review_rounds_spent(ident) == 0
+
+    q.move(ident, State.REVIEWING, head_sha="abc", review_rounds=1)
+    assert q.review_rounds_spent(ident) == 0, (
+        "a review the reviewer never returned from was counted as a round")
+
+    q.record_review(ident, round=1, sha="abc", verdict="CLEAN", findings=0)
+    assert q.review_rounds_spent(ident) == 1
+
+    # A database written before the counter was durable can hold two rounds
+    # numbered 1. Both were paid for, and the next round must clear both.
+    q.record_review(ident, round=1, sha="def", verdict="CLEAN", findings=0)
+    assert q.review_rounds_spent(ident) == 2
+
+
 # ===================================== work the loop can actually finish
 #
 # The link to the control plane drops for long stretches — TCP connects and the
@@ -2324,6 +2516,11 @@ def test_a_database_from_before_the_contract_gains_the_column(tmp_path):
     legacy = q.get("t-old")
     assert legacy["paths"] is None
     assert allowed_paths(legacy) == []
+    # The attempt counter arrived the same way, and starts a legacy row at zero
+    # rather than NULL: nothing counted its gate passes, so the only honest
+    # reading is "none recorded" — which gives it a full set of attempts and
+    # never fewer, the direction that cannot strand work.
+    assert legacy["gate_attempts"] == 0
     # A new row on the same database carries its contract.
     fresh = q.add(title="new", brief="b", origin="human", paths=["src/"])
     assert allowed_paths(q.get(fresh)) == ["src/"]

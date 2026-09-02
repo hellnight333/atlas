@@ -81,6 +81,18 @@ builder → gate for ever, so the attempt cap bounds that separately. Whichever
 runs out, the CONTESTED reason names *which* was exhausted and how much of the
 other was spent, so the record never implies a reviewer that was never asked.
 
+Both are counted in the queue, not in the running driver, and both are resumed
+from it. A task is requeued and re-run whenever the tooling fails under it, so a
+counter that lives only in `run_task` gives every such retry a fresh set of
+caps — which is no cap at all — and renumbers the rounds back to one on top of
+the evidence the earlier ones left. `reviews` comes from the recorded reviews
+and `gate_attempts` from the task row.
+
+The consequence to know: a contested task requeued with its caps already spent
+would contest again on its first round. Nothing does that today — a person
+reads a contested task, and there is no path that reopens one — and the
+counters live in the queue, which is where such a path would clear them.
+
 ## What stops it
 
 Not "I could not think of anything". An empty queue runs the production
@@ -133,13 +145,15 @@ class Limits:
     #: not going to resolve itself, and a person should read it.
     #: Counts **reviews the reviewer actually performed** and nothing else. A
     #: round stopped by the test gate never reached it, and spending the cap on
-    #: one records a disagreement that never took place.
+    #: one records a disagreement that never took place. Counted per task and
+    #: across every run of it, not per invocation of `run_task`.
     review_rounds: int = 3
     #: And the bound on the rounds that never reach the reviewer. Passes through
     #: the gates, reviewed or not: without it a test gate that never goes green
     #: cycles builder → gate until the runtime limit, and the record says
     #: nothing about why. Five, so the three reviews above stay reachable with
-    #: two gate failures in the way.
+    #: two gate failures in the way. Per task and across runs, for the same
+    #: reason: the retries are what a per-invocation cap fails to bound.
     build_attempts: int = 5
     #: A run of tooling failures means the tooling is broken. Continuing past
     #: it produces "clean review" results that mean nothing.
@@ -330,8 +344,21 @@ class Driver:
         # counts passes through the gates; `reviews` counts only the rounds the
         # reviewer actually saw and returned a verdict on. See "What the cap
         # counts" above for the run that paid for the difference.
-        reviews = 0
-        attempt = 0
+        #
+        # Both are resumed from the record rather than restarted at zero. The
+        # tooling failing under a task requeues it — a reviewer that timed out,
+        # a gate that could not be measured — and the next claim runs `run_task`
+        # again on the same branch. Counters local to the invocation make each
+        # of those a fresh set of caps: the task is reviewed past the cap, round
+        # one is written twice (a second `reviews` row, and a second
+        # `review-<id>-1.json` over the first round's evidence), and the
+        # CONTESTED reason reads "0 reached the reviewer" against a record
+        # holding reviews. The caps bound the task, not the invocation.
+        reviews = self.q.review_rounds_spent(ident)
+        attempt = int(task.get("gate_attempts") or 0)
+        if reviews or attempt:
+            log("RESUMING_COUNTS", task=ident, reviews=reviews,
+                attempts=attempt)
         while True:
             attempt += 1
             self._check_stop()
@@ -342,9 +369,14 @@ class Driver:
                 return State.FAILED
 
             # -- objective gate, before anybody is asked an opinion --------
+            # Written here, before the gates run, and not at the end of the
+            # pass: an attempt that dies mid-suite has still spent the builder
+            # time the cap exists to bound, and the endings that leave this loop
+            # do not all pass through a place that could record it.
             self.q.move(ident, State.GATING,
                         reason=f"attempt {attempt}, {reviews} review round(s) "
-                               f"spent")
+                               f"spent",
+                        gate_attempts=attempt)
             diff = gates.changed(cwd=self.repo)
             if not diff.passed:
                 # What the builder said, kept with the failure. Without it
