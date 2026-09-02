@@ -1965,6 +1965,125 @@ class OpportunityRepository:
             session.commit()
             return result.rowcount or 0
 
+    def unreviewed_outreach_records(self, *, limit: int = 100,
+                                    tenant: TenantId | None = None) -> dict:
+        """TENANT_SCOPED. The records `outreach.unreviewed` explains a draft from.
+
+        Reads, and only reads. Nothing here approves, rejects, sends or removes
+        anything, and the reason it may not is that a list of undecided things is
+        the most tempting place in the system to grow a control that decides them
+        all at once. The module this feeds holds the same guarantee from the
+        other side — it takes every record as an argument and opens no database —
+        and this is the half that was missing.
+
+        Returns exactly the record arguments of `unreviewed.from_records`, under
+        the names that signature gives them, so a caller writes
+        ``from_records(**repo.unreviewed_outreach_records(tenant=t))`` and there
+        is no third vocabulary for the two halves to disagree in. `now` and
+        `channels` are deliberately not among them: one is a clock and the other
+        is the registry of send paths, and neither is a record read from here.
+
+        **The query narrows by the reader's own definition of undecided.** Two
+        definitions of "nobody has decided" is how an approved message ends up in
+        a queue inviting somebody to approve it a second time, so the candidates
+        are narrowed by `UNDECIDED_STATUSES` and `DECISION_COLUMNS` — read from
+        the reader rather than spelled again here. Status alone will not do, and
+        the limit is why: `LIMIT` runs inside the database and the judgement runs
+        after it, so a row whose status still said `draft` while it carried an
+        approval would spend one of the places and then be correctly dropped,
+        leaving a genuinely undecided draft behind it unread.
+
+        **`limit` counts messages, never businesses.** A business holds several
+        drafts — `infra/outreach_drafts.py` writes a WhatsApp message and an
+        email for every one it prepares — so a window counted in businesses
+        answers a request for twenty rows with anywhere between twenty and
+        forty-odd, and the rows past the count are not a page anybody asked for:
+        they are rows the caller cannot tell it was given. Candidates are
+        individual messages, oldest-waiting first with `id` breaking ties so two
+        drafts written in the same instant do not swap places between calls.
+        Truncation therefore drops the newest, and clearing the front of the
+        queue brings the rest into view rather than leaving a long-waiting draft
+        permanently behind the cut.
+
+        Nothing is capped above what the caller asked for, because a ceiling it
+        cannot see is the same defect in a smaller font. A limit below zero is a
+        request for nothing and is answered with nothing.
+
+        **Every message those businesses hold is returned, not only the ones
+        asked about.** Supersession is answerable no other way: a draft replaced
+        by a message that was later approved is exactly as moot as one replaced
+        by another draft, and just as moot when the replacement fell outside the
+        limit. So the whole set goes back as `messages`, and `only` names the
+        ones inside the window. Narrowing `messages` to `only` instead would
+        quietly turn a superseded draft into current words somebody then sends.
+
+        **The timelines go back whole.** Which kinds record a question being put,
+        which record the evidence moving, and which window each message asks
+        about are all `classify`'s questions; answering them here would be a
+        second copy of a vocabulary that silently stops matching the day a kind
+        is added. The volume is bounded by `limit`, since only the candidates'
+        businesses are read at all.
+
+        Scoped through `atlas_businesses`, like contact history:
+        `atlas_outreach_messages` carries no tenant of its own, and the company a
+        message is about is what says whose work it is. One tenant reading
+        another's undecided outreach would be the disclosure a shared cooldown
+        would be. A message about a business owned by nobody is invisible here
+        too — `tenancy.owns` returns such a row to no tenant — and the operator
+        console reads with `ALL_TENANTS` when it wants the residue.
+        """
+        from ..outreach import unreviewed as reader
+
+        tenant = _require_tenant(tenant, method="unreviewed_outreach_records")
+        where, params = _tenant_predicate(tenant, alias="b")
+        # Built from the reader's list, so a column added there cannot be
+        # forgotten here. `coalesce(CAST(x AS text), '') = ''` is what
+        # `undecided` asks of each of them: a text column is absent when empty as
+        # well as when null, and a timestamp cast to text is non-empty exactly
+        # when it is set. Equivalent rather than merely similar — a query
+        # *stricter* than the judgement would hide a draft nobody has decided
+        # about, which is the one thing this list exists to prevent. `CAST`
+        # rather than `::`, because `text()` reads `:` as a bind marker.
+        undecided_sql = " AND ".join(
+            f"coalesce(CAST(m.{column} AS text), '') = ''"
+            for column in reader.DECISION_COLUMNS)
+        empty: dict = {"messages": [], "only": [], "names": {}, "events": {}}
+        with SessionLocal() as session:
+            candidates = session.execute(
+                text(f"""
+                SELECT m.id, m.business_id, b.name
+                FROM atlas_outreach_messages m
+                JOIN atlas_businesses b ON b.id = m.business_id
+                WHERE m.status = ANY(:statuses) AND {undecided_sql} AND {where}
+                ORDER BY m.created_at, m.id
+                LIMIT :limit
+                """),
+                {**params, "statuses": list(reader.UNDECIDED_STATUSES),
+                 "limit": max(0, int(limit))}).all()
+            if not candidates:
+                return empty
+            only = [row[0] for row in candidates]
+            names = {row[1]: row[2] for row in candidates}
+            businesses = sorted(names)
+            # The two reads below carry no tenant predicate of their own, and
+            # must not grow one. They read for exactly the businesses the query
+            # above already scoped, and a second predicate would be a second
+            # place for the scoping to be right — one more than there should be.
+            messages = [OutreachMessage(**dict(row)) for row in session.execute(
+                text("SELECT * FROM atlas_outreach_messages "
+                     "WHERE business_id = ANY(:ids) ORDER BY created_at, id"),
+                {"ids": businesses}).mappings()]
+            # Seeded with every business in the answer, so an absent history and
+            # a history nobody fetched are not the same empty list.
+            events: dict[str, list[BusinessEvent]] = {b: [] for b in businesses}
+            for row in session.execute(
+                    text("SELECT * FROM atlas_business_events "
+                         "WHERE business_id = ANY(:ids) ORDER BY at, id"),
+                    {"ids": businesses}).mappings():
+                events[row["business_id"]].append(self._event_from_row(row))
+        return {"messages": messages, "only": only,
+                "names": names, "events": events}
+
     def record_event(self, event: BusinessEvent) -> BusinessEvent:
         """Append to a business's permanent history.
 
