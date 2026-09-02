@@ -141,6 +141,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     evidence            TEXT NOT NULL DEFAULT '{}',
     requires_deploy     INTEGER NOT NULL DEFAULT 0,
     requires_prod_check INTEGER NOT NULL DEFAULT 0,
+    -- Whether this task's *whole content* is the deploy: `main` already
+    -- carries what it puts on the host, so there is nothing to build and
+    -- nothing to review. Declared by whoever enqueues it, never inferred —
+    -- an empty diff is also what a builder that silently did nothing leaves,
+    -- and `requires_deploy` is carried by every task that must build
+    -- something and then deploy it. Without this column the two are
+    -- indistinguishable, and the driver would deploy unchanged code and
+    -- record an unimplemented task as DONE.
+    deploy_only         INTEGER NOT NULL DEFAULT 0,
     -- The allowed-path contract, as a JSON list of repo-relative patterns.
     -- What the task may change; the driver compares the diff against it and
     -- refuses to land anything outside. NULL only on rows that predate the
@@ -321,6 +330,22 @@ def allowed_paths(task: dict) -> list[str]:
     return [one for one in loaded if isinstance(one, str)] if isinstance(loaded, list) else []
 
 
+def declares_deploy_only(task: dict) -> bool:
+    """Whether this task says its whole content is the deploy.
+
+    Read from the row, never inferred from the diff. "The builder changed
+    nothing" is the shape of a genuine deploy-only task *and* the shape of a
+    builder that silently did nothing, and `requires_deploy` is carried by
+    every task that must build something and then deploy it — so an empty diff
+    on its own establishes neither. Only the declaration does, and a row that
+    predates the column, or that nobody declared, is not one.
+
+    Both fields are asked, because a deploy-only task that does not deploy is
+    a contradiction: there would be nothing left for it to do.
+    """
+    return bool(task.get("deploy_only")) and bool(task.get("requires_deploy"))
+
+
 class Queue:
     """The driver's durable state. One writer at a time, by design.
 
@@ -345,14 +370,21 @@ class Queue:
 
         `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it
         was, so a column that arrived later has to be added by hand. A row
-        that predates the column keeps NULL — the honest record that no
-        contract was ever declared for it, which is not the same as an empty
-        one.
+        that predates the `paths` column keeps NULL — the honest record that
+        no contract was ever declared for it, which is not the same as an
+        empty one.
+
+        `deploy_only` defaults to 0 instead, and for the same reason read the
+        other way round: a row nobody declared deploy-only is not one, and the
+        default has to be the answer that refuses rather than the one that
+        deploys.
         """
         have = {row["name"] for row in
                 self._db.execute("PRAGMA table_info(tasks)")}
-        if "paths" not in have:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN paths TEXT")
+        for name, kind in (("paths", "TEXT"),
+                           ("deploy_only", "INTEGER NOT NULL DEFAULT 0")):
+            if name not in have:
+                self._db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {kind}")
 
     def close(self) -> None:
         self._db.close()
@@ -380,7 +412,7 @@ class Queue:
     def add(self, *, title: str, brief: str, origin: str, paths: list[str],
             evidence: dict | None = None, priority: int = 50,
             requires_deploy: bool = False, requires_prod_check: bool = False,
-            task_id: str = "") -> str:
+            deploy_only: bool = False, task_id: str = "") -> str:
         """Enqueue work. Refuses production-origin work with no evidence.
 
         The refusal is the point. Requirement: never generate work merely to
@@ -394,6 +426,14 @@ class Queue:
         rounds had been spent on it. The contract is a list the driver can
         compare a diff against, so the comparison is made by the loop rather
         than by whoever remembers to look.
+
+        `deploy_only` says the whole content of this task is the deploy —
+        `main` already carries what goes to the host, so the builder correctly
+        writes nothing. It is a declaration and not an observation: without it
+        the driver cannot tell such a task from one whose builder silently did
+        nothing, and every other task keeps failing on an empty diff. It
+        implies `requires_deploy`, because a deploy-only task that does not
+        deploy has nothing left to do.
         """
         if origin == "production" and not (evidence or {}):
             raise ValueError(
@@ -401,15 +441,18 @@ class Queue:
                 "Work with no evidence behind it is work invented to fill a "
                 "queue, and that is the failure this loop exists to avoid.")
         declared = contract(paths)
+        requires_deploy = bool(requires_deploy) or bool(deploy_only)
         ident = task_id or f"t-{uuid.uuid4().hex[:12]}"
         with self._write() as db:
             db.execute(
                 "INSERT INTO tasks (id, title, brief, state, origin, priority,"
-                " evidence, requires_deploy, requires_prod_check, paths,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " evidence, requires_deploy, requires_prod_check, deploy_only,"
+                " paths, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ident, redact(title), redact(brief), State.QUEUED, origin,
                  int(priority), json.dumps(evidence or {}),
                  int(requires_deploy), int(requires_prod_check),
+                 int(bool(deploy_only)),
                  json.dumps(declared), _now(), _now()))
             db.execute(
                 "INSERT INTO transitions (task_id, from_state, to_state, reason,"
@@ -523,6 +566,52 @@ class Queue:
                         + (f": {reason}" if reason else "")),
                  actor, _now()))
         return declared
+
+    def declare_deploy_only(self, task_id: str, *, actor: str,
+                            deploy_only: bool = True,
+                            reason: str = "") -> bool:
+        """Declare — or withdraw — that a task's whole content is the deploy.
+
+        The counterpart of `declare_paths`, and it exists for the same row:
+        one already in the queue whose nature nobody wrote down. t-4f02ee7a36c0
+        was enqueued as `requires_deploy=1` before this column existed, and
+        without a way to say so afterwards the task that motivated the whole
+        deploy-without-a-diff path could never take it.
+
+        It is a person's decision, so it leaves a transition naming who made
+        it, and it is refused on a task being measured right now — the driver
+        reads this field to choose between deploying and failing, and that
+        choice must not change underneath a task mid-run.
+        """
+        with self._write() as db:
+            row = db.execute("SELECT state FROM tasks WHERE id = ?",
+                             (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            if row["state"] in State.IN_FLIGHT:
+                raise ValueError(
+                    f"{task_id} is {row['state']}; what a task is cannot be "
+                    f"redeclared while the driver is deciding what to do "
+                    f"with it")
+            # A deploy-only task deploys: the flag is what makes an empty diff
+            # legitimate, and it would be meaningless on a task with no deploy
+            # gate to reach. Withdrawing it leaves `requires_deploy` alone —
+            # the task still deploys, it simply has to build something first.
+            sets = ("deploy_only = ?, requires_deploy = 1, updated_at = ?"
+                    if deploy_only else "deploy_only = ?, updated_at = ?")
+            db.execute(f"UPDATE tasks SET {sets} WHERE id = ?",
+                       (int(bool(deploy_only)), _now(), task_id))
+            db.execute(
+                "INSERT INTO transitions (task_id, from_state, to_state,"
+                " reason, actor, at) VALUES (?,?,?,?,?,?)",
+                (task_id, row["state"], row["state"],
+                 redact(("declared deploy-only: main already carries what "
+                         "this task deploys" if deploy_only else
+                         "no longer deploy-only: this task must build "
+                         "something before it deploys")
+                        + (f": {reason}" if reason else "")),
+                 actor, _now()))
+        return bool(deploy_only)
 
     def park(self, task_id: str, *, request_id: str, stage: str, sha: str,
              reason: str, run_id: str = "") -> None:
@@ -756,4 +845,5 @@ class Queue:
             "SELECT * FROM evaluations ORDER BY at")]
 
 
-__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract", "redact"]
+__all__ = ["DEFAULT_DB", "LEASE", "Queue", "State", "allowed_paths", "contract",
+           "declares_deploy_only", "redact"]

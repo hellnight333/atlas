@@ -4,6 +4,7 @@
     driver.py status                 what the queue holds
     driver.py enqueue --title ... --brief ... --path ... [--path ...]
     driver.py declare-paths <task> --path ... [--path ...]   contract for a legacy row
+    driver.py declare-deploy-only <task>   its whole content is the deploy
     driver.py scope <task>           the scope checks a task was measured by
     driver.py inspect                ask production what is worth doing
     driver.py health                 reviewer negative control
@@ -44,12 +45,22 @@ of them. The builder is told never to deploy and to change nothing it cannot do
 inside its paths, so a task whose whole content is "put what `main` already
 carries on the host" correctly leaves no diff — and the `changed` gate failed it
 for that, which is how t-4f02ee7a36c0 deployed nothing and verified nothing.
-When such a task changes nothing, the driver records the `main` sha it is
-deploying and runs exactly the gates the merged path runs: the whole suite, the
-deploy script's exit code, the production probe. There is no review and no scope
-check, because a review of nothing and a contract measured against nothing are
-both vacuous — and there is no second deploy mechanism: both routes run the same
-`_finish`.
+Such a task **declares itself deploy-only** (`enqueue --deploy-only`, or
+`declare-deploy-only` on a row that predates the flag); the driver then records
+the `main` sha it is deploying and runs exactly the gates the merged path runs:
+the whole suite, the deploy script's exit code, the production probe. There is
+no review and no scope check, because a review of nothing and a contract
+measured against nothing are both vacuous — and there is no second deploy
+mechanism: both routes run the same `_finish`.
+
+The declaration is required and is never inferred from the diff. "Nothing
+changed" is also exactly what a builder that silently did nothing leaves behind,
+and `requires_deploy` is carried by every task that must build something and
+*then* deploy it — including every task production inspection enqueues. Reading
+those two facts as "there was nothing to do" would deploy unchanged code and
+write DONE against work nobody did, which is the failure the `changed` gate
+exists for. An undeclared task with an empty diff keeps failing, with the
+declaration named in its reason so a person can correct it and requeue.
 
 `BLOCKED` is not a failure. A task that reaches a credential, a decision, a
 machine or an irreversible action is parked with its boundary written into
@@ -93,7 +104,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from devloop import agents, boundary, gates, projection  # noqa: E402
-from devloop.queue import Queue, State, allowed_paths, redact  # noqa: E402
+from devloop.queue import (Queue, State, allowed_paths,  # noqa: E402
+                           declares_deploy_only, redact)
 
 REPO = Path(__file__).resolve().parents[2]
 LOG = REPO / ".qevik" / "devloop" / "driver.log"
@@ -322,13 +334,24 @@ class Driver:
                 # it, and "nothing changed" ended a task whose whole content
                 # was the deploy.
                 #
-                # Two conditions, both measured rather than assumed. The gate
-                # must have *measured* an empty diff — an unreadable repository
-                # has established nothing and stays a failure — and the branch
-                # must carry nothing beyond `main` either, so a deploy-only
-                # task that did build something still goes through review, scope
-                # and the squash-merge exactly as it does today.
-                if "deployed" in gates.required(task) and not diff.unmeasured:
+                # Three conditions, and the first is the one that matters: the
+                # task must have *declared* itself deploy-only. `requires_deploy`
+                # cannot stand in for it — every task that builds something and
+                # then deploys it carries that flag too, including every task
+                # production inspection enqueues — so classifying on the flag
+                # plus an empty diff would read "the builder silently did
+                # nothing" as "there was nothing to do", deploy unchanged code
+                # and record an unimplemented task as DONE — which is the exact
+                # failure this gate was written to catch, arriving through the
+                # exemption meant to spare one legitimate task from it.
+                #
+                # The other two are measured rather than assumed. The gate must
+                # have *measured* an empty diff — an unreadable repository has
+                # established nothing and stays a failure — and the branch must
+                # carry nothing beyond `main` either, so a deploy-only task that
+                # did build something still goes through review, scope and the
+                # squash-merge exactly as it does today.
+                if declares_deploy_only(task) and not diff.unmeasured:
                     carried = gates.changed(cwd=self.repo, base_sha="main")
                     if not carried.passed and not carried.unmeasured:
                         return self._deploy_only(task, started)
@@ -337,8 +360,15 @@ class Driver:
                 # boundary it did not phrase as one, and an agent that simply
                 # did nothing all look identical afterwards.
                 said = " ".join((built.output or "").split())[-600:]
+                # And, for the one case that is not a defect: a task whose whole
+                # content really is the deploy says so with `declare-deploy-only`
+                # and is requeued. A person decides that, not the driver — the
+                # driver cannot see the difference, which is the reason it asks.
+                hint = ("" if declares_deploy_only(task) else
+                        " | if this task's whole content is the deploy, "
+                        "declare it (devloop declare-deploy-only) and requeue")
                 self.q.move(ident, State.FAILED,
-                            reason=f"{diff.detail} | builder said: {said}")
+                            reason=f"{diff.detail} | builder said: {said}{hint}")
                 log("FAILED", task=ident, why="nothing changed",
                     builder_said=said[-300:])
                 return State.FAILED
@@ -539,17 +569,34 @@ class Driver:
         review and no scope check because there is nothing to review and
         nothing to measure: both would be vacuous, and a vacuous pass recorded
         against a head is worse than no record at all.
+
+        Which tasks may come here is a declaration on the task row, not
+        something read off the diff. An empty diff is equally what a builder
+        that silently did nothing leaves behind, and `requires_deploy` is
+        carried by every task that must build something and *then* deploy it —
+        so inferring it would deploy unchanged code for tasks whose work was
+        never done, and write DONE against them.
         """
         ident = task["id"]
         branch = f"devloop/{ident}"
 
         # Structural, not incidental. This is the one path that deploys without
         # a review, so it must be impossible to reach it while anything a
-        # reviewer has not seen exists. The caller established both of these
-        # before delegating here, and both are asked again — of git, not of the
-        # caller — for the same reason `_ship` re-asks the review record before
-        # it merges: "only reachable from" is a property of today's control
-        # flow, and the guard has to live in the code that acts.
+        # reviewer has not seen exists — or for a task that never said its
+        # content was the deploy. The caller established all three before
+        # delegating here, and all three are asked again — of the row and of
+        # git, not of the caller — for the same reason `_ship` re-asks the
+        # review record before it merges: "only reachable from" is a property of
+        # today's control flow, and the guard has to live in the code that acts.
+        if not declares_deploy_only(task):
+            self.q.move(ident, State.FAILED,
+                        reason="refused to deploy without a review: this task "
+                               "does not declare that its whole content is the "
+                               "deploy, so an empty diff is a build that did "
+                               "not happen")
+            log("REFUSED_TO_DEPLOY", task=ident, why="not declared deploy-only")
+            _git("checkout", "-q", "main", cwd=self.repo)
+            return State.FAILED
         pending = gates.changed(cwd=self.repo)
         carried = gates.changed(cwd=self.repo, base_sha="main")
         if (pending.passed or carried.passed
@@ -866,6 +913,13 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--priority", type=int, default=50)
     add.add_argument("--evidence", default="{}")
     add.add_argument("--deploy", action="store_true")
+    add.add_argument("--deploy-only", action="store_true",
+                     help="this task's whole content is the deploy: main "
+                          "already carries what goes to the host, so there is "
+                          "nothing to build and nothing to review. Implies "
+                          "--deploy. Without it a task that changes nothing "
+                          "fails, which is what catches a builder that did "
+                          "nothing.")
     add.add_argument("--verify-production", action="store_true")
     add.add_argument("--path", action="append", default=[], required=True,
                      help="a path, directory (trailing /) or glob the task "
@@ -876,6 +930,14 @@ def main(argv: list[str] | None = None) -> int:
     declare.add_argument("--path", action="append", default=[], required=True)
     declare.add_argument("--reason", default="")
     declare.add_argument("--actor", default=os.environ.get("USER", "person"))
+
+    only = sub.add_parser("declare-deploy-only")
+    only.add_argument("task")
+    only.add_argument("--no", dest="deploy_only", action="store_false",
+                      help="withdraw the declaration: this task must build "
+                           "something before it deploys")
+    only.add_argument("--reason", default="")
+    only.add_argument("--actor", default=os.environ.get("USER", "person"))
 
     show = sub.add_parser("scope")
     show.add_argument("task")
@@ -908,7 +970,8 @@ def main(argv: list[str] | None = None) -> int:
                       paths=args.path, priority=args.priority,
                       evidence=json.loads(args.evidence),
                       requires_deploy=args.deploy,
-                      requires_prod_check=args.verify_production)
+                      requires_prod_check=args.verify_production,
+                      deploy_only=args.deploy_only)
         print(ident)
         return 0
 
@@ -916,6 +979,16 @@ def main(argv: list[str] | None = None) -> int:
         declared = q.declare_paths(args.task, args.path, actor=args.actor,
                                    reason=args.reason)
         print(f"{args.task} may change: {', '.join(declared)}")
+        return 0
+
+    if args.command == "declare-deploy-only":
+        set_to = q.declare_deploy_only(args.task, actor=args.actor,
+                                       deploy_only=args.deploy_only,
+                                       reason=args.reason)
+        print(f"{args.task} "
+              + ("deploys what main already carries; it builds nothing and is "
+                 "not reviewed" if set_to else
+                 "must build something before it deploys"))
         return 0
 
     if args.command == "scope":

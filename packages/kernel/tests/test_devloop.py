@@ -1789,6 +1789,13 @@ def test_a_database_from_before_the_contract_gains_the_column(tmp_path):
     legacy = q.get("t-old")
     assert legacy["paths"] is None
     assert allowed_paths(legacy) == []
+    # The other column added after the fact, and it defaults the other way: a
+    # row nobody declared deploy-only is not one, so an old task whose builder
+    # writes nothing keeps failing rather than deploying unchanged code.
+    from devloop.queue import declares_deploy_only
+
+    assert legacy["deploy_only"] == 0
+    assert declares_deploy_only(legacy) is False
     # A new row on the same database carries its contract.
     fresh = q.add(title="new", brief="b", origin="human", paths=["src/"])
     assert allowed_paths(q.get(fresh)) == ["src/"]
@@ -1852,7 +1859,7 @@ def _builder_that_changes_nothing(monkeypatch, drv):
 
 
 def _deploy_only_run(tmp_path, monkeypatch, *, deploys=True, probes=True,
-                     requires_deploy=True):
+                     requires_deploy=True, deploy_only=True):
     """Drive the driver over a stubbed builder that changes nothing.
 
     Returns everything the assertions need: the queue, the task id, the `main`
@@ -1867,6 +1874,7 @@ def _deploy_only_run(tmp_path, monkeypatch, *, deploys=True, probes=True,
                   brief="deploy what main already carries, then verify it",
                   origin="human", paths=["infra/devloop/"],
                   requires_deploy=requires_deploy, requires_prod_check=True,
+                  deploy_only=deploy_only,
                   evidence={"production_probe": "print('PROVED')"})
     task = q.claim(owner="test")
     _builder_that_changes_nothing(monkeypatch, drv)
@@ -1978,11 +1986,12 @@ def test_a_task_that_does_not_deploy_and_changes_nothing_still_fails(tmp_path,
     """The gate that catches the commonest silent failure keeps catching it.
 
     An agent that reports success having written nothing is still a failure —
-    the deploy declaration is what makes an empty diff legitimate, and a task
-    that declares no deploy has simply not been carried out.
+    the deploy-only declaration is what makes an empty diff legitimate, and a
+    task that declares nothing of the kind has simply not been carried out.
     """
     q, ident, _, outcome, called, _ = _deploy_only_run(tmp_path, monkeypatch,
-                                                       requires_deploy=False)
+                                                       requires_deploy=False,
+                                                       deploy_only=False)
     assert outcome == State.FAILED
     assert called == [], "a task that declares no deploy reached the deploy gates"
     reasons = " ".join(t["reason"] for t in q.transitions(ident))
@@ -1991,20 +2000,58 @@ def test_a_task_that_does_not_deploy_and_changes_nothing_still_fails(tmp_path,
         "the builder's own words were not kept with the failure")
 
 
+def test_a_build_and_deploy_task_whose_builder_did_nothing_still_fails(tmp_path,
+                                                                       monkeypatch):
+    """The finding this declaration exists for, as a test.
+
+    `requires_deploy=1` is not a statement that a task has nothing to build.
+    Every task that must build something and *then* deploy it carries it —
+    including every task production inspection enqueues, which is all of them.
+    So a builder that silently succeeded without doing its work leaves exactly
+    what a genuine deploy-only task leaves: an empty diff on a branch identical
+    to `main`.
+
+    Classifying on the flag alone would deploy unchanged code, skip the review,
+    and write DONE against work nobody did. The task must say so itself; when
+    it has not, the empty diff stays the failure it was, and the failure names
+    the declaration so a person can correct it.
+    """
+    q, ident, _, outcome, called, _ = _deploy_only_run(tmp_path, monkeypatch,
+                                                       requires_deploy=True,
+                                                       deploy_only=False)
+    assert outcome == State.FAILED, (
+        "a build-and-deploy task whose builder wrote nothing was accepted")
+    assert called == [], (
+        f"the gates ran as {called}; unchanged code was deployed for a task "
+        "whose work was never done")
+    row = q.get(ident)
+    assert row["state"] == State.FAILED
+    assert not row["head_sha"], "an undone task recorded a deployed sha"
+
+    reasons = " ".join(t["reason"] for t in q.transitions(ident))
+    assert "nothing was changed" in reasons
+    assert "declare-deploy-only" in reasons, (
+        "the failure does not say how a genuine deploy-only task declares "
+        "itself, so the one legitimate case has no route out")
+    assert State.DONE not in {t["to_state"] for t in q.transitions(ident)}
+
+
 def test_a_deploy_only_task_that_did_build_something_is_still_reviewed(tmp_path,
                                                                        monkeypatch):
     """Negative control, and the boundary of the whole change.
 
-    `requires_deploy=1` does not by itself buy a task a way past the review.
-    The moment the builder writes anything, the task takes today's path —
-    commit, scope, review — and nothing is deployed until that has finished.
+    Declaring a task deploy-only does not buy it a way past the review. The
+    moment the builder writes anything, the task takes today's path — commit,
+    scope, review — and nothing is deployed until that has finished. The
+    declaration says what the task is *for*; the diff still decides which path
+    it takes, and the two disagreeing resolves towards the review.
     """
     from devloop import driver as drv
 
     repo, main_sha = _repo_on_main(tmp_path)
     q = Queue(tmp_path / "s.db")
     ident = q.add(title="deploys, and builds", brief="b", origin="human",
-                  paths=["src/"], requires_deploy=True)
+                  paths=["src/"], requires_deploy=True, deploy_only=True)
     task = q.claim(owner="test")
 
     def build(task, *, cwd, **_):
@@ -2047,7 +2094,7 @@ def test_the_deploy_without_a_review_is_refused_when_anything_is_pending(tmp_pat
     repo, main_sha = _repo_on_main(tmp_path)
     q = Queue(tmp_path / "s.db")
     ident = q.add(title="t", brief="b", origin="human", paths=["src/"],
-                  requires_deploy=True)
+                  requires_deploy=True, deploy_only=True)
     q.claim(owner="test")
     (repo / "src" / "unreviewed.py").write_text("nobody has seen this\n")
 
@@ -2058,6 +2105,36 @@ def test_the_deploy_without_a_review_is_refused_when_anything_is_pending(tmp_pat
     driver = drv.Driver(q, drv.Limits(), repo=repo)
     assert driver._deploy_only(q.get(ident), 0.0) == State.CONTESTED
     assert any("refused to deploy" in t["reason"] for t in q.transitions(ident))
+
+
+def test_the_deploy_without_a_review_is_refused_when_nobody_declared_it(tmp_path,
+                                                                        monkeypatch):
+    """The same structural guard, over the classification itself.
+
+    The caller decides which tasks come here, and today it asks the row. A
+    second caller — or an edit that widened the condition back to
+    `requires_deploy` — would put an ordinary build-and-deploy task on the one
+    path that deploys without a review. So the method asks the row again, and a
+    task that never declared its content to be the deploy is refused where the
+    deploy actually happens.
+    """
+    from devloop import driver as drv
+
+    repo, _ = _repo_on_main(tmp_path)
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="builds, then deploys", brief="b", origin="human",
+                  paths=["src/"], requires_deploy=True)
+    q.claim(owner="test")
+
+    def never_deploy(**_):
+        raise AssertionError("an undeclared task was deployed without a review")
+
+    monkeypatch.setattr(drv.gates, "deployed", never_deploy)
+    monkeypatch.setattr(drv.gates, "tests",
+                        lambda **k: gates.Gate("tests", True, "1 passed"))
+    driver = drv.Driver(q, drv.Limits(), repo=repo)
+    assert driver._deploy_only(q.get(ident), 0.0) == State.FAILED
+    assert any("does not declare" in t["reason"] for t in q.transitions(ident))
 
 
 def test_both_ways_to_a_deploy_run_the_same_gates_in_the_same_order():
@@ -2091,3 +2168,130 @@ def test_both_ways_to_a_deploy_run_the_same_gates_in_the_same_order():
     for forbidden in ("agents.review(", '"merge"', "gates.scope("):
         assert forbidden not in deploy_only, (
             f"the deploy-only path calls {forbidden}")
+
+
+# ------------------------------------ the declaration that classifies a task
+
+
+def test_a_deploy_only_task_is_declared_and_implies_the_deploy(q):
+    """It is a statement about the task, made by whoever enqueued it.
+
+    And it implies `requires_deploy`, because a deploy-only task that does not
+    deploy would have nothing left to do — the flag exists to say the deploy is
+    the whole of the work.
+    """
+    from devloop.queue import declares_deploy_only
+
+    only = q.get(q.add(title="deploy what main carries", brief="b",
+                       origin="human", paths=["infra/"], deploy_only=True))
+    assert only["deploy_only"] == 1
+    assert only["requires_deploy"] == 1
+    assert declares_deploy_only(only) is True
+
+    # The two tasks it must be distinguishable from, and neither is.
+    builds = q.get(q.add(title="build it, then deploy it", brief="b",
+                         origin="human", paths=["infra/"],
+                         requires_deploy=True))
+    assert declares_deploy_only(builds) is False
+    plain = q.get(q.add(title="build it", brief="b", origin="human",
+                        paths=["infra/"]))
+    assert declares_deploy_only(plain) is False
+
+
+def test_a_row_that_predates_the_flag_can_be_declared_deploy_only(q):
+    """t-4f02ee7a36c0's own route out, and a person makes it.
+
+    The task that motivated the whole deploy-without-a-diff path was enqueued
+    before the flag existed. Without a way to declare it afterwards the fix
+    would not reach the task it was written for — so this is the counterpart of
+    `declare-paths`, and it records who decided, like that one does.
+    """
+    from devloop.queue import declares_deploy_only
+
+    ident = q.add(title="deploy and verify the unreviewed-drafts surface",
+                  brief="b", origin="human", paths=["infra/devloop/"],
+                  requires_deploy=True)
+    assert declares_deploy_only(q.get(ident)) is False
+
+    q.declare_deploy_only(ident, actor="ayoub", reason="main already has it")
+    assert declares_deploy_only(q.get(ident)) is True
+    assert any("declared deploy-only" in t["reason"] and t["actor"] == "ayoub"
+               for t in q.transitions(ident)), (
+        "nothing records who decided this task builds nothing")
+
+    # And withdrawn again, because a flag set by mistake must be removable —
+    # it is the one thing standing between an empty diff and a deploy. The
+    # deploy itself stays: the task still has to reach the host, it simply has
+    # to build something first.
+    q.declare_deploy_only(ident, actor="ayoub", deploy_only=False)
+    assert declares_deploy_only(q.get(ident)) is False
+    assert q.get(ident)["requires_deploy"] == 1
+
+
+def test_a_task_is_not_reclassified_while_the_driver_is_deciding(q):
+    """Not under a running task, for the same reason a contract is not.
+
+    The driver reads this field to choose between deploying `main` and failing
+    the task, and a field that changes mid-run makes that choice unattributable.
+    """
+    ident = q.add(title="t", brief="b", origin="human", paths=["src/"],
+                  requires_deploy=True)
+    q.claim(owner="d")
+    with pytest.raises(ValueError):
+        q.declare_deploy_only(ident, actor="ayoub")
+    assert q.get(ident)["deploy_only"] == 0
+
+
+def test_the_cli_can_declare_a_deploy_only_task_both_ways(tmp_path, monkeypatch):
+    """The declaration has to be reachable, or the one legitimate case is stuck.
+
+    A person is the only one who can say a task's whole content is the deploy,
+    so there must be a way for them to say it — at enqueue time, and afterwards
+    on a row that predates the flag.
+    """
+    from devloop import driver as drv
+    from devloop.queue import declares_deploy_only
+
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    assert drv.main(["enqueue", "--title", "deploy what main carries",
+                     "--brief", "b", "--path", "infra/devloop/",
+                     "--deploy-only"]) == 0
+    assert drv.main(["enqueue", "--title", "build it, then deploy it",
+                     "--brief", "b", "--path", "infra/devloop/",
+                     "--deploy"]) == 0
+
+    q = Queue(tmp_path / ".qevik" / "devloop" / "state.db")
+    only, builds = sorted(q.tasks(), key=lambda t: t["title"])[::-1]
+    assert declares_deploy_only(only) is True
+    assert declares_deploy_only(builds) is False, (
+        "--deploy alone declared a task deploy-only")
+
+    assert drv.main(["declare-deploy-only", builds["id"], "--actor", "ayoub",
+                     "--reason", "main already has it"]) == 0
+    assert declares_deploy_only(q.get(builds["id"])) is True
+    assert drv.main(["declare-deploy-only", builds["id"], "--no",
+                     "--actor", "ayoub"]) == 0
+    assert declares_deploy_only(q.get(builds["id"])) is False
+
+
+def test_the_classification_reads_the_declaration_and_not_the_deploy_flag():
+    """Structural, because the difference is invisible at the call site.
+
+    `requires_deploy` and `deploy_only` are one word apart and mean opposite
+    things here: the first is carried by every task that must build something
+    and then deploy it, and reading it as the second is what would deploy
+    unchanged code for work that was never done. The condition guarding the
+    bypass may only ask the declaration.
+    """
+    source = Path(INFRA / "devloop" / "driver.py").read_text()
+    run_task = source[source.index("def run_task("):source.index("def _ship(")]
+    span = run_task[run_task.index("if not diff.passed:"):
+                    run_task.index("self._deploy_only(")]
+    # The code only. Both names are discussed at length in the comments there,
+    # and a test that read those would be about the prose.
+    bypass = "\n".join(line for line in span.splitlines()
+                       if not line.strip().startswith("#"))
+    assert "declares_deploy_only(task)" in bypass
+    assert "requires_deploy" not in bypass and "gates.required(" not in bypass, (
+        "the deploy-without-a-review path is chosen by a flag that ordinary "
+        "build-and-deploy tasks also carry")
