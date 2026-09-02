@@ -624,14 +624,22 @@ def test_the_review_unit_never_absorbs_another_tasks_edits():
 
 
 def test_a_task_that_ends_contested_leaves_main_untouched():
+    """Every exit that gives up on a task, not just the one the reviewer took.
+
+    Both caps end the same way, and the attempt cap is reachable with the test
+    gate never green — which is a route to CONTESTED the review cap never had.
+    """
     source = Path(INFRA / "devloop" / "driver.py").read_text()
     run_task = source[source.index("def run_task("):source.index("def _ship(")]
-    contested = run_task.index("rounds")
-    section = run_task[run_task.index("if round_no == self.limits.review_rounds:"):]
-    assert '"checkout", "-q", "main"' in section[:400], (
-        "a contested task does not return to main, so its branch stays checked "
-        "out and the next task builds on top of rejected work")
-    assert "merge" not in section[:400]
+    for anchor in ("if exhausted:",
+                   "if attempt >= self.limits.build_attempts:"):
+        start = run_task.index(anchor)
+        section = run_task[start:run_task.index("return State.CONTESTED", start)]
+        assert '"checkout", "-q", "main"' in section, (
+            f"the contested exit at `{anchor}` does not return to main, so its "
+            "branch stays checked out and the next task builds on top of "
+            "rejected work")
+        assert "merge" not in section
 
 
 def test_a_resumed_branch_is_reviewed_from_where_it_left_main():
@@ -1452,6 +1460,214 @@ def test_a_size_the_driver_could_not_measure_is_never_a_pass(tmp_path,
     assert any("infrastructure failure" in t["reason"]
                and "size unmeasured" in t["reason"]
                for t in q.transitions(ident))
+
+
+# ========================= what the cap counts, and what a round costs
+#
+# t-422b20848039 reached the three-round cap having spent two Codex reviews.
+# Round two's test gate failed, the builder was sent to fix it, and the one
+# counter advanced without a review ever happening — then the task was recorded
+# CONTESTED "after 3 rounds", as though three reviewers had objected to it.
+#
+# A round the reviewer never saw is not a round of disagreement. So the review
+# cap counts reviews and nothing else, a separate attempt cap bounds the rounds
+# that never reach one, and whichever runs out is named in the reason.
+
+_BLOCKING = {"severity": "blocking", "file": "src/work.py",
+             "claim": "still not right", "why_it_matters": "it would ship broken",
+             "failure_scenario": "the caller gets None"}
+
+
+def _scripted_run(repo, tmp_path, monkeypatch, *, limits, suites):
+    """One task through the real driver with the suite and both agents scripted.
+
+    `suites` is consumed one entry per pass through the gates and runs out into
+    a passing suite, so a test says which passes the gate stops and the driver
+    decides what each of them costs. The reviewer objects every time it is
+    asked, which is what makes the counting visible: the run can only end by
+    exhausting something.
+
+    Returns the queue, the task id, the terminal state, and one entry per
+    review that actually happened.
+    """
+    from devloop import driver as drv
+
+    q = Queue(tmp_path / "s.db")
+    ident = q.add(title="counting rounds", brief="b", origin="human",
+                  paths=["src/"])
+    task = q.claim(owner="test")
+    asked: list[str] = []
+    written = [0]
+
+    def touch(cwd):
+        # Every pass leaves the tree dirty, or `changed` fails the task before
+        # any of this is reached.
+        written[0] += 1
+        (cwd / "src" / "work.py").write_text(f"x = {written[0]}\n")
+
+    def build(task, *, cwd, **_):
+        touch(cwd)
+        return agents.Outcome(ok=True, exit_code=0, output="built")
+
+    def fix(task, findings, *, cwd, **_):
+        touch(cwd)
+        return agents.Outcome(ok=True, exit_code=0, output="fixed")
+
+    def review(**k):
+        asked.append(k["base_sha"])
+        return agents.Outcome(ok=True, exit_code=0,
+                              data={"verdict": "DEFECTS_FOUND",
+                                    "findings": [_BLOCKING]})
+
+    def tests(**k):
+        return suites.pop(0) if suites else gates.Gate("tests", True, "1 passed")
+
+    monkeypatch.setattr(drv.agents, "build", build)
+    monkeypatch.setattr(drv.agents, "fix", fix)
+    monkeypatch.setattr(drv.agents, "review", review)
+    monkeypatch.setattr(drv.gates, "tests", tests)
+    state = drv.Driver(q, limits, repo=repo).run_task(task)
+    return q, ident, state, asked
+
+
+def _exhaustion_reason(q, ident) -> str:
+    [reason] = [t["reason"] for t in q.transitions(ident)
+                if t["reason"].startswith("exhausted ")]
+    return reason
+
+
+def test_a_failing_test_gate_does_not_spend_a_review_round(tmp_path,
+                                                            monkeypatch):
+    """The regression, on the real driver.
+
+    One failing suite, then a green one for the rest of the run. Against the
+    single counter this reached the cap having asked the reviewer twice and
+    recorded "3 rounds"; the reviewer must be asked three times, because three
+    is the number of reviews the cap allows.
+    """
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    q, ident, state, asked = _scripted_run(
+        repo, tmp_path, monkeypatch,
+        limits=drv.Limits(review_rounds=3, build_attempts=5),
+        suites=[gates.Gate("tests", False, "1 failed")])
+
+    assert state == State.CONTESTED
+    assert len(asked) == 3, (
+        f"the reviewer was asked {len(asked)} time(s) for a cap of three: the "
+        "round the test gate stopped was charged to the review cap")
+    row = q.get(ident)
+    assert row["review_rounds"] == 3, (
+        "the recorded round count is not the number of reviews that happened")
+    reason = _exhaustion_reason(q, ident)
+    assert "review cap" in reason, (
+        f"the contested reason does not say which cap ran out: {reason}")
+    assert "3 review round(s)" in reason and "4 attempt(s)" in reason, (
+        f"the reason does not separate reviews from attempts: {reason}")
+    ledger = (repo / ".qevik" / "DECISION_QUEUE.md").read_text()
+    assert f"<!-- devloop:contested:{ident} -->" in ledger
+    assert "3 review round(s), across 4 attempt(s)" in ledger
+
+
+def test_tests_that_never_pass_exhaust_the_attempt_cap_not_the_review_cap(
+        tmp_path, monkeypatch):
+    """Nobody reviewed it, so nobody objected to it, and the record says so.
+
+    The old ending was CONTESTED "tests still failing", reached by burning the
+    review cap on rounds no reviewer saw. It is the attempt cap that runs out
+    here, and the reason names it and says how many reviews were spent — none.
+    """
+    import subprocess
+
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    q, ident, state, asked = _scripted_run(
+        repo, tmp_path, monkeypatch,
+        limits=drv.Limits(review_rounds=3, build_attempts=4),
+        suites=[gates.Gate("tests", False, "1 failed") for _ in range(9)])
+
+    assert state == State.CONTESTED
+    assert asked == [], "work the gates never passed was sent for review"
+    row = q.get(ident)
+    assert row["review_rounds"] == 0, (
+        "a task no reviewer saw is recorded as having spent review rounds")
+    reason = _exhaustion_reason(q, ident)
+    assert "attempt cap" in reason and "review cap" not in reason, (
+        f"the reason blames the reviewer for a gate that never went green: "
+        f"{reason}")
+    assert "4 attempt(s)" in reason and "0 reached the reviewer" in reason
+    # And the same sentence where a person actually looks.
+    assert "attempt cap" in (row["detail"] or "")
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == "main"
+
+
+def test_a_task_that_runs_out_of_attempts_says_attempts_not_rounds(tmp_path,
+                                                                    monkeypatch):
+    """Both caps exist, and the one that ran out is the one named.
+
+    Three failing suites push the run past the attempt cap with only two of the
+    three review rounds spent — the case the single counter could not express
+    at all, because it had one number for both.
+    """
+    from devloop import driver as drv
+
+    repo = _repo_ready_for_a_run(tmp_path)
+    q, ident, state, asked = _scripted_run(
+        repo, tmp_path, monkeypatch,
+        limits=drv.Limits(review_rounds=3, build_attempts=5),
+        suites=[gates.Gate("tests", False, "1 failed") for _ in range(3)])
+
+    assert state == State.CONTESTED
+    assert len(asked) == 2, (
+        f"the reviewer was asked {len(asked)} time(s); three failing gates and "
+        "five attempts leave room for exactly two reviews")
+    assert q.get(ident)["review_rounds"] == 2
+    reason = _exhaustion_reason(q, ident)
+    assert "attempt cap" in reason and "review cap" not in reason
+    assert "5 attempt(s)" in reason and "2 reached the reviewer" in reason
+    ledger = (repo / ".qevik" / "DECISION_QUEUE.md").read_text()
+    assert "2 review round(s), across 5 attempt(s)" in ledger, (
+        "the ledger tells a person the reviewer objected three times")
+
+
+def test_a_contested_task_no_reviewer_saw_is_not_written_up_as_a_disagreement(
+        q, tmp_path):
+    """The projection said "the reviewer still objects" about every one of them.
+
+    A task stopped by the size gate, the scope gate or a suite that never went
+    green is contested without a reviewer ever having been asked, and the page
+    a person reads must not claim otherwise.
+    """
+    from devloop import projection
+
+    repo = tmp_path / "repo"
+    (repo / ".qevik").mkdir(parents=True)
+    (repo / ".qevik" / "EXECUTION_STATE.md").write_text("# State\n")
+
+    ident = q.add(title="never reviewed", brief="b", origin="human",
+                  paths=["src/"])
+    q.claim(owner="d")
+    q.move(ident, State.CONTESTED, reason="exhausted the attempt cap",
+           detail="the attempt cap: the tests still fail after 5 attempt(s), "
+                  "of which 0 reached the reviewer")
+    projection.write(repo, q)
+
+    body = (repo / ".qevik" / "EXECUTION_STATE.md").read_text()
+    assert "the reviewer still objects" not in body
+    assert "no review round was ever reached" in body
+    assert "0 reached the reviewer" in body
+
+    # Negative control: one the reviewer did see still reads as a disagreement.
+    q.move(ident, State.REVIEWING, head_sha="abc", review_rounds=2)
+    q.record_findings(ident, round=2, sha="abc", findings=[_BLOCKING])
+    q.move(ident, State.CONTESTED, reason="exhausted the review cap",
+           detail="the review cap: 1 blocking finding(s) still stand")
+    projection.write(repo, q)
+    assert "1 finding(s) after 2 review round(s)" in (
+        repo / ".qevik" / "EXECUTION_STATE.md").read_text()
 
 
 # ===================================== work the loop can actually finish

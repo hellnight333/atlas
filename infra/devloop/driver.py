@@ -35,8 +35,9 @@ agents and knows nothing about businesses, signals or outreach.
                      contract                            (objective)
                      too large, or outside it → CONTESTED, unreviewed
       → REVIEWING    Codex on base..HEAD                 (read-only, blind)
-          findings → FIXING → GATING → REVIEWING  (at most three rounds)
-          three rounds and still contested → CONTESTED
+          findings → FIXING → GATING → REVIEWING
+          three rounds the reviewer saw, still objecting → CONTESTED
+          five attempts, the gates never green           → CONTESTED
       → DEPLOYING    where the task declares it          (objective)
       → VERIFYING    where the task declares it          (objective)
       → DONE
@@ -62,6 +63,23 @@ work is not in `base..HEAD` until it is committed, so a size check that runs
 earlier measures the *previous* round, and on round one measures nothing at
 all. Both gates answer about the range that would land, or they answer about
 the wrong thing.
+
+## What the cap counts
+
+Two caps, counting two different things, because one counter conflated them.
+`review_rounds` counts the rounds **the reviewer actually saw**; `build_attempts`
+counts passes through the gates whether or not anybody was asked an opinion.
+
+t-422b20848039 is why. Round two's test gate failed, the builder was sent to
+fix it, and the single counter advanced without a review ever happening — so
+the task hit the three-round cap having spent two reviews, and was recorded as
+though three reviewers had objected to it. A round the reviewer never saw is
+not a round of disagreement.
+
+Counting only reviews would then let a test gate that never goes green cycle
+builder → gate for ever, so the attempt cap bounds that separately. Whichever
+runs out, the CONTESTED reason names *which* was exhausted and how much of the
+other was spent, so the record never implies a reviewer that was never asked.
 
 ## What stops it
 
@@ -113,7 +131,16 @@ class Limits:
     review_timeout_s: int = 1200
     #: Requirement, and a real bound: after three rounds the disagreement is
     #: not going to resolve itself, and a person should read it.
+    #: Counts **reviews the reviewer actually performed** and nothing else. A
+    #: round stopped by the test gate never reached it, and spending the cap on
+    #: one records a disagreement that never took place.
     review_rounds: int = 3
+    #: And the bound on the rounds that never reach the reviewer. Passes through
+    #: the gates, reviewed or not: without it a test gate that never goes green
+    #: cycles builder → gate until the runtime limit, and the record says
+    #: nothing about why. Five, so the three reviews above stay reachable with
+    #: two gate failures in the way.
+    build_attempts: int = 5
     #: A run of tooling failures means the tooling is broken. Continuing past
     #: it produces "clean review" results that mean nothing.
     consecutive_infra_failures: int = 3
@@ -299,7 +326,14 @@ class Driver:
                 note="turn limit reached — falling through to the gates")
 
         self.q.renew(ident)
-        for round_no in range(1, self.limits.review_rounds + 1):
+        # Two counters, because one conflated two different things. `attempt`
+        # counts passes through the gates; `reviews` counts only the rounds the
+        # reviewer actually saw and returned a verdict on. See "What the cap
+        # counts" above for the run that paid for the difference.
+        reviews = 0
+        attempt = 0
+        while True:
+            attempt += 1
             self._check_stop()
             if time.monotonic() - started > self.limits.task_runtime_s:
                 self.q.move(ident, State.FAILED,
@@ -308,7 +342,9 @@ class Driver:
                 return State.FAILED
 
             # -- objective gate, before anybody is asked an opinion --------
-            self.q.move(ident, State.GATING, reason=f"round {round_no}")
+            self.q.move(ident, State.GATING,
+                        reason=f"attempt {attempt}, {reviews} review round(s) "
+                               f"spent")
             diff = gates.changed(cwd=self.repo)
             if not diff.passed:
                 # What the builder said, kept with the failure. Without it
@@ -330,14 +366,24 @@ class Driver:
             suite = gates.tests(cwd=self.repo,
                                 selector=task.get("test_selector")
                                 or self._selector())
-            log("GATING", task=ident, round=round_no,
+            log("GATING", task=ident, attempt=attempt, reviews=reviews,
                 gates=gates.summarise([diff, suite]))
             if suite.unmeasured:
                 return self._infra(ident, f"tests unmeasured: {suite.detail}")
             if not suite.passed:
-                if round_no >= self.limits.review_rounds:
+                # The attempt cap, not the review cap. Nothing has been reviewed
+                # on this pass and the reviewer is not the one refusing the
+                # work, so spending a review round here would record a
+                # disagreement that never happened.
+                if attempt >= self.limits.build_attempts:
+                    why = (f"the attempt cap: the tests still fail after "
+                           f"{attempt} attempt(s), of which {reviews} reached "
+                           f"the reviewer — {suite.detail}")
                     self.q.move(ident, State.CONTESTED,
-                                reason=f"tests still failing: {suite.detail}")
+                                reason=f"exhausted {why}", detail=why[:500])
+                    log("CONTESTED", task=ident, why="attempt cap",
+                        attempts=attempt, reviews=reviews)
+                    _git("checkout", "-q", "main", cwd=self.repo)
                     return State.CONTESTED
                 fixed = agents.fix(task, [{
                     "severity": "blocking", "file": "(test suite)",
@@ -348,9 +394,15 @@ class Driver:
                     timeout=self.limits.build_timeout_s)
                 if fixed.infrastructure_failure:
                     return self._infra(ident, fixed.detail)
+                self.q.renew(ident)
                 continue
 
             # -- the immutable review unit --------------------------------
+            # The gates are green, so this attempt is the one that will reach
+            # the reviewer: it is review round `reviews + 1`. The number is
+            # provisional until the reviewer has actually returned a verdict —
+            # `reviews` only moves below, once one has.
+            round_no = reviews + 1
             # Committed *before* review so the diff cannot move under the
             # reviewer, and so a finding names a sha somebody can check out.
             self._commit(task, round_no)
@@ -398,20 +450,26 @@ class Driver:
                                 changed=kept.evidence["changed"],
                                 undeclared=kept.evidence["undeclared"])
             if not kept.passed:
+                # `reviews`, not `round_no`: this round is being refused before
+                # anybody is asked about it, so the count of rounds the reviewer
+                # saw does not move.
                 self.q.move(ident, State.CONTESTED,
                             reason=f"out of scope: {kept.detail}",
-                            head_sha=sha, review_rounds=round_no)
+                            head_sha=sha, review_rounds=reviews)
                 projection.park_out_of_scope(self.repo, task, kept.evidence)
-                log("OUT_OF_SCOPE", task=ident, round=round_no,
+                log("OUT_OF_SCOPE", task=ident, round=round_no, attempt=attempt,
                     undeclared=kept.evidence["undeclared"][:8])
                 _git("checkout", "-q", "main", cwd=self.repo)
                 return State.CONTESTED
-            log("SCOPE", task=ident, round=round_no, detail=kept.detail[:160])
+            log("SCOPE", task=ident, round=round_no, attempt=attempt,
+                detail=kept.detail[:160])
 
             self.q.move(ident, State.REVIEWING,
-                        reason=f"round {round_no} at {sha[:12]}",
+                        reason=f"review round {round_no} at {sha[:12]} "
+                               f"(attempt {attempt})",
                         head_sha=sha, review_rounds=round_no)
-            log("REVIEWING", task=ident, round=round_no, unit=f"{base[:12]}..{sha[:12]}")
+            log("REVIEWING", task=ident, round=round_no, attempt=attempt,
+                unit=f"{base[:12]}..{sha[:12]}")
 
             out = self.repo / ".qevik" / "devloop" / f"review-{ident}-{round_no}.json"
             reviewed = agents.review(cwd=self.repo, base_sha=base,
@@ -422,6 +480,11 @@ class Driver:
             untouched = gates.clean_tree(cwd=self.repo)
             if not untouched.passed:
                 return self._infra(ident, untouched.detail)
+
+            # The reviewer looked and answered. Only here does a review round
+            # count — a reviewer that could not be run has not disagreed with
+            # anything, and neither has a gate that stopped the work before it.
+            reviews = round_no
 
             found = reviewed.data.get("findings") or []
             # The review itself, then its findings. A clean review records no
@@ -437,22 +500,39 @@ class Driver:
                 verdict=reviewed.data.get("verdict"), findings=len(found),
                 blocking=len(must))
             if not must:
-                return self._ship(task, started)
+                return self._ship(task, started, reviews=reviews)
 
-            if round_no == self.limits.review_rounds:
+            # Which cap ran out, named. Both end the same way and the reason
+            # has to say which, because "three rounds" meant two different
+            # sentences before this: a reviewer that objected three times, and
+            # a counter that a failing test gate had walked forward.
+            exhausted = ""
+            if reviews >= self.limits.review_rounds:
+                exhausted = (f"the review cap: {len(must)} blocking finding(s) "
+                             f"still stand after {reviews} review round(s), "
+                             f"across {attempt} attempt(s)")
+            elif attempt >= self.limits.build_attempts:
+                exhausted = (f"the attempt cap: {len(must)} blocking finding(s) "
+                             f"still stand after {attempt} attempt(s), of which "
+                             f"{reviews} reached the reviewer")
+            if exhausted:
                 # The branch stays. A person reading a contested task needs the
                 # rounds, and `main` never saw them.
                 _git("checkout", "-q", "main", cwd=self.repo)
                 self.q.move(ident, State.CONTESTED,
-                            reason=f"{len(must)} finding(s) after "
-                                   f"{round_no} rounds")
+                            reason=f"exhausted {exhausted}",
+                            detail=exhausted[:500])
                 projection.park_contested(self.repo, task,
-                                          self.q.findings(ident))
-                log("CONTESTED", task=ident, findings=len(must))
+                                          self.q.findings(ident),
+                                          reviews=reviews, attempts=attempt)
+                log("CONTESTED", task=ident, findings=len(must),
+                    reviews=reviews, attempts=attempt,
+                    why=exhausted.split(":")[0])
                 return State.CONTESTED
 
             self.q.move(ident, State.FIXING, reason=f"{len(must)} finding(s)")
-            log("FIXING", task=ident, round=round_no, findings=len(must))
+            log("FIXING", task=ident, round=round_no, attempt=attempt,
+                findings=len(must))
             fixed = agents.fix(task, must, cwd=self.repo,
                                max_turns=self.limits.claude_turns,
                                timeout=self.limits.build_timeout_s)
@@ -460,11 +540,14 @@ class Driver:
                 return self._infra(ident, fixed.detail)
             self.q.renew(ident)
 
-        self.q.move(ident, State.CONTESTED, reason="rounds exhausted")
-        return State.CONTESTED
+    def _ship(self, task: dict, started: float, *, reviews: int = 1) -> str:
+        """Review is clean. Land it, run the remaining gates, then finish.
 
-    def _ship(self, task: dict, started: float) -> str:
-        """Review is clean. Land it, run the remaining gates, then finish."""
+        `reviews` is how many rounds the reviewer actually saw, passed in
+        rather than read off `task`: that row was loaded when the task was
+        claimed, so its `review_rounds` is whatever it was before this run and
+        the landing commit said "1 round(s)" for every task regardless.
+        """
         ident = task["id"]
         needed = gates.required(task)
         # Only now does it reach `main` — as one commit, so the history says
@@ -508,7 +591,7 @@ class Driver:
         _git("commit", "-q", "-m",
              f"{task['title']}\n\n{task['brief'][:900]}\n\n"
              f"devloop task {ident}; reviewer clean after "
-             f"{task.get('review_rounds') or 1} round(s).\n\n"
+             f"{max(reviews, 1)} review round(s).\n\n"
              "Co-Authored-By: Claude Opus 5 (1M context) "
              "<noreply@anthropic.com>", cwd=self.repo)
         _git("branch", "-D", branch, cwd=self.repo)

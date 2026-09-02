@@ -62,11 +62,17 @@ def _section(queue: Queue) -> str:
 
     contested = by_state.get(State.CONTESTED, [])
     if contested:
-        lines += ["### Contested — the reviewer still objects", ""]
+        # Not "the reviewer still objects". A task stopped by the size gate,
+        # the scope gate or a test suite that never went green is contested
+        # without a reviewer ever having seen it, and this heading used to say
+        # otherwise about every one of them.
+        lines += ["### Contested — stopped short of landing", ""]
         for task in contested:
             found = queue.findings(task["id"])
-            lines.append(f"- **{task['title']}** — {len(found)} finding(s) "
-                         f"after {task['review_rounds']} round(s). "
+            rounds = task["review_rounds"]
+            what = (f"{len(found)} finding(s) after {rounds} review round(s)"
+                    if rounds else "no review round was ever reached")
+            lines.append(f"- **{task['title']}** — {what}. "
                          f"{task['detail'] or ''}".rstrip())
         lines.append("")
 
@@ -155,8 +161,15 @@ def park_oversized(repo: Path, task: dict, detail: str) -> str:
     return marker
 
 
-def park_contested(repo: Path, task: dict, findings: list[dict]) -> str:
-    """A disagreement three rounds could not settle is a person's to read."""
+def park_contested(repo: Path, task: dict, findings: list[dict], *,
+                   reviews: int = 0, attempts: int = 0) -> str:
+    """A disagreement the loop could not settle is a person's to read.
+
+    `reviews` and `attempts` are both written down because they are not the
+    same number and the difference is the whole point: a task can run out of
+    attempts with fewer reviews than the cap allows, and saying "three rounds"
+    there claims three reviewers objected when two did.
+    """
     marker = f"<!-- devloop:contested:{task['id']} -->"
     listed = "\n".join(
         f"  - `{f['file']}` [{f['severity']}] {redact(f['claim'])}"
@@ -164,8 +177,9 @@ def park_contested(repo: Path, task: dict, findings: list[dict]) -> str:
     block = (
         f"{marker}\n"
         f"## Contested — {redact(task['title'])}\n\n"
-        f"The reviewer raised findings the builder did not settle in three "
-        f"rounds. The work is committed and **not deployed**.\n\n"
+        f"The reviewer raised findings the builder did not settle in "
+        f"{reviews} review round(s), across {attempts} attempt(s). The work is "
+        f"committed and **not deployed**.\n\n"
         f"{listed}\n\n"
         f"- **Driver task:** `{task['id']}`\n"
         f"- **Review unit:** `{(task.get('base_sha') or '')[:12]}.."
