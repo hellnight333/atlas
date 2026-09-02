@@ -374,3 +374,23 @@ verdict. Empty until then._
   successor with a structured diagnosis and the same three-path contract follows once
   the owner has reviewed its brief.
 
+- **T3 (attempt 2, T3b) — LANDED 8f649c9, DONE 2026-09-02.** `t-a32470d01b7a`
+  (base f7a18a8, run r-8e0bc10800, 16:45→18:04 UTC, 1 h 19 min; successor of
+  t-03e23ee8f736 under DQ-013 with a structured diagnosis, contract relation
+  *equal*) on the same three paths; squash 8f649c9 = +1,480/−37 across `driver.py`
+  (+445), `gates.py` (+174), `test_devloop.py` (+898). Gates and scope passed in all
+  three rounds. Findings: r1 blocking `driver.py:769-776` — a path edited between
+  the content proof and the cleanup loop would be overwritten; r1 blocking
+  `driver.py:750-754` — a mode-only change (executable bit) keeps its blob hash and
+  escaped the proof; r2 blocking `driver.py:676-678` — the marker was not re-read
+  after the production probe, so bytes replaced mid-probe could be recorded as
+  verification of S; r3 CLEAN. Fixes stayed inside DQ-013: each path is re-proven
+  (content *and* mode, `core.fileMode`-aware) immediately before it is touched and
+  any drift stops the cleanup as BLOCKED, saying how far it got — no repository lock,
+  and the file contains no `reset --hard`, `clean`, or `checkout -- .` call; the
+  provenance marker is read again after the probe and must still name S as
+  `installed`. Duplicate marker keys now fail `gates.provenance` closed. Nothing
+  deployed by this task. Step 1 is now implemented end to end on `main`; what remains
+  of Step 1 is item 10 — a `--rehearse` against the real host, then the first
+  human-watched deployment of a trivial reviewed commit.
+
