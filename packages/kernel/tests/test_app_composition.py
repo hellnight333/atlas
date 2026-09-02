@@ -462,8 +462,20 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
     assert "does not accept" in source, (
         "the console does not say which responses a request refuses, so a "
         "refused one reads as a bug rather than as the safety rule it is")
+    # Raised for the Outreach page. Fourteen messages had been drafted to
+    # strangers and nobody had decided about any of them; the kernel could say
+    # why each one was undecided and no surface asked. That is a capability an
+    # operator gains, which is the one reason this number moves — and the rules
+    # below got stricter with it, which is the condition on moving it.
+    assert "/api/missions/outreach-unreviewed" in source, (
+        "the console cannot show which outreach drafts are undecided, so the "
+        "reason each one is waiting reaches nobody")
+    for deciding in ("outreach-unreviewed', {", "approve-all", "data-approve-all"):
+        assert deciding not in source, (
+            f"the undecided-draft queue carries {deciding!r}; a control on a "
+            "list of fourteen is how fourteen strangers get written to at once")
 
-    assert Path(CONSOLE / "index.html").stat().st_size < 140_000
+    assert Path(CONSOLE / "index.html").stat().st_size < 148_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and
