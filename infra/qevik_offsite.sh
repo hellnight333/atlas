@@ -98,21 +98,63 @@ env_names() {
   chmod 644 "$out" "${STATE_DIR}/units.txt" 2>/dev/null || true
 }
 
-newest_dump() { ls -1t "$DUMPS"/qevik-*.dump 2>/dev/null | head -1 || true; }
+#: Historical dumps this host did not produce — the verified production dumps
+#: pulled from the old host. They live outside the top level of $DUMPS so that
+#: qevik_backup.sh's retention, which keeps the 14 newest `qevik-*.dump` there,
+#: cannot delete production history it did not write (B-5).
+ARCHIVE="${QEVIK_BACKUP_ARCHIVE:-${DUMPS}/archive}"
+
+#: The dump this host produced most recently. Top level only, deliberately.
+current_dump() { ls -1t "$DUMPS"/qevik-*.dump 2>/dev/null | head -1 || true; }
+
+#: The newest archived dump, if there is one.
+archived_dump() {
+  [ -d "$ARCHIVE" ] || return 0
+  find "$ARCHIVE" -type f -name 'qevik-*.dump' -print0 2>/dev/null \
+    | xargs -0 ls -1t 2>/dev/null | head -1 || true
+}
+
+#: What the daily restore proof reads back, and which kind of dump it is.
+#:
+#: Current dumps win, always. The archive is a *fallback*, used only while this
+#: host has produced none of its own — which is the state between the migration
+#: of the old host's dumps and the first backup here. Without the fallback the
+#: proof would report "skipped" every night in that window and the off-host copy
+#: would go unverified; with the archive preferred it could keep proving a 2026
+#: dump long after this host started writing its own, which is worse. So:
+#: prefer current, fall back to archive, and say which one it was.
+#:
+#: After the data migration, `qevik-backup.timer` runs and a current dump exists.
+#: If one ever stops existing, `--strict-current` (used by the daily run once the
+#: database holds data) turns that into a failure rather than a quiet fallback.
+select_dump() {
+  local dump
+  dump="$(current_dump)"
+  if [ -n "$dump" ]; then printf 'current\t%s\n' "$dump"; return 0; fi
+  dump="$(archived_dump)"
+  if [ -n "$dump" ]; then printf 'archive\t%s\n' "$dump"; return 0; fi
+  printf 'none\t\n'
+}
 
 restore_verify() {
-  # Restore the newest dump from the repository — not the local file — into a
-  # private directory and compare bytes. The local dump was already proven by
+  # Restore a dump from the repository — not the local file — into a private
+  # directory and compare bytes. The local dump was already proven by
   # pg_restore; this proves the off-host copy is the same bytes.
-  local dump; dump="$(newest_dump)"
-  if [ -z "$dump" ]; then echo "skipped (no dump on this host yet)"; return 0; fi
+  local kind dump selected
+  selected="$(select_dump)"
+  kind="${selected%%	*}"; dump="${selected#*	}"
+  if [ "$kind" = none ]; then echo "skipped (no dump on this host yet)"; return 0; fi
+  if [ "$kind" = archive ] && [ "${STRICT_CURRENT:-0}" = 1 ]; then
+    echo "FAILED: no dump produced by this host; only archived history is present"
+    return 1
+  fi
   local tmp; tmp="$(mktemp -d)"
   restic restore latest --quiet --include "$dump" --target "$tmp" >/dev/null
   local a b
   a="$(sha256sum "$dump" | cut -d' ' -f1)"
   b="$(sha256sum "${tmp}${dump}" 2>/dev/null | cut -d' ' -f1 || true)"
   rm -rf "$tmp"
-  [ -n "$b" ] && [ "$a" = "$b" ] && { echo "$(basename "$dump") sha256 match"; return 0; }
+  [ -n "$b" ] && [ "$a" = "$b" ] && { echo "$(basename "$dump") sha256 match (${kind})"; return 0; }
   echo "MISMATCH for $(basename "$dump")"; return 1
 }
 
@@ -122,8 +164,10 @@ case "${1:-run}" in
   --restore-dump)
     [ -n "${2:-}" ] || die "--restore-dump needs a target directory"
     mkdir -p "$2"
-    restic restore latest --include "${DUMPS}/qevik-*.dump" --target "$2" | tail -3
-    log "dumps restored under $2${DUMPS} — newest: $(ls -1t "$2${DUMPS}"/qevik-*.dump | head -1)"
+    # Both kinds: what this host produced and the archived history beneath it.
+    restic restore latest --include "${DUMPS}" --target "$2" | tail -3
+    log "dumps restored under $2${DUMPS} — newest current: $(ls -1t "$2${DUMPS}"/qevik-*.dump 2>/dev/null | head -1 || echo none)"
+    log "archived history under $2${ARCHIVE}: $(find "$2${ARCHIVE}" -name 'qevik-*.dump' 2>/dev/null | wc -l | tr -d ' ') file(s)"
     log "next: qevik_backup.sh --verify-only <that file>, then pg_restore --no-owner -d qevik <that file>"
     exit 0 ;;
   --selftest)
@@ -147,6 +191,10 @@ case "${1:-run}" in
     log "selftest: PASS — snapshot ${snap} restored byte-identical, then forgotten and pruned"
     exit 0 ;;
   run) ;;
+  --strict-current)
+    # Once this host takes its own backups, "no current dump" is a failure and
+    # not something to paper over with an archived one.
+    STRICT_CURRENT=1 ;;
   *) die "unknown argument: $1" ;;
 esac
 

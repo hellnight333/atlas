@@ -112,6 +112,11 @@ else
 fi
 
 # Prune only verified backups, newest kept. Never prunes the one just taken.
+# Top level only, and that is the whole rule: retention owns the dumps *this
+# host produced*. `${DIR}/archive/` holds verified production dumps migrated
+# from the old host — history this host did not write — and `ls "${DIR}"/…`
+# never descends into it. Deleting those is a Phase 11 decision by the owner,
+# not a side effect of a nightly backup (B-5).
 ls -1t "${DIR}"/qevik-*.dump 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
     rm -f "$old"; echo "pruned $(basename "$old")"
 done
