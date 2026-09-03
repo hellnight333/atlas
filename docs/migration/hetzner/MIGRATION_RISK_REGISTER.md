@@ -64,5 +64,5 @@ Scale: L = Low / M = Medium / H = High.
 | F-3 | sshd accepts passwords; fail2ban inactive; ~6.2k attempts/day | `prod-security-misc.txt`; ADR-0011:84 | Key-only on target |
 | F-4 | Same SSH private key for Naml and Qevik hosts | ADR-0011:32 | Dedicated key (O2) |
 | F-5 | Google Places key exposed in a screenshot; rotation open since Aug | `00_PROJECT_STATE.md:390-391` | Rotate (O6) |
-| F-6 | Backups local-only; 8-day silent failure history; no alerting | `qevik_backup.sh`; PROJECT_STATE:432-438 | **Off-host copy + failure marker IMPLEMENTED on target 2026-09-03** (`OFFSITE_BACKUP.md`); `/api/health` component still T9 |
+| F-6 | Backups local-only; 8-day silent failure history; no alerting | `qevik_backup.sh`; PROJECT_STATE:432-438 | **Off-host copy + failure marker IMPLEMENTED on target 2026-09-03** (`OFFSITE_BACKUP.md`); **all 11 old-host verified dumps (08-17→09-03) in the Storage Box repo, snapshot `ed2b42b1`, full `check --read-data` clean, 11/11 restored sha256 match** (§10.1); `/api/health` component still T9 |
 | F-7 | Public 8080 routes reached via `/control/*`: whether **all** are auth-gated is UNKNOWN | repo UNKNOWN #10 | Not a migration item; flag for product |

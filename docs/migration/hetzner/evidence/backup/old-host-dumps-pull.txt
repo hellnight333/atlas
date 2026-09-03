@@ -1,0 +1,160 @@
+# Old-host verified PostgreSQL dumps → qevik-prod-01 → Storage Box (restic)
+# 2026-09-03. Names, sizes, mtimes, sha256 of dump FILES, snapshot ids, counts only.
+# No credentials, no dump contents. Old host (2.28.62.83) accessed read-only (ls/stat/sha256sum/head/tail).
+
+## Source inventory (old host /opt/qevik/backups, read-only)
+name size_bytes mtime_epoch
+qevik-20260817T131008Z.dump 456709 1786972208
+qevik-20260818T033454Z.dump 1546664 1787024094
+qevik-20260826T100930Z.dump 4136347 1787738971
+qevik-20260827T033326Z.dump 4204000 1787801607
+qevik-20260828T033126Z.dump 5560934 1787887887
+qevik-20260829T033526Z.dump 7875507 1787974527
+qevik-20260830T033131Z.dump 9567432 1788060692
+qevik-20260831T033231Z.dump 13338027 1788147153
+qevik-20260901T033259Z.dump 16983743 1788233581
+qevik-20260902T033425Z.dump 19600812 1788320067
+qevik-20260903T033126Z.dump 22146501 1788406288
+
+Excluded (not verified-by-restore, ad-hoc): /var/lib/qevik/backups/pre-multiindustry-20260819.sql, pre-quarantine-20260819.sql
+No *.UNVERIFIED files present on the source. qevik_test data: none in scope (dumps are of the qevik production DB only).
+
+## Source sha256 (computed on old host)
+15f56a87e77f841399cdf6e0c5a8bece1a21ff9d2a80cffc9ebbfe2bf40e4b2c  qevik-20260817T131008Z.dump
+1a137265306c41962c9b3960d2856a6bcb6a19e2e25f66b3d3afbc2bdd44027f  qevik-20260831T033231Z.dump
+364499f8dfe26285f90dd32ae7bf445fc07a06bd1bf2f1ab6d8cb4078623644e  qevik-20260830T033131Z.dump
+4f5fca571272927966d6aa22581379271f3babddcc04eaae2dfc8afeae82572b  qevik-20260828T033126Z.dump
+8b25d74396cfe99abe31393c7b897092c45c431c0aa1e23a31e079fa6b1fda74  qevik-20260818T033454Z.dump
+a7dc07855faaee501e4fe13cd5ba6000852200e577c9bd42536e6cc2eb76c48e  qevik-20260829T033526Z.dump
+b1e6b5ff26d842492d83d294278894d18a8df03a7fcbead17700f9c2f75546d2  qevik-20260901T033259Z.dump
+c507c4c018247ac334622133593f7b0d01e447c5ae208dab2eeddbbbeb2e1264  qevik-20260826T100930Z.dump
+cdca62e5dc5a9b3245be57f7d7f741ee3bc17d362226c42a04abb8bc347c755f  qevik-20260903T033126Z.dump
+da14acd553017918e18664c63f7e34acd737ab97d32dcd175f6eeafa4b025a8c  qevik-20260902T033425Z.dump
+e9d3afa915fb47e8fb53b6ee1c193b8c515a78eb3205c7d21aab0801b6406f09  qevik-20260827T033326Z.dump
+
+## Transport
+Mac-mediated stream (old host → Mac stdout/stdin pipe → target), no disk on the Mac, no agent forwarding.
+Byte-resumable 4 MiB chunks; every existing .part prefix-verified against the source's first N bytes before resuming.
+Log excerpt (final run):
+  === v3c rerun 2026-09-03T16:13:22Z ===
+  16:13:24Z SKIP qevik-20260817T131008Z.dump (already verified)
+  16:13:24Z SKIP qevik-20260818T033454Z.dump (already verified)
+  16:13:25Z SKIP qevik-20260826T100930Z.dump (already verified)
+  16:13:25Z SKIP qevik-20260827T033326Z.dump (already verified)
+  16:13:26Z SKIP qevik-20260828T033126Z.dump (already verified)
+  16:13:29Z qevik-20260829T033526Z.dump .part (7875507 B) verified as source prefix — resuming
+  16:13:30Z DONE qevik-20260829T033526Z.dump sha256 match, mtime restored
+  16:13:54Z DONE qevik-20260830T033131Z.dump sha256 match, mtime restored
+  16:14:29Z DONE qevik-20260831T033231Z.dump sha256 match, mtime restored
+  16:15:03Z DONE qevik-20260901T033259Z.dump sha256 match, mtime restored
+  16:15:42Z DONE qevik-20260902T033425Z.dump sha256 match, mtime restored
+  16:16:24Z DONE qevik-20260903T033126Z.dump sha256 match, mtime restored
+  ALL FILES TRANSFERRED
+  ALL 11 CHECKSUMS MATCH
+
+## Target sha256 after transfer (qevik-prod-01 /opt/qevik/backups)
+15f56a87e77f841399cdf6e0c5a8bece1a21ff9d2a80cffc9ebbfe2bf40e4b2c  qevik-20260817T131008Z.dump
+1a137265306c41962c9b3960d2856a6bcb6a19e2e25f66b3d3afbc2bdd44027f  qevik-20260831T033231Z.dump
+364499f8dfe26285f90dd32ae7bf445fc07a06bd1bf2f1ab6d8cb4078623644e  qevik-20260830T033131Z.dump
+4f5fca571272927966d6aa22581379271f3babddcc04eaae2dfc8afeae82572b  qevik-20260828T033126Z.dump
+8b25d74396cfe99abe31393c7b897092c45c431c0aa1e23a31e079fa6b1fda74  qevik-20260818T033454Z.dump
+a7dc07855faaee501e4fe13cd5ba6000852200e577c9bd42536e6cc2eb76c48e  qevik-20260829T033526Z.dump
+b1e6b5ff26d842492d83d294278894d18a8df03a7fcbead17700f9c2f75546d2  qevik-20260901T033259Z.dump
+c507c4c018247ac334622133593f7b0d01e447c5ae208dab2eeddbbbeb2e1264  qevik-20260826T100930Z.dump
+cdca62e5dc5a9b3245be57f7d7f741ee3bc17d362226c42a04abb8bc347c755f  qevik-20260903T033126Z.dump
+da14acd553017918e18664c63f7e34acd737ab97d32dcd175f6eeafa4b025a8c  qevik-20260902T033425Z.dump
+e9d3afa915fb47e8fb53b6ee1c193b8c515a78eb3205c7d21aab0801b6406f09  qevik-20260827T033326Z.dump
+
+## Old host re-stat after transfer (read-only) — unchanged
+  qevik-20260817T131008Z.dump 456709 1786972208
+  qevik-20260818T033454Z.dump 1546664 1787024094
+  qevik-20260826T100930Z.dump 4136347 1787738971
+  qevik-20260827T033326Z.dump 4204000 1787801607
+  qevik-20260828T033126Z.dump 5560934 1787887887
+  qevik-20260829T033526Z.dump 7875507 1787974527
+  qevik-20260830T033131Z.dump 9567432 1788060692
+  qevik-20260831T033231Z.dump 13338027 1788147153
+  qevik-20260901T033259Z.dump 16983743 1788233581
+  qevik-20260902T033425Z.dump 19600812 1788320067
+  qevik-20260903T033126Z.dump 22146501 1788406288
+
+## Restic upload, check, restore, pg_restore --list, size (run on qevik-prod-01)
+== 1. local dumps on target
+456709 2026-08-17T13:10:08Z /opt/qevik/backups/qevik-20260817T131008Z.dump
+1546664 2026-08-18T03:34:54Z /opt/qevik/backups/qevik-20260818T033454Z.dump
+4136347 2026-08-26T10:09:31Z /opt/qevik/backups/qevik-20260826T100930Z.dump
+4204000 2026-08-27T03:33:27Z /opt/qevik/backups/qevik-20260827T033326Z.dump
+5560934 2026-08-28T03:31:27Z /opt/qevik/backups/qevik-20260828T033126Z.dump
+7875507 2026-08-29T03:35:27Z /opt/qevik/backups/qevik-20260829T033526Z.dump
+9567432 2026-08-30T03:31:32Z /opt/qevik/backups/qevik-20260830T033131Z.dump
+13338027 2026-08-31T03:32:33Z /opt/qevik/backups/qevik-20260831T033231Z.dump
+16983743 2026-09-01T03:33:01Z /opt/qevik/backups/qevik-20260901T033259Z.dump
+19600812 2026-09-02T03:34:27Z /opt/qevik/backups/qevik-20260902T033425Z.dump
+22146501 2026-09-03T03:31:28Z /opt/qevik/backups/qevik-20260903T033126Z.dump
+== 2. qevik-offsite.service run (real dumps)
+systemctl start exit=0
+Starting qevik-offsite.service - Qevik off-host backup to the Hetzner Storage Box (restic over SFTP)...
+2026-09-03T16:26:34Z backup: 2 path(s) → sftp repository
+2026-09-03T16:26:36Z backup: snapshot ed2b42b1 — 11 new, 3 changed files, 75 MiB added
+2026-09-03T16:26:36Z retention: keep daily=30 weekly=8 monthly=6
+2026-09-03T16:26:42Z check: repository consistent, 5% of data read back
+2026-09-03T16:26:43Z restore-verify: qevik-20260903T033126Z.dump sha256 match
+2026-09-03T16:26:45Z OK in 9s — 2 daily snapshot(s) retained off-host
+qevik-offsite.service: Deactivated successfully.
+Finished qevik-offsite.service - Qevik off-host backup to the Hetzner Storage Box (restic over SFTP).
+qevik-offsite.service: Consumed 5.667s CPU time over 10.314s wall clock time, 270.9M memory peak.
+-- status.json
+{"unit":"qevik-offsite","host":"qevik-prod-01","last_run_utc":"2026-09-03T16:26:43Z","result":"ok","snapshot":"ed2b42b1","restore_verified":"qevik-20260903T033126Z.dump sha256 match","check":"ok(5%)","repository":"sftp:…","keep":"daily=30,weekly=8,monthly=6","duration_s":9,"note":""}
+status exit=0
+== 3. full restic check --read-data (100%)
+[0:00] 100.00%  2 / 2 snapshots
+read all data
+[0:00] 100.00%  8 / 8 packs
+no errors were found
+check exit=0
+== 4. restore all dumps from Storage Box → /root/restore-test
+restoring snapshot ed2b42b1 of [/opt/qevik/backups /var/lib/qevik/backup] at 2026-09-03 16:26:34.901657637 +0000 UTC by root@qevik-prod-01 to /root/restore-test
+Summary: Restored 14 / 11 files/dirs (100.533 MiB / 100.533 MiB) in 0:00
+-- sha256 of restored files vs source manifest
+RESTORED 11 dumps: ALL sha256 MATCH SOURCE
+-- restored mtimes preserved?
+2026-08-17T13:10:08Z qevik-20260817T131008Z.dump
+2026-08-18T03:34:54Z qevik-20260818T033454Z.dump
+2026-08-26T10:09:31Z qevik-20260826T100930Z.dump
+2026-08-27T03:33:27Z qevik-20260827T033326Z.dump
+2026-08-28T03:31:27Z qevik-20260828T033126Z.dump
+2026-08-29T03:35:27Z qevik-20260829T033526Z.dump
+2026-08-30T03:31:32Z qevik-20260830T033131Z.dump
+2026-08-31T03:32:33Z qevik-20260831T033231Z.dump
+2026-09-01T03:33:01Z qevik-20260901T033259Z.dump
+2026-09-02T03:34:27Z qevik-20260902T033425Z.dump
+2026-09-03T03:31:28Z qevik-20260903T033126Z.dump
+== 5. pg_restore --list on every restored dump (TOC entry counts only)
+qevik-20260817T131008Z.dump pg_restore_exit=0 toc_entries=250 table_data_entries=65
+qevik-20260818T033454Z.dump pg_restore_exit=0 toc_entries=250 table_data_entries=65
+qevik-20260826T100930Z.dump pg_restore_exit=0 toc_entries=278 table_data_entries=70
+qevik-20260827T033326Z.dump pg_restore_exit=0 toc_entries=292 table_data_entries=72
+qevik-20260828T033126Z.dump pg_restore_exit=0 toc_entries=296 table_data_entries=73
+qevik-20260829T033526Z.dump pg_restore_exit=0 toc_entries=296 table_data_entries=73
+qevik-20260830T033131Z.dump pg_restore_exit=0 toc_entries=296 table_data_entries=73
+qevik-20260831T033231Z.dump pg_restore_exit=0 toc_entries=296 table_data_entries=73
+qevik-20260901T033259Z.dump pg_restore_exit=0 toc_entries=296 table_data_entries=73
+qevik-20260902T033425Z.dump pg_restore_exit=0 toc_entries=304 table_data_entries=75
+qevik-20260903T033126Z.dump pg_restore_exit=0 toc_entries=304 table_data_entries=75
+== 6. repository size
+{"total_size":78244755,"total_uncompressed_size":79491088,"compression_ratio":1.0159286459520513,"compression_progress":100,"compression_space_saving":1.5678902268893347,"total_blob_count":65,"snapshots_count":2}
+
+{"total_size":105417630,"total_file_count":31,"snapshots_count":2}
+
+ID        Time                 Host           Tags    Size
+-----------------------------------------------------------------
+b5212410  2026-09-03 11:12:05  qevik-prod-01  daily   484 B
+ed2b42b1  2026-09-03 16:26:34  qevik-prod-01  daily   100.534 MiB
+-----------------------------------------------------------------
+2 snapshots
+-- storage box usage (sftp df)
+sftp> df -h
+    Size     Used    Avail   (root)    %Capacity
+   1.0TB   75.4MB   1024GB   1024GB           0%
+== 7. cleanup
+restore-test removed

@@ -158,8 +158,35 @@ Full output: `evidence/backup/install-and-selftest.txt` (names, modes, fingerpri
 | Real run through systemd under `ProtectSystem=strict` etc. | PROVED | `systemctl start qevik-offsite.service` → `OK in 7s`, `status.json` result ok |
 | Failure marker written by `OnFailure=`, `--status` exit 2, cleared by next success | PROVED | transient `/bin/false` unit; systemd 259 `MONITOR_*` found unreliable → templated `%i` |
 | Timer enabled, next run 2026-09-04 04:15 UTC | PROVED | `systemctl list-timers` |
-| A **real** production dump round-trip (V15) | **NOT YET** | no Postgres/data on the target until Phase 4/6; data still on the old host (AR-4) |
+| The 11 verified production dumps from the old host are in the repository, byte-identical | PROVED | see §10.1 below; `evidence/backup/old-host-dumps-pull.txt` |
+| A **real** production dump restored from the Storage Box parses with `pg_restore --list` | PROVED | all 11 restored dumps: `pg_restore` exit 0, 250–304 TOC entries, 65–75 TABLE DATA entries |
+| A **real** production dump fully loaded into Postgres on the target (V15) | **NOT YET** | no Postgres server on the target until Phase 4; each dump was load-verified by `qevik_backup.sh` on the old host at creation time |
 | Restore on a machine that is not the server | **NOT YET** | `qevik_restore_offsite.sh` written; execution needs the owner to type both secrets on that machine |
+
+### 10.1 Old-host dumps pulled into the repository (2026-09-03 16:13–16:27 UTC)
+
+Owner GO: "pull old dumps", Mac-mediated, read-only, no agent forwarding. Evidence with every
+hash and count: `evidence/backup/old-host-dumps-pull.txt`.
+
+- **Copied: 11 dumps**, `qevik-20260817T131008Z.dump` … `qevik-20260903T033126Z.dump`
+  (dates 2026-08-17, 08-18, 08-26, 08-27, 08-28, 08-29, 08-30, 08-31, 09-01, 09-02, 09-03),
+  100.5 MiB total. Excluded: the two ad-hoc `pre-*.sql` files under `/var/lib/qevik/backups`
+  (never verified by restore); no `.UNVERIFIED` existed; no test-DB data is in these dumps.
+- Source access: `ls`, `stat`, `sha256sum`, `head`, `tail` only. Re-`stat` after the copy shows
+  the same 11 names/sizes/mtimes. Nothing on the old host was modified or deleted (AR-4).
+- Transfer: old host → Mac stdin/stdout → target, 4 MiB resumable chunks, `.part` prefix
+  re-verified against the source before each resume; final 11/11 sha256 match; original mtimes
+  restored with `touch -d @epoch`, mode 0600.
+- Restic: `systemctl start qevik-offsite.service` → snapshot **`ed2b42b1`** (11 new files,
+  75 MiB added), `check --read-data-subset=5%` ok, restore-verify of the newest dump `sha256 match`,
+  `status.json` result ok. Then a **full `restic check --read-data`: 8/8 packs, no errors**.
+- Restore test: all 11 dumps restored from the Storage Box into `/root/restore-test`
+  (removed afterwards): **11/11 sha256 match the old-host checksums**, mtimes preserved, and
+  `pg_restore --list` (postgresql-client 18.6, same major as the old host's `pg_dump` 18.6)
+  exits 0 on every file — 250→304 TOC entries, 65→75 TABLE DATA entries, growing with the dates.
+- Repository after upload: raw data 78.2 MB (74.6 MiB) in 65 blobs; restore size 105.4 MB;
+  Storage Box shows 75.4 MB used of 1 TB; 2 snapshots (`b5212410` state-only, `ed2b42b1` dumps).
+- The full-load test (V15) still waits for Postgres on the target (Phase 4).
 
 Interim note: until Phase 4 deploys the repo, the installed sources live in `/root/qevik-infra/`
 on the target (copied from `infra/` at this commit). After Phase 4, re-run the installer from

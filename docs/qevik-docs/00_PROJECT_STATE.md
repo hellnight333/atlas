@@ -52,7 +52,9 @@ about $0.58.
   runs `restic check` and restores the newest dump back to compare bytes. Failures
   write `/var/lib/qevik/backup/FAILED` (`qevik-backup-failed@.service`). Runbook:
   `docs/migration/hetzner/OFFSITE_BACKUP.md`. The repository password exists only in
-  `/opt/qevik/backup.env` and the owner's password manager.
+  `/opt/qevik/backup.env` and the owner's password manager. The repository already
+  holds the 11 verified production dumps from the old host (2026-08-17 → 2026-09-03,
+  snapshot `ed2b42b1`, pulled read-only on 2026-09-03; `OFFSITE_BACKUP.md` §10.1).
 - `qevik-api` — systemd, enabled at boot, restarts on failure (verified by
   SIGKILL, not by reading the config). `127.0.0.1:8080`, health returns 200.
 - `postgresql` — systemd, enabled at boot.
