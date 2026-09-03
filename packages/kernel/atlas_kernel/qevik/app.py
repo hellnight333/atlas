@@ -35,7 +35,6 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from ..approval.models import ApprovalRequest
-from ..mission import artefact
 from ..auth import api as auth_api
 from ..auth.api import current_user
 from ..auth.models import User
@@ -50,10 +49,12 @@ from ..credentials.vault import FileSecretStore, Vault
 from ..credits import CreditService
 from ..customer import api as customer_api
 from ..fabric import Registry as AgentRegistry
+from ..fabric import api as fabric_api
 from ..fabric.sandbox import Confinement
 from ..fabric.sandbox import available as sandbox_available
 from ..fabric.sandbox import describe as describe_sandbox
 from ..mission import api as mission_api
+from ..mission import artefact
 from ..mission.claims import LocalClaims
 from ..mission.claims import describe as describe_claims
 from ..mission.timeline import Timeline
@@ -71,6 +72,7 @@ log = logging.getLogger(__name__)
 #: what happened to all of them before this module existed.
 SURFACES: tuple[str, ...] = (
     "auth", "customer", "mission", "credentials", "models", "chat", "sales",
+    "fabric",
 )
 
 #: Where the vault keeps ciphertext when a deployment does not say otherwise.
@@ -227,6 +229,7 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     chat_api.install(app)
     sales_api.install(app)
     discovery_api.install(app)
+    fabric_api.install(app)
 
     timeline = (Timeline(wiring.mission_timeline)
                 if wiring.mission_timeline is not None else None)
