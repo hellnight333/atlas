@@ -94,6 +94,15 @@ ssh $SSH_ID "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /h
 echo "==> copying the console to $REMOTE"
 ssh $SSH_ID "$TARGET" "mkdir -p $REMOTE.incoming"
 scp $SSH_ID -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
+
+# The floor ships inside the same staging directory, so it goes live in the one
+# atomic swap below or not at all. It is not its own origin on purpose: it reads
+# the session out of the console's sessionStorage and is allowed by the console's
+# CSP, and a second origin would mean a second login for the same operator.
+echo "==> copying the floor to $REMOTE/office"
+ssh $SSH_ID "$TARGET" "mkdir -p $REMOTE.incoming/office"
+scp $SSH_ID -q "$HERE/../apps/office/index.html" "$TARGET:$REMOTE.incoming/office/"
+
 # Swap, rather than overwrite in place: a half-copied console is a broken
 # console that is live, which is worse than the previous one still being live.
 ssh $SSH_ID "$TARGET" "rm -rf $REMOTE.previous && \

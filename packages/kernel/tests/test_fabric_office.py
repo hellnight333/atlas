@@ -194,3 +194,63 @@ def test_the_office_route_is_mounted_and_authenticated(client) -> None:
 @pytest.mark.real_auth
 def test_the_office_is_not_public(client) -> None:
     assert client.get("/api/fabric/office").status_code == 401
+
+
+# --- the floor is actually shipped ---------------------------------------------
+
+def test_the_floor_is_staged_before_the_swap_that_promotes_it() -> None:
+    """Order, not merely presence.
+
+    The first version of this copied the floor *after* the console's
+    `.incoming` → live swap, which creates a fresh staging directory nothing
+    ever promotes: the deploy would have exited zero having shipped a floor
+    nobody could reach. Both copies must land in the staging directory, and the
+    swap must come after both.
+    """
+    from pathlib import Path
+
+    deploy = (Path(__file__).resolve().parents[3] / "infra" / "deploy_console.sh"
+              ).read_text(encoding="utf-8")
+    console = deploy.index('scp $SSH_ID -q -r "$LOCAL"/*')
+    floor = deploy.index("apps/office/index.html")
+    swap = deploy.index("mv $REMOTE.incoming $REMOTE")
+    assert console < floor < swap, (
+        "the floor must be staged with the console and promoted by the same swap")
+
+
+def test_the_floor_is_a_single_self_contained_file() -> None:
+    """The production CSP allows 'self' and inline only.
+
+    A stylesheet link, a CDN script or a font host would be silently blocked in
+    production and only in production — the failure mode this whole
+    no-build-step architecture exists to avoid.
+    """
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
+            ).read_text(encoding="utf-8")
+    assert "<script" in page and "<style" in page
+    for forbidden in ("src=\"http", "href=\"http", "cdn.", "fonts.googleapis", "unpkg"):
+        assert forbidden not in page, f"the floor reaches outside its own origin: {forbidden}"
+
+
+def test_the_floor_hardcodes_no_host() -> None:
+    """It is served from the machine it reads, so a baked-in address is how a
+    console ends up reporting another host's state as its own."""
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
+            ).read_text(encoding="utf-8")
+    assert "2.28.62.83" not in page and "91.107.244.253" not in page
+
+
+def test_the_floor_keeps_the_session_off_disk() -> None:
+    """sessionStorage, never localStorage — the console's own rule, and the
+    floor shares its origin, so a divergence here would leave a bearer token on
+    disk for the same operator."""
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
+            ).read_text(encoding="utf-8")
+    assert "sessionStorage" in page
+    assert "localStorage" not in page
