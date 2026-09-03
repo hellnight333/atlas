@@ -582,6 +582,48 @@ and belongs to Phase 4.
 
 ---
 
+## 13a. As implemented (2026-09-03)
+
+Approved with amendments A-1, A-2, A-3 and decisions D-S1…D-S7 (all as
+recommended, except D-S4 where the owner chose deletion over deprecation, and
+D-S7 where the owner chose **(a)** — the whole stage lands before Phase 3).
+Repository only: no host was touched, no secret handled, no deploy run.
+
+| Commit | Workstream | What landed |
+|---|---|---|
+| `ac150d1` | WS-1 (B-3) | `infra/deploy_targets.conf` + `deploy_target.sh` + `deploy_targets.py`; all three deploy scripts and the DevLoop gates resolve host **and** identity through it; `IdentitiesOnly=yes`; `PUBLIC_BASE` off the old IP; `cloudflare.py ORIGIN_IP` documented as a separately-owned DNS guard with a tripwire test |
+| `0934ac7` | WS-2 (B-4) | the schema step, three DevLoop probe builders, `qevik_backup.sh` and `bootstrap_qevik_server.sh` all read the environment through `systemd-run --property=EnvironmentFile=`; the schema step runs as the service account in the app directory |
+| `2f4659c` | WS-3 (B-1, B-2) | `infra/install_caddy.sh` (pinned GPG signing key, version gate ≥ 2.7, `caddy validate` gate); `:8443` block removed from the production Caddyfile; `evidence/phase-4/caddyfile-reconciliation.md` |
+| `01db2bf` | WS-5 (B-6) | deploy ships `.timer` files (snapshot and rollback widened to match); `infra/install_qevik_infra.sh` owns directories, slice, drop-in and enablement, and refuses `--enable-backup-timer` on two guards; `recover_qevik_server.sh` delegates |
+| `5fa9cc7` | WS-6 (B-5) | `current_dump` / `archived_dump` / `select_dump` with explicit precedence and `--strict-current`; pruner ownership documented; `--restore-dump` returns both kinds |
+| `4a3aa9f` | WS-7 (D-S1/3/4) | console kernel rsync removed; `secure_8443.sh`, `qevik-control.Caddyfile`, `qevik-sites.Caddyfile` deleted; repo-wide guards against the IP and the shared key returning |
+
+**Where the implementation differs from §3–§8 above**
+
+1. **A-1 (no default target).** §3.2 rule 4 said "nothing given → the registry's
+   `default` entry"; there is no default entry and no default host. Running any
+   deploy script without `--target` (or `QEVIK_DEPLOY_TARGET`) exits 2 and lists
+   the known names. **Consequence for the cutover:** it is no longer a one-line
+   flip of a `default =` line — every invocation names its target, and the
+   rollback is typing `old-prod`. The registry file itself does not change at
+   cutover.
+2. **A-2 (GPG, not SSH).** §4.2 said "signing key fingerprint" loosely; the
+   implementation pins the **repository GPG signing key**
+   (`65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, read from the host that has been
+   verifying these packages since 2026-08-17), verifies it with
+   `gpg --show-keys --with-fingerprint` **before** the keyring is written, and
+   records the installed version, the apt origin and the package digest.
+3. **A-3 (dump selection).** §8.3 proposed making `newest_dump()` recursive. It
+   is not: `current_dump()` (top level, what this host produced) always wins,
+   `archived_dump()` answers only while there is no current dump, `status.json`
+   records which kind was proved, and `--strict-current` makes a missing current
+   dump a failure once the database holds data.
+4. **DevLoop gates.** Not in §3: with no target configured they now report
+   `unmeasured` rather than reaching for whichever host used to be production,
+   and `provenance()` degrades instead of raising into the driver.
+5. **`qevik_backup.sh`** took D-S5 option (a) by re-executing itself *through*
+   systemd rather than growing a second parser — one parser, no divergence.
+
 ## 14. What happens after this spec is approved
 
 1. Implement WS-1…WS-6 in the landing order of §9, each as a reviewed commit with its tests; run the full suite; **no host is touched**.
@@ -589,5 +631,6 @@ and belongs to Phase 4.
 3. Only then: the **Phase 3 Pre-Execution Plan** (host baseline — swap, sshd hardening under AR-2, ufw, fail2ban, `qevik` user, directory skeleton — then the owner types the env files, with the DB password now genuinely unconstrained thanks to WS-4).
 4. Then Phase 4, per `PHASE_4_PRE_EXECUTION_REVIEW.md` §12 with the amendments above.
 
-**Stop.** Nothing is implemented or executed. Awaiting the owner's approval of
-this specification, and the D-S1…D-S7 answers.
+**Status 2026-09-03:** §13a records the implementation. The stage is code-complete
+and green on the repository-level matrix; nothing has run against a host. Phase 3
+begins only after this stage is reviewed.

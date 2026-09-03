@@ -446,6 +446,17 @@ and hosts today; they are not in the existing documents.
 
 | # | Item | Class | Consequence / proposed handling (no decision taken) |
 |---|---|---|---|
+> **Update 2026-09-03 (enablement stage):** N-1…N-4 and the two retention items are
+> **implemented in the repository** — `infra/install_caddy.sh` (version + validate
+> gates), the `:8443` removal with `evidence/phase-4/caddyfile-reconciliation.md`,
+> `infra/deploy_targets.conf` with host *and* identity resolution, the
+> systemd-mediated environment read, and the archive/retention split. §12's step
+> list is superseded where it says "apt install … caddy" (step 4 →
+> `infra/install_caddy.sh`), where it installs the slice, drop-in, directories and
+> timers by hand (steps 5, 7, 10 → `infra/install_qevik_infra.sh`), and where it
+> calls the deploy scripts (steps 8, 9, 12 → `--target new-prod`). See
+> `MIGRATION_ENABLEMENT_SPEC.md` §13a.
+
 | N-1 | **NEW — Caddy version.** Plan Phase 4 says `apt install … caddy`; Ubuntu 26.04's candidate is **2.6.2**, the old host runs **2.11.4 from Cloudsmith**, and the repo Caddyfile requires ≥ 2.7 | blocker for step 4 | add the Cloudsmith source (or an equivalent pinned ≥ 2.11 build) and record it as a new apt trust anchor |
 | N-2 | **NEW — the live Caddyfile is older than the repo's.** Live (225 lines) still has the SPA fallback; the repo (290 lines) has the 404 fix. `DATA_AND_STATE_INVENTORY.md` P1 says to migrate the live file as source of truth | doc drift | target takes the **repo** file minus the `:8443` block; P1's wording should be corrected when the owner approves this review |
 | N-3 | **NEW — R-12 is wider than the IP.** All three deploy scripts hard-code `~/.ssh/naml_hetzner`, which D-F/SR-4 forbid on the new host; the parameterisation must cover the key, not just the host | blocker for steps 8/9/12 | fold into the O10 change |

@@ -43,6 +43,24 @@ key and is not.
 the constraint that made every market unworkable. A full six-niche scan costs
 about $0.58.
 
+### Deploying (changed 2026-09-03)
+
+A deploy names its target: `./infra/deploy_control.sh --target old-prod` (or
+`new-prod`). `infra/deploy_targets.conf` is the one place that says which host
+each name means and which identity may reach it; there is **no default host**, an
+unknown name is refused, and a raw `user@host` needs an explicit
+`QEVIK_DEPLOY_KEY`. Two production hosts exist during the Hetzner migration, and
+the new one must never accept the old shared key.
+
+The deploy now also ships `qevik-*.timer` files and still enables nothing;
+`infra/install_qevik_infra.sh` owns the directory layout, the resource limits and
+enablement, and refuses to enable `qevik-backup.timer` until the database holds
+data and the migrated dumps are archived. The environment reaches the schema step
+through systemd's `EnvironmentFile=` rather than a shell, so a database password
+may contain any byte. `infra/install_caddy.sh` installs a Caddy new enough to run
+the shipped configuration (Ubuntu's 2.6.2 is not). Detail:
+`docs/migration/hetzner/MIGRATION_ENABLEMENT_SPEC.md`.
+
 ### Running services
 
 - `qevik-offsite.timer` — 04:15 UTC daily on the Hetzner target `qevik-prod-01`

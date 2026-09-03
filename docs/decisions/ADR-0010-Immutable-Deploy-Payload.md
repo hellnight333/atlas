@@ -160,6 +160,28 @@ for deployed content.
     the real host — and it is **human-watched, on a trivial low-risk reviewed
     commit**, never under an unattended `driver.py run`.
 
+### Amendment 2026-09-03 — target, identity and environment (migration enablement)
+
+Three parts of the contract changed while preparing the Hetzner migration, each
+under its own reviewed commit (`MIGRATION_ENABLEMENT_SPEC.md`):
+
+1. **Where a deploy goes is named, never defaulted.** `TARGET`/`KEY` are no
+   longer literals in the script: `infra/deploy_targets.conf` names each host and
+   the identity it may be reached with, `--target <name>` selects one, and no
+   argument is a refusal. With two production hosts alive at once, a default is
+   a coin toss; and the new host must never accept the old shared key, so the
+   identity travels with the host rather than being assumed.
+2. **The environment is read by systemd, not by a shell.** The schema step passed
+   `/opt/qevik/atlas.env` to a shell, so a database password containing shell
+   metacharacters broke the deploy or was silently altered. It now goes through
+   `systemd-run --property=EnvironmentFile=` — the same parser the units use —
+   and runs as the service account in the application directory.
+3. **Timers ship with the code** (see the closed non-goal below), and the deploy
+   continues to enable nothing.
+
+The payload, the manifest, the provenance marker, the refusals and the rollback
+are unchanged.
+
 ### Non-goals (parked, not implemented here)
 
 Each of these was found in the analysis and is real; none is Step 1. Each is
@@ -168,8 +190,14 @@ a separate decision or task, to be raised rather than folded in.
 - **Restart order** — `qevik-api`/`qevik-control` restart at `:164`, before
   the units are installed at `:200-204`; a changed api/control unit takes
   effect at a later restart. Behaviour change, not layout: separate task.
-- **Timers unshipped** — the unit glob is `qevik-*.service`; `qevik-backup.timer`
-  and `qevik-market-scan.timer` on `main` are never installed.
+- ~~**Timers unshipped** — the unit glob is `qevik-*.service`; `qevik-backup.timer`
+  and `qevik-market-scan.timer` on `main` are never installed.~~
+  **Closed 2026-09-03** by the migration-enablement stage: the glob is
+  `qevik-*.service` **and** `qevik-*.timer`, and the pre-deploy snapshot and the
+  rollback cover the same set (shipping a timer the rollback did not save would
+  have deleted it). The deploy still **enables** nothing — a shipped timer is
+  inert until `infra/install_qevik_infra.sh` enables it, and the backup timer is
+  refused until the database holds data and the migrated dumps are archived.
 - **The script itself runs from the tree** (`gates.py:331`, `ROOT` from `$0`).
   Materialising it from `S` needs a `ROOT=` override; deferred.
 - **No dependency install step** — a `pyproject`/lock change ships and fails

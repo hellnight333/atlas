@@ -83,6 +83,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Success criteria:** `--rehearse` resolves the new host with the `qevik_prod` key and `naml_hetzner` appears nowhere in its argv; defaults still point at the old host; the full test suite is green.
 - **Rollback:** revert the commits; defaults are unchanged, so the old host stays addressable exactly as today.
 - **Owner approval:** approval of `MIGRATION_ENABLEMENT_SPEC.md` and the D-S1…D-S7 answers, then review + push of each commit.
+- **Status 2026-09-03:** **IMPLEMENTED, awaiting review.** Six reviewed commits (`ac150d1`, `0934ac7`, `2f4659c`, `01db2bf`, `5fa9cc7`, `4a3aa9f`) with 60+ new tests; `MIGRATION_ENABLEMENT_SPEC.md` §13a records what landed and where it differs from the specification. No host was touched, no secret handled, no deploy run. Phase 3 starts only after this is reviewed (D-S7 = all six workstreams first).
 
 ## Phase 3 — Security & Access Baseline
 

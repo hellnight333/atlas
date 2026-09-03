@@ -204,7 +204,14 @@ newest. Before any backup unit runs here:
 - the archive is removed only at Phase 11, by owner decision, after the old host's
   final archive is restore-tested.
 
-Specified in `MIGRATION_ENABLEMENT_SPEC.md` §8. **Not yet implemented.**
+Specified in `MIGRATION_ENABLEMENT_SPEC.md` §8; **the code landed 2026-09-03**
+(`5fa9cc7`): `qevik_backup.sh`'s pruner is documented as owning only the top level,
+`qevik_offsite.sh` selects a **current** dump when one exists and falls back to the
+archive only while this host has produced none (`--strict-current` makes that a
+failure once the database holds data), and `install_qevik_infra.sh` refuses to
+enable `qevik-backup.timer` while an unarchived migrated dump is still in the
+retention path. **The move itself has not been performed** — it is a host action,
+and no host has been touched.
 
 Interim note: until Phase 4 deploys the repo, the installed sources live in `/root/qevik-infra/`
 on the target (copied from `infra/` at this commit). After Phase 4, re-run the installer from
