@@ -213,6 +213,15 @@ enable `qevik-backup.timer` while an unarchived migrated dump is still in the
 retention path. **The move itself has not been performed** — it is a host action,
 and no host has been touched.
 
+**Order matters when it is performed.** `/usr/local/sbin/qevik_offsite.sh` on the
+target is the version installed on 2026-09-03, before this change: it looks for
+dumps only in the top level of `/opt/qevik/backups`. Move the dumps before
+re-running `install_offsite_backup.sh` from the deployed tree and the nightly
+restore-verify reports "skipped (no dump on this host yet)" — the off-host copy
+stops being proved without anything failing. Correct order: deploy → re-run
+`install_offsite_backup.sh` → move the dumps into `archive/old-host/` → confirm
+`--status` still reports a `sha256 match`.
+
 Interim note: until Phase 4 deploys the repo, the installed sources live in `/root/qevik-infra/`
 on the target (copied from `infra/` at this commit). After Phase 4, re-run the installer from
 `/opt/qevik/atlas/infra/` and remove `/root/qevik-infra`.

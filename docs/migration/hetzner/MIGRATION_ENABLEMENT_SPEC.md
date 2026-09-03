@@ -624,6 +624,41 @@ Repository only: no host was touched, no secret handled, no deploy run.
 5. **`qevik_backup.sh`** took D-S5 option (a) by re-executing itself *through*
    systemd rather than growing a second parser — one parser, no divergence.
 
+## 13b. Cross-workstream review (2026-09-03)
+
+The six workstreams touch each other in four places. Reviewed together after
+they landed:
+
+| Interaction | Finding | Resolution |
+|---|---|---|
+| WS-1 payload ↔ WS-5 manifest | `deploy_target.sh` and `deploy_targets.conf` are `infra/` files, so they ship with the payload and appear in the manifest. The deploy sources them from its own directory, which is where they land | Intended. The fixture repository in `test_deploy_control.py` carries them for the same reason |
+| WS-1 ↔ WS-4 | `inspection.py` still guarded on `KEY.exists()` after the constant was removed — a `NameError` the first time the DevLoop asked the control plane anything | Fixed in `6e5b930`, with the sibling modules' pattern |
+| WS-5 guard ↔ WS-6 archive | the guard reasoned about timestamps ("older than this host's boot"), which a reboot after the data migration breaks and an unreadable boot time fails *open* | Rewritten structurally in `6e5b930`: dumps present **and** no archive directory ⇒ refuse |
+| WS-5 timers ↔ `install_offsite_backup.sh` | both now install `qevik-offsite.timer`; the files are identical, and the deploy becomes the source of truth | Fine, and an improvement |
+
+**One ordering constraint this produced, which belongs in the Phase 4 runbook:**
+
+> `/usr/local/sbin/qevik_offsite.sh` on the target is the version installed on
+> 2026-09-03, **before** WS-6. It still looks for dumps only in the top level of
+> `/opt/qevik/backups`. So the archive move must not happen before
+> `install_offsite_backup.sh` is re-run from the deployed tree — otherwise the
+> nightly restore-verify reports "skipped (no dump on this host yet)" and the
+> off-host copy silently stops being proved. Correct order: deploy →
+> re-run `install_offsite_backup.sh` → move the dumps to `archive/old-host/` →
+> confirm `--status` still shows a `sha256 match`.
+
+**Verification the repository can do, and what it cannot.** Every claim above is
+tested locally; three things can only be proved on a host and are Phase 4 gates:
+that systemd's real `EnvironmentFile=` parser agrees with the shim used in the
+tests (it was proved once already for the backup password), that
+`caddy validate` accepts the configuration on the installed build, and that
+`--rehearse` against `new-prod` resolves and writes nothing.
+
+**Tooling note.** `ruff` is clean on every file this stage touched. `black` and
+`mypy` are configured but the tree does not currently satisfy either (238 mypy
+errors across 53 files, and the existing `infra/` and test files are not
+black-formatted); reformatting the tree is not part of this stage.
+
 ## 14. What happens after this spec is approved
 
 1. Implement WS-1…WS-6 in the landing order of §9, each as a reviewed commit with its tests; run the full suite; **no host is touched**.
