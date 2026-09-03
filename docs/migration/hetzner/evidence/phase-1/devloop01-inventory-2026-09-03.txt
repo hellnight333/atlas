@@ -1,0 +1,415 @@
+# qevik-devloop-01 read-only inventory — 2026-09-03 07:28–07:35 UTC
+# Collected over SSH (key devloop_01) with read-only commands only; nothing on the host was changed.
+# Sanitised: Hetzner vendor_data (cloud-init multipart incl. random_seed) omitted; public-key material replaced by fingerprint; SHA256 fingerprints in sshd log lines abbreviated.
+
+### identity
+Static hostname: qevik-devloop-01
+Icon name: computer-vm
+Chassis: vm 🖴
+Machine ID: fe980c1d632c4d998c0d126e5da333d6
+Boot ID: 078d9782c1fb4893aa9bb6e9f4ef6375
+Product UUID: fe980c1d-632c-4d99-8c0d-126e5da333d6
+Virtualization: kvm
+Operating System: Ubuntu 26.04.1 LTS
+Kernel: Linux 7.0.0-30-generic
+Architecture: x86-64
+Hardware Vendor: Hetzner
+Hardware Model: vServer
+Hardware Serial: 164307556
+Hardware SKU: TM
+Hardware Version: 20171111
+Firmware Version: 20171111
+Firmware Date: Sat 2017-11-11
+Firmware Age: 8y 9month 3w 1d
+uptime:  07:28:23 up 19:04,  1 user,  load average: 0.03, 0.06, 0.07
+Thu Sep  3 07:28:23 AM UTC 2026
+### metadata
+instance-id: 164307556
+hostname: qevik-devloop-01
+region: eu-central
+availability-zone: nbg1-dc3
+local-ipv4: ""
+network-config:
+    version: 1
+    config:
+        - type: physical
+          name: eth0
+          mac_address: 92:00:09:cb:22:64
+          subnets:
+            - type: dhcp
+              ipv4: true
+            - type: static
+              address: 2a01:4f8:1c1b:1dbe::1/64
+              ipv6: true
+              gateway: fe80::1
+              dns_nameservers:
+                - 2a01:4ff:ff00::add:2
+                - 2a01:4ff:ff00::add:1
+vendor_data: <omitted — Hetzner cloud-init multipart, contains random_seed>
+public-keys:
+    - ssh-ed25519 <key material omitted; fingerprint SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues>
+public-ipv4: 91.107.244.253
+
+### cpu/mem/disk
+CPU(s):                                  8
+Model name:                              AMD EPYC-Genoa Processor
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Hypervisor vendor:                       KVM
+               total        used        free      shared  buff/cache   available
+Mem:           15603         534       14775           4         571       15068
+Swap:              0           0           0
+NAME      SIZE TYPE FSTYPE MOUNTPOINT
+sda     305.2G disk        
+├─sda1  304.9G part ext4   /
+├─sda14     1M part        
+└─sda15   256M part vfat   /boot/efi
+sr0      1024M rom         
+Filesystem     Type      Size  Used Avail Use% Mounted on
+/dev/sda1      ext4      301G  1.7G  287G   1% /
+efivarfs       efivarfs  256K   33K  219K  13% /sys/firmware/efi/efivars
+/dev/sda15     vfat      253M  154K  252M   1% /boot/efi
+### network
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             UP             91.107.244.253/32 metric 100 2a01:4f8:1c1b:1dbe::1/64 fe80::9000:9ff:fecb:2264/64 
+default via fe80::1 dev eth0 proto static metric 1024 onlink pref medium
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "92:00:09:cb:22:64"
+      addresses:
+      - "2a01:4f8:1c1b:1dbe::1/64"
+      nameservers:
+        addresses:
+        - 2a01:4ff:ff00::add:2
+        - 2a01:4ff:ff00::add:1
+      dhcp4: true
+      set-name: "eth0"
+      routes:
+      - on-link: true
+        to: "default"
+        via: "fe80::1"
+### os/patch
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04.1 LTS (Resolute Raccoon)"
+7.0.0-30-generic
+no reboot-required
+0
+total 141516
+drwxr-xr-x 4 root root    16384 Sep  2 12:22 .
+drwxr-xr-x 5 root root     4096 Sep  3 01:12 ..
+2026-09-03 01:12:24.176153793 +0000 /var/lib/apt/periodic/download-upgradeable-stamp
+2026-09-03 06:38:26.615171683 +0000 /var/lib/apt/periodic/unattended-upgrades-stamp
+2026-09-03 01:12:23.029145110 +0000 /var/lib/apt/periodic/update-stamp
+2026-09-03 01:12:21.905136602 +0000 /var/lib/apt/periodic/update-success-stamp
+2026-09-03 06:38:26.650171950 +0000 /var/lib/apt/periodic/upgrade-stamp
+enabled
+APT::Periodic::Unattended-Upgrade "1";
+585
+### services (non-default running)
+atd.service
+chrony.service
+cron.service
+dbus.service
+getty@tty1.service
+multipathd.service
+networkd-dispatcher.service
+polkit.service
+qemu-guest-agent.service
+rsyslog.service
+serial-getty@ttyS0.service
+ssh.service
+systemd-hostnamed.service
+systemd-journald.service
+systemd-logind.service
+systemd-networkd.service
+systemd-resolved.service
+systemd-udevd.service
+unattended-upgrades.service
+user@0.service
+### enabled units (custom)
+acpid.path
+apport-autoreport.path
+tpm-udev.path
+apport.service
+atd.service
+gpu-manager.service
+netplan-configure.service
+open-vm-tools.service
+vgauth.service
+system-xfs_scrub.slice
+acpid.socket
+apport-forward.socket
+dm-event.socket
+lxd-installer.socket
+uuidd.socket
+apport-autoreport.timer
+mdcheck_continue.timer
+mdcheck_start.timer
+mdmonitor-oneshot.timer
+xfs_scrub_all.timer
+--- /etc/systemd/system custom files
+### timers
+apport-autoreport.service apport-autoreport.timer
+apt-daily.service apt-daily.timer
+apt-daily-upgrade.service apt-daily-upgrade.timer
+dpkg-db-backup.service dpkg-db-backup.timer
+e2scrub_all.service e2scrub_all.timer
+fstrim.service fstrim.timer
+logrotate.service logrotate.timer
+man-db.service man-db.timer
+motd-news.service motd-news.timer
+snapd.snap-repair.service snapd.snap-repair.timer
+sysstat-collect.service sysstat-collect.timer
+sysstat-rotate.service sysstat-rotate.timer
+sysstat-summary.service sysstat-summary.timer
+systemd-tmpfiles-clean.service systemd-tmpfiles-clean.timer
+ua-timer.service ua-timer.timer
+update-notifier-download.service update-notifier-download.timer
+update-notifier-motd.service update-notifier-motd.timer
+xfs_scrub_all.service xfs_scrub_all.timer
+### cron
+/etc/cron.d:
+total 16
+drwxr-xr-x   2 root root 4096 Apr 20 18:22 .
+drwxr-xr-x 103 root root 4096 Sep  2 12:23 ..
+-rw-r--r--   1 root root  102 Nov  5  2025 .placeholder
+-rw-r--r--   1 root root  188 Feb 13  2026 e2scrub_all
+
+/var/spool/cron/crontabs:
+total 8
+drwx-wx--T 2 root crontab 4096 Aug 26 09:11 .
+drwxr-xr-x 5 root root    4096 Aug 26 09:11 ..
+### docker/containers
+none installed
+no container units
+### processes (non-kernel)
+root         509       1   68654 38512 /usr/lib/systemd/systemd-journald
+root        1144       1   68648 32684 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+root        1069       1   68648 30104 /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+root           1       0   68660 15940 /usr/lib/systemd/systemd --switched-root --system --deserialize=52
+systemd+     568       1   68654 14316 /usr/lib/systemd/systemd-resolved
+root         578       1   68654 12968 /usr/lib/systemd/systemd-udevd
+root       14829       1       2 12952 /usr/lib/systemd/systemd --user
+systemd+    1007       1   68650 12364 /usr/lib/systemd/systemd-networkd
+root        1081       1   68648  9676 /usr/lib/systemd/systemd-logind
+root         550       1   68654  9644 /usr/sbin/multipathd -d -s
+polkitd    12259       1   22562  8476 /usr/lib/polkit-1/polkitd --no-debug --log-level=notice
+root       15081   14927       0  8396 sort -k5 -nr
+root       14930       1       1  8196 /usr/lib/systemd/systemd-hostnamed
+root       15082   14927       0  7736 head -40
+root        1104       1   68648  7684 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+root       14926   14824       1  7624 sshd-session: root@notty
+_chrony     1147    1056   68648  6344 /usr/sbin/chronyd -n -F 1
+syslog      1105       1   68648  6160 /usr/sbin/rsyslogd -n -iNONE
+message+    1062       1   68648  5444 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+root       15078   14927       0  4680 ps -eo user,pid,ppid,etimes,rss,args --no-headers
+root        1070       1   68648  4592 /usr/sbin/qemu-ga
+root       15079   14927       0  4552 awk $3!=2 && $2!=2
+root       14833   14829       2  4020 (sd-pam)
+root       14927   14926       1  4004 bash -s
+root        1058       1   68648  3396 /usr/sbin/cron -f -P
+root        1130       1   68648  3260 /usr/sbin/agetty --noreset --noclear --issue-file=/etc/issue:/etc/issue.d:/run/issue.d:/usr/lib/issue.d --keep-baud 115200,57600,38400,9600 - vt220
+root        1169       1   68648  2888 /usr/sbin/agetty --noreset --noclear --issue-file=/etc/issue:/etc/issue.d:/run/issue.d:/usr/lib/issue.d - linux
+daemon      1087       1   68648  2800 /usr/sbin/atd -f
+root       15080   14927       0  2648 grep -vE \[.*\]$
+_chrony     1158    1147   68648  2504 /usr/sbin/chronyd -n -F 1
+root        1056       1   68648  2012 /bin/sh /usr/lib/systemd/scripts/chronyd-starter.sh -n -F 1
+### listening
+Netid State  Recv-Q Send-Q       Local Address:Port Peer Address:PortProcess                                                 
+udp   UNCONN 0      0               127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=568,fd=18))              
+udp   UNCONN 0      0            127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=568,fd=16))              
+udp   UNCONN 0      0      91.107.244.253%eth0:68        0.0.0.0:*    users:(("systemd-network",pid=1007,fd=36))             
+udp   UNCONN 0      0                127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=1147,fd=4))                      
+udp   UNCONN 0      0                    [::1]:323          [::]:*    users:(("chronyd",pid=1147,fd=5))                      
+tcp   LISTEN 0      4096               0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=1104,fd=3),("systemd",pid=1,fd=106))
+tcp   LISTEN 0      4096         127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=568,fd=17))              
+tcp   LISTEN 0      4096            127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=568,fd=19))              
+tcp   LISTEN 0      4096                  [::]:22           [::]:*    users:(("sshd",pid=1104,fd=4),("systemd",pid=1,fd=107))
+### firewall
+Status: inactive
+3
+0
+### sshd
+port 22
+maxauthtries 6
+permitrootlogin prohibit-password
+pubkeyauthentication yes
+passwordauthentication yes
+kbdinteractiveauthentication no
+--- authorized_keys fingerprints
+/root/.ssh/authorized_keys
+256 SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues no comment (ED25519)
+total 12
+drwx------ 2 root root 4096 Aug 26 09:06 .
+drwx------ 4 root root 4096 Sep  2 12:22 ..
+-rw------- 1 root root   81 Sep  2 12:18 authorized_keys
+inactive
+### users/homes
+root:0:/root:/bin/bash
+nobody:65534:/nonexistent:/usr/sbin/nologin
+total 8
+drwxr-xr-x  2 root root 4096 Aug 26 09:11 .
+drwxr-xr-x 20 root root 4096 Sep  2 12:24 ..
+--- /root
+total 28
+drwx------  4 root root 4096 Sep  2 12:22 .
+drwxr-xr-x 20 root root 4096 Sep  2 12:24 ..
+-rw-------  1 root root  292 Sep  2 12:32 .bash_history
+-rw-r--r--  1 root root 3106 Apr 20 08:46 .bashrc
+drwx------  2 root root 4096 Aug 26 09:06 .cache
+-rw-r--r--  1 root root    0 Aug 26 09:09 .cloud-locale-test.skip
+-rw-r--r--  1 root root  132 Apr 20 08:46 .profile
+drwx------  2 root root 4096 Aug 26 09:06 .ssh
+28K	/root
+### data dirs
+/opt                   4.0K  0 files
+/srv                   4.0K  0 files
+/mnt                   4.0K  0 files
+/home                  4.0K  0 files
+/var/backups           672K  6 files
+/var/log               37M  31 files
+--- /opt /srv /mnt listing
+/mnt:
+total 8
+drwxr-xr-x  2 root root 4096 Apr 20 18:05 .
+drwxr-xr-x 20 root root 4096 Sep  2 12:24 ..
+
+/opt:
+total 8
+drwxr-xr-x  2 root root 4096 Apr 20 18:05 .
+drwxr-xr-x 20 root root 4096 Sep  2 12:24 ..
+
+/srv:
+total 8
+drwxr-xr-x  2 root root 4096 Aug 26 09:11 .
+drwxr-xr-x 20 root root 4096 Sep  2 12:24 ..
+### packages of interest
+git git-man python3 python3.14 python3.14-gdbm python3.14-minimal tmux ufw unattended-upgrades 
+/usr/local/bin:
+
+/usr/local/sbin:
+/root/.cache
+/usr/bin/python3
+### big files / recently modified (last 14d, excluding /proc /sys /usr /var/lib/apt)
+/boot/grub/i386-pc/normal.mod
+/boot/grub/unicode.pf2
+/boot/grub/fonts/unicode.pf2
+/boot/grub/x86_64-efi/net.mod
+/boot/grub/x86_64-efi/core.efi
+/boot/grub/x86_64-efi/normal.mod
+/boot/grub/x86_64-efi/grub.efi
+/boot/initrd.img-7.0.0-30-generic
+/var/lib/dracut/console-setup-dir/etc/console-setup/cached_UTF-8_del.kmap
+/var/lib/snapd/pki/v1/merged/ca-certificates.crt
+/var/lib/ubuntu-advantage/apt-esm/var/lib/apt/lists/esm.ubuntu.com_apps_ubuntu_dists_resolute-apps-security_main_binary-amd64_Packages
+/var/lib/ubuntu-advantage/apt-esm/var/cache/apt/srcpkgcache.bin
+/var/lib/ubuntu-advantage/apt-esm/var/cache/apt/pkgcache.bin
+/var/lib/systemd/catalog/database
+/var/lib/command-not-found/commands.db
+/var/log/syslog
+/var/log/auth.log
+/var/log/sysstat/sar02
+/var/log/sysstat/sa02
+/var/log/kern.log
+/var/log/cloud-init.log
+/var/backups/dpkg.status.0
+/etc/ssl/certs/ca-certificates.crt
+--- largest files
+76792699 /var/lib/apt/lists/mirror.hetzner.com_ubuntu_packages_dists_resolute_universe_binary-amd64_Packages
+54201839 /var/cache/apt/pkgcache.bin
+54201745 /var/cache/apt/srcpkgcache.bin
+### journal
+Archived and active journals take up 24M in the file system.
+--- ssh accepted logins (journal, last 30d)
+17
+      1 Sep 03 07:28:22 root 178.104.85.106
+      1 Sep 03 06:15:00 root 178.104.85.106
+      1 Sep 03 06:14:07 root 178.104.85.106
+      1 Sep 02 23:53:24 root 178.104.85.106
+      1 Sep 02 23:50:48 root 178.104.85.106
+      1 Sep 02 23:22:51 ssh-rsa in
+      1 Sep 02 22:24:13 ssh-rsa in
+      1 Sep 02 21:24:12 ssh-rsa in
+      1 Sep 02 20:24:11 ssh-rsa in
+      1 Sep 02 19:24:10 ssh-rsa in
+### install time
+2026-08-26 08:58:00.000000000 +0000 /
+2026-09-02 12:18:20,478 - log_util.py[DEBUG]: Cloud-init v. 26.1-0ubuntu3~26.04.1 running 'init-local' at Wed, 02 Sep 2026 12:18:20 +0000. Up 7.29 seconds.
+2026-09-02 12:18:20,478 - main.py[INFO]: PID [1] started cloud-init 'init-local'.
+2026-09-02 12:18:20,478 - main.py[DEBUG]: No kernel command line url found.
+{"instance-id": 164307556, "hostname": null, "region": null, "availability-zone": null}
+### raw 'Accepted' lines (last 30d)
+Sep 02 12:19:00 qevik-devloop-01 sshd-session[1441]: Accepted publickey for root from 178.104.85.106 port 22998 ssh2: ED25519 SHA256:<fp>
+Sep 02 12:21:41 qevik-devloop-01 sshd-session[1591]: Accepted publickey for root from 178.104.85.106 port 57744 ssh2: ED25519 SHA256:<fp>
+Sep 02 12:22:54 qevik-devloop-01 sshd-session[1721]: Accepted publickey for root from 178.104.85.106 port 17526 ssh2: ED25519 SHA256:<fp>
+Sep 02 12:23:45 qevik-devloop-01 sshd-session[1096]: Accepted publickey for root from 178.104.85.106 port 60212 ssh2: ED25519 SHA256:<fp>
+Sep 02 12:24:17 qevik-devloop-01 sshd-session[1204]: Accepted publickey for root from 178.104.85.106 port 54158 ssh2: ED25519 SHA256:<fp>
+Sep 02 12:31:18 qevik-devloop-01 sshd-session[1460]: Accepted publickey for root from 178.104.85.106 port 41662 ssh2: ED25519 SHA256:<fp>
+Sep 02 18:25:19 qevik-devloop-01 sshd-session[7154]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 19:24:10 qevik-devloop-01 sshd-session[7755]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 20:24:11 qevik-devloop-01 sshd-session[8408]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 21:24:12 qevik-devloop-01 sshd-session[9199]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 22:24:13 qevik-devloop-01 sshd-session[10462]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 23:22:51 qevik-devloop-01 sshd-session[11369]: userauth_pubkey: signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms [preauth]
+Sep 02 23:50:48 qevik-devloop-01 sshd-session[11528]: Accepted publickey for root from 178.104.85.106 port 27748 ssh2: ED25519 SHA256:<fp>
+Sep 02 23:53:24 qevik-devloop-01 sshd-session[11691]: Accepted publickey for root from 178.104.85.106 port 34356 ssh2: ED25519 SHA256:<fp>
+Sep 03 06:14:07 qevik-devloop-01 sshd-session[14102]: Accepted publickey for root from 178.104.85.106 port 56166 ssh2: ED25519 SHA256:<fp>
+Sep 03 06:15:00 qevik-devloop-01 sshd-session[14254]: Accepted publickey for root from 178.104.85.106 port 30818 ssh2: ED25519 SHA256:<fp>
+Sep 03 07:28:22 qevik-devloop-01 sshd-session[14824]: Accepted publickey for root from 178.104.85.106 port 10790 ssh2: ED25519 SHA256:<fp>
+Sep 03 07:29:13 qevik-devloop-01 sshd-session[15207]: Accepted publickey for root from 178.104.85.106 port 28050 ssh2: ED25519 SHA256:<fp>
+### failed/invalid ssh attempts (count, last 24h)
+11683
+### journal first entry / boots
+IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+ -2 4dc96693e2ce474dbf2fd403dc660ed8 Wed 2026-09-02 12:18:15 UTC Wed 2026-09-02 12:23:25 UTC
+ -1 7959beaadd2541b0ba3e0d78b90f242a Wed 2026-09-02 12:23:35 UTC Wed 2026-09-02 12:23:57 UTC
+  0 078d9782c1fb4893aa9bb6e9f4ef6375 Wed 2026-09-02 12:24:06 UTC Thu 2026-09-03 07:29:14 UTC
+2026-09-02T12:18:15+00:00 Ubuntu-2604-resolute-64-minimal kernel: Linux version 7.0.0-30-generic (buildd@lcy02-amd64-048) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026 (Ubuntu 7.0.0-30.30-generic 7.0.12)
+### cloud-init first boot
+2026-09-02 12:18:20,478 - log_util.py[DEBUG]: Cloud-init v. 26.1-0ubuntu3~26.04.1 running 'init-local' at Wed, 02 Sep 2026 12:18:20 +0000. Up 7.29 seconds.
+2026-09-02 12:18:22,239 - log_util.py[DEBUG]: Cloud-init v. 26.1-0ubuntu3~26.04.1 running 'init' at Wed, 02 Sep 2026 12:18:22 +0000. Up 9.07 seconds.
+2026-09-02 12:18:27,557 - log_util.py[DEBUG]: Cloud-init v. 26.1-0ubuntu3~26.04.1 finished at Wed, 02 Sep 2026 12:18:27 +0000. Datasource DataSourceHetzner.  Up 14.40 seconds
+total 12
+drwxr-xr-x 3 root root 4096 2026-09-02 12:18 .
+drwxr-xr-x 8 root root 4096 2026-09-02 12:18 ..
+drwxr-xr-x 5 root root 4096 2026-09-02 12:24 164307556
+### bash_history (owner commands; secrets would be redacted)
+hostnamectl && echo "--- MEMORY ---" && free -h && echo "--- DISK ---" && df -h / && echo "--- CPU ---" && nproc && lscpu | grep -E 'Model name|CPU\(s\)'
+apt update && apt full-upgrade -y
+reboot
+apt update && apt full-upgrade -y
+reboot
+uname -r && uptime
+cd ~/atlas
+git status
+git branch -vv
+### apt history (installs since creation)
+Start-Date: 2026-09-02  12:23:04
+Commandline: apt full-upgrade -y
+### ufw config
+/etc/ufw/ufw.conf:ENABLED=no
+/etc/default/ufw:DEFAULT_INPUT_POLICY="DROP"
+/etc/default/ufw:DEFAULT_OUTPUT_POLICY="ACCEPT"
+/etc/default/ufw:DEFAULT_FORWARD_POLICY="DROP"
+/etc/default/ufw:DEFAULT_APPLICATION_POLICY="SKIP"
+### sysctl / swap file
+no /swapfile
+# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a
+# device; this may be used with UUID= as a more robust way to name devices
+# that works even if disks are added and removed. See fstab(5).
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+# / was on /dev/sda3 during curtin installation
+/dev/disk/by-uuid/9e4ec673-4345-4852-8a69-0f7f3df29989 / ext4 defaults 0 1
+# /boot/efi was on /dev/sda2 during curtin installation
+/dev/disk/by-uuid/A948-365C /boot/efi vfat defaults 0 1
+### hetzner backup/snapshot hints (inside host: none expected)
+/etc/hetzner-build

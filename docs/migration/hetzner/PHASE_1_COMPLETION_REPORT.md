@@ -76,7 +76,7 @@ itself lowers or raises the monthly bill.
 | N-1 | Hetzner price change 2026-06-15 (CPX ×2.5). Phase 0's "like-for-like cost" assumption was wrong. | D-B re-confirmation at the Phase 2 gate (§6). Not a blocker. |
 | N-2 | CX plans shown "not available" on hetzner.com. | Only the console tells whether they can be ordered in nbg1. |
 | N-3 | No API access to Hetzner/Cloudflare anywhere. | Every console step is the owner's; the plan already assumed this. Not a blocker. |
-| N-4 | `qevik-devloop-01` shape = CPX42 (≈ €69.49/mo post-change), currently idle. | Cost note for the owner; outside this migration's scope. |
+| N-4 | `qevik-devloop-01` shape = CPX42 (≈ €69.49/mo post-change), currently idle. | ~~Outside this migration's scope~~ — **withdrawn 2026-09-03** by owner instruction; assessed as the production target in `DEVLOOP01_SUITABILITY_ASSESSMENT.md` (suitable; Option A recommended; D-R pending). §8 below is superseded by that document's §10 if D-R-1/D-R-2 is chosen. |
 | N-5 | Cloudflare Full vs Full (strict) still unread. | Runbook detail; not blocking. |
 
 No new blocker for Phase 2 beyond the existing ones: owner GO, U1/U2 console reads, `qevik_prod`

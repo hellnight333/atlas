@@ -61,6 +61,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Rollback:** delete the server (owner action; nothing else depends on it yet).
 - **Stop conditions:** wrong region/size/OS → stop, owner recreates; any sign the server was created inside a shared project with unrelated resources the owner did not intend → stop.
 - **Owner approval:** **OWNER GO REQUIRED** (this is the first irreversible-cost action).
+- **Status 2026-09-03:** **HALTED by the owner before any server order.** Read-only assessment of the existing `qevik-devloop-01` as the target: `DEVLOOP01_SUITABILITY_ASSESSMENT.md` (suitable; Option A reuse recommended; decision **D-R** pending). If D-R-1/D-R-2 is chosen, this phase is replaced by the assessment's §10 (rename + optional rebuild + backups + firewall + BX11; **no server creation**) and the "touching `qevik-devloop-01`" line under Forbidden no longer applies to those approved steps. If D-R-3, this phase runs as written.
 
 ## Phase 3 — Security & Access Baseline
 

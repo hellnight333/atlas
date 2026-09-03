@@ -454,3 +454,11 @@ key, not the local-only backups.
 `PHASE_1_COMPLETION_REPORT.md`. Now stopped at the **Phase 2 provisioning gate**:
 no provisioning, no Hetzner/Cloudflare action, no data movement, no production
 change, no secret rotation, no DevLoop execution until the owner's Phase 2 GO.
+
+2026-09-03 (later): owner **halted Phase 2 before any server order** and asked for a
+read-only suitability assessment of the existing `qevik-devloop-01` as the production
+target. Result: `DEVLOOP01_SUITABILITY_ASSESSMENT.md` — suitable; recommendation
+Option A (reuse, with a free rebuild); one decision requested, **D-R**. The
+"`qevik-devloop-01` DevLoop only / never production" wording in §1, §4 and §10 of
+this document is **superseded pending D-R**; the §6 spec table stays as the
+approved D-B baseline, which the reused host exceeds. No action taken.
