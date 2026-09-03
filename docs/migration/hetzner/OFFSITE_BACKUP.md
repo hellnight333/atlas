@@ -188,6 +188,24 @@ hash and count: `evidence/backup/old-host-dumps-pull.txt`.
   Storage Box shows 75.4 MB used of 1 TB; 2 snapshots (`b5212410` state-only, `ed2b42b1` dumps).
 - The full-load test (V15) still waits for Postgres on the target (Phase 4).
 
+### 10.2 Retention ownership of the migrated dumps (planned, B-5 / R-31)
+
+The 11 dumps in §10.1 are **historical production evidence**, not backups this host
+produced, and `qevik_backup.sh` prunes `/opt/qevik/backups/qevik-*.dump` to the 14
+newest. Before any backup unit runs here:
+
+- they move to `/opt/qevik/backups/archive/old-host/` — outside the pruner's glob,
+  still inside the tree `qevik-offsite.service` ships off-host — `root:root`, dir
+  `0700`, files `0400`;
+- `qevik-backup.timer` stays **disabled** until Phase 6 (B-6), enforced by a guard in
+  the planned `install_qevik_infra.sh`;
+- `qevik_offsite.sh`'s `newest_dump()` becomes recursive, so the daily restore proof
+  keeps running against the archived dumps until the target produces its own;
+- the archive is removed only at Phase 11, by owner decision, after the old host's
+  final archive is restore-tested.
+
+Specified in `MIGRATION_ENABLEMENT_SPEC.md` §8. **Not yet implemented.**
+
 Interim note: until Phase 4 deploys the repo, the installed sources live in `/root/qevik-infra/`
 on the target (copied from `infra/` at this commit). After Phase 4, re-run the installer from
 `/opt/qevik/atlas/infra/` and remove `/root/qevik-infra`.

@@ -67,14 +67,14 @@ current state on the old host, not a recommendation.
 
 | # | Source | Location | Size | Classification | Notes |
 |---|---|---|---|---|---|
-| B1 | Verified daily dumps | `/opt/qevik/backups/qevik-*.dump` ×10 (17 Aug → 2 Sep) | 80 MB | **MIGRATE to off-host archive** (the migration must not start until at least one copy exists off the old host — see risk register) | custom format, `pg_restore`-able |
+| B1 | Verified daily dumps | `/opt/qevik/backups/qevik-*.dump` ×**11** (17 Aug → 3 Sep) | 106 MB | **DONE 2026-09-03**: all 11 copied read-only to `qevik-prod-01` and into the Storage Box restic repository (snapshot `ed2b42b1`; `OFFSITE_BACKUP.md` §10.1). **Retention rule (B-5 / R-31):** they move to `/opt/qevik/backups/archive/old-host/` (`0400`, outside the `qevik-*.dump` prune glob, inside the off-host set) before any backup unit runs on the target; `qevik_backup.sh` retention owns only dumps the target itself produces; the archive is deleted only at Phase 11 by owner decision | custom format, `pg_restore --list` verified on the target |
 | B2 | Backup script + timer | `infra/qevik_backup.sh`, unit + timer | — | REGENERATE (deploy payload) | KEEP=14, 03:30 Z |
 
 ## 6. Proxy and TLS
 
 | # | Source | Location | Classification | Notes |
 |---|---|---|---|---|
-| P1 | Live Caddyfile | `/etc/caddy/Caddyfile` (7.8 KB) | **MIGRATE as source of truth for the target config**, then REGENERATE per target (new origin IP in the 8443 block; decide fate of the blocked door) | five historical copies beside it: DO_NOT_MIGRATE |
+| P1 | Live Caddyfile | `/etc/caddy/Caddyfile` (7.8 KB, 225 lines, sha256 `38df2a4a…`) | **CORRECTED 2026-09-03 (B-2 / R-28): DO_NOT_MIGRATE as source of truth.** The repository's `infra/qevik-production.Caddyfile` (290 lines, sha256 `8d879127…`) is **newer** — the live file still carries the SPA fallback (`try_files {path} /index.html`) that the repo already replaced with real 404 handling. Target artifact = the **repository** file minus the `:8443` block (D-D). The live file is kept only as a reconciliation input (`evidence/phase-4/caddyfile-reconciliation.md`) | five historical copies beside it: DO_NOT_MIGRATE |
 | P2 | Let's Encrypt certificates + ACME account | `/var/lib/caddy/.local/share/caddy/` (236 KB) | **REGENERATE** on target (HTTP-01 through Cloudflare needs the origin to receive :80 for the new host — see cutover sequencing) or MIGRATE the directory to avoid a cert gap at cutover — **owner decision** (both are valid; copying avoids rate-limit and first-request latency) | |
 | P3 | Internal CA (8443, 127.0.0.1) | same dir | REGENERATE | |
 

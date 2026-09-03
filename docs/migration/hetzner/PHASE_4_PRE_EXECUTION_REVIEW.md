@@ -1,5 +1,11 @@
 # PHASE 4 — PRE-EXECUTION REVIEW
 
+> **Status 2026-09-03:** accepted by the owner **as a reconciliation finding**; Phase 4
+> is **not** approved to execute. The four blockers (§15 N-1…N-4) and the two retention
+> records are now tracked as B-1…B-6 in `MIGRATION_ENABLEMENT_SPEC.md`, which the
+> migration completes — under the normal reviewed-code workflow — **before Phase 3
+> creates any production credential**.
+
 **Planning and reconciliation pass only.** Nothing in this document has been
 executed. No host, service, database, secret, DNS or Cloudflare setting was
 modified while writing it; every host statement below comes from a read-only

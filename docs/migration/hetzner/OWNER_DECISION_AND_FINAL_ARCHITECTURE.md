@@ -16,6 +16,17 @@ task. Repo `~/atlas` main `ddfbbc1` + this document.
 > change (CPX32 ≈ €35.49/mo) makes CX43/CX33 cheaper *if orderable*; owner re-confirms the type at
 > the Phase 2 gate. Sections below keep the original review text; status lines mark what is decided.
 
+> **Decision record 2026-09-03 (owner, later the same day) — ENABLEMENT BEFORE CREDENTIALS.**
+> `PHASE_4_PRE_EXECUTION_REVIEW.md` found four blockers that would make Phase 4 unsafe or
+> non-reproducible, plus two retention hazards. The owner accepted the review **as a
+> reconciliation finding**, did **not** approve Phase 4 execution, and ordered the deployment
+> path fixed first: *"Phase 3 credentials are created only after the deployment path itself is
+> proven capable of safely deploying to `qevik-prod-01`."* The migration order is now
+> **Phase 2 → ENABLEMENT → Phase 3 → Phase 4**. Specification: `MIGRATION_ENABLEMENT_SPEC.md`
+> (B-1 Caddy version · B-2 Caddyfile source of truth · B-3 deploy target **and SSH identity** ·
+> B-4 env parsing without a shell · B-5 migrated-dump protection · B-6 backup timer disabled
+> until Phase 6). Seven new decisions D-S1…D-S7 are listed there. Risk register: R-27…R-31.
+
 Evidence tags are inherited from the inventories (PROVED / OBSERVED /
 INFERRED / UNKNOWN). Where this document *recommends*, it says so; where it
 *assumes*, it says so. Hetzner product names and prices below are quoted from
@@ -97,13 +108,13 @@ here.
 
 ### 2.2 CAN decide during provisioning (gates inside Phases 3–8)
 
-**D-H — Retarget strategy for the hard-coded `2.28.62.83` (T10, R-12, O10).** Needed before Phase 4.
+**D-H — Retarget strategy for the hard-coded `2.28.62.83` (T10, R-12, O10).** Needed before Phase 4 — **widened 2026-09-03 (B-3):** the deploy scripts hard-code `~/.ssh/naml_hetzner` as well as the IP, so **host *and* SSH identity** must be parameterised; a key D-F forbids on the new host must not be reachable from any deploy path. Implementation: one reviewed registry + one resolver shared by every script (`MIGRATION_ENABLEMENT_SPEC.md` §3), defaults unchanged until cutover.
 - Recommended: **parameterise**, not swap: one constant per subsystem sourced from env (`QEVIK_PROD_HOST` / `QEVIK_ORIGIN_IP`) with the *old* IP as the default until cutover, then a second one-line change after cutover. Reviewed by you, pushed by you.
 - Alternatives: (a) hard-swap the literal in all 12 files in one commit — rollback then needs another commit; (b) leave DevLoop gates pointing at the old host until DevLoop is un-paused.
 - Consequences: parameterise = both hosts addressable during Phases 4–10 with no code churn; the DevLoop deploy gates (`gates.py`, `boundary.py`, `inspection.py`) follow the same variable.
 - Why: rollback must not require a code change.
 
-**D-E — LE certificates: copy vs re-issue (T5, O9, K9).** Needed in Phase 4.
+**D-E — LE certificates: copy vs re-issue (T5, O9, K9).** Needed in Phase 4. **Note 2026-09-03 (B-2):** whichever is chosen, the target's *configuration* comes from the **repository** Caddyfile minus the `:8443` block — never from the old host's live file, which is older and still carries the SPA fallback the repo already fixed (R-28).
 - Recommended: **copy** `/var/lib/caddy` (account + 4 certs) root→root, chown `caddy`; Caddy renews on schedule after cutover.
 - Alternatives: re-issue on the target via a temporary hostname pointed at it, or at cutover.
 - Consequences: copy = zero cert gap, no LE rate-limit exposure on rollback (R-09), works under Cloudflare Full (strict) regardless of U2. Re-issue = cleaner but introduces a cutover-time dependency on HTTP-01 through Cloudflare.
