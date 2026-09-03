@@ -1,5 +1,7 @@
 # EXECUTIVE_MIGRATION_READINESS_REPORT
 
+> **Owner review:** the consolidated decision package is `OWNER_DECISION_AND_FINAL_ARCHITECTURE.md` (design review, supersedes §5 here for decision wording).
+
 **Mission:** Phase Hetzner / Infrastructure Migration — Phase 0 (Discovery & Evidence Freeze).
 **Date:** 2026-09-03. **Repo:** `~/atlas` @ `6ad8a98` (docs added in this directory only).
 **State of the world after this report:** nothing provisioned, nothing migrated, nothing changed on any host, no DNS touched, no task enqueued, DevLoop still paused.
