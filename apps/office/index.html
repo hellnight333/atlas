@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qevik Floor</title>
+<!--
+  The floor: twenty-one agents, six rooms, and the state each one is actually in.
+
+  Self-contained on purpose. The production CSP (infra/qevik-production.Caddyfile)
+  allows 'self' and inline only — no CDN, no font host, no analytics — so this
+  file carries its own styles and script exactly as apps/control/src/index.html
+  does. Same design tokens, so the two surfaces are one product.
+
+  What this is NOT: a decoration. Every desk is an `Agent` record the dispatcher
+  routes through, every state comes from the scheduler's own fleet snapshot, and
+  a fleet that cannot be read draws as `unknown` rather than as an empty office.
+  The blocked desks are drawn most prominently of all, because five seats waiting
+  on one credential is the most actionable fact in the company.
+-->
+<style>
+:root {
+  --bg: #0b1211; --panel: #121b1a; --line: #223029; --raised: #16211f;
+  --text: #e4ece8; --muted: #8ea099; --dim: #5f736c;
+  --accent: #17a29c; --accent-dim: #0d3330; --brand: #0d6e6b;
+  --ok: #4f9d7a; --warn: #e8b64c; --bad: #d8564f; --wait: #7f9cd8;
+  --radius: 10px;
+  --display: ui-serif, Iowan Old Style, Georgia, serif;
+  --ui: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* The floor itself. Wood for rooms people "sit" in, slate for the corridor —
+     the plan reads as a building rather than as a chart. */
+  --floor: #1a2422; --floor-edge: #26332f; --corridor: #141d1c;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f6f4; --panel: #ffffff; --line: #d5e0db; --raised: #e9f0ed;
+    --text: #10201c; --muted: #4d5f59; --dim: #74857f;
+    --accent: #0d6e6b; --accent-dim: #d8ecea;
+    --ok: #2f7d5c; --warn: #a5731a; --bad: #b23c36; --wait: #4b6bb0;
+    --floor: #e7eeea; --floor-edge: #d2ded8; --corridor: #dde6e2;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.55 var(--ui); -webkit-font-smoothing: antialiased;
+}
+header {
+  display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline;
+  padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg); z-index: 5;
+}
+h1 { font: 600 1.35rem/1.2 var(--display); margin: 0; letter-spacing: .01em; }
+.sub { color: var(--muted); font-size: .88rem; }
+.spacer { flex: 1 1 auto; }
+main { padding: 1.4rem; max-width: 1500px; margin: 0 auto; }
+
+/* --- the summary strip ----------------------------------------------------- */
+.counts { display: flex; flex-wrap: wrap; gap: .5rem; }
+.count {
+  display: inline-flex; align-items: center; gap: .45rem;
+  border: 1px solid var(--line); background: var(--panel);
+  border-radius: 999px; padding: .3rem .75rem; font-size: .82rem;
+}
+.count b { font-variant-numeric: tabular-nums; font-weight: 650; }
+.dot { width: .6rem; height: .6rem; border-radius: 50%; flex: none; }
+.dot.working { background: var(--accent); }
+.dot.ready   { background: var(--ok); }
+.dot.idle    { background: var(--dim); }
+.dot.blocked { background: var(--warn); }
+.dot.unknown { background: var(--wait); }
+
+/* --- the floor ------------------------------------------------------------- */
+.plan {
+  margin-top: 1.3rem; display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+}
+.room {
+  background: linear-gradient(180deg, var(--floor), var(--floor-edge));
+  border: 1px solid var(--line); border-radius: 14px; padding: .95rem 1rem 1.1rem;
+  position: relative; overflow: hidden;
+}
+/* A hairline inner wall, so a room reads as a room and not as a card. */
+.room::after {
+  content: ""; position: absolute; inset: .38rem; border-radius: 10px;
+  border: 1px dashed color-mix(in oklab, var(--line) 70%, transparent);
+  pointer-events: none;
+}
+.room > * { position: relative; z-index: 1; }
+.room h2 { font: 600 1rem/1.2 var(--display); margin: 0 0 .15rem; }
+.room .purpose { color: var(--muted); font-size: .8rem; margin: 0 0 .85rem; }
+.desks { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+
+/* A desk: the surface, the seat, the nameplate. Isometric enough to read as
+   furniture, flat enough to stay legible at 148px. */
+.desk {
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+  padding: .55rem .6rem .5rem; text-align: left; width: 100%;
+  display: flex; flex-direction: column; gap: .3rem; cursor: pointer;
+  font: inherit; color: inherit; transition: transform .12s ease, border-color .12s ease;
+}
+.desk:hover, .desk:focus-visible { transform: translateY(-2px); border-color: var(--accent); }
+.desk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seat { display: flex; align-items: center; gap: .45rem; }
+.seat svg { flex: none; }
+.who { font-size: .84rem; font-weight: 600; line-height: 1.25; }
+.cap { color: var(--dim); font-size: .72rem; font-family: var(--mono); }
+.state {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .72rem; color: var(--muted);
+}
+.desk[data-state="blocked"] { border-color: color-mix(in oklab, var(--warn) 55%, var(--line)); }
+.desk[data-state="working"] { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); }
+.desk[data-state="blocked"] .who { color: var(--warn); }
+/* Irreversible desks carry a mark, not just a colour: blast radius decides
+   approval, and colour alone is not a fact anyone can act on. */
+.irr { font-size: .64rem; letter-spacing: .06em; color: var(--bad); font-family: var(--mono); }
+
+/* --- unlocks --------------------------------------------------------------- */
+.unlocks { margin-top: 1.4rem; }
+.unlocks h2 { font: 600 1.05rem/1.2 var(--display); margin: 0 0 .2rem; }
+.unlocks p.lede { color: var(--muted); margin: 0 0 .8rem; font-size: .88rem; }
+.unlock {
+  border: 1px solid var(--line); border-left: 3px solid var(--warn);
+  background: var(--panel); border-radius: 8px; padding: .7rem .85rem;
+  margin-bottom: .55rem;
+}
+.unlock b { font-family: var(--mono); font-size: .85rem; }
+.unlock .agents { color: var(--muted); font-size: .82rem; margin-top: .2rem; }
+
+/* --- detail panel ---------------------------------------------------------- */
+dialog {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+  color: var(--text); max-width: 460px; width: calc(100% - 2rem); padding: 1.1rem 1.2rem;
+}
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog h3 { font: 600 1.1rem/1.2 var(--display); margin: 0 0 .1rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem .8rem; margin: .9rem 0 0; }
+dt { color: var(--muted); font-size: .8rem; }
+dd { margin: 0; font-size: .86rem; font-family: var(--mono); word-break: break-word; }
+.close { margin-top: 1rem; }
+button {
+  font: inherit; cursor: pointer; border-radius: 6px; padding: .45rem .85rem;
+  border: 1px solid var(--line); background: var(--raised); color: var(--text);
+}
+button:hover { border-color: var(--accent); }
+.note { color: var(--muted); font-size: .85rem; }
+.bad { color: var(--bad); }
+.legend { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 1.2rem; font-size: .78rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: .35rem; }
+@media (prefers-reduced-motion: reduce) { .desk { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>The floor</h1>
+    <div class="sub" id="headline">Reading the floor…</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="counts" id="counts"></div>
+</header>
+
+<main>
+  <div id="error" hidden class="note bad"></div>
+  <div class="plan" id="plan"></div>
+
+  <section class="unlocks" id="unlocks" hidden>
+    <h2>What the company is waiting on</h2>
+    <p class="lede">One line per thing to obtain, not one per agent. Clearing the
+      top row seats the most people.</p>
+    <div id="unlockList"></div>
+  </section>
+
+  <div class="legend" id="legend"></div>
+</main>
+
+<dialog id="detail">
+  <h3 id="dTitle"></h3>
+  <div class="note" id="dState"></div>
+  <dl id="dFacts"></dl>
+  <button class="close" onclick="document.getElementById('detail').close()">Close</button>
+</dialog>
+
+<script>
+'use strict';
+// The API base: same origin in production, overridable for local work against a
+// tunnel. Never a hardcoded host — this file is served from the machine it talks
+// to, and a baked-in address is how a console ends up reporting another host's
+// health as its own.
+const params = new URLSearchParams(location.search);
+const API = params.get('api') || '';
+// Same storage as the console: the session store, which is cleared when the tab
+// closes, rather than the persistent one — so a bearer token is never left on
+// disk for the next person at the machine. The guard test forbids the other API
+// by name, which is why it is not written out here.
+const token = () => sessionStorage.getItem('qevik.token') || params.get('token') || '';
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// A desk glyph, drawn rather than imported: a surface, a seat, and a monitor
+// whose glow is the state colour. Cheap, crisp at any DPI, and no asset to ship.
+function seatSVG(state) {
+  const glow = { working: 'var(--accent)', ready: 'var(--ok)', idle: 'var(--dim)',
+                 blocked: 'var(--warn)', unknown: 'var(--wait)' }[state] || 'var(--dim)';
+  return `<svg width="30" height="24" viewBox="0 0 30 24" aria-hidden="true">
+    <ellipse cx="15" cy="20" rx="12" ry="3.2" fill="var(--floor-edge)"/>
+    <rect x="4" y="12" width="22" height="5" rx="1.5" fill="var(--raised)" stroke="var(--line)"/>
+    <rect x="10" y="5" width="10" height="7" rx="1.2" fill="${glow}" opacity=".85"/>
+    <rect x="14" y="12" width="2" height="2" fill="var(--line)"/>
+    <circle cx="15" cy="19" r="2.6" fill="var(--raised)" stroke="var(--line)"/>
+  </svg>`;
+}
+
+function renderCounts(counts, meaning) {
+  const order = ['working', 'ready', 'idle', 'blocked', 'unknown'];
+  el('counts').innerHTML = order.filter(k => counts[k]).map(k =>
+    `<span class="count" title="${esc(meaning[k] || '')}">
+       <i class="dot ${k}"></i>${esc(k)} <b>${counts[k]}</b></span>`).join('');
+  el('legend').innerHTML = order.map(k =>
+    `<span><i class="dot ${k}"></i>${esc(k)} — ${esc(meaning[k] || '')}</span>`).join('');
+}
+
+function renderFloor(data) {
+  el('plan').innerHTML = data.rooms.map(room => `
+    <section class="room">
+      <h2>${esc(room.name)}</h2>
+      <p class="purpose">${esc(room.purpose)}</p>
+      <div class="desks">
+        ${room.desks.map(d => `
+          <button class="desk" data-state="${esc(d.state)}" data-agent="${esc(d.agent)}"
+                  aria-label="${esc(d.name)} — ${esc(d.state)}: ${esc(d.detail)}">
+            <span class="seat">${seatSVG(d.state)}
+              <span><span class="who">${esc(d.name)}</span><br>
+              <span class="cap">${esc(d.capability)}</span></span></span>
+            <span class="state"><i class="dot ${esc(d.state)}"></i>${esc(d.state)}</span>
+            ${d.irreversible ? '<span class="irr">IRREVERSIBLE</span>' : ''}
+          </button>`).join('')}
+      </div>
+    </section>`).join('');
+
+  // One listener on the floor rather than one per desk.
+  el('plan').onclick = (event) => {
+    const desk = event.target.closest('.desk');
+    if (!desk) return;
+    const found = data.rooms.flatMap(r => r.desks).find(d => d.agent === desk.dataset.agent);
+    if (found) showDesk(found);
+  };
+}
+
+function showDesk(d) {
+  el('dTitle').textContent = d.name;
+  el('dState').textContent = d.detail;
+  const facts = [
+    ['agent', d.agent], ['capability', d.capability], ['room', d.room],
+    ['blast radius', d.blast], ['runs', d.placement],
+    ['tools', (d.tools || []).join(', ') || '—'],
+    ['credentials', (d.credentials || []).join(', ') || '—'],
+    ['worker', d.worker || '—'],
+  ];
+  if (d.blockers && d.blockers.length) facts.push(['waiting on', d.blockers.join(', ')]);
+  el('dFacts').innerHTML = facts.map(([k, v]) =>
+    `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  el('detail').showModal();
+}
+
+function renderUnlocks(waiting) {
+  if (!waiting || !waiting.length) { el('unlocks').hidden = true; return; }
+  el('unlocks').hidden = false;
+  el('unlockList').innerHTML = waiting.map(w => `
+    <div class="unlock">
+      <b>${esc(w.blocker)}</b> — seats ${w.seats} agent${w.seats === 1 ? '' : 's'}
+      <div class="agents">${esc(w.agents.join(', '))}</div>
+    </div>`).join('');
+}
+
+async function load() {
+  try {
+    const headers = { 'Accept': 'application/json' };
+    const t = token();
+    if (t) headers['Authorization'] = 'Bearer ' + t;
+    const response = await fetch(API + '/api/fabric/office', { headers, credentials: 'same-origin' });
+    if (response.status === 401) {
+      el('error').hidden = false;
+      el('error').textContent = 'Not signed in. Open the console, sign in, then return to this page in the same tab.';
+      return;
+    }
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+
+    renderCounts(data.counts, data.state_meaning || {});
+    renderFloor(data);
+    renderUnlocks(data.waiting_on);
+    el('error').hidden = true;
+
+    // The fleet line says which of the two zeroes this is. "No workers" and
+    // "could not read the cluster" look identical on a floor and mean opposite
+    // things, so the headline never leaves it ambiguous.
+    const fleet = data.fleet || {};
+    const counts = fleet.counts || {};
+    el('headline').textContent = fleet.known
+      ? `${data.headcount} desks · fleet: ${counts.total || 0} worker(s), ${counts.ready || 0} ready, ${counts.busy || 0} busy, ${counts.stale || 0} stale`
+      : `${data.headcount} desks · the fleet could not be read — that is not the same as having no workers`;
+  } catch (error) {
+    el('error').hidden = false;
+    el('error').textContent = 'Could not read the floor: ' + error.message +
+      ' — showing nothing rather than a floor that might be out of date.';
+  }
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
