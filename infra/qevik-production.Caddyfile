@@ -230,8 +230,8 @@ sites.qevik.ai {
 # in the configuration of another.
 #
 # The break-glass is the Hetzner console plus SSH, which is what was actually
-# used every time. `infra/secure_8443.sh` — the never-applied proposal to lock
-# this block down — goes with it.
+# used every time. The never-applied proposal to lock this block down went with
+# it; both are in the history if anyone wants to read them.
 
 # --- the bare IP stays available as development infrastructure --------------
 #

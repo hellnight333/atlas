@@ -374,3 +374,100 @@ def test_every_shipped_timer_has_a_service_to_run() -> None:
                  if line.strip().startswith("Unit=")]
         service = named[0] if named else timer.name.replace(".timer", ".service")
         assert (INFRA / service).is_file(), f"{timer.name} runs {service}, which is not shipped"
+
+
+# --- the literals do not come back ---------------------------------------------
+
+#: The one place the old production host may be named as an address, and why.
+#: `cloudflare.py` holds it as a DNS *guard* — the content an A record must have
+#: before the automation will touch it — which is a different question from
+#: where a deploy may go, and is owned separately (see the constant's own
+#: comment and `test_cloudflare_origin_constant`).
+#: This file is exempt from both greps for the obvious reason: it is the grep.
+SELF = "packages/kernel/tests/test_deploy_targets.py"
+
+ORIGIN_EXEMPT = {"packages/kernel/atlas_kernel/infra/cloudflare.py", SELF}
+
+#: `naml_hetzner` reaches the *Naml* host, which is a different system that this
+#: migration does not touch. It may be named where that host is the subject.
+NAML_EXEMPT = {"infra/phase_a_proof.py", SELF}
+
+CODE_SUFFIXES = {".py", ".sh", ".Caddyfile", ".service", ".timer", ".slice", ".conf"}
+
+
+def _code_files():
+    for root in ("infra", "packages/kernel/atlas_kernel", "packages/kernel/tests", "apps"):
+        base = REPO_ROOT / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts or ".venv" in path.parts:
+                continue
+            if path.suffix not in CODE_SUFFIXES:
+                continue
+            yield path, path.relative_to(REPO_ROOT).as_posix()
+
+
+def test_the_old_production_ip_is_not_written_into_code() -> None:
+    """It lived in seventeen files, and each one was a place a deploy could go
+    to the wrong host once a second production host existed.
+
+    The registry names hosts now. This test is the thing that keeps the literal
+    from creeping back one convenience at a time.
+    """
+    offenders = []
+    for path, rel in _code_files():
+        if rel in ORIGIN_EXEMPT or rel == "infra/deploy_targets.conf":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), 1):
+            if "2.28.62.83" in line:
+                offenders.append(f"{rel}:{number}: {line.strip()}")
+    assert not offenders, (
+        "the old production IP is back in code; put the host in "
+        "infra/deploy_targets.conf instead:\n" + "\n".join(offenders))
+
+
+def test_the_shared_operator_key_is_not_written_into_qevik_code() -> None:
+    """D-F: the key that reaches the old host must be unreachable from the new
+    one's deploy path — including by a script that hard-codes it."""
+    offenders = []
+    for path, rel in _code_files():
+        if rel in NAML_EXEMPT or rel == "infra/deploy_targets.conf":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), 1):
+            if "naml_hetzner" in line:
+                offenders.append(f"{rel}:{number}: {line.strip()}")
+    assert not offenders, (
+        "an identity is hard-coded again; name it in infra/deploy_targets.conf "
+        "or pass QEVIK_DEPLOY_KEY:\n" + "\n".join(offenders))
+
+
+def test_only_one_path_puts_application_code_on_a_host() -> None:
+    """D-S1: a second, provenance-free kernel copy is not a deployment method.
+
+    `deploy_console.sh` used to rsync the kernel into the directory ADR-0010
+    owns, without writing DEPLOYED_SHA or DEPLOYED_MANIFEST and without any of
+    deploy_control.sh's refusals — so a host could serve code while reporting a
+    provenance it no longer had.
+    """
+    for name in ("deploy_console.sh", "deploy_public.sh"):
+        text = (INFRA / name).read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            assert "packages/kernel/atlas_kernel" not in stripped, f"{name}:{number}: {stripped}"
+
+
+def test_the_superseded_configurations_are_gone() -> None:
+    """D-S3/D-S4: obsolete operational files are removed, not kept "for reference".
+
+    Each carried the old host's address, and a file that is not used but is
+    still there is a file someone eventually copies onto a host.
+    """
+    for name in ("secure_8443.sh", "qevik-control.Caddyfile", "qevik-sites.Caddyfile"):
+        assert not (INFRA / name).exists(), f"{name} is back"

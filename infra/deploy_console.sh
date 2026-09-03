@@ -8,6 +8,9 @@
 #
 #   ./infra/deploy_console.sh --target <name>|user@host
 #
+# The console, the public site and the Caddyfile — not the kernel. Application
+# code reaches a host through `deploy_control.sh` (ADR-0010) and nowhere else.
+#
 # It refuses rather than half-deploying, and it verifies afterwards rather than
 # reporting success because `scp` exited zero.
 #
@@ -64,9 +67,13 @@ MSG
   exit 2
 fi
 
-echo "==> syncing the kernel"
-rsync -az -e "ssh $SSH_ID" --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
-
+# The kernel is NOT copied here (D-S1). This script used to `rsync --delete` it
+# into /opt/qevik/atlas/packages/kernel/atlas_kernel/ — the directory ADR-0010
+# owns — without writing DEPLOYED_SHA or DEPLOYED_MANIFEST, so a console deploy
+# could replace the running code while the host went on reporting a provenance
+# it no longer had, and without any of deploy_control.sh's refusals (clean tree,
+# ancestry, export verification). One way for code to reach a host, and this is
+# not it: run `deploy_control.sh --target <name>` for the kernel.
 echo "==> installing the control-plane service"
 scp $SSH_ID -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
 ssh $SSH_ID "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable qevik-control && \
