@@ -25,9 +25,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from pathlib import Path
 
-from .queue import Queue, State
+from .queue import Queue
 from .targets import control_plane, remote_python, ssh_argv
 
 #: Which boundary a builder ran into, from what it said. Deliberately narrow:

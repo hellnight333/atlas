@@ -75,9 +75,9 @@ def test_retention_deletes_only_dumps_this_host_produced(tmp_path: Path) -> None
     migrated = [_dump(archive, f"qevik-202608{17 + i:02d}T131008Z.dump", age=100_000 + i)
                 for i in range(11)]
 
-    prune = ('KEEP=14\nDIR="%s"\n'
+    prune = (f'KEEP=14\nDIR="{dumps}"\n'
              'ls -1t "${DIR}"/qevik-*.dump 2>/dev/null | tail -n +$((KEEP + 1)) '
-             '| while read -r old; do rm -f "$old"; done\n' % dumps)
+             '| while read -r old; do rm -f "$old"; done\n')
     done = subprocess.run(["bash", "-c", prune], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
 
@@ -172,3 +172,57 @@ def test_the_restore_helper_returns_both_kinds() -> None:
     restore = text.split("--restore-dump)", 1)[1].split("exit 0", 1)[0]
     assert '--include "${DUMPS}"' in restore
     assert "archived history" in restore
+
+
+# --- the guard that decides when backups may begin ------------------------------
+
+INSTALLER = REPO_ROOT / "infra" / "install_qevik_infra.sh"
+
+
+def _guard(dumps: Path, *, archive: bool) -> subprocess.CompletedProcess:
+    """Run the installer's archive guard against a fixture directory."""
+    text = INSTALLER.read_text(encoding="utf-8")
+    head = text.split('if [ "$MODE" = backup-timer ]', 1)[0]
+    head = head.replace('case "${1:-}" in', 'case "" in')
+    env = {k: v for k, v in os.environ.items() if not k.startswith("QEVIK_")}
+    env["QEVIK_BACKUP_DIR"] = str(dumps)
+    env["QEVIK_BACKUP_ARCHIVE"] = str(dumps / "archive")
+    call = ('if unarchived_migrated_dumps; then echo UNARCHIVED; else echo CLEAR; fi')
+    return subprocess.run(["bash", "-c", head + "\n" + call],
+                          capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_the_guard_refuses_while_migrated_dumps_sit_in_the_retention_path(
+        tmp_path: Path) -> None:
+    dumps = tmp_path / "backups"
+    _dump(dumps, "qevik-20260903T033126Z.dump")
+    done = _guard(dumps, archive=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "UNARCHIVED"
+
+
+def test_the_guard_opens_once_the_dumps_are_archived(tmp_path: Path) -> None:
+    dumps = tmp_path / "backups"
+    _dump(dumps / "archive" / "old-host", "qevik-20260903T033126Z.dump")
+    _dump(dumps, "qevik-20260910T033000Z.dump")  # one this host produced
+    done = _guard(dumps, archive=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "CLEAR"
+
+
+def test_an_empty_backup_directory_is_not_a_reason_to_refuse(tmp_path: Path) -> None:
+    dumps = tmp_path / "backups"
+    dumps.mkdir()
+    done = _guard(dumps, archive=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "CLEAR"
+
+
+def test_the_guard_does_not_depend_on_timestamps() -> None:
+    """A reboot after the data migration makes every dump look migrated, and a
+    host that cannot report its boot time would answer 'nothing to worry about'
+    — a guard that fails open. The rule is structural instead."""
+    guard = INSTALLER.read_text(encoding="utf-8").split(
+        "unarchived_migrated_dumps() {", 1)[1].split("\n}", 1)[0]
+    for timeish in ("uptime", "newermt", "date -d", "-mtime"):
+        assert timeish not in guard, guard

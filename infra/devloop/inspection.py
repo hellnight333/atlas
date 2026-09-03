@@ -32,7 +32,6 @@ from pathlib import Path
 from .targets import control_plane, remote_python, ssh_argv
 
 
-
 @dataclass(frozen=True)
 class Finding:
     """One thing production says is wrong, and what it would take to fix."""
@@ -133,7 +132,8 @@ RULES: tuple[dict, ...] = (
 
 def _query(sql: str) -> dict | None:
     """Run one read-only query on the control plane. Returns the first row."""
-    if not KEY.exists():
+    target = control_plane()
+    if target is None:
         return None
     script = (
         "import json\n"
@@ -143,9 +143,6 @@ def _query(sql: str) -> dict | None:
         f"    r = s.execute(text('''{sql}''')).mappings().first()\n"
         "    print(json.dumps(dict(r) if r else {}, default=str))\n")
     remote = remote_python(script, heredoc="Q")
-    target = control_plane()
-    if target is None:
-        return None
     try:
         done = subprocess.run(
             ssh_argv(target, remote, connect_timeout=20, attempts=3),

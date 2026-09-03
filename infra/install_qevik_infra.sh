@@ -35,6 +35,8 @@ APP="${QEVIK_APP:-$BASE/atlas}"
 APP_USER="${QEVIK_USER:-qevik}"
 STATE="${QEVIK_STATE_DIR:-/var/lib/qevik}"
 DUMPS="${QEVIK_BACKUP_DIR:-$BASE/backups}"
+#: Where the migrated production dumps live, outside the retention glob.
+ARCHIVE="${QEVIK_BACKUP_ARCHIVE:-$DUMPS/archive}"
 UNIT_DIR="${QEVIK_UNIT_DIR:-/etc/systemd/system}"
 SRC="${QEVIK_INFRA_SRC:-$APP/infra}"
 
@@ -66,19 +68,24 @@ database_has_data() {
   [ "${count:-0}" -gt 0 ] 2>/dev/null
 }
 
-#: True when a dump that this host did not produce is sitting where the pruner
-#: would find it. `qevik_backup.sh` keeps the 14 newest `qevik-*.dump` in the top
-#: level of $DUMPS and deletes the rest — which, with the migrated production
-#: dumps still there, means deleting production history.
+#: True when dumps are sitting in the retention path and none of them has been
+#: archived — i.e. the migrated production history is still where the pruner
+#: would delete it.
+#:
+#: The rule is deliberately about *structure*, not about timestamps. "Older than
+#: this host's boot" was the first attempt and is wrong twice over: a reboot
+#: after the data migration makes every dump look migrated, and a host that
+#: cannot report its boot time would answer "nothing to worry about" — a guard
+#: that fails open. This asks one question with a stable answer: are there dumps
+#: in the retention path, and has the archive they belong in been created? On
+#: this target the only dumps that exist before the data migration are the
+#: migrated ones, and archiving them creates the directory, so the guard opens
+#: exactly when the move has happened and stays open afterwards.
 unarchived_migrated_dumps() {
-  local newest_boot
   [ -d "$DUMPS" ] || return 1
-  # Anything in the top level older than this host's first boot cannot have been
-  # produced here.
-  newest_boot="$(date -d "$(uptime -s)" +%s 2>/dev/null || echo 0)"
-  [ "$newest_boot" = 0 ] && return 1
-  find "$DUMPS" -maxdepth 1 -name 'qevik-*.dump' -newermt "@0" ! -newermt "@$newest_boot" \
-    -print -quit 2>/dev/null | grep -q .
+  ls -1 "$DUMPS"/qevik-*.dump >/dev/null 2>&1 || return 1   # nothing there at all
+  [ -d "$ARCHIVE" ] && return 1                              # the move has happened
+  return 0
 }
 
 if [ "$MODE" = backup-timer ]; then
@@ -87,7 +94,7 @@ if [ "$MODE" = backup-timer ]; then
   database_has_data \
     || die "the qevik database has no tables. A backup of an empty database is not a backup, and its retention would begin deleting the migrated production dumps. Enable this after the data migration (Phase 6)."
   ! unarchived_migrated_dumps \
-    || die "$DUMPS still holds dumps this host did not produce. Move them to $DUMPS/archive/old-host/ first — retention owns only what this host wrote (B-5)."
+    || die "$DUMPS holds dumps and $ARCHIVE does not exist, so the migrated production history is still where qevik_backup.sh would prune it. Move it to $ARCHIVE/old-host/ first — retention owns only what this host wrote (B-5)."
   systemctl enable --now qevik-backup.timer
   systemctl list-timers qevik-backup.timer --no-pager
   echo "qevik-backup.timer is enabled."
