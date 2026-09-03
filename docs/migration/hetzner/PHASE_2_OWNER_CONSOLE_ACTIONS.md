@@ -43,7 +43,7 @@ install), which creates a credential and is worse; **not recommended**.
 Legend: **OWNER** = your hands in the console or on the Mac · **AGENT** = me, over SSH, only after
 the GO named in that row · ⏸ = stop and report before continuing.
 
-### Step 0 — `qevik_prod` key pair (OWNER, on the Mac; or AGENT on an explicit GO)
+### Step 0 — `qevik_prod` key pair (OWNER, on the Mac; or AGENT on an explicit GO) — **DONE 2026-09-03** (owner-typed passphrase, SHA256:RE9AIKm94JL0LnHg16FxDYjIoKueZQGzeo9324tGv78; ssh config block added)
 
 The standing rule is that I never create credentials on my own. Either run this yourself:
 
@@ -110,7 +110,7 @@ the web console; nothing is needed there.
    passwordauth` (expect `yes` — Hetzner default), `ufw status` (inactive).
 4. Write `evidence/phase-2/host-identity.txt` (no key material, fingerprints only).
 
-### Step 6 — key swap under AR-2 (AGENT, needs GO "swap keys") — this is the only change to the host in Phase 2
+### Step 6 — key swap under AR-2 (AGENT, needs GO "swap keys") — this is the only change to the host in Phase 2 — **DONE 2026-09-03 10:22 UTC**, see `evidence/phase-2/key-swap.txt`
 
 Session **A** (devloop_01) stays open the whole time.
 1. Append `qevik_prod.pub` to `/root/.ssh/authorized_keys` (mode 600 unchanged).

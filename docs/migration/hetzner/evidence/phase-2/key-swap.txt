@@ -1,0 +1,25 @@
+# Phase 2 · Step 6 — AR-2 key swap on qevik-prod-01 (164307556, 91.107.244.253)
+# GO given by owner: 'GO "swap keys"' (2026-09-03). Performed from the Mac, 10:21:58–10:22:05 UTC.
+# qevik_prod private key loaded into the macOS ssh-agent by the owner (interactive ssh-add, agent-only, not Keychain).
+# A first attempt at 10:21:29Z aborted before connecting (ControlMaster socket path too long) — no host contact.
+# Session A = devloop_01 ControlMaster, held open for the whole procedure; B, C, D = fresh independent sessions.
+
+2026-09-03T10:21:58Z  A  OPEN  devloop_01 master -> qevik-prod-01 (client 63.250.56.242)
+2026-09-03T10:21:59Z  A  authorized_keys before: 1 line(s); SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues
+2026-09-03T10:22:00Z  A  appended qevik_prod: now 2 lines, mode 600; fps: SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues SHA256:RE9AIKm94JL0LnHg16FxDYjIoKueZQGzeo9324tGv78 
+2026-09-03T10:22:01Z  B  OK    qevik_prod fresh session: qevik-prod-01 10:22:01Z
+2026-09-03T10:22:02Z  A  reduced: 1 line, mode 600; fp: SHA256:RE9AIKm94JL0LnHg16FxDYjIoKueZQGzeo9324tGv78
+2026-09-03T10:22:04Z  C  OK    qevik_prod fresh session: qevik-prod-01 10:22:04Z
+2026-09-03T10:22:05Z  D  REFUSED devloop_01 fresh session: root@91.107.244.253: Permission denied (publickey,password).
+2026-09-03T10:22:05Z  A  CLOSED
+
+## Result (PROVED)
+/root/.ssh/authorized_keys = exactly 1 line, mode 600, 92 bytes = qevik_prod SHA256:RE9AIKm94JL0LnHg16FxDYjIoKueZQGzeo9324tGv78
+devloop_01 (SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues) refused: "Permission denied (publickey,password)".
+The temporary /root/.ssh/authorized_keys.pre-swap backup (held only during the swap) was removed; /root/.ssh contains authorized_keys only.
+Mac ~/.ssh/config: "Host qevik-prod-01" block added (HostName 91.107.244.253, User root, IdentityFile ~/.ssh/qevik_prod, IdentitiesOnly yes).
+Note: the Mac's public IP as seen by the host was 63.250.56.242 (earlier logins on 09-02 came from 178.104.85.106) — owner's egress changed; not a finding.
+sshd still has PasswordAuthentication yes / MaxAuthTries 6 (Hetzner defaults) — Phase 3, unchanged here by design. Root has no password (prohibit-password + key-created server).
+
+## Next
+Step 7 (owner): delete devloop_01 from the Hetzner project; on GO, delete ~/.ssh/devloop_01(.pub) on the Mac.
