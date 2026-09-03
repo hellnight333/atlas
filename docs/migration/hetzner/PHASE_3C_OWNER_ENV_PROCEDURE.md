@@ -3,7 +3,7 @@
 **This is a procedure for you to run on `qevik-prod-01`. The agent does not run
 it, does not see any value, and must never be sent one** — not in chat, not in a
 file, not in a task. Everything below deals in *names*, *paths*, *modes* and
-*digests*.
+*presence*. No value, and no derived form of one — no hash, no length (owner's instruction, 2026-09-04).
 
 Prerequisites, all satisfied at Phase 3 completion (`8c2685e`): the `qevik`
 account exists (uid 999, `nologin`), `/opt/qevik` is `root:root 0755`, and access
@@ -137,6 +137,95 @@ chown qevik:qevik /opt/qevik/places.env && chmod 600 /opt/qevik/places.env
 
 ---
 
+## 4a. Filling the values — the exact commands (2026-09-04)
+
+The five files now exist on the host as **scaffolds**: `root:root`/`qevik:qevik`
+as documented, `0600`, holding the non-secret configuration, the variable names
+and these instructions as comments. No secret has ever been in them.
+
+| File | Active now | Still to add |
+|---|---|---|
+| `atlas.env` | `QEVIK_LEDGER`, `QEVIK_SITES_BASE_URL` | `ATLAS_DATABASE_URL`, `QEVIK_DASHSCOPE_API_KEY`, `QEVIK_DASHSCOPE_BASE_URL`, `QEVIK_ADMIN_PASSWORD`, `QEVIK_REPORTS_STORE` |
+| `control.env` | — | `QEVIK_VAULT_MASTER_KEY`, `QEVIK_CLAIMS_DSN`, `QEVIK_REQUIRE_ATOMIC_CLAIMS` |
+| `worker.env` | — | `QEVIK_CLAIMS_DSN`, `QEVIK_REQUIRE_ATOMIC_CLAIMS` |
+| `brave.env` | — | `QEVIK_BRAVE_API_KEY` |
+| `places.env` | — | `QEVIK_GOOGLE_PLACES_API_KEY` |
+
+The placeholders are **commented out** on purpose: an uncommented `KEY=` is a
+real assignment of the empty string, and systemd would hand that to a service as
+a value. A missing variable fails loudly; an empty one fails obscurely.
+
+### Why `read -rs` rather than an editor or a heredoc
+
+`read -rs` echoes nothing to the screen, `-r` stops backslashes being eaten, and
+the value reaches `printf` as one argument — so it never appears in your shell
+history, never on a command line, and is never expanded. It is the same pattern
+`qevik-backup-set-password` already uses on this host.
+
+```sh
+ssh qevik-prod-01          # your own session
+umask 077
+```
+
+**1 — the database password, written into all three DSNs at once.** One prompt,
+three files: this is why the two `QEVIK_CLAIMS_DSN` lines cannot drift apart, and
+it removes the need to compare the two files afterwards at all.
+
+```sh
+read -rsp 'qevik DB password: ' P; echo
+printf 'ATLAS_DATABASE_URL=postgresql+psycopg://qevik:%s@127.0.0.1:5432/qevik\n' "$P" >> /opt/qevik/atlas.env
+printf 'QEVIK_CLAIMS_DSN=postgresql://qevik:%s@127.0.0.1:5432/qevik\n'          "$P" >> /opt/qevik/control.env
+printf 'QEVIK_CLAIMS_DSN=postgresql://qevik:%s@127.0.0.1:5432/qevik\n'          "$P" >> /opt/qevik/worker.env
+unset P
+```
+
+> Percent-encode `@ / : # ?` **inside the password** before typing it here — that
+> is a URL rule, not a shell rule (§3). Keep the same password in your manager:
+> Phase 4 applies it to the role with `\password qevik`, typed by you.
+
+**2 — the remaining single-value secrets.** One line each; run only the ones you
+are ready for.
+
+```sh
+read -rsp 'DashScope API key: ' V;   echo; printf 'QEVIK_DASHSCOPE_API_KEY=%s\n' "$V" >> /opt/qevik/atlas.env;   unset V
+read -rsp 'admin password: ' V;      echo; printf 'QEVIK_ADMIN_PASSWORD=%s\n'    "$V" >> /opt/qevik/atlas.env;   unset V
+read -rsp 'vault master key: ' V;    echo; printf 'QEVIK_VAULT_MASTER_KEY=%s\n'  "$V" >> /opt/qevik/control.env; unset V
+read -rsp 'Brave API key: ' V;       echo; printf 'QEVIK_BRAVE_API_KEY=%s\n'     "$V" >> /opt/qevik/brave.env;   unset V
+read -rsp 'NEW Places API key: ' V;  echo; printf 'QEVIK_GOOGLE_PLACES_API_KEY=%s\n' "$V" >> /opt/qevik/places.env; unset V
+```
+
+**3 — the three non-secret values copied from the old host** (§5). These are
+configuration, so a plain `printf` is fine — substitute what the old host says:
+
+```sh
+printf 'QEVIK_DASHSCOPE_BASE_URL=%s\n'    'https://…'   >> /opt/qevik/atlas.env
+printf 'QEVIK_REPORTS_STORE=%s\n'         '…'           >> /opt/qevik/atlas.env
+printf 'QEVIK_REQUIRE_ATOMIC_CLAIMS=%s\n' '…'           >> /opt/qevik/control.env
+printf 'QEVIK_REQUIRE_ATOMIC_CLAIMS=%s\n' '…'           >> /opt/qevik/worker.env
+```
+
+**4 — restore the ownership the appends may have changed** (appending as root
+leaves the owner alone, but this is cheap and idempotent):
+
+```sh
+chown root:root /opt/qevik/atlas.env /opt/qevik/brave.env
+chown qevik:qevik /opt/qevik/control.env /opt/qevik/worker.env /opt/qevik/places.env
+chmod 600 /opt/qevik/*.env
+```
+
+**Mistyped something?** Append the line again — the last assignment wins, proved
+on this host on 2026-09-04 with invented values. To start a file over, re-create
+the scaffold from this document and repeat.
+
+**Generating a value rather than pasting one** (vault master key, admin password,
+DB password), if you would rather not use a manager for these:
+
+```sh
+openssl rand -base64 32        # prints to your screen only; store it before use
+```
+
+---
+
 ## 5. The three values to copy from the old host
 
 `QEVIK_DASHSCOPE_BASE_URL`, `QEVIK_REPORTS_STORE` and
@@ -157,8 +246,8 @@ Do not paste the output anywhere; type the values into the new host's files.
 ## 6. Validation — proves presence, ownership, mode and parseability, prints no value
 
 Run all four. The last asks **systemd's own parser** to read the files — the
-same parser the units and the deploy use — and reports a length and a truncated
-digest per variable, never the value.
+same parser the units and the deploy use — and reports **presence and
+non-emptiness** per variable: no value, and no derived form of one.
 
 ```sh
 # 1. the files: existence, owner, mode. Nothing else may live in /opt/qevik.
@@ -177,18 +266,19 @@ for f in /opt/qevik/*.env; do
     "$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=$' "$f")"
 done   # every count must be 0
 
-# 4. systemd parses it, and each variable arrives non-empty — digests, not values
+# 4. systemd parses it, and each variable arrives non-empty — presence only
 # (verified on this host on 2026-09-04 with an invented value containing a
-#  space, a `$` and a quote: it reported len=7 and a digest, and printed nothing)
+#  space, a `$` and a quote: it reported the variable as present and printed
+#  nothing of it)
 systemd-run --wait --collect --pipe --quiet \
   --property=EnvironmentFile=/opt/qevik/atlas.env \
-  /usr/bin/python3 -c 'import hashlib, os, sys
+  /usr/bin/python3 -c 'import os, sys
 for k in sys.argv[1:]:
     v = os.environ.get(k)
     if v is None:
         print(k, "MISSING")
     else:
-        print(k, "len=%d" % len(v), "sha256=" + hashlib.sha256(v.encode()).hexdigest()[:12])' \
+        print(k, "present, non-empty" if v else "PRESENT BUT EMPTY")' \
   ATLAS_DATABASE_URL QEVIK_DASHSCOPE_API_KEY QEVIK_DASHSCOPE_BASE_URL \
   QEVIK_ADMIN_PASSWORD QEVIK_SITES_BASE_URL QEVIK_LEDGER QEVIK_REPORTS_STORE
 ```
@@ -196,14 +286,13 @@ for k in sys.argv[1:]:
 Repeat step 4 for `control.env` (`QEVIK_VAULT_MASTER_KEY QEVIK_CLAIMS_DSN
 QEVIK_REQUIRE_ATOMIC_CLAIMS`), `worker.env` and the two key files.
 
-**The one comparison worth making:** the digest of `QEVIK_CLAIMS_DSN` in
-`control.env` and in `worker.env` must be **identical** — they are the same DSN,
-and a divergence here is a class of bug that otherwise surfaces as workers that
-cannot claim missions.
+**The comparison that used to need a digest** — `QEVIK_CLAIMS_DSN` identical in
+`control.env` and `worker.env` — is handled structurally instead: §4a step 1
+writes both from one prompt, so they cannot diverge. That divergence is the kind
+of bug that otherwise stays invisible until workers fail to claim missions in
+Phase 7.
 
-You may paste the digest lines to the agent if you want them recorded: a
-truncated SHA-256 of a value is not the value, and the agent will store only that
-these variables are present, non-empty and consistent.
+Nothing derived from a value is produced, printed or recorded.
 
 ---
 
