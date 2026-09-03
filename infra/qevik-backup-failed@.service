@@ -1,0 +1,13 @@
+[Unit]
+Description=Qevik backup failure marker for %i
+Documentation=file:///opt/qevik/atlas/docs/migration/hetzner/OFFSITE_BACKUP.md
+
+[Service]
+Type=oneshot
+# Templated so the failing unit's name arrives as %i (OnFailure=qevik-backup-failed@%n.service)
+# — deterministic, unlike systemd's MONITOR_* variables, which it withholds whenever more
+# than one unit lists this one as its OnFailure= target (both backup units do; verified
+# on systemd 259). The marker is what qevik_offsite.sh --status and (Phase 10, T9)
+# /api/health surface; the next successful off-host run removes it. A backup that fails
+# silently for five days is the failure this unit exists to make loud.
+ExecStart=/bin/sh -c 'mkdir -p /var/lib/qevik/backup && printf "%%s unit=%%s result=%%s\\n" "$$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "%i" "$${MONITOR_SERVICE_RESULT:-see-journal}" >> /var/lib/qevik/backup/FAILED && chmod 644 /var/lib/qevik/backup/FAILED && echo "qevik backup FAILED: %i"'

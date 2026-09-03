@@ -1,0 +1,32 @@
+[Unit]
+Description=Qevik off-host backup to the Hetzner Storage Box (restic over SFTP)
+Documentation=file:///opt/qevik/atlas/docs/migration/hetzner/OFFSITE_BACKUP.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=qevik-backup-failed@%p.service
+
+[Service]
+Type=oneshot
+# Root, unlike qevik-backup.service: the Storage Box key lives in /root/.ssh and
+# the backup set spans /var/lib/qevik, /srv, /etc/caddy and the unit directory.
+# Everything not listed in ReadWritePaths stays read-only to the run.
+EnvironmentFile=/opt/qevik/backup.env
+Environment=RESTIC_REPOSITORY=sftp:storagebox:restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
+Environment=QEVIK_OFFSITE_KEEP_DAILY=30
+Environment=QEVIK_OFFSITE_KEEP_WEEKLY=8
+Environment=QEVIK_OFFSITE_KEEP_MONTHLY=6
+Environment=QEVIK_OFFSITE_CHECK_SUBSET=5%%
+ExecStart=/usr/local/sbin/qevik_offsite.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/qevik/backup /var/cache/restic /opt/qevik/backups
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily off-host backup of Qevik to the Hetzner Storage Box
+
+[Timer]
+# qevik-backup.timer fires at 03:30 UTC (+ up to 5 min jitter) and a dump with
+# restore-verify takes under ten minutes; 04:15 leaves the gap without racing.
+OnCalendar=*-*-* 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=qevik-offsite.service
+
+[Install]
+WantedBy=timers.target

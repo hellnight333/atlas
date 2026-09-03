@@ -2,6 +2,10 @@
 Description=Qevik database backup (taken and verified by restore)
 After=postgresql.service
 Requires=postgresql.service
+# On failure a marker is written so a silent five-day gap cannot recur (F-6).
+# The off-host copy (qevik-offsite.timer, 04:15 UTC) runs on its own clock so a
+# failed dump still ships yesterday's verified dump and all non-database state.
+OnFailure=qevik-backup-failed@%p.service
 
 [Service]
 Type=oneshot

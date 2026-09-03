@@ -1,0 +1,115 @@
+# Off-host backup — install + verification evidence, qevik-prod-01, 2026-09-03T11:12:52Z
+# No secret values appear here: names, modes, fingerprints, sizes, exit codes only.
+
+## Files installed (PROVED)
+-rw-r--r-- 1 root root  963 Sep  3 11:10 /etc/systemd/system/qevik-backup-failed@.service
+-rw-r--r-- 1 root root 1138 Sep  3 11:10 /etc/systemd/system/qevik-offsite.service
+-rw-r--r-- 1 root root  374 Sep  3 11:10 /etc/systemd/system/qevik-offsite.timer
+-rwxr-xr-x 1 root root 1467 Sep  3 11:10 /usr/local/sbin/qevik-backup-set-password
+-rwxr-xr-x 1 root root 9612 Sep  3 11:10 /usr/local/sbin/qevik_offsite.sh
+
+## Secrets — presence, owner, mode, key NAMES only (PROVED)
+/opt/qevik/backup.env root:root 600 49 bytes
+/root/.ssh/storagebox_ed25519 root:root 600 432 bytes
+/root/.ssh/storagebox_ed25519.pub root:root 644 117 bytes
+/root/.ssh/config root:root 600 403 bytes
+/root/.ssh/known_hosts root:root 600 1239 bytes
+backup.env keys: RESTIC_PASSWORD 
+storagebox key fingerprint: 256 SHA256:jzmnYt6RNxuSt0WyjBlrdilGdewxvAY5+Q00v2sqhG4 qevik-prod-01 storagebox 2026-09-03 (ED25519)
+
+## Storage Box host key pinned (PROVED, matches evidence/phase-2 recorded fingerprint)
+6
+# Host [u662608.your-storagebox.de]:23 found: line 6 
+[u662608.your-storagebox.de]:23 ED25519 SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM
+# Host [u662608.your-storagebox.de]:23 found: line 7 
+[u662608.your-storagebox.de]:23 RSA SHA256:EMlfI8GsRIfpVkoW1H2u0zYVpFGKkIMKHFZIRkf2ioI
+# Host [u662608.your-storagebox.de]:23 found: line 8 
+[u662608.your-storagebox.de]:23 ECDSA SHA256:oDHZqKXnoMtgvPBjjC57pcuFez28roaEuFcfwyg8O5c
+
+## ssh config block (non-secret)
+Host storagebox
+    HostName u662608.your-storagebox.de
+    Port 23
+    User u662608-sub1
+    IdentityFile /root/.ssh/storagebox_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+    ServerAliveInterval 30
+    ConnectTimeout 20
+
+## Key-based SFTP auth to sub-account, batch mode, no password (PROVED)
+Connected to storagebox.
+Remote working directory: /home
+drwxr-xr-x    ? u662608-sub1 1012            4 Sep  3 11:06 .
+dr-x--x--x    ? root     root           11 Sep  3 10:46 ..
+drwx------    ? u662608-sub1 1012            3 Sep  3 11:04 .ssh
+drwxrwxr-x    ? u662608-sub1 1012            8 Sep  3 11:06 restic
+drwxrwxr-x    ? u662608-sub1 1012            8 Sep  3 11:06 restic/.
+drwxr-xr-x    ? u662608-sub1 1012            4 Sep  3 11:06 restic/..
+-rw-------    ? u662608-sub1 1012          155 Sep  3 11:06 restic/config
+drwxrwxr-x    ? u662608-sub1 1012          258 Sep  3 11:06 restic/data
+drwxrwxr-x    ? u662608-sub1 1012            3 Sep  3 11:12 restic/index
+drwxrwxr-x    ? u662608-sub1 1012            3 Sep  3 11:06 restic/keys
+drwxrwxr-x    ? u662608-sub1 1012            2 Sep  3 11:12 restic/locks
+drwxrwxr-x    ? u662608-sub1 1012            3 Sep  3 11:12 restic/snapshots
+
+## restic repository (PROVED)
+restic 0.18.1 compiled with go1.25.0 on linux/amd64
+repo id a8dfcaf29daf256b version 2
+ID        Time                 Host           Tags    Size
+-----------------------------------------------------------
+b5212410  2026-09-03 11:12:05  qevik-prod-01  daily   484 B
+-----------------------------------------------------------
+1 snapshots
+[0:00] 100.00%  2 / 2 packs
+no errors were found
+
+## Timer (PROVED)
+NEXT                        LEFT LAST PASSED UNIT                ACTIVATES
+Fri 2026-09-04 04:16:41 UTC  17h -         - qevik-offsite.timer qevik-offsite.service
+enabled
+
+## Unit dependencies (PROVED)
+OnFailure=qevik-backup-failed@qevik-offsite.service
+EnvironmentFiles=/opt/qevik/backup.env (ignore_errors=no)
+ReadWritePaths=/var/lib/qevik/backup /var/cache/restic /opt/qevik/backups
+ProtectSystem=strict
+
+## Last status (PROVED)
+{"unit":"qevik-offsite","host":"qevik-prod-01","last_run_utc":"2026-09-03T11:12:11Z","result":"ok","snapshot":"b5212410","restore_verified":"skipped (no dump on this host yet)","check":"ok(5%)","repository":"sftp:…","keep":"daily=30,weekly=8,monthly=6","duration_s":6,"note":""}
+exit=0
+
+## Journal of this session's runs (PROVED)
+2026-09-03T11:10:24+00:00 qevik-prod-01 sh[5355]: qevik backup FAILED: qevik-offsite-negtest7
+2026-09-03T11:10:51+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:51Z backup: 2 path(s) → sftp repository
+2026-09-03T11:10:53+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:53Z backup: snapshot f5653f11 — 3 new, 0 changed files, 0 MiB added
+2026-09-03T11:10:53+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:53Z retention: keep daily=30 weekly=8 monthly=6
+2026-09-03T11:10:58+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:58Z check: repository consistent, 5% of data read back
+2026-09-03T11:10:58+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:58Z restore-verify: skipped (no dump on this host yet)
+2026-09-03T11:10:59+00:00 qevik-prod-01 qevik_offsite.sh[5685]: 2026-09-03T11:10:59Z OK in 7s — 1 daily snapshot(s) retained off-host
+2026-09-03T11:11:46+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:46Z backup: 2 path(s) → sftp repository
+2026-09-03T11:11:47+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:47Z backup: snapshot 739e6f4e — 2 new, 2 changed files, 8 MiB added
+2026-09-03T11:11:47+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:47Z retention: keep daily=30 weekly=8 monthly=6
+2026-09-03T11:11:53+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:53Z check: repository consistent, 5% of data read back
+2026-09-03T11:11:54+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:54Z restore-verify: qevik-00000000T000000Z-FIXTURE.dump sha256 match
+2026-09-03T11:11:55+00:00 qevik-prod-01 qevik_offsite.sh[5893]: 2026-09-03T11:11:55Z OK in 8s — 2 daily snapshot(s) retained off-host
+2026-09-03T11:12:05+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:05Z backup: 2 path(s) → sftp repository
+2026-09-03T11:12:06+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:06Z backup: snapshot b5212410 — 3 new, 0 changed files, 0 MiB added
+2026-09-03T11:12:06+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:06Z retention: keep daily=30 weekly=8 monthly=6
+2026-09-03T11:12:11+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:11Z check: repository consistent, 5% of data read back
+2026-09-03T11:12:11+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:11Z restore-verify: skipped (no dump on this host yet)
+2026-09-03T11:12:12+00:00 qevik-prod-01 qevik_offsite.sh[6139]: 2026-09-03T11:12:12Z OK in 6s — 1 daily snapshot(s) retained off-host
+
+## Negative controls run today (PROVED)
+- key not yet on sub-account → 'Permission denied (publickey,password)' exit 255 (11:03Z)
+- OnFailure marker: transient unit /bin/false with OnFailure=qevik-backup-failed@<name>.service → FAILED line 'unit=qevik-offsite-negtest7 result=exit-code'; --status exit 2; cleared by next successful run
+- restore-verify tamper: local dump replaced by different random bytes → 'MISMATCH' exit 1
+- MONITOR_* vars: withheld by systemd 259 when >1 unit lists the same OnFailure target ('multiple trigger source candidates … skipping') → templated unit with %i instead
+
+## Fixture round-trips (PROVED, fixture removed, snapshots forgotten+pruned)
+- selftest 4 MiB: snapshot e4228699 restored byte-identical (11:07:20Z)
+- 8 MiB dump fixture sha256 6d65349da0c88a12…: shipped in snapshot 739e6f4e, restore-verify 'sha256 match'; local deleted, --restore-dump from repo → identical sha256 (11:11:56Z)
+
+## What is NOT yet proved on this host
+- pg_dump → verify → ship → restore of a REAL production dump: no Postgres and no production data on this host until Phase 4/6 (data still on qevik-core-01, AR-4). V15 stays open.
+- restore on a SECOND machine (independent of this server): script written (qevik_restore_offsite.sh), not executed elsewhere — needs the owner to type the two secrets on that machine.

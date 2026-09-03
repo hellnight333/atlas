@@ -200,23 +200,30 @@ units for no evidenced need.
 - No Cloudflare zone export — Phase 1 owner action (no secrets in a zone file).
 - Retention: dumps 14 local + 30 off-host; tars 30 off-host; image backups 7 (add-on fixed).
 
-### 3.5 Backup model, final
+### 3.5 Backup model, final (IMPLEMENTED 2026-09-03 — see `OFFSITE_BACKUP.md`)
 ```
-03:30 UTC  qevik-backup.service (existing, extended)
+03:30 UTC  qevik-backup.service (existing, User=qevik)
   1. pg_dump -Fc qevik → /opt/qevik/backups/qevik-<ts>.dump        (existing)
-  2. pg_restore into scratch DB, verify, drop                     (existing)
-  3. tar --zstd of: /var/lib/qevik/{control,evidence,jobs,prospects,outreach,audits,briefs,workspaces}
-       /srv/sites  /srv/qevik-public  /etc/caddy/Caddyfile  /etc/systemd/system/qevik-*  /var/lib/caddy
-       + `cut -d= -f1` name lists of /opt/qevik/*.env  → /opt/qevik/backups/state-<ts>.tar.zst   (NEW)
-  4. rsync dump + tar → Storage Box sub-account (SFTP, key in /root/.ssh, 0600)                  (NEW)
-  5. prune local (14) and remote (30)                                                             (NEW)
-  OnFailure=qevik-backup-failed.service → writes /var/lib/qevik/control/backup.failed            (NEW)
-  /api/health reports backup component: last_verified_at, last_offsite_at, failed marker         (NEW, code)
-Hetzner backup add-on: daily image, 7 rotations (console toggle)
+  2. pg_restore into scratch DB, verify, drop; prune local 14      (existing)
+  OnFailure=qevik-backup-failed.service → appends /var/lib/qevik/backup/FAILED   (NEW, installed)
+04:15 UTC  qevik-offsite.service (NEW, root, own timer — a failed dump must not stop the rest)
+  3. restic backup → Storage Box sub-account (sftp, key /root/.ssh/storagebox_ed25519 0600):
+       verified dumps (never *.UNVERIFIED), /var/lib/qevik/{control,evidence,jobs,prospects,outreach,
+       audits,briefs,workspaces}, /srv/sites, /srv/qevik-public, /etc/caddy, /var/lib/caddy,
+       + `cut -d= -f1` name lists of /opt/qevik/*.env and the qevik-* unit list.
+       Encrypted client-side (AES-256, password in /opt/qevik/backup.env root 0600), deduplicated.
+  4. restic forget --keep-daily 30 --keep-weekly 8 --keep-monthly 6 --prune
+  5. restic check --read-data-subset=5%  +  restore newest dump from the repo → sha256 == local
+  6. /var/lib/qevik/backup/status.json (fresh/proven/failed) ; FAILED marker cleared on success
+  OnFailure=qevik-backup-failed.service                                                          (NEW)
+  /api/health backup component reads status.json + FAILED           (T9, Phase 10, code — still open)
+Hetzner backup add-on: daily image, 7 rotations (console, ON since 2026-09-03)
 ```
-Steps 3–5 and the health component are implementation items (Phase 4 script
-change under review; health component is a small code change) — listed so the
-owner sees the whole model, not approved by this document.
+Change from the sketch above as first written: restic instead of tar+rsync (encryption at rest,
+retention and a real `check`/`restore` in one apt package) and an independent 04:15 timer instead
+of an `OnSuccess=` chain (a failed dump still ships everything else). Cost of that choice: one more
+secret only the owner holds — the repository password — which is also what makes a total-loss
+restore possible without the server. The health component remains a Phase 10 code change.
 
 ### 3.6 Monitoring, final (minimum that closes "nobody notices")
 1. `OnFailure=` on every `qevik-*` unit and timer → marker file → `/api/health` component (code change, small).

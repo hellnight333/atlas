@@ -45,6 +45,14 @@ about $0.58.
 
 ### Running services
 
+- `qevik-offsite.timer` — 04:15 UTC daily on the Hetzner target `qevik-prod-01`
+  (installed 2026-09-03, not on the old host): restic ships every verified dump and
+  all non-database state (`/var/lib/qevik`, `/srv/sites`, Caddy) to the Storage Box
+  `qevik-prod-storage`, encrypted client-side, keeps 30 daily / 8 weekly / 6 monthly,
+  runs `restic check` and restores the newest dump back to compare bytes. Failures
+  write `/var/lib/qevik/backup/FAILED` (`qevik-backup-failed@.service`). Runbook:
+  `docs/migration/hetzner/OFFSITE_BACKUP.md`. The repository password exists only in
+  `/opt/qevik/backup.env` and the owner's password manager.
 - `qevik-api` — systemd, enabled at boot, restarts on failure (verified by
   SIGKILL, not by reading the config). `127.0.0.1:8080`, health returns 200.
 - `postgresql` — systemd, enabled at boot.
