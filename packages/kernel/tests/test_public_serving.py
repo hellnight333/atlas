@@ -758,3 +758,59 @@ def test_artwork_that_is_here_but_short_a_file_fails_rather_than_skipping(
 
     assert build.main(["--out", str(tmp_path / "dist")]) == 1
     assert "site.css" in capsys.readouterr().err
+
+
+def test_the_production_caddyfile_has_no_bare_ip_site() -> None:
+    """B-2 / D-D: the `:8443` door is gone, and with it one host's IP.
+
+    A configuration deployed to two hosts during a migration must not name one
+    of them. The door it belonged to had never worked — the host firewall
+    dropped 8443 — so what it actually provided was a hard-coded address in a
+    file that gets copied to a different machine.
+    """
+    text = CADDYFILE.read_text(encoding="utf-8")
+    # Directives, not prose: the comment where the block used to be explains why
+    # it is gone and necessarily says 8443.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped.endswith("{"):
+            continue
+        assert ":8443" not in stripped, "the emergency-door block is back"
+        # A site address is the token before the brace; none of them may be a
+        # literal address rather than a name.
+        assert not re.match(r"^(https?://)?\d{1,3}(\.\d{1,3}){3}", stripped), stripped
+
+
+def test_the_caddy_installer_refuses_the_version_the_config_cannot_run_on() -> None:
+    """The floor is a gate, not a comment: Ubuntu's 2.6.2 must be refused.
+
+    `handle_errors` with an explicit `status` in `file_server` — what answers a
+    missing page with a real 404 — needs Caddy >= 2.7. Installing the distro
+    package would produce a config that does not validate, i.e. a web server
+    that does not start.
+    """
+    installer = REPO / "infra" / "install_caddy.sh"
+    script = (f'CADDY_MIN=2.7.0\n'
+              f'{installer.read_text(encoding="utf-8").split("version_at_least() {", 1)[1].split("}", 1)[0].join(["version_at_least() {", "}"])}\n'
+              'for v in 2.6.2 2.7.0 2.11.4; do\n'
+              '  if version_at_least "$v" "$CADDY_MIN"; then echo "$v ok"; else echo "$v refused"; fi\n'
+              'done\n')
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["2.6.2", "refused", "2.7.0", "ok", "2.11.4", "ok"], done.stdout
+
+
+def test_the_caddy_installer_pins_the_repository_signing_key() -> None:
+    """A third-party apt source is a trust decision; it is pinned and verified.
+
+    The fingerprint is the *package signing* key, not an SSH host key, it is
+    compared before the keyring is written, and a mismatch aborts having trusted
+    nothing.
+    """
+    text = (REPO / "infra" / "install_caddy.sh").read_text(encoding="utf-8")
+    assert re.search(r'KEY_FPR="\$\{CADDY_KEY_FPR:-[0-9A-F]{40}\}"', text), "no pinned fingerprint"
+    fingerprint_check = text.index('if [ "$got" != "$KEY_FPR" ]')
+    keyring_write = text.index("gpg --dearmor")
+    assert fingerprint_check < keyring_write, (
+        "the key is written to the keyring before its fingerprint is checked")
+    assert "--show-keys" in text and "gpg" in text

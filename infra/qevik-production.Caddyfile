@@ -221,47 +221,17 @@ sites.qevik.ai {
 	}
 }
 
-# --- the operator's way back in, if DNS or Cloudflare breaks ----------------
+# --- the operator's way back in ---------------------------------------------
 #
-# Self-signed and deliberately kept. If a DNS record is wrong, a Cloudflare
-# setting is changed, or the domain lapses, app.qevik.ai stops resolving and the
-# only route to the control plane would be SSH. A second door on the raw IP is
-# worth one browser warning; the warning is on a page only the operator sees.
-https://2.28.62.83:8443 {
-	tls internal
-
-	# Two services behind one domain, and the split is not arbitrary.
-	#
-	# :8080 is `atlas_kernel.api:app` — 181 Atlas routes plus the sales console's
-	# API — and it carries a middleware that rewrites `/api/X` to `/X` for the
-	# desktop client. Mounting the Qevik control plane there turned
-	# `/api/missions` into `/missions` and answered HTML with a 200 where an
-	# authenticated JSON API belongs.
-	#
-	# :8081 is `atlas_kernel.qevik.app:from_environment` — the composed control
-	# plane the acceptance suite actually exercises, where `/api/` is a real
-	# namespace rather than an alias.
-	#
-	# `/control/*` deliberately stays on :8080 so the sales console keeps working.
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8081
-	}
-	handle /auth/* {
-		reverse_proxy 127.0.0.1:8081
-	}
-	handle /control/* {
-		reverse_proxy 127.0.0.1:8080
-	}
-	handle /health {
-		reverse_proxy 127.0.0.1:8081
-	}
-	handle {
-		root * /srv/qevik-control
-		try_files {path} /index.html
-		file_server
-	}
-	import security
-}
+# There is no `:8443` door here any more (D-D, 2026-09-03). It was a self-signed
+# site on the bare IP, and it had never worked: the host firewall dropped 8443,
+# so the "second route to the control plane" was a hard-coded address that
+# answered nothing. Keeping it would also mean carrying one production host's IP
+# in the configuration of another.
+#
+# The break-glass is the Hetzner console plus SSH, which is what was actually
+# used every time. `infra/secure_8443.sh` — the never-applied proposal to lock
+# this block down — goes with it.
 
 # --- the bare IP stays available as development infrastructure --------------
 #
