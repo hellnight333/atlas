@@ -278,3 +278,99 @@ def test_the_remote_python_builder_hands_over_a_path() -> None:
     assert "--property=EnvironmentFile=/opt/qevik/atlas.env" in command
     assert "--property=User=qevik" in command
     assert "set -a" not in command and ". /opt/qevik/atlas.env" not in command
+
+
+# --- which unit is installed by what, and enabled by whom ---------------------
+
+INFRA = REPO_ROOT / "infra"
+INSTALLER = INFRA / "install_qevik_infra.sh"
+DEPLOY = INFRA / "deploy_control.sh"
+
+
+def test_the_deploy_ships_every_unit_file_including_timers() -> None:
+    """A `.timer` used to match nothing, so the schedule on a host was whatever
+    had been installed by hand and no deploy could correct it."""
+    deploy = DEPLOY.read_text(encoding="utf-8")
+    globs = [line for line in deploy.splitlines()
+             if "qevik-*.service" in line and "EXPORT" in line]
+    assert globs, "the deploy no longer ships units at all"
+    for line in globs:
+        assert "qevik-*.timer" in line, f"timers are not shipped here: {line.strip()}"
+
+
+def test_the_snapshot_and_the_rollback_cover_what_the_deploy_installs() -> None:
+    """Shipping timers without snapshotting them would make a rollback delete
+    files it never saved — the failure this pairing exists to prevent."""
+    deploy = DEPLOY.read_text(encoding="utf-8")
+    snapshot = next(line for line in deploy.splitlines()
+                    if "ROLLBACK_DIR}-units" in line and "cp -a" in line and "for f in" in line)
+    rollback = next(line for line in deploy.splitlines()
+                    if "rm -f $UNIT_DIR/qevik-" in line)
+    for line in (snapshot, rollback):
+        assert "qevik-*.service" in line and "qevik-*.timer" in line, line
+
+
+def test_the_deploy_enables_nothing() -> None:
+    """Installing a unit and starting one are different decisions.
+
+    The deploy restarts what is already running; enabling is the installer's
+    job, and enabling a *timer* is a separate decision again, gated on data.
+    """
+    deploy = DEPLOY.read_text(encoding="utf-8")
+    for number, line in enumerate(deploy.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "systemctl enable" not in stripped, f"deploy_control.sh:{number}: {stripped}"
+
+
+def test_the_installer_never_enables_the_data_timers_by_default() -> None:
+    """`qevik-backup.timer` and the market scan wait for data and for a key."""
+    text = INSTALLER.read_text(encoding="utf-8")
+    # The action, not the word: both timers are *named* in the header that
+    # explains why they wait, and one is named again in what the run reports.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "systemctl enable" not in stripped:
+            continue
+        for deferred in ("qevik-backup.timer", "qevik-market-scan.timer"):
+            if deferred in stripped:
+                assert "$MODE" in text.split(stripped)[0].rsplit("\n\n", 1)[-1] or \
+                    "--enable-backup-timer" in text.split(stripped)[0][-2000:], (
+                    f"{deferred} is enabled outside the guarded path: {stripped}")
+
+
+def test_the_backup_timer_is_guarded_by_data_and_by_the_archive() -> None:
+    """Two refusals, not two warnings: an empty database, or migrated dumps
+    still sitting where `qevik_backup.sh` would prune them."""
+    text = INSTALLER.read_text(encoding="utf-8")
+    guarded = text.split('if [ "$MODE" = backup-timer ]', 1)[1].split("exit 0", 1)[0]
+    assert "database_has_data" in guarded and "die " in guarded
+    assert "unarchived_migrated_dumps" in guarded
+    enable = guarded.index("systemctl enable --now qevik-backup.timer")
+    for guard in ("database_has_data", "unarchived_migrated_dumps"):
+        assert guarded.index(guard) < enable, f"{guard} is checked after enabling"
+
+
+def test_recovery_does_not_carry_a_second_copy_of_the_install_logic() -> None:
+    """D-S6: one implementation, so a recovery cannot install a different set."""
+    recover = (INFRA / "recover_qevik_server.sh").read_text(encoding="utf-8")
+    assert "install_qevik_infra.sh" in recover
+    # Reading the slice's effective limits is a report; installing the file is
+    # the duplication that mattered.
+    for line in recover.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert not (stripped.startswith("install ") and "systemd/" in stripped), stripped
+        assert "resources.conf" not in stripped, stripped
+
+
+def test_every_shipped_timer_has_a_service_to_run() -> None:
+    """A timer that names nothing is a schedule that silently does nothing."""
+    for timer in sorted(INFRA.glob("qevik-*.timer")):
+        text = timer.read_text(encoding="utf-8")
+        named = [line.split("=", 1)[1].strip() for line in text.splitlines()
+                 if line.strip().startswith("Unit=")]
+        service = named[0] if named else timer.name.replace(".timer", ".service")
+        assert (INFRA / service).is_file(), f"{timer.name} runs {service}, which is not shipped"

@@ -39,8 +39,7 @@
 set -euo pipefail
 
 REPO="${QEVIK_REPO:-/opt/qevik/atlas}"
-SLICE_SRC="$REPO/infra/systemd/qevik-jobs.slice"
-DROPIN_SRC="$REPO/infra/systemd/qevik-api.service.d/resources.conf"
+INSTALLER="$REPO/infra/install_qevik_infra.sh"
 
 say() { printf '\n== %s\n' "$*"; }
 
@@ -68,15 +67,15 @@ done
 printf 'browsers after reap: %s\n' "$(pgrep -c -f 'chrom|headless_shell|playwright' 2>/dev/null || echo 0)"
 
 say "3. Installing the resource limits"
-if [[ -f "$SLICE_SRC" && -f "$DROPIN_SRC" ]]; then
-	install -m 0644 "$SLICE_SRC" /etc/systemd/system/qevik-jobs.slice
-	install -d -m 0755 /etc/systemd/system/qevik-api.service.d
-	install -m 0644 "$DROPIN_SRC" /etc/systemd/system/qevik-api.service.d/resources.conf
-	systemctl daemon-reload
-	systemctl start qevik-jobs.slice || true
-	echo "installed qevik-jobs.slice and the qevik-api drop-in"
+# Delegated (D-S6). This script is incident response; the limits, the directory
+# layout and the enablement rules are one implementation, in
+# infra/install_qevik_infra.sh, so a recovery cannot install a different set from
+# a provisioning run. Two copies of that logic is how a host ends up with the
+# slice but not the drop-in.
+if [[ -x "$INSTALLER" ]]; then
+	"$INSTALLER" || echo "WARNING: $INSTALLER did not complete" >&2
 else
-	echo "WARNING: limit files not found under $REPO — sync the repo first" >&2
+	echo "WARNING: $INSTALLER not found — sync the repo first" >&2
 fi
 
 say "4. Restarting the control plane"

@@ -286,7 +286,7 @@ rollback_and_report() {
   # The saved set replaces what is installed, so a unit this deploy added and
   # the saved set does not carry is removed with it.
   rc=0
-  ssh_ "set -e; if [ -e ${ROLLBACK_DIR}-absent/units ]; then exit 3; fi; [ -d ${ROLLBACK_DIR}-units ]; rm -f $UNIT_DIR/qevik-*.service; cp -a ${ROLLBACK_DIR}-units/. $UNIT_DIR/; systemctl daemon-reload" || rc=$?
+  ssh_ "set -e; if [ -e ${ROLLBACK_DIR}-absent/units ]; then exit 3; fi; [ -d ${ROLLBACK_DIR}-units ]; rm -f $UNIT_DIR/qevik-*.service $UNIT_DIR/qevik-*.timer; cp -a ${ROLLBACK_DIR}-units/. $UNIT_DIR/; systemctl daemon-reload" || rc=$?
   if [ "$rc" = 0 ]; then
     echo "    restored: units"
     note_restored units
@@ -594,7 +594,7 @@ manifest_lines() {  # export subtree, host prefix (trailing slash), then exactly
   manifest_lines "$EXPORT/infra" "$REMOTE_APP/infra/" "${INFRA_EXCLUDE[@]}"
   manifest_lines "$EXPORT/apps/control/src" "$CONSOLE_DIR/"
   # A shipped unit lands twice: in infra/ and, installed, in $UNIT_DIR.
-  for unit in "$EXPORT"/infra/qevik-*.service; do
+  for unit in "$EXPORT"/infra/qevik-*.service "$EXPORT"/infra/qevik-*.timer; do
     [ -e "$unit" ] || continue
     printf '%s  %s/%s\n' "$(shasum -a 256 "$unit" | cut -d' ' -f1)" \
       "$UNIT_DIR" "$(basename "$unit")"
@@ -635,7 +635,7 @@ if [ "$REHEARSE" = 1 ]; then
     "$EXPORT/infra/" "$TARGET:$REMOTE_APP/infra/"
   N_INFRA="$PLANNED"
   N_UNITS=0
-  for unit in "$EXPORT"/infra/qevik-*.service; do
+  for unit in "$EXPORT"/infra/qevik-*.service "$EXPORT"/infra/qevik-*.timer; do
     [ -f "$unit" ] || continue
     plan_rsync "unit $(basename "$unit")" "$unit" "$TARGET:$UNIT_DIR/"
     N_UNITS=$((N_UNITS + PLANNED))
@@ -688,7 +688,7 @@ rm -rf $ROLLBACK_DIR ${ROLLBACK_DIR}-infra ${ROLLBACK_DIR}-console ${ROLLBACK_DI
 if [ -d $REMOTE_APP/packages/kernel/atlas_kernel ]; then cp -a $REMOTE_APP/packages/kernel/atlas_kernel $ROLLBACK_DIR; else echo 'absent: kernel'; mkdir -p ${ROLLBACK_DIR}-absent; : > ${ROLLBACK_DIR}-absent/kernel; fi; \
 if [ -d $REMOTE_APP/infra ]; then cp -a $REMOTE_APP/infra ${ROLLBACK_DIR}-infra; else echo 'absent: infra'; mkdir -p ${ROLLBACK_DIR}-absent; : > ${ROLLBACK_DIR}-absent/infra; fi; \
 if [ -d $CONSOLE_DIR ]; then cp -a $CONSOLE_DIR ${ROLLBACK_DIR}-console; else echo 'absent: console'; mkdir -p ${ROLLBACK_DIR}-absent; : > ${ROLLBACK_DIR}-absent/console; fi; \
-for f in $UNIT_DIR/qevik-*.service; do [ -e \"\$f\" ] || continue; mkdir -p ${ROLLBACK_DIR}-units; cp -a \"\$f\" ${ROLLBACK_DIR}-units/; done; \
+for f in $UNIT_DIR/qevik-*.service $UNIT_DIR/qevik-*.timer; do [ -e \"\$f\" ] || continue; mkdir -p ${ROLLBACK_DIR}-units; cp -a \"\$f\" ${ROLLBACK_DIR}-units/; done; \
 if [ ! -d ${ROLLBACK_DIR}-units ]; then echo 'absent: units'; mkdir -p ${ROLLBACK_DIR}-absent; : > ${ROLLBACK_DIR}-absent/units; fi; \
 if [ -f $REMOTE_APP/DEPLOYED_SHA ]; then mkdir -p ${ROLLBACK_DIR}-provenance; cp $REMOTE_APP/DEPLOYED_SHA ${ROLLBACK_DIR}-provenance/; fi; \
 if [ -f $REMOTE_APP/DEPLOYED_MANIFEST ]; then mkdir -p ${ROLLBACK_DIR}-provenance; cp $REMOTE_APP/DEPLOYED_MANIFEST ${ROLLBACK_DIR}-provenance/; fi" || {
@@ -843,8 +843,15 @@ done
 # non-zero for the whole list -- and `ssh_` then retried it, which stopped and
 # started the four healthy workers twelve times and tripped StartLimitBurst on
 # all of them. Four dead workers from one missing file.
+# Services *and* timers. A `.timer` matched nothing here until now, so the
+# schedule on a host was whatever had been installed by hand, and no deploy could
+# correct it. Shipping a timer file does not start anything — a timer is inert
+# until `systemctl enable`, which no deploy does — so the repository becomes the
+# source of truth for the schedule without a deploy ever activating one. The
+# snapshot and the rollback cover the same glob, or a rollback would delete a
+# timer it never saved.
 echo "==> installing the unit files"
-for unit in "$EXPORT"/infra/qevik-*.service; do
+for unit in "$EXPORT"/infra/qevik-*.service "$EXPORT"/infra/qevik-*.timer; do
   [ -f "$unit" ] || continue
   rsync_ "$unit" "$TARGET:$UNIT_DIR/" >/dev/null || {
     echo "FAILED: $(basename "$unit") could not be installed"; rollback_and_report; }

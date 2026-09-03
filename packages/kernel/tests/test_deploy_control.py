@@ -1704,3 +1704,47 @@ def test_a_failing_schema_step_still_rolls_back(world: World):
     assert proc.returncode == 1, out
     assert "the schema could not be applied" in out
     assert "ROLLED BACK" in out
+
+
+# --- timers ship with the code, and are still not started by a deploy ---------
+
+TIMER = ("[Unit]\nDescription=a shipped timer\n\n[Timer]\nOnCalendar=*-*-* 05:00:00\n"
+         "\n[Install]\nWantedBy=timers.target\n")
+
+
+def test_a_timer_is_shipped_and_installed_but_never_enabled(world: World):
+    """The schedule comes from the repository now, and starting it does not.
+
+    A `.timer` matched no glob here until this change, so what ran on a host was
+    whatever had been installed by hand — and no deploy could correct it. The
+    file lands; a timer is inert until `systemctl enable`, which is a separate,
+    guarded decision (`install_qevik_infra.sh`), because enabling the backup
+    timer before the data migration would start deleting migrated dumps.
+    """
+    sha = commit(world, {"infra/qevik-shipped.timer": TIMER}, message="add a timer")
+    proc = run(world, env=env_for(world, sha=sha))
+    out = both(proc)
+    assert proc.returncode == 0, out
+
+    installed = world.units / "qevik-shipped.timer"
+    assert installed.read_text(encoding="utf-8") == TIMER
+    assert f"{world.units}/qevik-shipped.timer" in manifest_path(world).read_text(encoding="utf-8")
+
+    enables = [line for line in world.log()
+               if line.startswith("systemctl ") and " enable" in line]
+    assert not enables, enables
+
+
+def test_a_rollback_puts_back_a_timer_it_replaced(world: World):
+    """Shipping timers without snapshotting them would delete files on rollback."""
+    _write(world.units / "qevik-shipped.timer", "[Timer]\nOnCalendar=daily\n")
+    sha = commit(world, {"infra/qevik-shipped.timer": TIMER}, message="change the timer")
+    # Fail after the units are installed, so the rollback has to undo them.
+    _write(world.ctl / "ssh_fail_match", "sha256sum --check")
+
+    proc = run(world, env=env_for(world, sha=sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "ROLLED BACK" in out
+    assert (world.units / "qevik-shipped.timer").read_text(encoding="utf-8") == \
+        "[Timer]\nOnCalendar=daily\n"
