@@ -1,0 +1,30 @@
+# Phase 2 · Step 8 — full-upgrade + reboot of qevik-prod-01 (GO "upgrade", 2026-09-03)
+# Hostname was already qevik-prod-01 (cloud-init from server name) — no hostname change made.
+
+## apt (via ssh qevik-prod-01, non-interactive, confold)
+START 2026-09-03T10:27:00Z host=qevik-prod-01 kernel=7.0.0-30-generic
+upgradable before: 36
+36 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+upgradable after: 0
+reboot-required: absent
+installed kernels: linux-image-7.0.0-30-generic linux-image-virtual 
+END 2026-09-03T10:27:21Z
+
+## reboot (this host only; issued 10:27:36Z, back 10:28:05Z — ~30 s)
+BACK 10:28:05Z host=qevik-prod-01 kernel=7.0.0-30-generic up_since=2026-09-03 10:27:47
+IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+ -1 cfa33370a63549bfb54558ceafb33e7e Thu 2026-09-03 08:51:18 UTC Thu 2026-09-03 10:27:39 UTC
+  0 89bb03636f254bfeab1122bedfe082dc Thu 2026-09-03 10:27:49 UTC Thu 2026-09-03 10:28:04 UTC
+reboot-required: absent
+upgradable: 0
+failed units: 0
+authorized_keys: 1 line, SHA256:RE9AIKm94JL0LnHg16FxDYjIoKueZQGzeo9324tGv78
+host key: SHA256:QZ4yqkstkMawonTB/4esXJzQigKtLEDwRc1rgCPikuk
+listening: 0.0.0.0:22 127.0.0.53%lo:53 127.0.0.54:53 [::]:22 
+df /: 1.7G used of 301G
+
+## Result (PROVED)
+Boot #2 on the rebuilt image; 36 packages upgraded, 0 upgradable, no reboot pending, 0 failed units; still key-only qevik_prod; host key unchanged; only :22 listening.
+
+## Step 7 console half
+Owner reported 2026-09-03: devloop_01 deleted from the Hetzner project (OWNER-REPORTED; not visible to the agent).

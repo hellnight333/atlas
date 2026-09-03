@@ -124,14 +124,14 @@ not here — Phase 2 changes nothing on the host except the key line. Hetzner's 
 root password login (`prohibit-password`) and no other user exists, so the host is key-only in
 practice from first boot.
 
-### Step 7 — retire `devloop_01` (OWNER) — **Mac part DONE 2026-09-03**; console deletion = owner (unconfirmed)
+### Step 7 — retire `devloop_01` (OWNER) — **DONE 2026-09-03** (Mac part PROVED; console deletion OWNER-REPORTED)
 
 Console → **Security** → **SSH keys** → delete `devloop_01`. On the Mac: delete `~/.ssh/devloop_01`
 and `devloop_01.pub` (I can do the Mac part on GO). ADR-0011 note: the future DevLoop host gets its
 own new key when it is created. After this, a future console rebuild of 164307556 would fall into
 FAQ "case 1" (mailed root password) — acceptable; noted in the runbook.
 
-### Step 8 — hostname + patches (AGENT, needs GO "upgrade") — optional in Phase 2, otherwise Phase 3
+### Step 8 — hostname + patches (AGENT, needs GO "upgrade") — **DONE 2026-09-03 10:28 UTC**, see `evidence/phase-2/upgrade-reboot.txt` (hostname already set by cloud-init)
 
 `hostnamectl set-hostname qevik-prod-01`; `apt full-upgrade -y`; reboot **this host only**;
 confirm `reboot-required` absent and `hostname` = `qevik-prod-01`.
