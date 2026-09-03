@@ -54,7 +54,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Owner approval:** the decisions **are** the approval; **OWNER GO REQUIRED** to enter Phase 2.
 - **Status 2026-09-03:** COMPLETE — decisions D-A/B/C/D/F approved, D-L for Phase 1 only; evidence `evidence/phase-1/`; report `PHASE_1_COMPLETION_REPORT.md`. Console reads U1/U2 remain owner-pending (no API access exists). D-B re-confirmation (CPX32 vs CX43/CX33) at the Phase 2 gate.
 
-## Phase 2 — Target Preparation by Rebuild  **(D-R-1 APPROVED 2026-09-03 — execution needs the owner's explicit per-step GO)**
+## Phase 2 — Target Preparation by Rebuild  **(COMPLETE 2026-09-03 — rebuilt, qevik_prod-only, upgraded+rebooted, backups on, firewall verified U16, Storage Box ordered; evidence in `evidence/phase-2/`)**
 
 *Revised 2026-09-03 under D-R-1: no server is purchased. The existing Hetzner server
 **164307556** (`91.107.244.253`, `2a01:4f8:1c1b:1dbe::1`, nbg1-dc3, 8 vCPU / 16 GB /

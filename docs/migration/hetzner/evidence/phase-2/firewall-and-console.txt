@@ -1,0 +1,39 @@
+# Phase 2 · Steps 7 (console), 9, 10, 11 — owner console actions + U16 firewall verification (2026-09-03)
+
+## Owner-reported (console; not visible to the agent unless stated)
+- Step 7 console half: devloop_01 deleted from the project. PROVED by owner screenshot of Security → SSH keys
+  (10:4x UTC): only `qevik_prod` (MD5 3e:12:c2:90:8f:f5:b7:85:ba:e8:df:55:98:b9:69:32 — matches
+  `ssh-keygen -E md5 -lf ~/.ssh/qevik_prod.pub` on the Mac, PROVED) and `ayoub@naml-deploy-20260513` remain.
+- Step 9: Backups enabled — OWNER-REPORTED ("enabled and confirmed working").
+- Step 10: Hetzner Cloud Firewall configured and attached — OWNER-REPORTED, PROVED below.
+- Step 11: Storage Box BX11 `qevik-prod-storage`, host u662608.your-storagebox.de, port 23; sub-account
+  u662608-sub1, base dir /qevik-prod-backup, SSH + external reachability enabled, SMB/WebDAV off, RW — OWNER-REPORTED.
+  Credential never given to the agent (correct).
+
+## U1 partial answer (from the screenshot, OBSERVED)
+The Hetzner project also holds the Naml deploy key `ayoub@naml-deploy-20260513`, so the project is shared with
+Naml infrastructure (likely 204.168.249.69 lives in the same project). Both keys are marked **Default** → any
+server created in this project gets BOTH keys injected. Project name and 2FA state still UNKNOWN.
+
+## U16 — firewall verified from the second vantage (qevik-core-01, read-only nc/ping; approved carve-out) 10:49:00Z
+  22    OPEN
+  80    closed (instant RST → allowed by firewall, nothing listening yet)
+  443   closed (instant RST → allowed by firewall, nothing listening yet)
+  8443  filtered (4.00 s timeout → dropped by the Cloud Firewall)
+  5432  filtered (dropped by the Cloud Firewall)
+  ICMP  reply
+Conclusion (PROVED): rules = TCP 22/80/443 + ICMP in, everything else dropped — as specified in step 10.
+
+## Mac vantage — REJECTED as evidence
+From the Mac (egress 63.250.56.242) `nc -z` reported 22/80/443/8443 all "OPEN", including 8443 where nothing
+listens and the firewall drops. The Mac's egress path completes TCP handshakes itself; it cannot be used to
+judge reachability (feedback_verify_from_second_vantage_point).
+
+## Storage Box reachability from qevik-prod-01 (read-only, no credential used) 10:49:32Z
+DNS      91.98.244.195 / 2a01:4f8:bacc:2:200::938
+TCP      23 OPEN, 22 OPEN
+Host keys (port 23): ED25519 SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM
+                     ECDSA   SHA256:oDHZqKXnoMtgvPBjjC57pcuFez28roaEuFcfwyg8O5c
+                     RSA     SHA256:EMlfI8GsRIfpVkoW1H2u0zYVpFGKkIMKHFZIRkf2ioI
+Auth offered to u662608-sub1: publickey,password (nothing sent).
+Tools on host: rsync, sftp, ssh-copy-id, gpg present; restic 0.18.1-3ubuntu1 and borgbackup 1.4.4-3 available via apt; pg_dump absent (no Postgres installed yet).

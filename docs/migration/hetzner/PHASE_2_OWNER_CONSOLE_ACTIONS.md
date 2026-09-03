@@ -3,7 +3,7 @@
 **Decision basis:** D-R-1 (owner, 2026-09-03) — reuse the existing Hetzner server, clean console
 rebuild, Ubuntu 26.04, `qevik_prod` key only, `devloop_01` must not remain authorised, same id and
 IPs, **no** new/replacement server or extra compute. Old production host untouched.
-**Status:** presented for approval. **Nothing here has been executed.** Every step below waits for
+**Status:** **PHASE 2 COMPLETE 2026-09-03** — every step below is done (see per-step markers and `evidence/phase-2/`). Original text kept as the record of what was approved. Every step below waits for
 the owner's explicit GO; the console steps are the owner's own hands.
 **Tags:** PROVED · OBSERVED-3P (docs.hetzner.com FAQ, read 2026-09-03 via devloop-01 because
 docs.hetzner.com is unreachable from the Mac) · INFERRED · UNKNOWN.
@@ -136,13 +136,13 @@ FAQ "case 1" (mailed root password) — acceptable; noted in the runbook.
 `hostnamectl set-hostname qevik-prod-01`; `apt full-upgrade -y`; reboot **this host only**;
 confirm `reboot-required` absent and `hostname` = `qevik-prod-01`.
 
-### Step 9 — image backups (OWNER, console) — first recurring cost change
+### Step 9 — image backups (OWNER, console) — first recurring cost change — **DONE 2026-09-03 (owner-reported)**
 
 **Servers** → `qevik-prod-01` → **Backups** → **Enable**. Cost: +20 % of the server price
 (≈ €13.90/mo on CPX42, OBSERVED-3P). Enabling after the rebuild means the first backup is of the
 clean image, not of the old state.
 
-### Step 10 — Cloud Firewall (OWNER, console) — free
+### Step 10 — Cloud Firewall (OWNER, console) — free — **DONE 2026-09-03; verified from qevik-core-01 (U16), see `evidence/phase-2/firewall-and-console.txt`**
 
 **Firewalls** → **Create Firewall** → name `qevik-prod-fw` → inbound rules: TCP 22 from any
 (`0.0.0.0/0`, `::/0`), TCP 80 any, TCP 443 any, ICMP any; outbound: leave "allow all" → **Apply to** →
@@ -151,14 +151,14 @@ select `qevik-prod-01` → create. (D-D: no IP restriction on 22; `:8443` stays 
 from the second vantage (U16: read-only `nc` from `qevik-core-01` — needs your one-time OK for that
 read-only use of the old host — plus an external checker).
 
-### Step 11 — Storage Box (OWNER, Robot/console) — second recurring cost
+### Step 11 — Storage Box (OWNER, Robot/console) — second recurring cost — **DONE 2026-09-03 (owner-reported: `qevik-prod-storage`, u662608.your-storagebox.de:23, sub-account u662608-sub1)**
 
 Hetzner **Storage Boxes** → order **BX11** (1 TB, €3.20/mo OBSERVED-3P), location Germany →
 after delivery: **Sub-accounts** → create `qevik-prod-backup`, home directory its own folder, SFTP
 enabled, SSH support enabled. The sub-account password/key goes **only** into the target's `/root`
 in Phase 4 (never to me, chat or repo). Tell me the Storage Box hostname (not the credential).
 
-### Step 12 — evidence + docs (AGENT)
+### Step 12 — evidence + docs (AGENT) — **DONE 2026-09-03**
 
 `evidence/phase-2/` complete; `MASTER_MIGRATION_PLAN.md` Phase 2 → COMPLETE; DQ-014 status;
 memory. Commit, no push. ⏸ **Phase 3 gate.**
