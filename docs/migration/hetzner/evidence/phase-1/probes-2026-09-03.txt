@@ -1,0 +1,56 @@
+# Phase 1 read-only probes — 2026-09-03 ~06:14 UTC
+# Vantage: qevik-devloop-01 (91.107.244.253) unless stated. No production change made.
+
+## Origin :80 behaviour by Host header (Cloudflare SSL-mode test)
+app.qevik.ai     308 -> https://app.qevik.ai/
+qevik.ai         308 -> https://qevik.ai/
+www.qevik.ai     308 -> https://www.qevik.ai/
+sites.qevik.ai   308 -> https://sites.qevik.ai/
+# Interpretation: origin never serves content on :80; under Cloudflare "Flexible" the
+# edge would fetch http://origin and loop on the 308. The sites work through Cloudflare
+# (below), therefore SSL mode is Full or Full (strict) — PROVED not Flexible.
+# Full vs Full (strict) is not distinguishable from outside → owner dashboard read (U2).
+
+## Origin :443 direct with SNI — certificate issuer / expiry
+app.qevik.ai     issuer=Let's Encrypt CN=YE2  notAfter=Nov 17 09:07:23 2026 GMT
+qevik.ai         issuer=Let's Encrypt CN=YE2  notAfter=Nov 17 09:07:19 2026 GMT
+www.qevik.ai     issuer=Let's Encrypt CN=YE2  notAfter=Nov 17 09:07:20 2026 GMT
+sites.qevik.ai   issuer=Let's Encrypt CN=YE1  notAfter=Nov 17 09:07:21 2026 GMT
+# 75 days of validity remain as of 2026-09-03 → rollback precondition (§7: notAfter > 30 d
+# beyond the observation window) holds for a cutover on or before ~2026-10-04.
+
+## Through Cloudflare
+https://app.qevik.ai/health    200  via: 1.1 Caddy   server: cloudflare  cf-ray ...-CDG
+https://qevik.ai/              200  server: cloudflare
+https://sites.qevik.ai/        404  x-qevik-host: sites  (expected: no slug at root)
+
+## :8443
+https://2.28.62.83:8443/       000 no reply (unchanged; ufw blocks)
+
+## Hetzner metadata service (read-only, from each host itself)
+qevik-core-01     instance-id 162146484  region eu-central  az nbg1-dc3
+                  cpu "AMD EPYC-Genoa Processor"  nproc 4  mem 7740M  /dev/sda 152.6G
+qevik-devloop-01  instance-id 164307556  region eu-central  az nbg1-dc3
+                  cpu "AMD EPYC-Genoa Processor"  nproc 8  mem 15G    /dev/sda 305.2G
+# Metadata does not expose the server type. Shapes match the CPX family
+# (old host ≈ CPX31/CPX32 4/8/160; devloop-01 ≈ CPX42 8/16/320) — INFERRED, console confirms.
+
+## Tooling / credential existence on the operator Mac (names only)
+hcloud CLI: absent   ~/.config/hcloud: absent   HCLOUD_*/HETZNER_* env: absent
+wrangler: absent     cloudflared: present (no ~/.cloudflared credentials)
+QEVIK_CLOUDFLARE_API_TOKEN: not set on Mac; cloudflare.env absent on old host (Phase 0)
+# → no Hetzner or Cloudflare API access exists anywhere the agent can reach.
+#   Console reads (U1, U2) are owner actions, as the plan already assumed.
+
+## Public price sheet (third-party aggregators; NOT the console — verify before ordering)
+Sources: northflank.com blog on the 2026-06-15 Hetzner price change; costgoat.com "last updated
+2026-08-02"; whtop.com; hetzner.com/cloud/regular-performance (specs, prices not rendered);
+hetzner.com/cloud/cost-optimized (CX specs; every CX row displayed "not available").
+CPX32  4 vCPU AMD / 8 GB / 160 GB / 20 TB   €35.49/mo  (was €13.99 before 2026-06-15)
+CPX42  8 vCPU AMD / 16 GB / 320 GB           €69.49/mo  (was €25.49)
+CX33   4 vCPU Intel-or-AMD / 8 GB / 80 GB    €8.49/mo   DE/FI only; status "not available" on hetzner.com
+CX43   8 vCPU / 16 GB / 160 GB               €15.99/mo  DE/FI only; status "not available" on hetzner.com
+CPX31/CPX41 now listed for US locations only (4/8/160 and 8/16/240).
+IPv4 primary IP €0.50/mo · Backups +20 % of server price · Snapshots €0.0143/GB/mo
+Storage Box BX11 1 TB €3.20/mo (whtop, 2026-02-13; 10 snapshots, 100 sub-accounts, SFTP)
+All prices excl. VAT.

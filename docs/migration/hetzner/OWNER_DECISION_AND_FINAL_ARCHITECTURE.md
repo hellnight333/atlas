@@ -8,6 +8,14 @@ Status: **design review only.** Nothing provisioned, no Hetzner or Cloudflare
 action, no data moved, no production change, no secret rotated, no DevLoop
 task. Repo `~/atlas` main `ddfbbc1` + this document.
 
+> **Decision record 2026-09-03 (owner):** D-A, D-B, D-C, D-D, D-F **APPROVED**; D-L **approved
+> for Phase 1 only** (read-only console checks + non-destructive preparation; no provisioning or
+> cost-incurring action). Five additional requirements AR-1…AR-5 are binding (see
+> `evidence/phase-1/decisions.md`). Phase 1 outcome: `PHASE_1_COMPLETION_REPORT.md` — including a
+> D-B re-confirmation item: the nbg1 product is named **CPX32** and Hetzner's 2026-06-15 price
+> change (CPX32 ≈ €35.49/mo) makes CX43/CX33 cheaper *if orderable*; owner re-confirms the type at
+> the Phase 2 gate. Sections below keep the original review text; status lines mark what is decided.
+
 Evidence tags are inherited from the inventories (PROVED / OBSERVED /
 INFERRED / UNKNOWN). Where this document *recommends*, it says so; where it
 *assumes*, it says so. Hetzner product names and prices below are quoted from
@@ -46,37 +54,43 @@ here.
 
 ### 2.1 MUST decide before provisioning (gate Phase 2)
 
-**D-A — Approve Phase 0 and this design; authorise Phase 1 (read-only console checks).**
+**D-A — Approve Phase 0 and this design; authorise Phase 1 (read-only console checks).**  
+*Status 2026-09-03: **APPROVED.***
 - Recommended: approve, with any corrections to §4/§6 noted inline.
 - Alternatives: reject and re-scope (e.g. migrate in place, or stay on the current host and only harden it).
 - Consequences: approve → Phase 1 owner console reads (U1, U2) then Phase 2 gate. Harden-in-place → cheaper, no cutover, but keeps the pending-reboot/never-rebooted unknown, the shared key, and a host whose secrets are already exposed; rotation would then have to happen *on* production.
 - Why: the target is small and the old host's posture is the reason to move; a fresh host is the cleanest way to rotate everything at once with a rollback path.
 
-**D-B — Server size, region, disk (T1, T7).**
+**D-B — Server size, region, disk (T1, T7).**  
+*Status 2026-09-03: **APPROVED** (4 vCPU / 8 GB / ~160 GB + 2 GB swap, nbg1) subject to console confirmation of exact product name and price; no larger class without load evidence. Re-confirmation item at the Phase 2 gate: nbg1 name is CPX32 at ≈ €35.49/mo; CX43 (8/16/160, ≈ €15.99) or CX33 (4/8/80, ≈ €8.49) if orderable — see `PHASE_1_COMPLETION_REPORT.md` §6.*
 - Recommended: **CPX31-class** (4 vCPU AMD, 8 GB, 160 GB NVMe) — INFERRED to be the same class as today (4 vCPU Genoa / 8 GB / 150 GiB ≈ 160 GB) — in **nbg1**, **+ 2 GB swap file**. Confirm type/price in console.
 - Alternatives: (a) CPX41-class (8 vCPU / 16 GB / 240 GB) for headroom; (b) CX-line Intel shared; (c) fsn1/hel1.
 - Consequences: CPX31 = like-for-like cost, proven sufficient (1.7 GiB used, load 0.25 — single sample, peak UNKNOWN U8); Hetzner allows a **reversible CPU/RAM-only upscale** later, so under-sizing is recoverable without reinstall. CPX41 ≈ 2× cost for headroom that no evidence requires. nbg1 keeps the same legal region as today and devloop-01, enabling a Hetzner private network later; other locations only matter if you want DC diversity from the old host (irrelevant after decommission).
 - Why: SHIP_RULE — no capacity we cannot justify; the resize path is the expansion design.
 
-**D-D — Firewall model and fate of `:8443` (T3, T4).**
+**D-D — Firewall model and fate of `:8443` (T3, T4).**  
+*Status 2026-09-03: **APPROVED** as recommended (22/80/443 only, no `:8443`, key-only SSH, origin-IP restriction deferred to D-Q).*
 - Recommended: Hetzner **Cloud Firewall** as the authoritative layer (inbound 22 from anywhere, 80/443 from anywhere; all else denied; ICMP allowed) + ufw mirroring it; **remove the `:8443` block** from the Caddyfile. Tighten 80/443 to Cloudflare ranges only in Phase 10 (§3.3), not at cutover.
 - Alternatives: (a) 22 restricted to owner IPs — **not recommended**: your egress IP is not stable (VPN/Iranian connectivity, see `feedback_verify_from_second_vantage_point`); a lockout is recovered only via the Hetzner web console. (b) Keep 8443 open to owner IPs — same lockout problem, plus the hard-coded IP. (c) Origin-lock 80/443 to Cloudflare ranges from day 1 — adds a cutover failure mode (526/521 on a range mistake) for a benefit that can be taken a week later.
 - Consequences: recommended = simplest cutover, key-only SSH + fail2ban carries the brute-force load (~6.2k attempts/day today, all failing); origin exposure persists until Phase 10 (same as today).
 - Why: safety of the cutover outranks hardening that can be staged.
 
-**D-F — Dedicated production SSH key (T6, O2).**
+**D-F — Dedicated production SSH key (T6, O2).**  
+*Status 2026-09-03: **APPROVED**; `naml_hetzner` never authorised on the new host.*
 - Recommended: yes — new ed25519 pair `qevik_prod` generated on the Mac; only its public key on the target; `naml_hetzner` **not** authorised there.
 - Alternatives: reuse `naml_hetzner`.
 - Consequences: reuse keeps one key covering Naml + Qevik + (if ever) devloop — one leak = every host. Dedicated key costs one `~/.ssh/config` entry and one `TARGET`-side change in ADR-0010 tooling (already needed for R-12).
 - Why: F-4.
 
-**D-C — Off-host backup destination and failure visibility (T2, T9).** *(Decide now so the Storage Box is ordered with the server; the implementation itself lands in Phase 4/10.)*
+**D-C — Off-host backup destination and failure visibility (T2, T9).** *(Decide now so the Storage Box is ordered with the server; the implementation itself lands in Phase 4/10.)*  
+*Status 2026-09-03: **APPROVED** (Storage Box sub-account = independent target; image backup add-on on; a Volume is never the only mechanism).*
 - Recommended: **Hetzner Storage Box** (smallest tier) reached by SFTP/rsync with a **sub-account** whose credential lives only on the target (root 0600); + **Hetzner server backup add-on** (image-level, 7 rotations, +20 % of server price); + `OnFailure=` marker read by `/api/health`.
 - Alternatives: (a) Hetzner Object Storage (S3) via rclone — fine, one more tool; (b) Hetzner Volume mounted at `/mnt/backup` — **not off-host** in the sense that matters (same project, same account, attached to the same server); (c) none — an explicit regression of F-6.
 - Consequences: Storage Box = separate product, separate credential, its own snapshot feature (protects against overwrite of the copies), a few € / month. Backup add-on = fastest whole-box rollback for the *new* host. "None" leaves the only backups on the disk they protect.
 - Why: F-6 is the one finding that can lose everything.
 
-**D-L — GO for Phase 2 (first cost-incurring, owner-executed action).**
+**D-L — GO for Phase 2 (first cost-incurring, owner-executed action).**  
+*Status 2026-09-03: **APPROVED FOR PHASE 1 ONLY** — read-only checks and non-destructive preparation. Phase 2 GO still required; see `PHASE_1_COMPLETION_REPORT.md` §8 for the exact first cost-incurring actions.*
 - Recommended: give it together with D-A–D-F once Phase 1 console reads are recorded.
 - Alternatives: stage (order Storage Box first, server later).
 - Consequences: Phase 2 creates the server and firewall in your console; deleting it is the rollback.
@@ -220,6 +234,9 @@ owner sees the whole model, not approved by this document.
 HA/replication · managed DB · separate DB host · containers · Prometheus stack
 · IP-allowlisted SSH · blue/green · a second production host · Hetzner Volume.
 
+*Owner requirement AR-3 (2026-09-03): the single-host architecture is preserved; none of the
+above is introduced unless a concrete requirement emerges.*
+
 ---
 
 ## 4. Final proposed target architecture — `qevik-prod-01`
@@ -322,6 +339,19 @@ re-issuance; one off-host copy of the latest verified dump exists.
 | **R2 — days 1–14 (observation)** | data-loss signal, integration failure, instability | same lever; **reverse-sync required**: stop target units, dump target DB + rsync state back to the old host (first agent writes to old host beyond stop — needs its own GO), start old units, revert origin | Bounded by the time since cutover; missions/sites created on the target are carried back. This is why the old host is *frozen*, not *running*: its DB must be a clean base for the reverse restore. |
 | **R3 — after Phase 11** | — | **none.** Forward-fix from backups (Storage Box + image). | The snapshot kept 30 days after deletion is a last-resort archive, not a rollback. |
 
+### 7.1 Explicit RPO / RTO (AR-1 — proposed numbers, to be approved with D-M before any origin change)
+
+| Scenario | Maximum acceptable data loss (RPO) | Expected time to restore service (RTO) | Mechanism |
+|---|---|---|---|
+| R0 — abort before the origin change | **0** (no writes anywhere after the freeze) | **≤ 10 min** (start old units, probe) | old host restarted |
+| R1 — rollback within 60 min of the origin change | **≤ 60 min of target-side writes discarded** — the runbook default; workers are held stopped on the target for the first 15 min after cutover so the realistic loss is operator/API writes only | **≤ 15 min** (Cloudflare origin revert ≈ 1–2 min to take effect + old units start ≈ 2 min + probes) | origin revert, no data movement |
+| R2 — rollback during the 14-day observation | **0 for committed data** by reverse-sync (target `pg_dump` + state rsync → old host, same `DEPLOYED_SHA`); in-flight missions at the freeze moment are re-run | **≤ 60 min** (freeze target ≈ 2 min, dump+restore ≈ 5 min for a 20 MB dump, rsync ≈ 1 min, start, probes) | reverse-sync — a separate owner GO because it writes to the old host |
+| R3 — after decommission | no rollback; **disaster RPO 24 h** (daily verified backup; tighten by raising the timer frequency if wanted) | **2–4 h** image restore · **≈ ½ day** checklist rebuild + off-host restore | Hetzner image backup / Storage Box copies |
+
+These numbers are the agent's proposal from measured sizes (dump 19.6 MB compressed, state
+258 MB) and the ADR-0010 restart timings; the owner approves or changes them at D-M. Cutover
+does not proceed on wording like "minutes may be lost".
+
 Old-host **freeze** method after successful cutover (Phase 9 step 8): all
 seven `qevik-*` units and both timers `systemctl disable --now` (so a reboot
 cannot restart writers), a marker file `/opt/qevik/FROZEN_<ts>`, Caddy and
@@ -367,7 +397,7 @@ Each is a **pass/fail gate** in Phase 7 (before cutover) unless marked Phase 10.
 |---|---|---|---|
 | SR-1 | F-1 | No credential on any process argv, ever. DSNs only via `EnvironmentFile=`/`PGPASSFILE`. No ad-hoc root processes; hand tooling runs as `systemd-run --property=EnvironmentFile=…` or via `qevikctl --slice`. `postgres` superuser `local peer` only. New `qevik` DB password (K1/K2). Phase 10: `/proc` mounted `hidepid=invisible`. | `ps -eo args` grep for `://` and `password` = 0 hits; `pg_hba` diff. |
 | SR-2 | F-2 | `/var/lib/qevik/**` 0700 dirs / 0600 files; `vault.json`, `credentials.jsonl` 0600; units get `UMask=0077` (reviewed unit change) so it stays that way. | `find /var/lib/qevik -perm /o+r` = 0; unit `systemctl show -p UMask`. |
-| SR-3 | F-3 | `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `MaxAuthTries 3`, fail2ban sshd jail active; password login **tested refused** from devloop-01. | `sshd -T`; `fail2ban-client status sshd`; negative test. |
+| SR-3 | F-3 | `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `MaxAuthTries 3`, fail2ban sshd jail active; password login **tested refused** from devloop-01. **AR-2 two-session procedure, mandatory:** (1) session A stays open throughout; (2) install the `qevik_prod` public key; (3) open a *fresh* session B from the Mac with `-i ~/.ssh/qevik_prod -o IdentitiesOnly=yes` and prove it; (4) apply sshd hardening and `sshd -t`, reload (not restart); (5) from devloop-01 prove password auth is refused and a key-less attempt fails; (6) open session C with the key to prove reconnect; (7) only then close A. Never rely on disconnecting and hoping to reconnect. | `sshd -T`; `fail2ban-client status sshd`; negative test; session log A/B/C timestamps in `evidence/phase-3/`. |
 | SR-4 | F-4 | Only `qevik_prod` public key in `/root/.ssh/authorized_keys`; `naml_hetzner` and `devloop_01` public keys **absent**. | `authorized_keys` fingerprint list = 1 entry, matches. |
 | SR-5 | F-5 | New Google Places key: restricted to the target IPv4/IPv6 **and** to the Places API; old key revoked immediately after cutover (Phase 9 step 8), not at Phase 11. DashScope + Brave rotated (D-J); old values revoked at Phase 11. | Phase 7 market-scan test call succeeds; console screenshot of restrictions (no key value). |
 | SR-6 | F-6 | Off-host copy of every verified dump + state tar (§3.5); `OnFailure=` marker surfaced in `/api/health`; **one off-host restore test passed before Phase 9** (V15); image backup add-on enabled. | Storage Box listing; restore log; `/api/health` JSON. |
@@ -420,7 +450,7 @@ key, not the local-only backups.
 
 ## 12. Stop
 
-Design review delivered. Awaiting the owner's decisions in §2.1 (D-A, D-B,
-D-C, D-D, D-F, D-L). No provisioning, no Hetzner/Cloudflare action, no data
-movement, no production change, no secret rotation, no DevLoop execution will
-occur before that.
+2026-09-03: §2.1 decisions received (D-L for Phase 1 only). Phase 1 complete —
+`PHASE_1_COMPLETION_REPORT.md`. Now stopped at the **Phase 2 provisioning gate**:
+no provisioning, no Hetzner/Cloudflare action, no data movement, no production
+change, no secret rotation, no DevLoop execution until the owner's Phase 2 GO.

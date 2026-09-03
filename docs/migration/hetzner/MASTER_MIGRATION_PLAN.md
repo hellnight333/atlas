@@ -48,6 +48,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Rollback:** n/a.
 - **Stop conditions:** owner declines to decide → plan pauses (DQ-009: agent never decides for the owner).
 - **Owner approval:** the decisions **are** the approval; **OWNER GO REQUIRED** to enter Phase 2.
+- **Status 2026-09-03:** COMPLETE — decisions D-A/B/C/D/F approved, D-L for Phase 1 only; evidence `evidence/phase-1/`; report `PHASE_1_COMPLETION_REPORT.md`. Console reads U1/U2 remain owner-pending (no API access exists). D-B re-confirmation (CPX32 vs CX43/CX33) at the Phase 2 gate.
 
 ## Phase 2 — Target Provisioning  **(STOP FOR OWNER APPROVAL BEFORE STARTING)**
 
@@ -65,6 +66,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 
 - **Objective:** the target's access posture is the hardened one, and the owner has placed the secrets on the target.
 - **Prerequisites:** Phase 2.
+- **SSH hardening procedure (owner requirement AR-2, mandatory):** two independent sessions — keep session A open; install the `qevik_prod` key; prove a fresh session B with that key (`IdentitiesOnly=yes`); apply sshd changes, `sshd -t`, reload; prove from devloop-01 that password auth is refused; prove reconnect with session C; only then close A. Never a disconnect-and-reconnect gamble.
 - **Allowed (agent):** sshd hardening (`PasswordAuthentication no`), ufw 22/80/443 (+ cloud firewall per T3), fail2ban if decided, create `qevik` user, create `/opt/qevik` and `/var/lib/qevik` skeleton with correct ownership, `umask` guidance. **Allowed (owner):** create `/opt/qevik/{atlas,control,worker,brave,places}.env` with new/rotated values (O3–O7), 0600, correct owner per unit `User=`.
 - **Forbidden:** agent reading, copying, or generating any secret value; copying env files from the old host; changing anything on the old host (including rotating its DB password — that happens **after** cutover, Phase 10/11).
 - **Evidence required:** `sshd -T` effective values; `ufw status numbered`; `stat -c '%U:%G %a %n' /opt/qevik/*.env`; env **names** per file via `cut -d= -f1` compared against secret inventory §1 (K1–K7) — must be a superset of the old host's name set (`ATLAS_DATABASE_URL, QEVIK_ADMIN_PASSWORD, QEVIK_DASHSCOPE_API_KEY, QEVIK_DASHSCOPE_BASE_URL, QEVIK_LEDGER, QEVIK_REPORTS_STORE, QEVIK_SITES_BASE_URL` / `QEVIK_VAULT_MASTER_KEY, QEVIK_CLAIMS_DSN, QEVIK_REQUIRE_ATOMIC_CLAIMS` / `QEVIK_CLAIMS_DSN, QEVIK_REQUIRE_ATOMIC_CLAIMS` / `QEVIK_BRAVE_API_KEY` / `QEVIK_GOOGLE_PLACES_API_KEY`).
@@ -127,6 +129,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Prerequisites:** Phase 7 passed.
 - **Allowed:** write `evidence/phase-8/CUTOVER_RUNBOOK.md`; rehearse the Cloudflare change on a **non-protected test hostname** (e.g. `migrate-test.qevik.ai` → target) if the owner creates it; rehearse the final delta (dump + rsync) against the target with the old host live (identical to Phase 6, timed); rehearse rollback of the DNS on the test hostname.
 - **Forbidden:** touching the four protected names; stopping old-host services; any old-host write.
+- **RPO / RTO (owner requirement AR-1):** the runbook states the explicit maximum data-loss window and expected rollback time for R0/R1/R2/R3 (proposed in `OWNER_DECISION_AND_FINAL_ARCHITECTURE.md` §7.1); the owner approves those numbers as part of D-M. No cutover on "minutes may be lost" wording.
 - **Evidence required:** timed rehearsal results (delta sync duration D, validation duration V); the runbook with a pre-cutover checklist (owner present, Cloudflare dashboard open, Hetzner console open, old-host snapshot taken if T1 backups on, rollback commands pre-typed).
 - **Success criteria:** runbook reviewed by the owner; projected downtime = stop + D + V + Cloudflare change ≈ minutes, written down; rollback proven on the test hostname.
 - **Rollback:** n/a.

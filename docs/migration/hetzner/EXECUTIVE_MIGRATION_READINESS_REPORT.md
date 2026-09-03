@@ -1,6 +1,8 @@
 # EXECUTIVE_MIGRATION_READINESS_REPORT
 
 > **Owner review:** the consolidated decision package is `OWNER_DECISION_AND_FINAL_ARCHITECTURE.md` (design review, supersedes §5 here for decision wording).
+>
+> **2026-09-03:** D-A/B/C/D/F approved, D-L Phase 1 only; Phase 1 complete → `PHASE_1_COMPLETION_REPORT.md`. Stopped at the Phase 2 provisioning gate. DevLoop stays paused (AR-5).
 
 **Mission:** Phase Hetzner / Infrastructure Migration — Phase 0 (Discovery & Evidence Freeze).
 **Date:** 2026-09-03. **Repo:** `~/atlas` @ `6ad8a98` (docs added in this directory only).
