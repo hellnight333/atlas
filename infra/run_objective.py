@@ -44,7 +44,11 @@ from atlas_kernel.workspace import Workspace  # noqa: E402
 #: process that made it.
 WORKSPACES = Path(os.environ.get("QEVIK_WORKSPACES", "/var/lib/qevik/workspaces"))
 SITES_ROOT = os.environ.get("QEVIK_SITES_ROOT", "/srv/sites")
-PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "http://2.28.62.83")
+# The public base for published sites. The old-host IP used to be the default
+# here; a second production host makes a hard-coded origin a way to publish a
+# URL that points at the wrong machine, so the public name is the default and
+# QEVIK_SITES_BASE_URL (as set in atlas.env on the hosts) overrides it.
+PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "https://sites.qevik.ai")
 
 
 class Authorised:

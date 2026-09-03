@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish the public marketing site to the host that serves qevik.ai.
 #
-#   bash infra/deploy_public.sh [user@host]  build, ship, verify on the host
+#   bash infra/deploy_public.sh --target <name>|user@host   build, ship, verify
 #   bash infra/deploy_public.sh --check DIR  verify a built directory against the
 #                                            Caddyfile and exit; touches no host
 #
@@ -41,7 +41,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 #: Overridable so the tests can point the same checks at a fixture config.
 CADDYFILE="${QEVIK_CADDYFILE:-$ROOT/infra/qevik-production.Caddyfile}"
-KEY="$HOME/.ssh/naml_hetzner"
 
 # --- what the web server expects to find, asked of the config that expects it
 
@@ -184,9 +183,29 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
-TARGET="${1:-root@2.28.62.83}"
+# Where this deploy is allowed to go, and with which key — one reviewed
+# registry, no implicit production default. `deploy_console.sh` calls this
+# script after resolving; the exported target is reused rather than re-derived,
+# so the two halves of one deploy cannot land on different hosts.
+. "$ROOT/infra/deploy_target.sh"
+TARGET_SPEC=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target)
+      shift
+      [ $# -gt 0 ] || { echo "REFUSED: --target needs a name." >&2; exit 2; }
+      TARGET_SPEC="$1" ;;
+    -*) echo "REFUSED: unknown option '$1'." >&2; exit 2 ;;
+    *) TARGET_SPEC="$1" ;;
+  esac
+  shift
+done
+qevik_resolve_target "$TARGET_SPEC"
+TARGET="$QEVIK_TARGET_HOST"
+echo "target: $QEVIK_TARGET_NAME -> $TARGET (identity ${QEVIK_TARGET_KEY:-ssh_config})"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=4 \
-          -o IdentitiesOnly=yes -i "$KEY")
+          -o IdentitiesOnly=yes)
+[ -n "$QEVIK_TARGET_KEY" ] && SSH_OPTS+=(-i "$QEVIK_TARGET_KEY")
 
 # --- build
 

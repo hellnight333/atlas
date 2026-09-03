@@ -9,9 +9,10 @@ friends shimmed onto `PATH` and the host paths pointed at directories under
 
 Two safety layers, because a test that drives a deploy script is one mistake
 away from driving a deploy: every run passes an explicit `qevik-test@127.0.0.1`
-target rather than the production default, and `HOME` is a directory inside
-`tmp_path` where the deploy key does not exist — so a shim that failed to take
-effect reaches nothing. One test asserts exactly that.
+target — the script has no production default to fall back to — together with a
+`QEVIK_DEPLOY_KEY` that points inside `tmp_path`, and `HOME` is a directory in
+`tmp_path` where no real key exists, so a shim that failed to take effect
+reaches nothing. One test asserts exactly that.
 """
 
 from __future__ import annotations
@@ -385,9 +386,17 @@ def world(tmp_path: Path) -> World:
     for rel, text in S_FILES.items():
         _write(repo / rel, text)
     # The real script, copied rather than symlinked: a symlink is an untracked
-    # path inside the repository and the export check would count it.
+    # path inside the repository and the export check would count it. The target
+    # resolver and its registry travel with it — the script sources them, so a
+    # deploy that could not find them would fail before it did anything, and the
+    # tests would be proving that instead of what they are here for.
     shutil.copy2(SCRIPT, repo / "infra" / "deploy_control.sh")
     (repo / "infra" / "deploy_control.sh").chmod(0o755)
+    shutil.copy2(REPO_ROOT / "infra" / "deploy_target.sh", repo / "infra" / "deploy_target.sh")
+    shutil.copy2(REPO_ROOT / "infra" / "deploy_targets.conf", repo / "infra" / "deploy_targets.conf")
+    # An identity that exists, inside tmp_path. The script refuses a raw host
+    # without one, which is the point: an approved identity is never inferred.
+    _write(home / ".ssh" / "deploy_key", "not a real key\n")
     _git(repo, "add", "-A", home=home)
     _git(repo, "commit", "-q", "-m", "S", home=home)
     sha = _git(repo, "rev-parse", "HEAD", home=home).stdout.strip()
@@ -421,6 +430,7 @@ def env_for(world: World, *, sha: str | None = None, seams: bool = True,
     env["XDG_CONFIG_HOME"] = str(world.home)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["TMPDIR"] = str(world.scratch)
+    env["QEVIK_DEPLOY_KEY"] = str(world.home / ".ssh" / "deploy_key")
     if test_host:
         env["QEVIK_TEST_HOST"] = "1"
     if seams:
@@ -501,9 +511,11 @@ def expected_manifest(world: World) -> str:
                 paths[world.units / Path(rel).name] = text
         elif rel.startswith("apps/control/src/"):
             paths[world.console / rel[len("apps/control/src/"):]] = text
-    # The script itself is a tracked file under infra/ and ships with the rest.
-    script = world.repo / "infra/deploy_control.sh"
-    paths[world.app / "infra/deploy_control.sh"] = script.read_text(encoding="utf-8")
+    # The script itself is a tracked file under infra/ and ships with the rest —
+    # and so do the target resolver and its registry, which the script sources.
+    for name in ("deploy_control.sh", "deploy_target.sh", "deploy_targets.conf"):
+        paths[world.app / "infra" / name] = (
+            (world.repo / "infra" / name).read_text(encoding="utf-8"))
     return host_manifest_for(paths)
 
 
@@ -732,7 +744,7 @@ def test_a_utf8_filename_verifies(world: World):
     proc = run(world, env=env_for(world, sha=sha))
     out = both(proc)
     assert proc.returncode == 0, out
-    assert f"export verified: 7 files from {sha}" in out
+    assert f"export verified: 9 files from {sha}" in out
 
 
 def test_a_symlink_missing_from_the_export_is_refused(world: World):
@@ -767,7 +779,7 @@ def test_rehearse_writes_nothing(world: World):
 
     assert f"REHEARSED sha={world.sha}" in out
     assert f"targets: app={world.app}" in out
-    assert f"export verified: 6 files from {world.sha}" in out
+    assert f"export verified: 8 files from {world.sha}" in out
 
     for line in world.log():
         if line.startswith("rsync "):

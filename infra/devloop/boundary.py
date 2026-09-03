@@ -28,9 +28,7 @@ import subprocess
 from pathlib import Path
 
 from .queue import Queue, State
-
-KEY = Path.home() / ".ssh" / "naml_hetzner"
-HOST = "root@2.28.62.83"
+from .targets import control_plane, ssh_argv
 
 #: Which boundary a builder ran into, from what it said. Deliberately narrow:
 #: an agent that merely felt uncertain must not be able to manufacture a human
@@ -73,15 +71,15 @@ def classify(boundary: str) -> str:
 
 def _remote(script: str, *, timeout: int = 120) -> dict | None:
     """Run a small read or write against the control plane. None if unreachable."""
-    if not KEY.exists():
+    target = control_plane()
+    if target is None:
         return None
     remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
               "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'PY'\n"
               f"{script}\nPY")
     try:
         done = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-             "-o", "ConnectionAttempts=3", "-i", str(KEY), HOST, remote],
+            ssh_argv(target, remote, connect_timeout=20, attempts=3),
             capture_output=True, text=True, timeout=timeout,
             stdin=subprocess.DEVNULL)
     except (subprocess.TimeoutExpired, FileNotFoundError):

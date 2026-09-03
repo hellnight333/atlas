@@ -404,10 +404,12 @@ def test_the_site_is_shipped_before_the_config_that_names_its_pages() -> None:
     a window in which the server rewrites to a page that is not there.
     """
     console = DEPLOY_CONSOLE.read_text(encoding="utf-8")
-    # The invocation with its argument, not the bare filename: the comment above
-    # it names the script too, and matching that would put "ships" before
-    # "installs" no matter what the script actually does.
-    ships = console.index('bash "$HERE/deploy_public.sh" "$TARGET"')
+    # The invocation, not the bare filename: the comment above it names the
+    # script too, and matching that would put "ships" before "installs" no
+    # matter what the script actually does. The target is no longer passed as an
+    # argument — it is exported by the resolver and inherited, so the two halves
+    # of one deploy cannot land on different hosts.
+    ships = console.index('bash "$HERE/deploy_public.sh"')
     installs = console.index('"$TARGET:/etc/caddy/Caddyfile"')
     restarts = console.index("systemctl restart caddy")
     assert ships < installs < restarts, (
@@ -637,9 +639,11 @@ def test_the_check_refuses_the_single_page_application_fallback(tmp_path) -> Non
 def test_the_check_needs_no_credentials_and_so_can_run_anywhere(tmp_path) -> None:
     """A gate an operator cannot run is a gate that does not run.
 
-    The other mode of this script reads `$HOME/.ssh/naml_hetzner` and opens SSH
-    connections with it. `--check` is run here with `HOME` pointing at an empty
-    directory, so there is no key to find: it must still decide, both ways.
+    The other mode of this script resolves a deploy target from
+    `infra/deploy_targets.conf` and opens SSH connections with that identity.
+    `--check` is run here with `HOME` pointing at an empty directory and no
+    target named, so there is no key to find and no host to reach: it must
+    still decide, both ways.
     """
     home = tmp_path / "no-keys-here"
     home.mkdir()

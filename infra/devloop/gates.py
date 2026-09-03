@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .queue import redact
+from .targets import control_plane, ssh_argv
 
 #: Where the deploy script records what the host holds. Read back, never
 #: written from here.
@@ -410,10 +411,10 @@ def _ssh_argv(remote: str) -> list[str]:
     connection options are stated once. What either gate *runs* and how either
     one *decides* stays its own.
     """
-    key = Path.home() / ".ssh" / "naml_hetzner"
-    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-            "-o", "ConnectionAttempts=4", "-i", str(key),
-            "root@2.28.62.83", remote]
+    target = control_plane()
+    if target is None:
+        raise LookupError("no control-plane target is configured")
+    return ssh_argv(target, remote, connect_timeout=20, attempts=4)
 
 
 def provenance(*, sha: str, timeout: int = 120) -> Gate:
@@ -434,6 +435,13 @@ def provenance(*, sha: str, timeout: int = 120) -> Gate:
     A host that cannot be reached is unmeasured, never failed, and is retried
     twice before that is concluded.
     """
+    if control_plane() is None:
+        # Not a failure of the change: this machine has not been told which
+        # production host to read. Raising here would take the driver down.
+        return Gate("provenance", False,
+                    "no control-plane target is configured (QEVIK_DEPLOY_TARGET), "
+                    "or its key is missing here",
+                    unmeasured=True)
     argv = _ssh_argv(f"cat {MARKER} 2>/dev/null || echo 'state=missing'")
     code, out = 0, ""
     for attempt in range(3):
@@ -489,9 +497,10 @@ def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
 
     Nothing here may reach a business. Probes read; they do not send.
     """
-    key = Path.home() / ".ssh" / "naml_hetzner"
-    if not key.exists():
-        return Gate("in_production", False, "no key to reach the host",
+    if control_plane() is None:
+        return Gate("in_production", False,
+                    "no control-plane target is configured (QEVIK_DEPLOY_TARGET), "
+                    "or its key is missing here",
                     unmeasured=True)
     remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
               "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'PROBE'\n"
@@ -528,13 +537,15 @@ def host_reachable(*, timeout: int = 40) -> Gate:
     nothing about the change, and treating it as one would requeue good work
     with a misleading reason.
     """
-    key = Path.home() / ".ssh" / "naml_hetzner"
-    if not key.exists():
-        return Gate("host", False, "no key to reach the host", unmeasured=True)
+    target = control_plane()
+    if target is None:
+        return Gate("host", False,
+                    "no control-plane target is configured (QEVIK_DEPLOY_TARGET), "
+                    "or its key is missing here",
+                    unmeasured=True)
     code, out, timed_out = _sh(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-         "-o", "ConnectionAttempts=2", "-i", str(key),
-         "root@2.28.62.83", "true"], cwd=Path.home(), timeout=timeout)
+        ssh_argv(target, "true", connect_timeout=15, attempts=2),
+        cwd=Path.home(), timeout=timeout)
     if timed_out or code != 0:
         return Gate("host", False,
                     "the control plane is not reachable from here; work that "

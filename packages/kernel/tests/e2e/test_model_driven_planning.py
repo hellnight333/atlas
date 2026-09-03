@@ -266,7 +266,7 @@ class TestTheHarnessIsShapeAgnostic:
         one looks identical in a report and is a coincidence, not a pipeline."""
         actions = default_action_runner()
         literal = json.loads(json.dumps(UNUSUAL_PLAN))
-        literal["steps"][-1]["payload"]["url"] = "http://2.28.62.83/hat-rabbit/"
+        literal["steps"][-1]["payload"]["url"] = "https://sites.example.invalid/hat-rabbit/"
         planner, _ = _scripted_planner(literal, actions)
         plan = planner.plan(GAME_OBJECTIVE)
         with pytest.raises(AssertionError, match="did not consume"):

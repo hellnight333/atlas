@@ -39,14 +39,18 @@
 # operator's shell must never redirect part of a real deploy.
 set -euo pipefail
 
-USAGE="usage: QEVIK_DEPLOY_SHA=<commit> $0 [--rehearse] [user@host]"
+USAGE="usage: QEVIK_DEPLOY_SHA=<commit> $0 [--rehearse] --target <name>|user@host"
 
 REHEARSE=0
-TARGET=""
+TARGET_SPEC=""
 POSITIONAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rehearse) REHEARSE=1 ;;
+    --target)
+      shift
+      [ $# -gt 0 ] || { echo "REFUSED: --target needs a name." >&2; echo "  $USAGE" >&2; exit 2; }
+      TARGET_SPEC="$1" ;;
     --*)
       echo "REFUSED: unknown option '$1'." >&2
       echo "  $USAGE" >&2
@@ -59,13 +63,21 @@ while [ $# -gt 0 ]; do
         echo "  $USAGE" >&2
         exit 2
       fi
-      TARGET="$1" ;;
+      TARGET_SPEC="$1" ;;
   esac
   shift
 done
 
-TARGET="${TARGET:-root@2.28.62.83}"
-KEY="$HOME/.ssh/naml_hetzner"
+# Where this deploy is allowed to go, and with which key: one reviewed registry
+# (infra/deploy_targets.conf), no built-in production default, no fallback on a
+# typo. What stood here was the old production IP and the shared operator key,
+# hard-coded — a host and an identity that a second production host makes
+# actively dangerous, since the second host must never accept that key.
+. "$(cd "$(dirname "$0")" && pwd)/deploy_target.sh"
+qevik_resolve_target "$TARGET_SPEC"
+TARGET="$QEVIK_TARGET_HOST"
+KEY="$QEVIK_TARGET_KEY"
+echo "target: $QEVIK_TARGET_NAME -> $TARGET (identity ${KEY:-ssh_config})"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE="qevik-control.service"
 WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service qevik-worker-healthcheck.service"
@@ -111,7 +123,7 @@ echo "targets: app=$REMOTE_APP console=$CONSOLE_DIR units=$UNIT_DIR rollback=$RO
 # this hides a real outage: the whole set still gives up, just not on the first
 # lost packet.
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=4
-          -o ServerAliveInterval=10 -o ServerAliveCountMax=6)
+          -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o IdentitiesOnly=yes)
 # `ConnectionAttempts` retries the TCP connect, which is not where this link
 # fails: it fails *after* connecting, during the banner exchange. So each call
 # is retried here instead. Every command this script sends is idempotent — copy
@@ -120,11 +132,17 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=4
 # own status for every connection-level failure, and any other status is the
 # remote command's own answer, which retrying twelve times would turn into 165 s
 # of waiting for a result the first attempt already gave.
+# Empty when the registry entry defers to ~/.ssh/config; a pinned identity
+# otherwise. Expanded unquoted on purpose: it is either two words or none.
+KEY_ARGS=""
+[ -n "$KEY" ] && KEY_ARGS="-i $KEY"
+
 ssh_() {
   local try rc
   for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
     rc=0
-    ssh "${SSH_OPTS[@]}" -i "$KEY" "$TARGET" "$@" || rc=$?
+    # shellcheck disable=SC2086
+    ssh "${SSH_OPTS[@]}" $KEY_ARGS "$TARGET" "$@" || rc=$?
     if [ "$rc" = 0 ]; then return 0; fi
     if [ "$rc" != 255 ]; then return "$rc"; fi
     if [ "$try" = 12 ]; then return 255; fi
@@ -133,7 +151,7 @@ ssh_() {
   done
 }
 #: rsync resumes rather than restarting when a transfer is cut mid-file.
-RSYNC_SSH="ssh ${SSH_OPTS[*]} -i $KEY"
+RSYNC_SSH="ssh ${SSH_OPTS[*]} $KEY_ARGS"
 
 # Same reason as `ssh_`, and safe for the same reason: rsync is idempotent by
 # construction, and `--partial` means a retry continues the file it was cut in
@@ -337,7 +355,7 @@ rollback_and_report() {
   # Not through `ssh_`, for the reason the deploy gives: retrying a restart
   # stops the healthy units again.
   for unit in $WORKERS; do
-    ssh "${SSH_OPTS[@]}" -i "$KEY" "$TARGET" \
+    ssh "${SSH_OPTS[@]}" $KEY_ARGS "$TARGET" \
       "systemctl reset-failed $unit 2>/dev/null; systemctl restart $unit" \
       || { echo "    restart failed: $unit"; RESTART_FAILED=1; }
   done
@@ -861,7 +879,7 @@ echo "==> restarting the mission workers (expecting fingerprint $FINGERPRINT)"
 ssh_ "chown qevik:qevik $REMOTE_APP/infra/mission_worker.py 2>/dev/null; true" || {
   echo "FAILED: the worker source could not be chowned"; rollback_and_report; }
 for unit in $WORKERS; do
-  ssh "${SSH_OPTS[@]}" -i "$KEY" "$TARGET" \
+  ssh "${SSH_OPTS[@]}" $KEY_ARGS "$TARGET" \
     "systemctl reset-failed $unit 2>/dev/null; systemctl restart $unit" \
     || echo "    WARNING: $unit did not restart; the fingerprint check follows"
 done

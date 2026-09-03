@@ -29,8 +29,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-HOST = "root@2.28.62.83"
-KEY = Path.home() / ".ssh" / "naml_hetzner"
+from .targets import control_plane, ssh_argv
+
 
 
 @dataclass(frozen=True)
@@ -145,10 +145,12 @@ def _query(sql: str) -> dict | None:
     remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
               "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'Q'\n"
               f"{script}\nQ")
+    target = control_plane()
+    if target is None:
+        return None
     try:
         done = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-             "-o", "ConnectionAttempts=3", "-i", str(KEY), HOST, remote],
+            ssh_argv(target, remote, connect_timeout=20, attempts=3),
             capture_output=True, text=True, timeout=180,
             stdin=subprocess.DEVNULL)
     except (subprocess.TimeoutExpired, FileNotFoundError):

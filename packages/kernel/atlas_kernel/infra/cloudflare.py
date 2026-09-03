@@ -37,7 +37,20 @@ API = "https://api.cloudflare.com/client/v4"
 
 ZONE = "qevik.ai"
 
-#: This server. A record may only be pointed here.
+#: The origin every A record this module writes must point at.
+#:
+#: **This is a guard constant, not a deploy target.** It is deliberately *not*
+#: read from `infra/deploy_targets.conf`: the registry says where a deploy may
+#: go, while this says which address the DNS automation is allowed to publish,
+#: and coupling them would let a deploy-time choice silently repoint public DNS.
+#: `check_writable()` refuses to touch a record whose content is anything else,
+#: so a wrong value here does not misdirect traffic — it makes the automation
+#: refuse.
+#:
+#: Ownership: the migration owner changes this line, once, as an explicit
+#: reviewed step of the cutover (Phase 9), together with the Cloudflare records
+#: themselves. `test_cloudflare_origin_constant` fails until the change is
+#: deliberate, so it can never drift in unnoticed.
 ORIGIN_IP = "2.28.62.83"
 
 #: The records that serve production. Editing one of these takes the site,

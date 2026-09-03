@@ -2859,6 +2859,26 @@ _S = "a" * 40
 _OTHER = "b" * 40
 
 
+@pytest.fixture(autouse=True)
+def _a_configured_control_plane(tmp_path_factory, monkeypatch):
+    """The gates read a target from `infra/deploy_targets.conf`; give them one.
+
+    There is no default host any more — a machine that has not been told which
+    production host to look at reports `unmeasured` rather than reaching for
+    whichever host used to be production. The gate tests are about what the
+    gates *decide*, so they run with a target configured; the two tests that are
+    about the absent-target case unset it themselves.
+    """
+    root = tmp_path_factory.mktemp("target")
+    key = root / "id"
+    key.write_text("not a real key\n")
+    conf = root / "targets.conf"
+    conf.write_text(f"test-host|root@127.0.0.1|{key}|a fixture host\n")
+    monkeypatch.setenv("QEVIK_TARGETS_FILE", str(conf))
+    monkeypatch.setenv("QEVIK_DEPLOY_TARGET", "test-host")
+    yield
+
+
 @pytest.mark.parametrize("marker,passes,in_detail", [
     (f"sha={_S}\nstate=installed", True, ""),
     (f"sha={_S}\ninstalled_at=2026-09-02T10:00Z\nstate=installed", True, ""),

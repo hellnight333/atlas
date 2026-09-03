@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     print("backup      : removed")
     print()
     print("The new password is in the env file and nowhere else. Read it with:")
-    print(f"  ssh -i ~/.ssh/naml_hetzner root@2.28.62.83 \"grep '^{KEY}=' {ENV_FILE}\"")
+    print(f"  ssh <target from infra/deploy_targets.conf> \"grep '^{KEY}=' {ENV_FILE}\"")
     return 0
 
 

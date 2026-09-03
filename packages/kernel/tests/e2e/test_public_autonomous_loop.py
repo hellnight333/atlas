@@ -38,7 +38,7 @@ from atlas_kernel.workspace import Workspace
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 
 SITES_ROOT = Path(os.environ.get("QEVIK_SITES_ROOT", "/srv/sites"))
-PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "http://2.28.62.83")
+PUBLIC_BASE = os.environ.get("QEVIK_SITES_BASE_URL", "https://sites.qevik.ai")
 
 REQUEST = (
     "Create a small website for a fictional children's game called Rabbit Racer, "

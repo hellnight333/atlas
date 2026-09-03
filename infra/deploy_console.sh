@@ -6,7 +6,7 @@
 # server, and there is no toolchain between the repository and the browser that
 # can be broken on the day the operator needs the console.
 #
-#   ./infra/deploy_console.sh [user@host]
+#   ./infra/deploy_console.sh --target <name>|user@host
 #
 # It refuses rather than half-deploying, and it verifies afterwards rather than
 # reporting success because `scp` exited zero.
@@ -18,8 +18,27 @@
 # *before* the config that names its files is installed.
 set -euo pipefail
 
-TARGET="${1:-root@2.28.62.83}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Where this deploy is allowed to go, and with which key — one reviewed
+# registry, no implicit production default (infra/deploy_targets.conf).
+. "$HERE/deploy_target.sh"
+TARGET_SPEC=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target)
+      shift
+      [ $# -gt 0 ] || { echo "REFUSED: --target needs a name." >&2; exit 2; }
+      TARGET_SPEC="$1" ;;
+    -*) echo "REFUSED: unknown option '$1'." >&2; exit 2 ;;
+    *) TARGET_SPEC="$1" ;;
+  esac
+  shift
+done
+qevik_resolve_target "$TARGET_SPEC"
+TARGET="$QEVIK_TARGET_HOST"
+SSH_ID=$(qevik_target_identity_args)
+echo "target: $QEVIK_TARGET_NAME -> $TARGET (identity ${QEVIK_TARGET_KEY:-ssh_config})"
 LOCAL="$(cd "$(dirname "$0")/.." && pwd)/apps/control/src"
 REMOTE="/srv/qevik-control"
 CADDYFILE="$HERE/qevik-production.Caddyfile"
@@ -27,14 +46,14 @@ CADDYFILE="$HERE/qevik-production.Caddyfile"
 [ -f "$LOCAL/index.html" ] || { echo "no console at $LOCAL"; exit 1; }
 
 echo "==> checking access to $TARGET"
-if ! ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" true 2>/dev/null; then
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 $SSH_ID "$TARGET" true 2>/dev/null; then
   cat <<'MSG'
 REFUSED: no SSH access to the host.
 
 This is the exact human dependency, and nothing here can work around it:
 
   1. An SSH key or password for the host serving app.qevik.ai
-     (qevik-core-01 / 2.28.62.83).
+     (the target named above).
 
 Everything else is ready. The console is built, the Caddyfile carries the
 /api/* route the control plane needs, and this script deploys and verifies in
@@ -46,11 +65,11 @@ MSG
 fi
 
 echo "==> syncing the kernel"
-rsync -az -e "ssh -i $HOME/.ssh/naml_hetzner -o IdentitiesOnly=yes" --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
+rsync -az -e "ssh $SSH_ID" --delete   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc'   "$(cd "$(dirname "$0")/.." && pwd)/packages/kernel/atlas_kernel/"   "$TARGET:/opt/qevik/atlas/packages/kernel/atlas_kernel/"
 
 echo "==> installing the control-plane service"
-scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable qevik-control && \
+scp $SSH_ID -q "$(cd "$(dirname "$0")" && pwd)/qevik-control.service"   "$TARGET:/etc/systemd/system/qevik-control.service"
+ssh $SSH_ID "$TARGET" "install -d -o qevik -g qevik /var/lib/qevik/control &&   systemctl daemon-reload && systemctl enable qevik-control && \
   systemctl restart qevik-control"
 # `restart`, not `enable --now`. On an already-running unit `--now` is a no-op,
 # so the freshly synced code stayed unloaded and the schema migration inside
@@ -58,19 +77,19 @@ ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "install -d -o 
 # Give it a moment, then insist it is actually up. A unit that failed to start
 # and a unit that started are indistinguishable from `systemctl enable`.
 sleep 3
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl is-active --quiet qevik-control" || {
+ssh $SSH_ID "$TARGET" "systemctl is-active --quiet qevik-control" || {
   echo "the control plane did not start:"
-  ssh "$TARGET" "journalctl -u qevik-control -n 30 --no-pager"
+  ssh $SSH_ID "$TARGET" "journalctl -u qevik-control -n 30 --no-pager"
   exit 6
 }
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /health -> %{http_code}\n' http://127.0.0.1:8081/health"
+ssh $SSH_ID "$TARGET" "curl -sS --max-time 8 -o /dev/null -w '    local :8081 /health -> %{http_code}\n' http://127.0.0.1:8081/health"
 
 echo "==> copying the console to $REMOTE"
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "mkdir -p $REMOTE.incoming"
-scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
+ssh $SSH_ID "$TARGET" "mkdir -p $REMOTE.incoming"
+scp $SSH_ID -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
 # Swap, rather than overwrite in place: a half-copied console is a broken
 # console that is live, which is worse than the previous one still being live.
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "rm -rf $REMOTE.previous && \
+ssh $SSH_ID "$TARGET" "rm -rf $REMOTE.previous && \
   { [ -d $REMOTE ] && mv $REMOTE $REMOTE.previous || true; } && \
   mv $REMOTE.incoming $REMOTE"
 
@@ -91,7 +110,7 @@ ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "rm -rf $REMOTE
 # bit and plenty of ways of moving a tree drop it, and "permission denied" here
 # would stop a deploy that has already restarted the control plane.
 echo "==> publishing the public site the Caddyfile serves"
-bash "$HERE/deploy_public.sh" "$TARGET" || {
+bash "$HERE/deploy_public.sh" || {
   echo "FAILED: the public site was not published, so the Caddyfile that names"
   echo "        its 404 pages was not installed and Caddy was not restarted."
   echo "        The steps above did run: the kernel, the control-plane service"
@@ -101,13 +120,13 @@ bash "$HERE/deploy_public.sh" "$TARGET" || {
 }
 
 echo "==> installing the Caddyfile"
-scp -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
+scp $SSH_ID -q "$CADDYFILE" "$TARGET:/etc/caddy/Caddyfile"
+ssh $SSH_ID "$TARGET" "caddy validate --config /etc/caddy/Caddyfile" \
   || { echo "the Caddyfile did not validate; nothing was reloaded"; exit 3; }
 # `restart`, not `reload`. Caddy's admin API on :2019 is disabled on this host,
 # so `reload` validates the config and then fails to apply it with
 # `connection refused` — reporting the file valid while changing nothing.
-ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" "systemctl restart caddy"
+ssh $SSH_ID "$TARGET" "systemctl restart caddy"
 
 echo "==> verifying"
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' https://app.qevik.ai/ || echo 000)
@@ -140,7 +159,7 @@ esac
 # because the caller's extra curl flags have to reach the remote shell as
 # separate words.
 origin() {
-  ssh -i "$HOME/.ssh/naml_hetzner" -o IdentitiesOnly=yes "$TARGET" \
+  ssh $SSH_ID "$TARGET" \
     "curl -sS --max-time 15 --resolve qevik.ai:443:127.0.0.1 ${2:-} 'https://qevik.ai$1'" 2>/dev/null || true
 }
 # A path nothing has ever requested, so no cache anywhere holds the 200 the old
