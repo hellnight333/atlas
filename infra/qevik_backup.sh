@@ -34,13 +34,36 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # loosening them to fix this would have handed the database URL to any process
 # running as qevik, to repair a service that never needed to read the file
 # itself.
+# Under systemd the environment arrives through `EnvironmentFile=`. A hand run
+# has to get it from somewhere too, and it used to `source` the file — a shell,
+# so a database password containing `$`, a backtick, a quote or a space either
+# broke the run or was silently altered before psql saw it.
+#
+# Rather than write a second parser that would drift from systemd's, a hand run
+# re-executes itself *through* systemd, with the same EnvironmentFile= the units
+# use. One parser, one set of semantics, and the value never passes through a
+# shell. The marker stops the re-exec repeating if the file does not define it.
 if [ -z "${ATLAS_DATABASE_URL:-}" ]; then
   if [ ! -r "$ENV_FILE" ]; then
     echo "ATLAS_DATABASE_URL is not set and $ENV_FILE is not readable by $(id -un)." >&2
     echo "Under systemd this comes from EnvironmentFile=; by hand, run as root." >&2
     exit 1
   fi
-  set -a; . "$ENV_FILE"; set +a
+  if [ -n "${QEVIK_BACKUP_REEXEC:-}" ]; then
+    echo "$ENV_FILE does not define ATLAS_DATABASE_URL." >&2
+    exit 1
+  fi
+  if ! command -v systemd-run >/dev/null; then
+    echo "ATLAS_DATABASE_URL is not set and systemd-run is unavailable." >&2
+    echo "Run this unit rather than the script: systemctl start qevik-backup" >&2
+    exit 1
+  fi
+  exec systemd-run --wait --collect --pipe --quiet \
+    --property=EnvironmentFile="$ENV_FILE" \
+    --property=User="${QEVIK_USER:-qevik}" --property=Group="${QEVIK_USER:-qevik}" \
+    --property=WorkingDirectory="$BASE" \
+    --setenv=QEVIK_BACKUP_REEXEC=1 \
+    "$0" "$@"
 fi
 URL="${ATLAS_DATABASE_URL#*://}"
 CRED="${URL%%@*}"; HOSTDB="${URL#*@}"

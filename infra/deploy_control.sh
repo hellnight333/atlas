@@ -90,6 +90,9 @@ UNIT_DIR="${QEVIK_UNIT_DIR:-/etc/systemd/system}"
 ENV_FILE="${QEVIK_ENV_FILE:-/opt/qevik/atlas.env}"
 HEALTH="${QEVIK_HEALTH_URL:-http://127.0.0.1:8081/api/health}"
 ROLLBACK_DIR="${QEVIK_ROLLBACK_DIR:-/opt/qevik/rollback}"
+#: The service account the units run as, and therefore the identity the schema
+#: step runs as: same user, same environment, same view of the database.
+APP_USER="${QEVIK_APP_USER:-qevik}"
 
 SEAMS=0
 for seam in "${QEVIK_REMOTE_APP:-}" "${QEVIK_CONSOLE_DIR:-}" "${QEVIK_UNIT_DIR:-}" \
@@ -780,8 +783,30 @@ rsync_ "${INFRA_RSYNC_EXCLUDE[@]}" \
 # `composition_root`, which this deploy does not restart, so a schema change
 # would otherwise be applied whenever `qevik-api` next happened to restart. A
 # worker that registers before its column exists fails to register at all.
+# The environment reaches this step the way it reaches every service: through
+# systemd's own EnvironmentFile parser, given a *path*. What stood here sourced
+# the environment file in a shell — so a database password containing `$`, a
+# backtick, a quote, a space or a semicolon either broke the deploy or, worse,
+# was silently mangled into a different value. The fix belongs here and not in the password: a credential's entropy is
+# not something a deploy script gets to constrain.
+#
+# Using systemd rather than a parser of our own is the point. The services read
+# this file through `EnvironmentFile=`; a hand-written reader that quoted one
+# case differently would give the schema step a different value than the
+# services get, and that difference would surface as a schema applied against
+# the wrong database rather than as an error.
+#
+# `--wait` propagates the exit status, `--pipe` returns the output, `--collect`
+# removes the transient unit afterwards, and the value never touches a command
+# line, a log or this script.
 echo "==> applying the schema"
-ssh_ "cd $REMOTE_APP && set -a && . $ENV_FILE && set +a && PYTHONPATH=$REMOTE_APP/packages/kernel $REMOTE_APP/.venv/bin/python -c 'from atlas_kernel.db import init_db; init_db(); print(\"schema applied\")'" || {
+SCHEMA_PY='from atlas_kernel.db import init_db; init_db(); print("schema applied")'
+ssh_ "systemd-run --wait --collect --pipe --quiet \
+  --property=EnvironmentFile=$ENV_FILE \
+  --property=User=$APP_USER --property=Group=$APP_USER \
+  --property=WorkingDirectory=$REMOTE_APP \
+  --setenv=PYTHONPATH=$REMOTE_APP/packages/kernel \
+  $REMOTE_APP/.venv/bin/python -c '$SCHEMA_PY'" || {
   echo "FAILED: the schema could not be applied; nothing was restarted"
   rollback_and_report
 }

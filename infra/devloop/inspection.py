@@ -29,7 +29,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .targets import control_plane, ssh_argv
+from .targets import control_plane, remote_python, ssh_argv
 
 
 
@@ -142,9 +142,7 @@ def _query(sql: str) -> dict | None:
         "with SessionLocal() as s:\n"
         f"    r = s.execute(text('''{sql}''')).mappings().first()\n"
         "    print(json.dumps(dict(r) if r else {}, default=str))\n")
-    remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
-              "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'Q'\n"
-              f"{script}\nQ")
+    remote = remote_python(script, heredoc="Q")
     target = control_plane()
     if target is None:
         return None

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .queue import redact
-from .targets import control_plane, ssh_argv
+from .targets import control_plane, remote_python, ssh_argv
 
 #: Where the deploy script records what the host holds. Read back, never
 #: written from here.
@@ -502,9 +502,7 @@ def in_production(*, cwd: Path, probe: str, timeout: int = 600) -> Gate:
                     "no control-plane target is configured (QEVIK_DEPLOY_TARGET), "
                     "or its key is missing here",
                     unmeasured=True)
-    remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
-              "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'PROBE'\n"
-              f"{probe}\nPROBE")
+    remote = remote_python(probe, heredoc="PROBE")
     code, out, timed_out = _sh(_ssh_argv(remote), cwd=cwd, timeout=timeout)
     if timed_out or code == 255:
         return Gate("in_production", False,

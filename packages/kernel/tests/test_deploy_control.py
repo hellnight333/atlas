@@ -152,6 +152,80 @@ def fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
+SYSTEMD_RUN_SHIM = r'''#!/usr/bin/env python3
+# systemd-run, as far as the deploy uses it.
+#
+# Reads the environment file the way systemd reads it - as a file, never through
+# a shell - and runs the command with it. What this proves locally is that the
+# deploy hands over a *path* and never interpolates a value into a command line;
+# that systemd's real parser agrees with this one is proved on the host, where
+# both the file and the parser live.
+import os
+import subprocess
+import sys
+
+CTL = "@CTL@"
+os.makedirs(CTL, exist_ok=True)
+with open(os.path.join(CTL, "log"), "a", encoding="utf-8") as fh:
+    fh.write("systemd-run " + " ".join(sys.argv[1:]) + "\n")
+
+env = dict(os.environ)
+argv = list(sys.argv[1:])
+cwd = None
+QUOTES = ("'", '"')
+while argv:
+    arg = argv[0]
+    if arg in ("--wait", "--collect", "--pipe", "--quiet"):
+        argv.pop(0)
+        continue
+    if arg.startswith("--property=EnvironmentFile="):
+        path = arg.split("=", 2)[2]
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in QUOTES:
+                    value = value[1:-1]
+                env[key.strip()] = value
+        argv.pop(0)
+        continue
+    if arg.startswith("--property=WorkingDirectory="):
+        cwd = arg.split("=", 2)[2]
+        argv.pop(0)
+        continue
+    if arg.startswith("--property="):
+        argv.pop(0)
+        continue
+    if arg.startswith("--setenv="):
+        key, _, value = arg[len("--setenv="):].partition("=")
+        env[key] = value
+        argv.pop(0)
+        continue
+    break
+sys.exit(subprocess.run(argv, cwd=cwd, env=env).returncode)
+'''
+
+#: The venv python the deploy runs, answering with a digest of what it was given.
+SCHEMA_PYTHON = r'''#!/usr/bin/env python3
+import hashlib
+import os
+import sys
+
+if os.path.exists("@CTL@/schema_fail"):
+    print("init_db failed", file=sys.stderr)
+    raise SystemExit(1)
+# The digest, never the value: a test can assert the process saw the exact bytes
+# of the environment file without a secret-shaped string appearing in an
+# assertion, a log or a failure message.
+dsn = os.environ.get("ATLAS_DATABASE_URL", "")
+print("dsn-sha=" + hashlib.sha256(dsn.encode()).hexdigest())
+print("cwd=" + os.getcwd())
+print("schema applied")
+'''
+
+
 def _write_shims(shims: Path, ctl: Path) -> None:
     real_rsync = _TOOLS["rsync"]
     common = f'CTL="{ctl}"\nmkdir -p "$CTL"\n'
@@ -288,6 +362,9 @@ case "$1" in is-active) echo active ;; esac
 exit 0
 """, executable=True)
 
+    _write(shims / "systemd-run", SYSTEMD_RUN_SHIM.replace("@CTL@", str(ctl)),
+           executable=True)
+
     for name in ("chown", "journalctl"):
         _write(shims / name, f"""#!/usr/bin/env bash
 {common}
@@ -370,11 +447,7 @@ def world(tmp_path: Path) -> World:
         _write(fake / rel, text)
     _write(fake / "opt/qevik/atlas.env", "")
     _write(fake / "opt/qevik/atlas/.venv/bin/python",
-           f'#!/usr/bin/env bash\n'
-           f'if [ -f "{ctl}/schema_fail" ]; then\n'
-           f'  echo "init_db failed" >&2; exit 1\n'
-           f'fi\n'
-           f'echo "schema applied"\n', executable=True)
+           SCHEMA_PYTHON.replace("@CTL@", str(ctl)), executable=True)
     _write(ctl / "health_code", "200")
 
     repo = tmp_path / "repo"
@@ -1537,3 +1610,97 @@ def test_rehearse_says_not_ready_when_the_host_check_cannot_run(world: World):
     assert "NOT READY: a real deploy would refuse at the host check" in out
     assert "REHEARSED" not in out
     assert snapshot(world.fake) == before
+
+
+# --- the environment file, and the password it is allowed to contain ----------
+#
+# A high-entropy password is a string of arbitrary bytes. The deploy used to
+# read `/opt/qevik/atlas.env` with `set -a && . $ENV_FILE` — a shell — so `$`,
+# a backtick, a quote, a space or a semicolon in the value either broke the
+# deploy or, worse, changed the value silently. The fix is in the deploy, not in
+# the password: nothing here may constrain what a credential is allowed to be.
+
+#: Every shell metacharacter that matters, in one value. `$(id)` and the
+#: backtick would execute; the quotes and the backslash would be eaten; the
+#: semicolon and the pipe would end the command; the space would split it.
+NASTY = "p@ss w'or\"d`$(id)`;|&<>\\#$HOME*?[]{}!"
+NASTY_DSN = f"postgresql+psycopg://qevik:{NASTY}@127.0.0.1:5432/qevik"
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _env_file_with(world: World, dsn: str) -> None:
+    _write(world.fake / "opt/qevik/atlas.env", f"ATLAS_DATABASE_URL={dsn}\n")
+
+
+def test_the_schema_step_sees_the_password_byte_for_byte(world: World):
+    """The value reaches the process exactly as the file holds it.
+
+    Compared by digest, never printed: an assertion that echoes a credential is
+    a credential in a CI log.
+    """
+    _env_file_with(world, NASTY_DSN)
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 0, out
+    assert f"dsn-sha={_sha(NASTY_DSN)}" in out, "the schema step saw different bytes"
+
+
+def test_the_deploy_never_puts_the_value_on_a_command_line(world: World):
+    """A path is handed over, not a value — so no log, argv or transcript holds it."""
+    _env_file_with(world, NASTY_DSN)
+    proc = run(world, env=env_for(world, sha=world.sha))
+    assert proc.returncode == 0, both(proc)
+
+    schema_calls = [c for c in world.remote_commands() if "init_db" in c]
+    assert len(schema_calls) == 1, schema_calls
+    command = schema_calls[0]
+    assert "EnvironmentFile=" in command, command
+    assert "set -a" not in command and ". /" not in command, command
+    for fragment in (NASTY, "p@ss", "$(id)"):
+        assert fragment not in command, "a secret fragment reached the command line"
+    # Nor anywhere else the run wrote: the shim log is every command that ran.
+    assert not [line for line in world.log() if NASTY in line]
+    assert NASTY not in both(proc)
+
+
+def test_the_schema_step_runs_as_the_service_account_in_the_app_directory(world: World):
+    """Same identity and same directory as the units, so it sees the same database."""
+    _env_file_with(world, NASTY_DSN)
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 0, out
+    command = [c for c in world.remote_commands() if "init_db" in c][0]
+    assert "--property=User=qevik" in command, command
+    assert f"--property=WorkingDirectory={world.app}" in command, command
+    assert f"cwd={world.app}" in out, out
+
+
+def test_the_old_shell_form_would_have_failed_on_the_same_value(world: World):
+    """The negative control.
+
+    Without it, the test above passes just as well against a deploy that never
+    had the bug. This runs the *previous* implementation against the same file
+    and shows it does not survive it — either it fails outright or it hands the
+    process a different value.
+    """
+    _env_file_with(world, NASTY_DSN)
+    env_file = world.fake / "opt/qevik/atlas.env"
+    done = subprocess.run(
+        ["bash", "-c", f'set -a && . "{env_file}" && set +a && '
+                       f'printf "%s" "$ATLAS_DATABASE_URL"'],
+        capture_output=True, text=True, timeout=60)
+    assert done.returncode != 0 or _sha(done.stdout) != _sha(NASTY_DSN), (
+        "the shell form survived the value; this control proves nothing")
+
+
+def test_a_failing_schema_step_still_rolls_back(world: World):
+    """The transport changed; the consequence of a failure did not."""
+    _write(world.ctl / "schema_fail", "1")
+    proc = run(world, env=env_for(world, sha=world.sha))
+    out = both(proc)
+    assert proc.returncode == 1, out
+    assert "the schema could not be applied" in out
+    assert "ROLLED BACK" in out

@@ -127,12 +127,19 @@ chmod 600 "$ENV_FILE"
 echo "wrote ${ENV_FILE} (0600, ${APP_USER}); password not printed"
 
 say "schema"
-sudo -u "$APP_USER" bash -c "set -a; . '${ENV_FILE}'; set +a; cd '${APP}' && .venv/bin/python -c '
-import sys; sys.path.insert(0, \"packages/kernel\")
+# The environment comes from systemd's own EnvironmentFile parser, not from a
+# shell: a generated database password contains arbitrary bytes, and `source`
+# would either break on them or alter them silently.
+systemd-run --wait --collect --pipe --quiet \
+  --property=EnvironmentFile="${ENV_FILE}" \
+  --property=User="${APP_USER}" --property=Group="${APP_USER}" \
+  --property=WorkingDirectory="${APP}" \
+  --setenv=PYTHONPATH="${APP}/packages/kernel" \
+  "${APP}/.venv/bin/python" -c '
 from atlas_kernel.db import init_db
 init_db(); init_db()   # twice: idempotency is half the contract
-print(\"schema initialised, and idempotent on re-run\")
-'"
+print("schema initialised, and idempotent on re-run")
+'
 
 say "service"
 # Managed rather than nohup-ed: "run my system" means it survives a reboot and
@@ -161,4 +168,6 @@ echo "API on 127.0.0.1:8080 (loopback only — no auth layer yet)."
 echo "Reach it from a laptop with:  ssh -N -L 8080:127.0.0.1:8080 root@HOST"
 echo
 echo "Run the suite:"
-echo "  cd ${APP} && sudo -u ${APP_USER} bash -c 'set -a; . ${ENV_FILE}; set +a; .venv/bin/python -m pytest packages/kernel/tests -q'"
+echo "  systemd-run --wait --pipe --property=EnvironmentFile=${ENV_FILE} \\"
+echo "    --property=User=${APP_USER} --property=WorkingDirectory=${APP} \\"
+echo "    ${APP}/.venv/bin/python -m pytest packages/kernel/tests -q"

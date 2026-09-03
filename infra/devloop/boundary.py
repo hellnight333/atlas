@@ -28,7 +28,7 @@ import subprocess
 from pathlib import Path
 
 from .queue import Queue, State
-from .targets import control_plane, ssh_argv
+from .targets import control_plane, remote_python, ssh_argv
 
 #: Which boundary a builder ran into, from what it said. Deliberately narrow:
 #: an agent that merely felt uncertain must not be able to manufacture a human
@@ -74,9 +74,7 @@ def _remote(script: str, *, timeout: int = 120) -> dict | None:
     target = control_plane()
     if target is None:
         return None
-    remote = ("cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && "
-              "set +a && PYTHONPATH=packages/kernel .venv/bin/python - <<'PY'\n"
-              f"{script}\nPY")
+    remote = remote_python(script)
     try:
         done = subprocess.run(
             ssh_argv(target, remote, connect_timeout=20, attempts=3),

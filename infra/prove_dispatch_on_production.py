@@ -10,9 +10,13 @@ Real business work is never started to manufacture evidence. Where a case does
 not exist in production -- two eligible workers, a placement other than EITHER,
 a busy worker -- the control is synthetic and says so.
 
-Run on the host:
-    cd /opt/qevik/atlas && set -a && . /opt/qevik/atlas.env && set +a \\
-      && PYTHONPATH=packages/kernel .venv/bin/python infra/prove_dispatch_on_production.py
+Run on the host, with the environment read by systemd rather than by a shell
+(a database password may contain any byte, and a shell would not survive it):
+    systemd-run --wait --collect --pipe --quiet \\
+      --property=EnvironmentFile=/opt/qevik/atlas.env \\
+      --property=User=qevik --property=WorkingDirectory=/opt/qevik/atlas \\
+      --setenv=PYTHONPATH=/opt/qevik/atlas/packages/kernel \\
+      /opt/qevik/atlas/.venv/bin/python infra/prove_dispatch_on_production.py
 """
 from __future__ import annotations
 

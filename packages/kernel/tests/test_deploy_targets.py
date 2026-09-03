@@ -239,3 +239,42 @@ def test_cloudflare_origin_constant() -> None:
                      "QEVIK_DEPLOY_TARGET"):
         assert coupling not in source, (
             f"the DNS guard must not read the deploy-target registry ({coupling})")
+
+
+# --- no environment file is read through a shell, anywhere ---------------------
+
+def test_no_infra_script_sources_an_environment_file() -> None:
+    """One rule, everywhere (D-S5).
+
+    `set -a; . atlas.env; set +a` is a shell reading a file that contains a
+    password. It breaks on `$`, a backtick, a quote or a space, and — worse —
+    can alter the value silently. Every reader now goes through systemd's own
+    `EnvironmentFile=` parser, which is the parser the units use, so the schema
+    step, the backup script and the DevLoop probes all see the same bytes the
+    services see.
+
+    No file is exempt, including the comments that explain the rule: a grep the
+    reviewer runs must come back empty, and an allow-list is where the next
+    instance hides.
+    """
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "infra").rglob("*")):
+        if not path.is_file() or path.suffix not in {".sh", ".py"}:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), 1):
+            if "set -a" in line or ". /opt/qevik/atlas.env" in line:
+                offenders.append(f"{rel}:{number}: {line.strip()}")
+    assert not offenders, "an environment file is still read by a shell:\n" + "\n".join(offenders)
+
+
+def test_the_remote_python_builder_hands_over_a_path() -> None:
+    """The DevLoop probes read the environment the same way the deploy does."""
+    sys.path.insert(0, str(REPO_ROOT / "infra"))
+    from devloop.targets import remote_python  # noqa: PLC0415
+
+    command = remote_python("print('hello')")
+    assert "--property=EnvironmentFile=/opt/qevik/atlas.env" in command
+    assert "--property=User=qevik" in command
+    assert "set -a" not in command and ". /opt/qevik/atlas.env" not in command

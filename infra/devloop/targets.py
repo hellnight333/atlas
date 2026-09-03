@@ -58,3 +58,30 @@ def ssh_argv(target: Target, remote: str, *, connect_timeout: int = 20,
         argv += ["-i", target.key, "-o", "IdentitiesOnly=yes"]
     argv += [target.host, remote]
     return argv
+
+
+#: Where the control plane keeps its environment and its virtualenv. Stated once
+#: here because three call sites used to spell it out, each with its own copy of
+#: the shell that read the environment file.
+APP_DIR = "/opt/qevik/atlas"
+ENV_FILE = "/opt/qevik/atlas.env"
+APP_USER = "qevik"
+
+
+def remote_python(script: str, *, heredoc: str = "PY") -> str:
+    """A remote command that runs `script` with the control plane's environment.
+
+    The environment arrives through systemd's own `EnvironmentFile=` parser,
+    given a path — the same parser the units use. What stood here sourced the
+    environment file in a shell: a database password containing ``$``, a
+    backtick, a quote or a space either broke the command or was silently
+    altered before the process saw it. Fixing the reader rather
+    than the password is the whole point; a credential's entropy is not a
+    deploy-time variable.
+    """
+    return (f"systemd-run --wait --collect --pipe --quiet "
+            f"--property=EnvironmentFile={ENV_FILE} "
+            f"--property=User={APP_USER} --property=Group={APP_USER} "
+            f"--property=WorkingDirectory={APP_DIR} "
+            f"--setenv=PYTHONPATH={APP_DIR}/packages/kernel "
+            f"{APP_DIR}/.venv/bin/python - <<'{heredoc}'\n{script}\n{heredoc}")
