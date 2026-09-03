@@ -1,9 +1,16 @@
 # PHASE 3 — PRE-EXECUTION PLAN (infrastructure preparation of `qevik-prod-01`)
 
-**Plan only. Nothing here has been executed.** No host was changed while writing
-it: every host fact below comes from a read-only command run on
-2026-09-03 22:18 UTC. No secret was requested, created, transferred or handled.
-Phase 3 has not started. The DevLoop remains paused (AR-5).
+> **STATUS 2026-09-03: EXECUTED AND COMPLETE.** All seven groups ran (G6 skipped
+> at its documented default), every validation in §7 passed after the reboot, and
+> two corrections the host forced — C-1 (sshd needs a reload) and C-2 (fail2ban
+> bans through nftables) — are folded into the text below and accepted by the
+> owner. Evidence: `evidence/phase-3/execution-2026-09-03.md`. Phase 4 has **not**
+> begun.
+
+**Written as a plan; kept as the record of what ran.** Every host fact in §2 comes
+from a read-only command run on 2026-09-03 22:18 UTC, before execution. No secret
+was requested, created, transferred or handled at any point — §8 remains the
+owner's gate. The DevLoop remains paused (AR-5).
 
 **Baseline.** The approved repository baseline is
 **`3103ced656f6e18acf496591c9abe5e525dbd55b`** — the closed ENABLEMENT stage.
@@ -65,7 +72,7 @@ baseline and the service account that Phase 4 assumes — and nothing else.
 | **Swap** | **none**; `/etc/fstab` has no swap entry; `vm.swappiness=60` |
 | Users | **`qevik`, `postgres`, `caddy` do not exist**; only `root` |
 | sshd | `passwordauthentication yes` · `permitrootlogin prohibit-password` · `kbdinteractiveauthentication no` · `pubkeyauthentication yes` · `maxauthtries 6` · `usepam yes`; `/etc/ssh/sshd_config.d/` is **empty**; `Include /etc/ssh/sshd_config.d/*.conf` is line 24 of `sshd_config` |
-| ssh units | **`ssh.socket` enabled and active; `ssh.service` disabled** — socket activation, so each connection starts `sshd` fresh and reads the config then |
+| ssh units | **`ssh.socket` enabled and active; `ssh.service` disabled** — read at the time as per-connection activation. **Disproved during execution (C-1):** the socket starts `ssh.service` once and that daemon holds `:22` and reads the config only at start or on reload |
 | `authorized_keys` | one line, `qevik_prod` (ED25519) |
 | Host firewall | `ufw` **inactive**; ingress governed by the Hetzner Cloud Firewall: 22/80/443 + ICMP (PROVED from the second vantage, `evidence/phase-2/`) |
 | fail2ban | not installed; candidate `1.1.0-9`; `/var/log/auth.log` exists (2.0 MB) |
@@ -96,17 +103,26 @@ command that can affect SSH access has its recovery path listed *before* it.
 2. Capture the baseline: `sshd -T | sort > /root/sshd-T.before`.
 3. Arm the dead-man (R2) with the undo for this group.
 4. Write the drop-in (`/etc/ssh/sshd_config.d/10-qevik-hardening.conf`).
-5. `sshd -t` — a syntax check that must pass **before** anything takes effect.
-6. **Session B**: from the Mac, a *fresh* `ssh -i ~/.ssh/qevik_prod -o IdentitiesOnly=yes root@…  'echo B-OK; id'`. Under socket activation the new config is already live for this connection, so B is the proof.
+5. `sshd -t` — a syntax check that must pass **before** anything takes effect — then `systemctl reload ssh.service` (C-1), which re-checks and signals the running daemon.
+6. **Session B**: from the Mac, a *fresh* `ssh -i ~/.ssh/qevik_prod -o IdentitiesOnly=yes root@…  'echo B-OK; id'`. B is the proof that the reloaded daemon still accepts the key.
 7. Negative control from the second vantage (`qevik-core-01`, read-only carve-out U16): `ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@91.107.244.253` must be **refused**, and a key-less attempt must fail.
 8. **Session C**: another fresh session with the key. Only then cancel the dead-man and close A.
 
-> **Socket-activation note (new since the earlier drafts).** `ssh.service` is
-> disabled and `ssh.socket` is enabled, so there is no daemon holding the old
-> config: the drop-in applies to the *next* connection. `systemctl reload ssh`
-> is therefore not the lever it is on a classic setup — `sshd -t` plus session B
-> is. `systemctl restart ssh.socket` is **not** run: it would drop the listener
-> briefly for no benefit.
+> **CORRECTED 2026-09-03 during execution (C-1, owner-accepted).** The note here
+> said that because `ssh.service` is disabled and `ssh.socket` is enabled, each
+> connection reads the config afresh and no reload is needed. **That is wrong on
+> this host.** `ssh.socket` starts `ssh.service` once, and that daemon holds
+> `:22` and serves every connection: `ss -tlnp` showed `sshd` pid 1098 running
+> since boot. The drop-in was on disk and `sshd -T` reported it while the running
+> daemon still advertised `publickey,password`.
+>
+> **`systemctl reload ssh.service` is the lever** — its `ExecReload` runs
+> `sshd -t` first and then `kill -HUP $MAINPID`, so a bad config cannot be
+> signalled into effect. Step 5 below therefore becomes: `sshd -t`, then
+> `systemctl reload ssh.service`, and only then session B. The dead-man's undo
+> must **also** reload, or removing the drop-in would leave the running daemon
+> hardened with no file to explain it. `systemctl restart ssh.socket` is still
+> not run: reload is sufficient and does not drop the listener.
 
 **D-3.2 (owner decision).** `MaxAuthTries 3` vs leaving 6.
 Recommended: **3**. The deploy tooling now pins its identity
@@ -248,8 +264,11 @@ findmnt --verify --verbose | tail -3   # fstab parses
 ```
 # Session A stays open in another terminal.
 systemd-run --on-active=10min --unit=qevik-undo-sshd \
-  /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/10-qevik-hardening.conf'
+  /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/10-qevik-hardening.conf; systemctl reload ssh.service'
 ```
+The undo reloads as well as removes (C-1): the running daemon keeps whatever it
+last read, so deleting the file alone would leave a hardened daemon and no file
+to explain it.
 
 ```
 cat > /etc/ssh/sshd_config.d/10-qevik-hardening.conf <<'EOF'
@@ -262,6 +281,7 @@ MaxAuthTries 3
 EOF
 chmod 644 /etc/ssh/sshd_config.d/10-qevik-hardening.conf
 sshd -t && echo "config valid"
+systemctl reload ssh.service          # C-1: the running daemon re-reads only on reload
 ```
 
 *Validation (the AR-2 proof, all four parts):*
@@ -275,7 +295,7 @@ ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHos
 # session C, another fresh connection with the key, before A is closed
 ```
 *Keep:* `systemctl stop qevik-undo-sshd.timer 2>/dev/null; systemctl reset-failed qevik-undo-sshd.service 2>/dev/null`
-*Rollback:* in **session A** — `rm -f /etc/ssh/sshd_config.d/10-qevik-hardening.conf` (takes effect on the next connection; no restart needed under socket activation). If session A is lost: the dead-man timer does it, and R3 is the floor.
+*Rollback:* in **session A** — `rm -f /etc/ssh/sshd_config.d/10-qevik-hardening.conf && systemctl reload ssh.service` (C-1: the removal alone does not reach the running daemon). If session A is lost: the dead-man timer does both, and R3 is the floor.
 
 ---
 
@@ -315,7 +335,9 @@ getent hosts dashscope-intl.aliyuncs.com >/dev/null && echo dns-ok
 
 ### G4 — fail2ban
 
-Ordered **after** ufw so `banaction = ufw` is valid on first start.
+Ordered **after** ufw so the firewall exists before the jail starts. (The plan
+expected `banaction = ufw`; the distribution default `nftables` is what actually
+loads — C-2.)
 
 ```
 DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban
@@ -328,7 +350,13 @@ bantime  = 1h
 findtime = 10m
 maxretry = 5
 backend  = systemd
-banaction = ufw
+# CORRECTED 2026-09-03 during execution (C-2, owner-accepted): `banaction = ufw`
+# was set here and did NOT take effect — `jail.d/defaults-debian.conf` sets
+# `banaction = nftables` and that is what the jail loads. Bans live in the
+# `inet f2b-table`, are read with `fail2ban-client get sshd banned`, and do not
+# appear in `ufw status`; both tables are evaluated and a drop in either drops.
+# The installed jail documents this instead of asserting a setting that did
+# nothing.
 # Never ban the host itself; no operator IP is listed, because the owner's
 # egress IP is not stable (D-D) and a stale allow-list is worse than none.
 ignoreip = 127.0.0.1/8 ::1
@@ -343,7 +371,8 @@ systemctl enable --now fail2ban
 ```
 systemctl is-active fail2ban                 # active
 fail2ban-client status sshd                  # jail exists, filter systemd, 0 or more banned
-fail2ban-client get sshd banaction           # ufw
+fail2ban-client get sshd actions             # nftables (the distro default — C-2)
+fail2ban-client get sshd banned              # where bans are visible, not `ufw status`
 journalctl -u fail2ban -n 20 --no-pager      # no "Failed to ..." lines
 # session B, a fresh connection: still works
 ```
@@ -421,12 +450,12 @@ return, R3 then R4.
 
 | # | Check | Expected |
 |---|---|---|
-| P3-1 | `sshd -T` diff vs `/root/phase3-sshd.before` | exactly four lines changed: password/kbd/maxauthtries (+ permitrootlogin unchanged) |
+| P3-1 | `sshd -T` diff vs `/root/phase3-sshd.before` | exactly two lines changed: `passwordauthentication yes→no`, `maxauthtries 6→3` (`kbdinteractiveauthentication` and `permitrootlogin` were already at target) |
 | P3-2 | password auth from the second vantage | refused |
 | P3-3 | key auth from the Mac, fresh session | works, three times (B, C, post-reboot) |
 | P3-4 | `ufw status verbose` | active; deny incoming; 22/80/443 allowed v4+v6 |
 | P3-5 | second-vantage port scan | 22 open · 80/443 closed (nothing listening) · everything else filtered |
-| P3-6 | `fail2ban-client status sshd` | jail active, `banaction ufw`, systemd backend |
+| P3-6 | `fail2ban-client status sshd` | jail active, action `nftables` (C-2), systemd backend, 3600/600/5 |
 | P3-7 | `swapon --show`, `sysctl vm.swappiness` | 2 GB, 10 — and after the reboot |
 | P3-8 | `id qevik`, `runuser -u qevik -- id -un` | exists, `nologin`, usable by the units' pattern |
 | P3-9 | `/opt/qevik` and `backup.env` | unchanged owner/mode; 11 dumps still present |
@@ -508,9 +537,18 @@ data.
 
 ---
 
-## 11. Stop
+## 11. Outcome
 
-This plan is presented for approval. Nothing in it has been executed: no host
-change, no package, no user, no firewall rule, no secret, no database, no
-deployment, no DevLoop task. Phase 3 begins at **STOP GATE 3-A**, on an explicit
-owner GO that also answers D-3.2, D-3.3 and D-3.4.
+Executed 2026-09-03 22:25–22:36 UTC on the owner's GO, at the documented defaults
+for D-3.2 (MaxAuthTries 3), D-3.3 (`nologin`) and D-3.4 (`/opt/qevik` root-owned).
+G6 was skipped at its own default. STOP GATE 3-B was reported and answered before
+the reboot; C-1 and C-2 were reported there and accepted.
+
+Every check in §7 passed after the reboot. Evidence, including the AR-2 proof
+chain and the raw host output:
+`evidence/phase-3/execution-2026-09-03.md`.
+
+**Phase 3 is complete. Phase 4 has not begun** — no PostgreSQL, no Caddy, no
+venv, no application, no deployment, and no secret handled. What remains before
+Phase 4 is STOP GATE 3-C (the owner writes the env files) and STOP GATE 3-D (an
+explicit GO), both unchanged.

@@ -101,6 +101,8 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Stop conditions:** any secret value appears in a shell history, transcript, or file the agent can read → stop, owner rotates it.
 - **Owner approval:** owner's completion of the env files is the gate; agent may not proceed until the owner says the files are in place.
 
+- **Status 2026-09-03: COMPLETE.** Executed on the owner's GO per `PHASE_3_PRE_EXECUTION_PLAN.md`: 2 GB swap, key-only sshd (`MaxAuthTries 3`) proved under AR-2, `ufw` mirroring the Cloud Firewall, fail2ban, the `qevik` service account (`nologin`, uid 999), and a reboot test that all of it survived. Two plan corrections the host forced are folded in and owner-accepted: **C-1** the running sshd re-reads its config only on `systemctl reload ssh.service`, and **C-2** fail2ban bans through the distribution's `nftables` action, not `ufw`. Evidence: `evidence/phase-3/execution-2026-09-03.md`. The owner's env files (STOP GATE 3-C) and the GO for Phase 4 (3-D) remain outstanding; no secret was handled.
+
 ## Phase 4 — Application Runtime Preparation
 
 - **Objective:** the target runs the same unit set, Caddy config, Postgres version, venv and Playwright as the old host, against an **empty** database, and passes the deploy contract's rehearsal.
