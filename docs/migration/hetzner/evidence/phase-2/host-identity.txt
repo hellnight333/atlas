@@ -1,0 +1,35 @@
+# Phase 2 · Step 5 — post-rebuild identity check of server 164307556 (qevik-prod-01)
+# Read-only. Performed 2026-09-03 08:52–08:53 UTC from the Mac over SSH (devloop_01, the only key Hetzner injected).
+# GO given by owner: "Rebuild done. GO verify (Step 5). Read-only verification only. No host changes."
+# No host change made. Mac-side change: 3 stale known_hosts lines for 91.107.244.253 removed, 1 new ED25519 line added.
+
+## Host keys — rebuild PROVED (all three differ from pre-rebuild)
+                pre-rebuild (evidence/phase-1)                       post-rebuild (ssh-keyscan 08:52:59Z)
+ED25519  SHA256:3jMtwUlaGN3zlLRgTp0NDjeWO5vIUZ7YWmztwgc0tD4  ->  SHA256:QZ4yqkstkMawonTB/4esXJzQigKtLEDwRc1rgCPikuk
+ECDSA    SHA256:wHfDYuaTGWUFbUCNJ4gOzW8F/z7gcvUpa+AT8hi76PI  ->  SHA256:vYuf3owPywjZPvOJvsrZGE2IB5hrPnoCy0vlpJ4JgKw
+RSA      SHA256:ZwgL68n0G3h2gaFiSdS335uFIEGZXc1tSkNUl8mHjQw  ->  SHA256:UT7y+tGId4u2Sbuhtp2QYoWI60VFqeys8E1izxTopkY
+Trust basis for the new ED25519 key: trust-on-first-use via keyscan (owner did not report a console fingerprint reading),
+then cross-checked in-session: /etc/ssh/ssh_host_ed25519_key.pub on the host = SHA256:QZ4yqkstkMawonTB/4esXJzQigKtLEDwRc1rgCPikuk (match).
+
+## Host state (PROVED, in-session)
+OS              Ubuntu 26.04.1 LTS, kernel 7.0.0-30-generic, kvm, Hetzner vServer, Hardware Serial 164307556
+Hostname        qevik-prod-01 (set by cloud-init from the console server name — step 8 hostname change no longer needed)
+Boots           exactly 1 (boot id cfa33370a63549bfb54558ceafb33e7e, first entry 2026-09-03 08:51:18 UTC); uptime since 08:51:15 UTC
+cloud-init      status: done
+Disk /          301 G total, 1.4 G used (clean image)
+Memory / swap   15,603 MiB / 0
+authorized_keys 1 line = devloop_01  SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues  (qevik_prod NOT yet present — step 6)
+sshd -T         permitrootlogin prohibit-password · pubkeyauthentication yes · passwordauthentication yes (Hetzner default) · maxauthtries 6
+ufw             inactive
+Listening       :22 sshd (v4+v6); 127.0.0.53/54:53 systemd-resolved only
+Shell users     root only
+reboot-required absent
+Network         eth0 91.107.244.253/32 · 2a01:4f8:1c1b:1dbe::1/64  (IPs kept, as required by D-R-1)
+
+## Not provided by owner at this step (UNKNOWN, requested in runbook step 1/3)
+- project name, other resources in project, 2FA state (U1)
+- console Type/price, Backups/Snapshots/Firewalls/Volumes readings (step 3)
+- console-displayed ED25519 host-key fingerprint (step 4)
+
+## Next
+Step 6 (AR-2 key swap) requires a separate owner GO "swap keys". Nothing else changed.

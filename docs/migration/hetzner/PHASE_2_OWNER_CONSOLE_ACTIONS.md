@@ -84,7 +84,7 @@ From the server page: **Type** (expected CPX42) and **price**; **Backups** tab s
 existing backups); **Snapshots** (any?); **Firewalls** (any attached?); **Volumes** (expect none);
 **Networking** → confirm `91.107.244.253` and the IPv6 `/64`. If anything differs from §1 ⏸.
 
-### Step 4 — REBUILD (OWNER, console) — the destructive step; free; ~2 minutes
+### Step 4 — REBUILD (OWNER, console) — the destructive step; free; ~2 minutes — **DONE by owner 2026-09-03 (first boot 08:51:15 UTC)**
 
 **Servers** → `qevik-prod-01` → **Rebuild** tab → image **Ubuntu 26.04** → **Rebuild server**.
 The console warns that all data will be lost — that is intended (assessment §5: all disposable).
@@ -97,7 +97,7 @@ the web console; nothing is needed there.
 
 ⏸ Tell me "rebuild done".
 
-### Step 5 — post-rebuild identity check (AGENT, read-only, needs GO "verify")
+### Step 5 — post-rebuild identity check (AGENT, read-only, needs GO "verify") — **DONE 2026-09-03 08:53 UTC**, see `evidence/phase-2/host-identity.txt`
 
 1. `ssh-keyscan` the IP: every host-key fingerprint must **differ** from the pre-rebuild values in §1
    (proves the reimage). If any is unchanged ⏸.
