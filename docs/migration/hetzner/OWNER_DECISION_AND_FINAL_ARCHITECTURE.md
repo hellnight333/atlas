@@ -38,7 +38,7 @@ every one in the Hetzner console before ordering (U1).
 | Security | root SSH key shared with Naml; `PasswordAuthentication yes`; fail2ban off; `credentials.jsonl` 0644; DB DSN on root argv; Places key IP-pinned + once exposed | Dedicated key; key-only sshd; Hetzner Cloud Firewall + ufw; 0600 state files; no DSN on argv; every old-host credential rotated (§9). |
 | Monitoring | none (no agent, no external check, no alert) | Minimal: unit `OnFailure=` markers surfaced in `/api/health`; one external uptime check owned by the owner (§3.6). No Prometheus/Grafana. |
 | Deploy origin | operator Mac (`deploy_control.sh`), hard-coded `2.28.62.83` in ≥ 12 files | operator Mac, `TARGET`/`ORIGIN_IP` parameterised — a reviewed code change the owner pushes (D-H). |
-| DevLoop | paused; `qevik-devloop-01` bare, reserved | unchanged; devloop-01 stays a read-only vantage point. |
+| DevLoop | paused; `qevik-devloop-01` bare, reserved | paused. **D-R-1 (2026-09-03):** server 164307556 (ex-devloop-01) is rebuilt and becomes `qevik-prod-01`; the DevLoop executor is a *future* separate server (ADR-0011 amended); DevLoop never runs on production. Second vantage → U16. |
 | Rollback | n/a | old host frozen-but-intact for a defined observation period (§7). |
 
 Data to move: ≈ 0.8 GB (PROVED sizes). Transfer is seconds; the cutover
@@ -263,7 +263,8 @@ above is introduced unless a concrete requirement emerges.*
                                    External uptime monitor (owner-owned) → owner alert
 
    qevik-core-01 (old)   frozen-intact, rollback target for 14 days, then snapshot + delete
-   qevik-devloop-01      DevLoop only; read-only vantage during Phases 7–10
+   (server 164307556 = qevik-prod-01 above; ex-devloop-01, rebuilt clean — D-R-1)
+   second vantage       qevik-core-01 read-only curl/nc/dig (AR-4 carve-out) + external checker (U16)
    Operator Mac          ADR-0010 deploy origin (TARGET=root@qevik-prod-01, key qevik_prod)
 ```
 
@@ -305,12 +306,12 @@ raising the timer frequency if the owner wants — dump is 20 MB), **RTO ≈ 2�
 
 | Item | Recommendation | Notes / verify in console |
 |---|---|---|
-| Type / CPU | **CPX31-class** — 4 vCPU AMD EPYC (shared) | INFERRED same class as today. Alternative CPX41 (8 vCPU). Names/prices unverified (U1). |
-| RAM | 8 GB + **2 GB swap file** (`vm.swappiness=10`) | Resize CPU/RAM later without reinstall if needed. |
-| Storage | 160 GB local NVMe (comes with the type); **no Volume** | Today 12 GB used of 150; growth is journald/evidence — capped/bounded. |
+| Type / CPU | Approved baseline (D-B): 4 vCPU AMD. **Actual under D-R-1:** existing server 164307556, **8 vCPU** AMD EPYC-Genoa (CPX42-shape, INFERRED; console confirms) | PROVED on the host 2026-09-03. Larger than D-B by reuse, not by purchase — owner accepted with D-R-1. |
+| RAM | Baseline 8 GB. **Actual: 15.2 GiB** (PROVED) + **2 GB swap file** (`vm.swappiness=10`) still required (no swap on the box). | No resize needed. |
+| Storage | Baseline 160 GB. **Actual: 305 GB** local NVMe (PROVED); **no Volume** | Cannot be rescaled smaller (Hetzner FAQ). Today 12 GB used on the old host. |
 | OS | Ubuntu 26.04 LTS (same as source; PG 18, Python 3.14 from distro) | apt full-upgrade + reboot in Phase 2 before anything is installed. |
-| IPv4 / IPv6 | **Primary IPv4 + IPv6 /64** both assigned | IPv4 needed for SSH from your networks and as the Cloudflare origin; AAAA origin optional. Neither IP is published in DNS. |
-| Location | **nbg1** (Nuremberg) | same as old host and devloop-01; private-network option later. |
+| IPv4 / IPv6 | **`91.107.244.253` + `2a01:4f8:1c1b:1dbe::1/64`** (PROVED) — kept through the rebuild (D-R-1 item 7) | IPv4 is the future Cloudflare origin; AAAA origin optional. Neither IP is published in DNS. |
+| Location | **nbg1-dc3** (PROVED) | same DC as the old host; private-network option later. |
 | Firewall | Hetzner **Cloud Firewall** attached to the server: in 22/tcp any, 80/tcp any, 443/tcp any, ICMP; out any. ufw identical. Phase 10: 80/443 → Cloudflare ranges (or Authenticated Origin Pulls). | Do not restrict 22 by IP (D-D). |
 | SSH access model | root, `PermitRootLogin prohibit-password`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `MaxAuthTries 3`; **one** authorised key `qevik_prod` (Mac); fail2ban sshd jail; Hetzner web console = break-glass | `qevik` user has no login. ADR-0010 keeps deploying as root. |
 | Backup strategy | daily verified dump + state tar → Storage Box; image add-on 7 d; restore test before cutover and monthly after | §3.5. |
@@ -416,7 +417,7 @@ key, not the local-only backups.
 | Phase | Who | Effort (work) | Elapsed (bounded by owner availability) | Gate |
 |---|---|---|---|---|
 | 1 Decisions + console reads | owner | 1–2 h | day 1 | D-A…D-F, D-L |
-| 2 Provision | owner 30 min · agent 1 h | 2 h | day 1–2 | — |
+| 2 Rebuild + configure existing server (D-R-1; no purchase) | owner 30 min console · agent 1 h verify | 2 h | day 1–2 | per-step owner GO (`PHASE_2_OWNER_CONSOLE_ACTIONS.md`) |
 | 3 Security + secrets | owner 1 h (typing env files) · agent 1 h | 2 h | day 2 | owner "files in place" |
 | 4 Runtime prep (incl. R-12 change review + push) | agent ½ day · owner review | 1 day | day 2–4 | D-H, D-E, O10 push |
 | 5 Data prep | agent ½ day · owner answers | ½ day | day 4 | D-G, D-I |
@@ -460,5 +461,14 @@ read-only suitability assessment of the existing `qevik-devloop-01` as the produ
 target. Result: `DEVLOOP01_SUITABILITY_ASSESSMENT.md` — suitable; recommendation
 Option A (reuse, with a free rebuild); one decision requested, **D-R**. The
 "`qevik-devloop-01` DevLoop only / never production" wording in §1, §4 and §10 of
-this document is **superseded pending D-R**; the §6 spec table stays as the
-approved D-B baseline, which the reused host exceeds. No action taken.
+this document is **superseded**; the §6 spec table now shows baseline vs actual.
+
+**2026-09-03 — D-R-1 APPROVED** (owner): reuse server 164307556 after a clean
+console rebuild (Ubuntu 26.04, same id/IPs), then `qevik_prod` as the only
+authorised key — `devloop_01` must not remain (Hetzner re-injects it at rebuild,
+so the swap runs under AR-2 right after first boot); no new server, replacement or compute of any kind;
+DevLoop never on production; old host untouched and rollback-capable throughout.
+Documents updated (ADR-0011, this file, plan, risk register, DQ-011/DQ-014).
+Exact console actions: `PHASE_2_OWNER_CONSOLE_ACTIONS.md`. **Still stopped:**
+no console change, rebuild, DNS, data or production action until the owner's
+explicit GO for the next execution step.

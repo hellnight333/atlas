@@ -1,9 +1,13 @@
 # MASTER_MIGRATION_PLAN — Qevik production → new Hetzner production host
 
 Phase 0 deliverable 7. Governs the migration of Qevik production from
-`qevik-core-01` (2.28.62.83) to a **new** Hetzner production server.
-`qevik-devloop-01` (91.107.244.253) is never a production target under this
-plan.
+`qevik-core-01` (2.28.62.83) to a new Hetzner production host.
+**Revised 2026-09-03 (D-R-1):** the target is the **existing** Hetzner server
+**164307556** (`91.107.244.253`, nbg1-dc3), formerly `qevik-devloop-01`, rebuilt
+clean and renamed **`qevik-prod-01`**; no server is purchased
+(`DEVLOOP01_SUITABILITY_ASSESSMENT.md`). The pre-2026-09-03 sentence "devloop-01
+is never a production target" is withdrawn; what remains binding is that
+**DevLoop never runs on the production server** (ADR-0011 amendment).
 
 Companion documents (same directory): `CURRENT_INFRASTRUCTURE_INVENTORY.md`,
 `CURRENT_PRODUCTION_SERVICE_GRAPH.md`, `DATA_AND_STATE_INVENTORY.md`,
@@ -18,8 +22,8 @@ Companion documents (same directory): `CURRENT_INFRASTRUCTURE_INVENTORY.md`,
 4. The old host is **read-only for the agent** until Phase 9's approved stop step, and is never destroyed before Phase 11.
 5. Every phase ends with a written evidence record under `docs/migration/hetzner/evidence/phase-N/` (no secret values) and an explicit owner go/no-go where marked.
 6. The DevLoop remains paused for the duration; no autonomous tasks are enqueued for migration work.
-7. Nothing on `qevik-devloop-01` is changed except as a read-only vantage point (`curl`, `dig`, `nc`).
-8. Verification is done from **two vantage points** (loopback on the host + devloop-01 or the Mac) before any claim of "reachable" / "unreachable" (feedback_verify_from_second_vantage_point).
+7. Server 164307556 (`qevik-prod-01`, ex-devloop-01) is changed only by the approved Phase 2+ steps; before its rebuild it is not used for anything else.
+8. Verification is done from **two vantage points** before any claim of "reachable" / "unreachable" (feedback_verify_from_second_vantage_point). **U16 (D-R-1):** the second vantage is no longer devloop-01; it is `qevik-core-01` running **read-only** `curl`/`nc`/`dig` (an explicit AR-4 carve-out — reads only, no writes, no installs) plus an external HTTPS checker; the Mac never counts as the sole vantage.
 
 Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an explicit owner message.
 
@@ -50,18 +54,24 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Owner approval:** the decisions **are** the approval; **OWNER GO REQUIRED** to enter Phase 2.
 - **Status 2026-09-03:** COMPLETE — decisions D-A/B/C/D/F approved, D-L for Phase 1 only; evidence `evidence/phase-1/`; report `PHASE_1_COMPLETION_REPORT.md`. Console reads U1/U2 remain owner-pending (no API access exists). D-B re-confirmation (CPX32 vs CX43/CX33) at the Phase 2 gate.
 
-## Phase 2 — Target Provisioning  **(STOP FOR OWNER APPROVAL BEFORE STARTING)**
+## Phase 2 — Target Preparation by Rebuild  **(D-R-1 APPROVED 2026-09-03 — execution needs the owner's explicit per-step GO)**
 
-- **Objective:** a bare Ubuntu 26.04 server exists with the chosen size, SSH key, firewall and backup add-on.
-- **Prerequisites:** Phase 1 decisions; O1, O2 provided by the owner.
-- **Allowed:** **owner** creates the server in the Hetzner console (or runs `hcloud` themselves); agent verifies afterwards over SSH: `os-release`, `nproc`, `free`, `lsblk`, `ufw status`, `sshd -T` subset, `apt list --upgradable | wc -l`; agent may apply `apt upgrade` and reboot **the new host only** if the owner includes that in the go.
-- **Forbidden:** touching `qevik-core-01` or `qevik-devloop-01`; installing Qevik components (Phase 4); any Cloudflare change.
-- **Evidence required:** `evidence/phase-2/host-identity.txt` (hostname, IP, hardware, disk, region), host key fingerprint recorded from the Hetzner console for `known_hosts`, firewall rule listing.
-- **Success criteria:** SSH with the new key works from the Mac; second vantage (devloop-01) confirms 22 open only from allowed sources and 80/443 closed until Caddy exists; reboot-required cleared.
-- **Rollback:** delete the server (owner action; nothing else depends on it yet).
-- **Stop conditions:** wrong region/size/OS → stop, owner recreates; any sign the server was created inside a shared project with unrelated resources the owner did not intend → stop.
-- **Owner approval:** **OWNER GO REQUIRED** (this is the first irreversible-cost action).
-- **Status 2026-09-03:** **HALTED by the owner before any server order.** Read-only assessment of the existing `qevik-devloop-01` as the target: `DEVLOOP01_SUITABILITY_ASSESSMENT.md` (suitable; Option A reuse recommended; decision **D-R** pending). If D-R-1/D-R-2 is chosen, this phase is replaced by the assessment's §10 (rename + optional rebuild + backups + firewall + BX11; **no server creation**) and the "touching `qevik-devloop-01`" line under Forbidden no longer applies to those approved steps. If D-R-3, this phase runs as written.
+*Revised 2026-09-03 under D-R-1: no server is purchased. The existing Hetzner server
+**164307556** (`91.107.244.253`, `2a01:4f8:1c1b:1dbe::1`, nbg1-dc3, 8 vCPU / 16 GB /
+305 GB, currently named `qevik-devloop-01`) is rebuilt in the console and becomes
+**`qevik-prod-01`**. The exact console steps are in `PHASE_2_OWNER_CONSOLE_ACTIONS.md`.*
+
+- **Objective:** server 164307556 is a **freshly rebuilt** Ubuntu 26.04 host named `qevik-prod-01`, with **only** the `qevik_prod` key authorised, image backups enabled, a Cloud Firewall (22/80/443 + ICMP) attached, the same id and IPs, and a Storage Box ordered.
+- **Prerequisites:** D-R-1 (given); `qevik_prod` key pair generated and its **public** key registered in the Hetzner project (O2); owner console session.
+- **Allowed:** **owner** performs every console action (register `qevik_prod` → rename → rebuild [image only; Hetzner re-injects `devloop_01` at first boot — FAQ] → backups on → firewall attach → Storage Box order); agent, on GO, performs the **key swap under AR-2 as the first action on the fresh host** (add `qevik_prod`, prove session B, reduce `authorized_keys` to one line, prove session C, prove `devloop_01` refused) and verifies over SSH **with `qevik_prod` only**: `os-release`, `hostnamectl`, `nproc`, `free`, `lsblk`, `ufw status`, `sshd -T` subset, `apt list --upgradable | wc -l`, `authorized_keys` = one line = `qevik_prod` fingerprint, journal has exactly one boot; agent may `apt full-upgrade`, `hostnamectl set-hostname qevik-prod-01` and reboot **this host only** if the owner includes that in the GO.
+- **Forbidden:** creating, ordering, resizing or deleting any server; touching `qevik-core-01`; any Cloudflare change; installing Qevik components (Phase 4); any use of `devloop_01` after the AR-2 swap (it must not remain authorised — SR-4; it is retired from the project and the Mac in the same phase).
+- **Evidence required:** `evidence/phase-2/host-identity.txt` (server id, name, IPv4/IPv6, product name and price as shown in the console, new host-key fingerprint from the console, hardware, disk, region, firewall rule listing, backup state, Storage Box order id — no credentials); first-SSH `known_hosts` fingerprint match recorded.
+- **Success criteria:** `ssh -i ~/.ssh/qevik_prod -o IdentitiesOnly=yes root@91.107.244.253` works from the Mac and the host-key fingerprint equals the console value; `devloop_01` refused after the swap; `authorized_keys` one line; all three host-key fingerprints differ from the pre-rebuild values recorded in `PHASE_2_OWNER_CONSOLE_ACTIONS.md` §1; journal shows one boot since rebuild; disk ≤ 2 GB used; second vantage (U16) confirms 22 open, 80/443 closed until Caddy; reboot-required cleared.
+- **Rollback:** console rebuild again (free); nothing depends on the host. Deleting the server is **not** a rollback option (D-R-1 item 8).
+- **Stop conditions:** console shows a product/price different from CPX42-class ≈ €69.49 (record and continue only if the owner says so); the rebuild dialog offers no Ubuntu 26.04 image; the server sits in a project with unrelated resources the owner did not intend; the console shows an attached Volume, snapshot or firewall nobody expected — stop and report.
+- **Owner approval:** each console step is the owner's own action; the agent's post-rebuild SSH verification and optional upgrade/reboot need an explicit GO.
+
+---
 
 ## Phase 3 — Security & Access Baseline
 
@@ -71,7 +81,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Allowed (agent):** sshd hardening (`PasswordAuthentication no`), ufw 22/80/443 (+ cloud firewall per T3), fail2ban if decided, create `qevik` user, create `/opt/qevik` and `/var/lib/qevik` skeleton with correct ownership, `umask` guidance. **Allowed (owner):** create `/opt/qevik/{atlas,control,worker,brave,places}.env` with new/rotated values (O3–O7), 0600, correct owner per unit `User=`.
 - **Forbidden:** agent reading, copying, or generating any secret value; copying env files from the old host; changing anything on the old host (including rotating its DB password — that happens **after** cutover, Phase 10/11).
 - **Evidence required:** `sshd -T` effective values; `ufw status numbered`; `stat -c '%U:%G %a %n' /opt/qevik/*.env`; env **names** per file via `cut -d= -f1` compared against secret inventory §1 (K1–K7) — must be a superset of the old host's name set (`ATLAS_DATABASE_URL, QEVIK_ADMIN_PASSWORD, QEVIK_DASHSCOPE_API_KEY, QEVIK_DASHSCOPE_BASE_URL, QEVIK_LEDGER, QEVIK_REPORTS_STORE, QEVIK_SITES_BASE_URL` / `QEVIK_VAULT_MASTER_KEY, QEVIK_CLAIMS_DSN, QEVIK_REQUIRE_ATOMIC_CLAIMS` / `QEVIK_CLAIMS_DSN, QEVIK_REQUIRE_ATOMIC_CLAIMS` / `QEVIK_BRAVE_API_KEY` / `QEVIK_GOOGLE_PLACES_API_KEY`).
-- **Success criteria:** password SSH refused (tested from devloop-01); env-file names match; modes 0600; `QEVIK_LEDGER`, `QEVIK_REPORTS_STORE`, `QEVIK_REQUIRE_ATOMIC_CLAIMS`, `QEVIK_SITES_BASE_URL` present (values entered by the owner to match the old host's semantics — S3/S4 note).
+- **Success criteria:** password SSH refused (tested from the second vantage, U16); env-file names match; modes 0600; `QEVIK_LEDGER`, `QEVIK_REPORTS_STORE`, `QEVIK_REQUIRE_ATOMIC_CLAIMS`, `QEVIK_SITES_BASE_URL` present (values entered by the owner to match the old host's semantics — S3/S4 note).
 - **Rollback:** rebuild the server (Phase 2 rollback).
 - **Stop conditions:** any secret value appears in a shell history, transcript, or file the agent can read → stop, owner rotates it.
 - **Owner approval:** owner's completion of the env files is the gate; agent may not proceed until the owner says the files are in place.
@@ -118,7 +128,7 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Prerequisites:** Phase 6.
 - **Allowed:** on the target: start all units; `curl --resolve app.qevik.ai:443:127.0.0.1` / `qevik.ai` / `sites.qevik.ai` against the target's Caddy; login with the migrated operator account; read missions/approvals/credential records via the console; run a **self-check** mission (agent `self-check` — no external effect); serve one published site from `/srv/sites` and compare bytes with the old host; `/api/health` all components green; `atlas_workers` shows 5 target workers; **owner-supervised** test of one external integration per key (DashScope, Brave, Places — new keys from Phase 3) using the smallest possible call; reboot test repeated with data present; from devloop-01: `curl --resolve <host>:443:<new-ip>` for the four names (bypassing Cloudflare) to prove the origin serves the correct certificate and content.
 - **Forbidden:** any outreach/delivery/publish action with real-world effect; changing Cloudflare; letting the target's workers pick up **real** queued missions that would run twice (the target's DB copy contains the same QUEUED missions as production → **workers on the target must run with an isolated tenant or the mission table quiesced during shadow** — the exact mechanism is a Phase 5 runbook item; if no safe mechanism exists, workers stay stopped during shadow and are validated only by self-check under owner supervision).
-- **Evidence required:** `evidence/phase-7/`: probe outputs from loopback and devloop-01; console screenshot(s) without secrets; `/api/health` JSON; worker registry rows; site byte-diff result; reboot log.
+- **Evidence required:** `evidence/phase-7/`: probe outputs from loopback and the second vantage (U16); console screenshot(s) without secrets; `/api/health` JSON; worker registry rows; site byte-diff result; reboot log.
 - **Success criteria:** every probe in the Phase 9 validation checklist passes on the target **before** cutover; no duplicate mission execution occurred (verified against the old host's ledger by mission id — read-only).
 - **Rollback:** stop target units; fix; repeat.
 - **Stop conditions:** any evidence of the target acting on real missions/customers; any integration key failing (fix keys before proceeding); reboot leaves any unit down.
@@ -152,9 +162,9 @@ references this runbook and a window.
   2. On the old host (**first and only writes to it by the agent, approved**): `systemctl stop qevik-worker qevik-worker-research qevik-worker-delivery qevik-worker-publish qevik-worker-healthcheck qevik-market-scan.timer qevik-backup.timer`, then `qevik-control`, then `qevik-api`. Caddy stays up serving static (or a maintenance page — T-decision) so the site does not vanish. Verify `pg_stat_activity` has no `qevik` backends.
   3. Final delta: `pg_dump -Fc` → target (drop + restore into `qevik`); `rsync` delta of MIGRATE trees with `--delete` **on the target only**; re-run manifests and row counts → must be equal (no explanation allowed this time, source is quiescent).
   4. Start target: `qevik-api`, `qevik-control`, five workers, timers. `/health`, `/api/health`, worker registry (5 fresh heartbeats).
-  5. Origin checks from devloop-01 via `--resolve` for the four names.
+  5. Origin checks from the second vantage (U16) via `--resolve` for the four names.
   6. **Owner** changes the four Cloudflare A/AAAA records to the target IP.
-  7. Public checks: `https://qevik.ai`, `https://app.qevik.ai/health`, `https://app.qevik.ai/api/health` (auth), `https://sites.qevik.ai/<slug>/`, `X-Qevik-Host` headers; from devloop-01 and the Mac; `cf-ray` present; login works; one self-check mission completes on the target.
+  7. Public checks: `https://qevik.ai`, `https://app.qevik.ai/health`, `https://app.qevik.ai/api/health` (auth), `https://sites.qevik.ai/<slug>/`, `X-Qevik-Host` headers; from the second vantage (U16) and the Mac; `cf-ray` present; login works; one self-check mission completes on the target.
   8. Record T2; downtime = T2 − T1.
 - **Forbidden:** deleting or modifying anything on the old host beyond stopping units; starting old-host units again unless rolling back; any step out of order.
 - **Evidence required:** `evidence/phase-9/`: timestamps, stop confirmation, row-count equality table, manifest check, health outputs, Cloudflare change confirmation (owner statement + `dig` — note the proxied IPs do not change; verify by origin headers/behaviour), public probe outputs from two vantages.
@@ -169,7 +179,7 @@ references this runbook and a window.
 - **Prerequisites:** Phase 9 success.
 - **Allowed:** watch target journals, `/api/health`, backup timer's first run (03:30 UTC) and its verify result, market-scan run (06:00) with the new Places key; implement the T9 backup-visibility mechanism and T2 off-host copy (these are implementation items → each needs its own owner approval as a change to the target); rotate old-host-exposed credentials that were **not** already replaced (K1/K2 on the old host may be changed now since it no longer serves — owner action); update docs (`00_PROJECT_STATE.md` host section, ADR note, `cloudflare.py` comment) under review.
 - **Forbidden:** deleting the old host or its data; re-enabling old-host units; DevLoop un-pause (owner's call, separate).
-- **Evidence required:** 7 consecutive days: daily backup VERIFIED on target; no unit restarts (`NRestarts=0`) or each explained; market scan output fresh; public probes green daily from devloop-01; error/warn counts per unit.
+- **Evidence required:** 7 consecutive days: daily backup VERIFIED on target; no unit restarts (`NRestarts=0`) or each explained; market scan output fresh; public probes green daily from the second vantage (U16); error/warn counts per unit.
 - **Success criteria:** 7 clean days (owner may shorten/lengthen); off-host backup copy proven by restoring one dump elsewhere (e.g. on the target into a scratch DB from the off-host copy).
 - **Rollback:** still possible (old host intact) but increasingly lossy; after this phase, rollback is no longer a plan item.
 - **Stop conditions:** any data-loss signal (missing records reported by the owner, 404 on a site that existed) → freeze, compare with the old host read-only.
@@ -180,7 +190,7 @@ references this runbook and a window.
 - **Objective:** retire `qevik-core-01` without losing anything the owner wants kept.
 - **Prerequisites:** Phase 10 success; final full archive of the old host (DB dump + all `/var/lib/qevik`, `/srv`, `/opt/qevik` minus env values, `/etc/caddy`, `/var/lib/caddy`, journal export) stored off-host and restore-tested; owner's written list of what is deliberately discarded (A5, A6, S7, Y4, Y5, `.git` dirty tree — 43 modified + 260 untracked files archived as a tarball first).
 - **Allowed (owner-approved, in order):** stop remaining old-host units (Caddy last); revoke/rotate every credential that lived on the old host (K1/K2 DB password on old host is moot once deleted; K5/K6/K7 old keys revoked in provider consoles; old Places key deleted); remove the old host's public key from GitHub if K13 existed; Hetzner snapshot of the old server (owner decision, retention period); delete the server (owner action in console).
-- **Forbidden:** deleting before the archive is restore-tested; deleting Cloudflare records (none point at the old IP after cutover; nothing to delete); touching devloop-01.
+- **Forbidden:** deleting before the archive is restore-tested; deleting Cloudflare records (none point at the old IP after cutover; nothing to delete).
 - **Evidence required:** archive manifest + restore test result; credential revocation checklist (names only); Hetzner deletion confirmation (owner statement + server list).
 - **Success criteria:** old IP no longer answers (second vantage); no repo file references `2.28.62.83` as a live target (grep = 0 or only historical docs); `known_hosts` cleaned.
 - **Rollback:** none after deletion — hence the snapshot decision above.
@@ -196,15 +206,15 @@ references this runbook and a window.
 | V1 | `GET /health` on 127.0.0.1:8080 and :8081 | 200 `{"status":"ok"}` | target loopback |
 | V2 | `GET /api/health` on :8081 (authenticated) | all components ok: missions durable, vault sealed, research configured, claiming atomic | target loopback |
 | V3 | `SELECT name, version, last_heartbeat FROM atlas_workers` | 5 rows for target hostname, heartbeat < 90 s, expected version | target |
-| V4 | `curl --resolve qevik.ai:443:<ip> https://qevik.ai/` | 200, expected `/srv/qevik-public` content, `X-Content-Type-Options` present | devloop-01 |
-| V5 | `curl --resolve app.qevik.ai:443:<ip> https://app.qevik.ai/api/missions` | 401 (auth required) | devloop-01 |
-| V6 | `curl --resolve sites.qevik.ai:443:<ip> https://sites.qevik.ai/<slug>/` | 200 + `X-Qevik-Host: sites`; bytes equal to old host | devloop-01 |
+| V4 | `curl --resolve qevik.ai:443:<ip> https://qevik.ai/` | 200, expected `/srv/qevik-public` content, `X-Content-Type-Options` present | second vantage (U16) |
+| V5 | `curl --resolve app.qevik.ai:443:<ip> https://app.qevik.ai/api/missions` | 401 (auth required) | second vantage (U16) |
+| V6 | `curl --resolve sites.qevik.ai:443:<ip> https://sites.qevik.ai/<slug>/` | 200 + `X-Qevik-Host: sites`; bytes equal to old host | second vantage (U16) |
 | V7 | Login + list missions in console | works; counts equal to old host at T0/T1 | owner browser (via `--resolve` or hosts file pre-cutover; public post-cutover) |
 | V8 | Row-count table, 75 public tables | equal (Phase 9) / explained (Phase 6) | both hosts |
 | V9 | Manifest `sha256sum -c` for each MIGRATE tree | 0 failures | target |
 | V10 | Self-check mission | completes with report | target |
 | V11 | Reboot target | all units active within 2 min; V1–V3 pass | target |
-| V12 | Post-cutover public probes (no `--resolve`) | as V4–V6 with `cf-ray` header | devloop-01 + Mac |
+| V12 | Post-cutover public probes (no `--resolve`) | as V4–V6 with `cf-ray` header | second vantage (U16) + Mac |
 | V13 | Backup timer first run | dump VERIFIED, retained | target journal |
 | V14 | Market scan first run | `latest.json` updated, no 403 from Places | target journal |
 

@@ -86,6 +86,8 @@ not by Phase 2.
 
 ## 8. Exact first cost-incurring actions Phase 2 would perform
 
+> **Superseded 2026-09-03 by D-R-1.** No server is created. The revised Phase 2 is `MASTER_MIGRATION_PLAN.md` Phase 2 and `PHASE_2_OWNER_CONSOLE_ACTIONS.md`. Kept for the record.
+
 All in the Hetzner console, **by the owner**, in this order. Billing for a server starts at
 creation (hourly, capped monthly); deleting it is the rollback.
 

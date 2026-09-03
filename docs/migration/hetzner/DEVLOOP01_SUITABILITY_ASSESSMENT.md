@@ -11,6 +11,7 @@ changed; no server created or ordered; no data moved; no secret touched; DevLoop
 INFERRED (derived, method stated) · UNKNOWN / OWNER (only the console shows it).
 **Supersedes:** `PHASE_1_COMPLETION_REPORT.md` §7 N-4 ("outside this migration's scope") — withdrawn.
 **Decision requested:** one — **D-R** (§9). The owner decides; this document recommends (DQ-009).
+**Status 2026-09-03: D-R-1 APPROVED by the owner** — reuse server 164307556 after a clean console rebuild, `qevik_prod` only, same id/IPs, no purchase of any kind, DevLoop never on production. Console steps: `PHASE_2_OWNER_CONSOLE_ACTIONS.md`.
 
 ---
 
@@ -145,7 +146,7 @@ What is not yet right (all fixable, all of it Phase 2/3 work a *new* server woul
 | Gap | Required end state | Where in the plan |
 |---|---|---|
 | `PasswordAuthentication yes`, `MaxAuthTries 6`, no fail2ban | SR-3 (`no`, `3`, fail2ban) via the **AR-2 two-session procedure** | Phase 3 |
-| Authorised key is `devloop_01` | SR-4: **only** `qevik_prod` — devloop key removed | Phase 2 (rebuild with `qevik_prod` selected) or Phase 3 (add-then-remove under AR-2) |
+| Authorised key is `devloop_01` | SR-4: **only** `qevik_prod` — devloop key removed | Phase 2, immediately after the rebuild, add-then-remove under AR-2 (the rebuild itself re-injects `devloop_01` — Hetzner FAQ) |
 | No swap | 2 GB swap file, `vm.swappiness=10` (D-B) | Phase 3/4 |
 | ufw inactive; Cloud Firewall unknown | D-D: Cloud Firewall 22/80/443 + ufw mirror, `:8443` closed | Phase 2 (console) + Phase 3 |
 | Backup add-on unknown; no Storage Box | D-C: image backups on + BX11 sub-account | Phase 2 (console) |
@@ -203,7 +204,7 @@ End state identical (SR-1…SR-9, D-D, D-F). A has one extra step: the `devloop_
 **removed**, not merely joined — SR-4 already says "only `qevik_prod`" and the Phase 3 checklist
 verifies a one-line `authorized_keys`. The `devloop_01` private key on the Mac then has no host left
 and should be deleted (owner action, no rotation of anything else involved). The rebuild variant
-lets the owner select `qevik_prod` in the console so the devloop key never touches the production image.
+was expected to let the owner select `qevik_prod` in the console — **corrected 2026-09-03**: Hetzner re-injects the creation key on rebuild, so the swap is done under AR-2 immediately after first boot (`PHASE_2_OWNER_CONSOLE_ACTIONS.md` §0).
 
 ### 7.5 Migration complexity
 
@@ -241,9 +242,12 @@ data, and cheaper than adding a third server. The DevLoop plan is retargeted on 
 
 **D-R (owner):** choose one —
 
-- **D-R-1 (recommended):** Reuse with a **free console rebuild** first (Ubuntu 26.04, SSH key =
-  `qevik_prod` only, same IPs, same id) so the production image is clean by construction and the
-  `devloop_01` key never exists on it. Cost €0; ~2 minutes; loses nothing (§5).
+- **D-R-1 (recommended):** Reuse with a **free console rebuild** first (Ubuntu 26.04, same IPs, same
+  id) so the production image is clean by construction; then the key swap to `qevik_prod` only.
+  Cost €0; ~2 minutes; loses nothing (§5). *Correction 2026-09-03 (Hetzner FAQ, OBSERVED-3P): the
+  console rebuild takes only an image and re-injects the creation-time key (`devloop_01`); a key
+  cannot be selected at rebuild. The swap therefore runs on the fresh host as the first action under
+  AR-2 — see `PHASE_2_OWNER_CONSOLE_ACTIONS.md` §0.*
 - **D-R-2:** Reuse **as-is** (no rebuild); clean state stays INFERRED; the devloop key is swapped
   for `qevik_prod` inside the AR-2 procedure in Phase 3.
 - **D-R-3:** Do not reuse; proceed with Option B (new server per `PHASE_1_COMPLETION_REPORT.md` §8),
@@ -263,7 +267,7 @@ All console steps are the **owner's**. Nothing below happens until the owner's e
 |---|---|---|---|---|
 | 0 | Generate `qevik_prod` ed25519 key pair on the Mac; add the **public** key to the Hetzner project (Security → SSH keys). | none | owner (or agent on explicit go) | fingerprint in `evidence/phase-2/host-identity.txt` |
 | 1 | Console: **rename** server `qevik-devloop-01` → **`qevik-prod-01`** (free, OBSERVED-3P; no reboot; IPs and id unchanged; the OS hostname is set separately in step 6). | none | owner | screenshot / console read |
-| 1a | **D-R-1 only:** console **Rebuild** → Ubuntu 26.04, SSH key **`qevik_prod` only**. Removes everything in §5 (all disposable — Hetzner FAQ: "all saved data will be lost", OBSERVED-3P). Server keeps `164307556`, `91.107.244.253`, IPv6 (rebuild reimages the same server — INFERRED; the console shows the IP before confirming). Record the **new host-key fingerprint** from the console before the first SSH. | none | owner | fingerprint + timestamp |
+| 1a | **D-R-1 only:** console **Rebuild** → Ubuntu 26.04 (image only; Hetzner re-injects `devloop_01` — corrected, see `PHASE_2_OWNER_CONSOLE_ACTIONS.md` §0; swap to `qevik_prod` is then the first action on the fresh host under AR-2). Removes everything in §5 (all disposable — Hetzner FAQ: "all saved data will be lost", OBSERVED-3P). Server keeps `164307556`, `91.107.244.253`, IPv6 (rebuild reimages the same server — INFERRED; the console shows the IP before confirming). Record the **new host-key fingerprint** from the console before the first SSH. | none | owner | fingerprint + timestamp |
 | 2 | Console: **Backups: enable** (+20 % ≈ €13.90/mo on CPX42) — or confirm already enabled. Confirm/record: product name, price, project, labels, existing snapshots. | +20 % of server price | owner | console read → `host-identity.txt` |
 | 3 | Console: create Cloud Firewall `qevik-prod-fw` (in 22/80/443 tcp any + ICMP; out any) and **attach** to the server. | none | owner | rule listing |
 | 4 | Agent verifies read-only over SSH (`qevik_prod` after 1a, `devloop_01` under D-R-2): `os-release`, `nproc`, `free`, `lsblk`, `ufw status`, `sshd -T` subset, `apt list --upgradable`; hostname; authorized_keys = 1 line. Second vantage per U16 (§8): 22 open; 80/443 closed until Caddy. | none | agent | `evidence/phase-2/` |
@@ -281,7 +285,7 @@ Recurring cost after Phase 2 (excl. VAT, OBSERVED-3P): old host ≈ €35.99 + r
 backups ≈ €13.90 + BX11 €3.20 ≈ **€123.08 / mo** for the ≈ 3–4 weeks of migration + observation,
 then ≈ **€87.09 / mo** after Phase 11 (old host deleted, snapshot ≈ €0.20/mo for 30 days).
 
-## 11. Documents that change on approval (not yet changed — pending D-R)
+## 11. Documents changed on approval (done 2026-09-03 after D-R-1)
 
 | Document | Change |
 |---|---|
@@ -292,12 +296,10 @@ then ≈ **€87.09 / mo** after Phase 11 (old host deleted, snapshot ≈ €0.2
 | `docs/decisions/ADR-0011-DevLoop-Executor-Host.md` | Implementation-record entry: server bought 2026-09-02 as CPX42 (not CX43/CX53) ahead of the gates; retargeted to production per D-R; executor host = future server |
 | `.qevik/DECISION_QUEUE.md` | DQ-014 status; DQ-011 note |
 
-Already changed in this commit: this document; sanitised evidence file; one-line status pointers in
-`OWNER_DECISION_AND_FINAL_ARCHITECTURE.md` §12, `MASTER_MIGRATION_PLAN.md` Phase 2,
-`PHASE_1_COMPLETION_REPORT.md` N-4, and the DQ-014 row — all marked "pending D-R".
+All rows above applied in the D-R-1 documentation commit (ADR-0011 implementation record + status amendment; plan Phase 2 rewritten; R-22 re-scoped and R-26 added; DQ-011/DQ-014 updated). `PHASE_2_OWNER_CONSOLE_ACTIONS.md` added.
 
 ## 12. Stop
 
-Assessment complete. Waiting for **D-R** (and, with it, the owner's console confirmations of §1
-product/price and §5 console-side objects). Until then: no Hetzner action, no rename, no rebuild, no
-key change, no DNS, no data movement, no secret rotation, no DevLoop execution, no push.
+D-R-1 received. Documentation updated. **Still stopped**: no Hetzner action, no rename, no rebuild,
+no key change, no DNS, no data movement, no secret rotation, no DevLoop execution, no push — until the
+owner's explicit GO for the first execution step in `PHASE_2_OWNER_CONSOLE_ACTIONS.md`.
