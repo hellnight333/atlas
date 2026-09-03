@@ -83,11 +83,13 @@ Legend for approval: **OWNER GO REQUIRED** = the phase may not start without an 
 - **Success criteria:** `--rehearse` resolves the new host with the `qevik_prod` key and `naml_hetzner` appears nowhere in its argv; defaults still point at the old host; the full test suite is green.
 - **Rollback:** revert the commits; defaults are unchanged, so the old host stays addressable exactly as today.
 - **Owner approval:** approval of `MIGRATION_ENABLEMENT_SPEC.md` and the D-S1…D-S7 answers, then review + push of each commit.
-- **Status 2026-09-03:** **IMPLEMENTED, awaiting review.** Six reviewed commits (`ac150d1`, `0934ac7`, `2f4659c`, `01db2bf`, `5fa9cc7`, `4a3aa9f`) with 60+ new tests; `MIGRATION_ENABLEMENT_SPEC.md` §13a records what landed and where it differs from the specification. No host was touched, no secret handled, no deploy run. Phase 3 starts only after this is reviewed (D-S7 = all six workstreams first).
+- **Status 2026-09-04: ACCEPTED AND CLOSED.** `3103ced656f6e18acf496591c9abe5e525dbd55b` is the approved repository baseline; the implementation is not modified further unless a later phase reveals a concrete defect.
+- **Status 2026-09-03:** IMPLEMENTED, awaiting review. Six reviewed commits (`ac150d1`, `0934ac7`, `2f4659c`, `01db2bf`, `5fa9cc7`, `4a3aa9f`) with 60+ new tests; `MIGRATION_ENABLEMENT_SPEC.md` §13a records what landed and where it differs from the specification. No host was touched, no secret handled, no deploy run. Phase 3 starts only after this is reviewed (D-S7 = all six workstreams first).
 
 ## Phase 3 — Security & Access Baseline
 
 - **Objective:** the target's access posture is the hardened one, and the owner has placed the secrets on the target.
+- **Execution plan:** `PHASE_3_PRE_EXECUTION_PLAN.md` (2026-09-04) — command-level boundary, AR-2 procedure with dead-man recovery, firewall rules, fail2ban policy, swap, the account and ownership model, validation and rollback per group, and the STOP gates. Written against the approved repository baseline `3103ced` and superseding every earlier Phase 3 sketch.
 - **Sequencing change (owner, 2026-09-03):** Phase 3 is now gated on the **ENABLEMENT stage** below — production credentials are created only after the deployment path is proven capable of safely targeting `qevik-prod-01` (`MIGRATION_ENABLEMENT_SPEC.md`). In particular the DB password may not be chosen until B-4 has landed, so its entropy is never traded for shell-safety. The Phase 3 execution plan is written after that work is reviewed and pushed.
 - **Prerequisites:** Phase 2.
 - **SSH hardening procedure (owner requirement AR-2, mandatory):** two independent sessions — keep session A open; install the `qevik_prod` key; prove a fresh session B with that key (`IdentitiesOnly=yes`); apply sshd changes, `sshd -t`, reload; prove from devloop-01 that password auth is refused; prove reconnect with session C; only then close A. Never a disconnect-and-reconnect gamble.

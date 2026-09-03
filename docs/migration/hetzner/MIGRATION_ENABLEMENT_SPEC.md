@@ -666,6 +666,11 @@ black-formatted); reformatting the tree is not part of this stage.
 3. Only then: the **Phase 3 Pre-Execution Plan** (host baseline — swap, sshd hardening under AR-2, ufw, fail2ban, `qevik` user, directory skeleton — then the owner types the env files, with the DB password now genuinely unconstrained thanks to WS-4).
 4. Then Phase 4, per `PHASE_4_PRE_EXECUTION_REVIEW.md` §12 with the amendments above.
 
+**Status 2026-09-04: ACCEPTED AND CLOSED** by the owner.
+`3103ced656f6e18acf496591c9abe5e525dbd55b` is the approved repository baseline;
+this implementation is not modified further unless a later phase reveals a
+concrete defect. Next: `PHASE_3_PRE_EXECUTION_PLAN.md`.
+
 **Status 2026-09-03:** §13a records the implementation. The stage is code-complete
 and green on the repository-level matrix; nothing has run against a host. Phase 3
 begins only after this stage is reviewed.
