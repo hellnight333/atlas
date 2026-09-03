@@ -124,7 +124,7 @@ not here — Phase 2 changes nothing on the host except the key line. Hetzner's 
 root password login (`prohibit-password`) and no other user exists, so the host is key-only in
 practice from first boot.
 
-### Step 7 — retire `devloop_01` (OWNER)
+### Step 7 — retire `devloop_01` (OWNER) — **Mac part DONE 2026-09-03**; console deletion = owner (unconfirmed)
 
 Console → **Security** → **SSH keys** → delete `devloop_01`. On the Mac: delete `~/.ssh/devloop_01`
 and `devloop_01.pub` (I can do the Mac part on GO). ADR-0011 note: the future DevLoop host gets its

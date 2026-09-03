@@ -23,3 +23,7 @@ sshd still has PasswordAuthentication yes / MaxAuthTries 6 (Hetzner defaults) �
 
 ## Next
 Step 7 (owner): delete devloop_01 from the Hetzner project; on GO, delete ~/.ssh/devloop_01(.pub) on the Mac.
+
+## Step 7 (Mac part) — devloop_01 deleted from the Mac
+2026-09-03 (GO "delete devloop_01 on Mac"): ~/.ssh/devloop_01 and devloop_01.pub (SHA256:0ony14dB7vfo4y0xVmaDwHIonDE2khTODM2YiE76ues) removed. Not in ssh-agent, not referenced in ~/.ssh/config. qevik_prod untouched (600, fingerprint unchanged).
+Console part (delete devloop_01 from the Hetzner project) = owner; not verifiable by the agent — OWNER-REPORTED when confirmed.
