@@ -501,6 +501,58 @@ origin. Making it a per-mission property with an allow-list is the next step.
 See `docs/WORKSPACE_ISOLATION.md`. Open security findings are recorded in
 `docs/SECURITY_FINDINGS.md`.
 
+## The console an operator can actually work from (2026-09-04)
+
+Everything in this section was built, tested and deployed before today and none
+of it reached the operator. That is the theme, and it is worth stating plainly
+rather than as a list of fixes.
+
+**The floor.** `/office` answered 200 with the *console shell* — `apps/office/`
+was in no shipped prefix of `deploy_control.sh`, so the floor had never been on
+a host. Three URLs all returned 200 and I read that as proof. It now lives
+inside the console bundle, where the one existing rsync carries it, and the
+tests read the real bundle and assert on `<title>` rather than spelling a path
+they invented.
+
+**The operator had no tenant.** Five modules each carried their own copy of "no
+tenant, therefore 403", so an administrator — the only account there is — got
+that 403 from chat, models, credentials, missions and the live status feed. The
+console held 59 companies and showed empty screens. One decision now, in
+`tenancy`: `of_user` for writes (D037), `console_scope` for house-wide reads
+(D036).
+
+**The ledger wrote one factory and read another** (D038). Under Postgres,
+credentials, chat, customer tasks and quota were all written correctly and were
+unreadable. Two credentials sat in `atlas_business_events` while the credential
+centre showed none and the model-backed worker refused to start for want of
+one. Only a host with a database could show this; the file backend has no
+filter, so every test passed.
+
+**The vault gated registration and the shell supplied the key** (D039). A
+credential could be stored, enabled and verified and fail every call.
+
+**Nothing could carry out an approved plan.** The chat surface, planner,
+approval gate, mission queue and report writer all existed, and no process ran
+`--agent llm`. `policy.refuse_agent_substitution` was refusing exactly as
+designed; there was simply nobody to accept. `qevik-worker-llm.service` is that
+process.
+
+**Models.** Qwen is the working path, by the operator's choice and by price.
+Every registered model was called against the configured Model Studio workspace
+first (D041); `qwen-plus` turned out to be declared vision-capable and is not.
+Anthropic's key authenticates and the account balance is empty, which is now its
+own error type rather than a 400 that reads as a malformed request (D040).
+
+**The off-host backup had been failing since a reboot**, one second in, with no
+output at all: an env file of only comments made `grep` match nothing, and
+`pipefail` ended the script before its first log line. The failure path wrote to
+stderr, which the unit never routed to the journal — so the successful runs were
+the verbose ones. `health()` can now say *broken* as distinct from *absent*
+(D042) and the dashboard draws it above the fold.
+
+Proven end to end: a plan produced by `qwen-turbo` from a key held only in the
+vault, with no model credential anywhere in the environment.
+
 ## Deferred
 - Broad package/schema/database rename.
 - High-volume autonomous prospecting.
