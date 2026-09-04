@@ -49,7 +49,13 @@ from atlas_kernel.credentials.models import (  # noqa: E402
     chosen_for,
     registry_for,
 )
-from atlas_kernel.credentials.service import CredentialService, usable_for  # noqa: E402
+from atlas_kernel.credentials.service import (  # noqa: E402
+    FACTORY as CREDENTIAL_FACTORY,
+)
+from atlas_kernel.credentials.service import (  # noqa: E402
+    CredentialService,
+    usable_for,
+)
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
 from atlas_kernel.fabric import recipes, scheduler  # noqa: E402
 from atlas_kernel.fabric.agents import Registry as AgentRegistry  # noqa: E402
@@ -156,7 +162,7 @@ def roles_for(kind: str, *, tenant: str,
     # and the timeline holds the record, and a process with only one of them
     # finds nothing.
     where = credentials_at or paths_for()
-    records = Timeline(where.records)
+    records = Timeline(where.records, factory=CREDENTIAL_FACTORY)
     credentials = CredentialService(Vault(FileSecretStore(where.vault)),
                                     events=records.read(), sink=records.append)
     log.info("credentials: %s", where.summary())
@@ -1009,7 +1015,7 @@ def credential_service(credentials_at: CredentialPaths) -> object:
     view: two `CredentialService` objects over the same files would answer the
     same question at different moments and disagree about what is configured.
     """
-    records = Timeline(credentials_at.records)
+    records = Timeline(credentials_at.records, factory=CREDENTIAL_FACTORY)
     return CredentialService(Vault(FileSecretStore(credentials_at.vault)),
                              events=records.read(), sink=records.append)
 

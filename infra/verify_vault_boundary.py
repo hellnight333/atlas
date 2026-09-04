@@ -22,6 +22,7 @@ from atlas_kernel.auth.store import AuthStore, init_auth  # noqa: E402
 from atlas_kernel.credentials.location import describe, paths_for  # noqa: E402
 from atlas_kernel.credentials.service import CredentialService  # noqa: E402
 from atlas_kernel.credentials.vault import FileSecretStore, Vault  # noqa: E402
+from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
 from atlas_kernel.mission.timeline import Timeline  # noqa: E402
 
 BASE = 'http://127.0.0.1:8081'
@@ -118,7 +119,7 @@ try:
 
     print()
     print("4. The worker's own view, resolved its way")
-    records = Timeline(where.records)
+    records = Timeline(where.records, factory=CREDENTIAL_FACTORY)
     worker_view = CredentialService(Vault(FileSecretStore(where.vault)),
                                     events=records.read(), sink=records.append)
     rec = worker_view.record(provider='qwen', tenant=TENANT)

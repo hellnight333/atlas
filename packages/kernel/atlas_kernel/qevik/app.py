@@ -188,7 +188,11 @@ class Wiring:
         vault = Vault(FileSecretStore(self.vault_path))
         if self.credential_timeline is None:
             return CredentialService(vault)
-        timeline = Timeline(self.credential_timeline)
+        # Named, because under the Postgres backend a timeline reads back only
+        # the factory it is told to own, and the default is the mission one.
+        from ..credentials.service import FACTORY as CREDENTIAL_FACTORY
+
+        timeline = Timeline(self.credential_timeline, factory=CREDENTIAL_FACTORY)
         return CredentialService(vault, events=timeline.read(),
                                  sink=timeline.append)
 
@@ -239,7 +243,14 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
 
     # `is not None`, never truthiness: `Timeline` defines `__len__`, so a brand
     # new one is falsy and `or` would silently swap durable storage for a list.
-    chat = (Timeline(wiring.chat_timeline)
+    # Its own factory, for the same reason the credential timeline needs one:
+    # chat events carry `factory="chat"` and a timeline that reads back the
+    # mission factory returns none of them. On a Postgres host every
+    # conversation was written and none could be read — the surface the operator
+    # was asked to work from, empty after every restart.
+    from ..chat.models import FACTORY as CHAT_FACTORY
+
+    chat = (Timeline(wiring.chat_timeline, factory=CHAT_FACTORY)
             if wiring.chat_timeline is not None else None)
     app.state.chat_events = chat if chat is not None else wiring.chat_events
     app.state.chat_sink = (chat.append if chat is not None

@@ -153,6 +153,7 @@ def test_what_the_centre_writes_is_what_the_worker_reads(tmp_path,
                                                          monkeypatch) -> None:
     """Both halves, resolved the same way by both sides, with no fallback in
     between."""
+    from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
     from atlas_kernel.credentials.service import CredentialService, Status
     from atlas_kernel.credentials.vault import FileSecretStore, Vault
     from atlas_kernel.mission.timeline import Timeline
@@ -162,7 +163,7 @@ def test_what_the_centre_writes_is_what_the_worker_reads(tmp_path,
     where = paths_for()
 
     def service() -> CredentialService:
-        records = Timeline(where.records)
+        records = Timeline(where.records, factory=CREDENTIAL_FACTORY)
         return CredentialService(Vault(FileSecretStore(where.vault)),
                                  events=records.read(), sink=records.append)
 
@@ -180,6 +181,7 @@ def test_what_the_centre_writes_is_what_the_worker_reads(tmp_path,
 
 
 def test_no_secret_reaches_the_records_file(tmp_path, monkeypatch) -> None:
+    from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
     from atlas_kernel.credentials.service import CredentialService
     from atlas_kernel.credentials.vault import FileSecretStore, Vault
     from atlas_kernel.mission.timeline import Timeline
@@ -187,7 +189,7 @@ def test_no_secret_reaches_the_records_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
     monkeypatch.setenv("QEVIK_STATE", str(tmp_path))
     where = paths_for()
-    records = Timeline(where.records)
+    records = Timeline(where.records, factory=CREDENTIAL_FACTORY)
     secret = "sk-a-very-distinctive-value-not-real"
     CredentialService(Vault(FileSecretStore(where.vault)),
                       events=records.read(), sink=records.append).store(
@@ -196,3 +198,55 @@ def test_no_secret_reaches_the_records_file(tmp_path, monkeypatch) -> None:
     assert secret not in where.records.read_text(encoding="utf-8")
     assert secret not in where.vault.read_text(encoding="utf-8"), (
         "the vault stores ciphertext, not the value")
+
+
+# --- the split that only a database could show ---------------------------------
+
+def test_a_timeline_refuses_another_factorys_event() -> None:
+    """The read/write asymmetry, made impossible rather than merely corrected.
+
+    `_rows` filtered by factory; `_append_row` wrote whatever the event carried.
+    So a timeline handed another factory's events stored every one of them
+    perfectly and read back none — and only ever on a host with a database.
+    Under the file backend there is one file per timeline and no filter, so
+    every test and every laptop passed while the production host lost the lot.
+
+    Two credentials really did go into `atlas_business_events` under
+    `factory='credentials'` where nothing could see them again: the console
+    showed no stored key, and the model-backed worker refused to start for want
+    of a credential that was sitting in the database.
+
+    Refusing is right even though the write itself would succeed. A store that
+    accepts what it cannot return is data loss wearing a success.
+    """
+    from atlas_kernel.mission.timeline import Timeline
+
+    mission_timeline = Timeline("/tmp/does-not-matter.jsonl")
+    with pytest.raises(ValueError, match="owns 'mission'"):
+        mission_timeline.append({"factory": "credentials", "kind": "stored"})
+
+
+def test_a_timeline_told_its_factory_accepts_it(tmp_path) -> None:
+    from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
+    from atlas_kernel.mission.timeline import Timeline
+
+    records = Timeline(tmp_path / "credentials.jsonl", factory=CREDENTIAL_FACTORY)
+    records.append({"factory": CREDENTIAL_FACTORY, "kind": "credential_stored"})
+    assert len(records.read()) == 1
+
+
+def test_every_credential_timeline_in_the_tree_names_its_factory() -> None:
+    """Three production call sites had to be fixed by hand. This is what stops
+    the fourth from being written."""
+    root = Path(__file__).resolve().parents[3]
+    offenders = []
+    for path in list((root / "packages" / "kernel" / "atlas_kernel").rglob("*.py")) + \
+            list((root / "infra").rglob("*.py")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "Timeline(" not in line:
+                continue
+            if ".records" in line and "factory=" not in line:
+                offenders.append(f"{path.relative_to(root)}:{number}")
+    assert offenders == [], (
+        "a credential timeline built without naming its factory writes rows "
+        f"nothing reads back: {offenders}")

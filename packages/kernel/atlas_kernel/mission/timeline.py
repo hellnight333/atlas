@@ -82,8 +82,28 @@ class Timeline:
     order it returns them — equivalent to reading the file.
     """
 
-    def __init__(self, path: Path | str, *, backend: str | None = None) -> None:
+    def __init__(self, path: Path | str, *, backend: str | None = None,
+                 factory: str | None = None) -> None:
         self.path = Path(path)
+        #: Which factory's rows this timeline owns, under the Postgres backend.
+        #:
+        #: It had no such field, and `_rows` filtered on the *mission* factory
+        #: while `_append_row` wrote whatever factory the event carried. So a
+        #: timeline used for anything else wrote rows correctly and read back
+        #: nothing at all. The credential timeline is exactly that: two
+        #: credentials went into `atlas_business_events` under
+        #: `factory='credentials'` and no process could ever see them again —
+        #: the console showed no stored key, and the model-backed worker
+        #: refused to start for want of a credential that was sitting in the
+        #: database.
+        #:
+        #: Asymmetry is the whole bug. A store that writes one key and reads
+        #: another is not a store, and under the file backend — where there is
+        #: one file per timeline and no filter — it worked perfectly, so the
+        #: failure appeared only on a host with a database.
+        from .service import FACTORY as MISSION_FACTORY
+
+        self.factory = factory or MISSION_FACTORY
         #: Lines that would not parse. Counted rather than raised, and exposed so
         #: a health check can notice a timeline quietly rotting.
         self.corrupt = 0
@@ -100,8 +120,25 @@ class Timeline:
         return self.backend == POSTGRES
 
     def append(self, event: Any) -> None:
-        """One event, one write. Never both stores."""
+        """One event, one write. Never both stores, and never another factory's.
+
+        The factory check is what makes the read/write asymmetry impossible
+        rather than merely fixed. `_rows` filters by factory; `_append_row`
+        wrote whatever the event carried. A timeline handed another factory's
+        events therefore stored them perfectly and read back nothing, on a
+        Postgres host only — under the file backend there is one file per
+        timeline and no filter, so every test and every laptop passed.
+
+        Refusing is right here even though the write would "work". A store that
+        accepts what it cannot return is a data-loss bug wearing a success.
+        """
         record = _record(event)
+        carried = record.get("factory", "")
+        if carried and carried != self.factory:
+            raise ValueError(
+                f"this timeline owns {self.factory!r} and the event is "
+                f"{carried!r}. Under the Postgres backend it would be written "
+                f"and never read back. Construct it with factory={carried!r}.")
         if self.backend == POSTGRES:
             return self._append_row(record)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -178,7 +215,6 @@ class Timeline:
         from sqlalchemy import text
 
         from ..db import SessionLocal
-        from .service import FACTORY
 
         try:
             with SessionLocal() as session:
@@ -188,7 +224,7 @@ class Timeline:
                     FROM atlas_business_events
                     WHERE factory = :factory
                     ORDER BY at, id
-                    """), {"factory": FACTORY}).mappings().all()
+                    """), {"factory": self.factory}).mappings().all()
         except Exception as unreachable:           # noqa: BLE001 - re-raised
             raise LedgerUnavailable(
                 f"could not read the ledger: {unreachable}"[:300]

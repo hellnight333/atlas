@@ -29,6 +29,7 @@ from atlas_kernel.auth.store import AuthStore
 from atlas_kernel.chat import api as chat_api
 from atlas_kernel.chat import planner, service
 from atlas_kernel.chat.models import ConversationStatus, Role
+from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
 from atlas_kernel.credentials.service import CredentialService
 from atlas_kernel.credentials.vault import Vault
 from atlas_kernel.mission import service as mission_service
@@ -460,7 +461,7 @@ def test_a_provider_refusing_a_key_is_not_reported_as_a_missing_key(
 
     monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
     where = paths_for(tmp_path)
-    records = Timeline(where.records)
+    records = Timeline(where.records, factory=CREDENTIAL_FACTORY)
     credentials = CredentialService(Vault(FileSecretStore(where.vault)),
                                     events=records.read(), sink=records.append)
     conversation, _ = service.start(tenant="t1", text="Add a dark mode toggle.",
