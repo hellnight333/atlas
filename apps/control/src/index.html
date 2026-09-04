@@ -1311,7 +1311,11 @@ views.schedule = async () => {
  */
 views.more = async () => {
   const [me, health] = await Promise.all([
-    API.get('/api/me').catch(() => null),
+    /* `/auth/me`, not `/api/me`. There is no `/api/me`: the auth router is
+       mounted at `/auth` and the customer one at `/api/customer`. This
+       404'd on every load and the `.catch(() => null)` turned it into an
+       empty panel — the page rendered, so nothing looked wrong. */
+    API.get('/auth/me').catch(() => null),
     API.get('/api/health').catch(() => null),
   ]);
   const hidden = PAGES.filter(([id]) => !THUMB[id] && id !== 'more');

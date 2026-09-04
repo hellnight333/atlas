@@ -276,3 +276,28 @@ def test_saving_a_business_writes_its_tenant() -> None:
         "a saved business does not record which tenant knows about it")
     assert "tenant_id = EXCLUDED.tenant_id" not in insert, (
         "seeing a company again must not move it between tenants")
+
+
+def test_there_is_exactly_one_place_that_decides_a_callers_tenant() -> None:
+    """Six copies, and the sixth survived consolidating the other five.
+
+    They were found by their shared refusal message. The customer surface's copy
+    was worded differently — better, in fact — so a search keyed on the wording
+    missed it, and it went on refusing the operator on a page whose three-state
+    handling was written for exactly that account.
+
+    Derived, so a seventh cannot be added quietly.
+    """
+    from pathlib import Path
+
+    kernel = Path(__file__).resolve().parents[1] / "atlas_kernel"
+    deciders = []
+    for path in kernel.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for block in text.split("def current_tenant(")[1:]:
+            body = block.split("\ndef ", 1)[0]
+            if "of_user(" not in body:
+                deciders.append(str(path.relative_to(kernel)))
+    assert deciders == [], (
+        "these decide a caller's tenant themselves instead of calling "
+        f"tenancy.of_user: {deciders}")

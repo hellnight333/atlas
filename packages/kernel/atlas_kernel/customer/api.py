@@ -52,20 +52,25 @@ NOT_FOUND = "no such resource"
 
 
 def current_tenant(user: User = Depends(current_user)) -> TenantId:
-    """The tenant this request acts for, or a refusal.
+    """The tenant this request acts for. Decided in `tenancy.of_user`, once.
 
-    Raises rather than returning a default. An implicit fallback here would make
-    every downstream `owns()` check pass for whichever tenant the fallback named,
-    and every one of them would look correct in review.
+    This was the sixth copy of that decision, and it survived a consolidation
+    of the other five because its refusal is worded differently — which is the
+    argument for one function in its most literal form.
+
+    Its wording was also the most defensible of the six: the customer surface is
+    for customers, and an operator is not one. But refusing here left the
+    console's Settings page unable to read the plan route at all, and that page
+    already distinguishes three answers — on a plan, no plan, unreadable. With
+    the operator acting for the house tenant it gets 409 (no plan), which is
+    true and is the state the page was written for.
     """
-    tenant = (user.tenant_id or "").strip()
-    if not tenant:
-        raise HTTPException(
-            status_code=403,
-            detail="this account is not attached to a customer. Operator "
-                   "accounts use the internal surfaces, which name a tenant "
-                   "explicitly.")
-    return tenant
+    from ..opportunity.tenancy import TenantRequired, of_user
+
+    try:
+        return of_user(user, method="the customer surface")
+    except TenantRequired as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 def _events(request: Request) -> list:

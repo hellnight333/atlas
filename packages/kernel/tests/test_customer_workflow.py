@@ -250,12 +250,28 @@ def test_a_missing_business_is_indistinguishable_from_another_tenants(
 
 
 def test_an_account_with_no_tenant_reaches_nothing(client) -> None:
-    """Empty means not established. An operator account runs Qevik; it does not
-    read one customer's file."""
-    client.acting_as(_as(""))
+    """Empty means not established, and `_as("")` grants every scope.
+
+    Including ADMIN, which is why this asserted a 403 for the one account that
+    must not get one. An administrator with no customer tenant acts for the
+    house — a real tenant that happens to be us — and the customer surface then
+    answers about the house rather than refusing to answer at all. It still
+    reads nobody else's file: the house is a tenant like any other, so a request
+    for `alpha-co` is another tenant's record and is absent.
+
+    Without ADMIN, a tenantless account is refused outright, which is the
+    isolation this test was written for.
+    """
+    client.acting_as(_as("", scopes=frozenset({Scope.READ})))
     assert client.get("/api/customer/me").status_code == 403
     for path in READS:
         assert client.get(path.format(b="alpha-co")).status_code == 403
+
+    # The operator. Scoped, not refused — and still not able to read a business
+    # belonging to somebody else.
+    client.acting_as(_as(""))
+    for path in READS:
+        assert client.get(path.format(b="alpha-co")).status_code == 404, path
 
 
 def test_no_route_lets_the_caller_name_a_tenant() -> None:
