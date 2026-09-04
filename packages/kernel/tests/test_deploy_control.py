@@ -1748,3 +1748,30 @@ def test_a_rollback_puts_back_a_timer_it_replaced(world: World):
     assert "ROLLED BACK" in out
     assert (world.units / "qevik-shipped.timer").read_text(encoding="utf-8") == \
         "[Timer]\nOnCalendar=daily\n"
+
+
+def test_units_are_installed_before_anything_is_restarted(world: World):
+    """A restart cannot start a unit that is not on the host yet.
+
+    On a host with a previous deploy the old order happened to work, because the
+    units were already there from last time. The first deploy to an empty
+    qevik-prod-01 failed with `Unit qevik-control.service not found` and rolled
+    back — ADR-0010 had parked this as a behaviour change to make later, and a
+    first deploy proved it was a correctness bug.
+
+    Asserted on the log rather than on the script text, so it is the order the
+    deploy *ran*, not the order the file reads in.
+    """
+    proc = run(world, env=env_for(world, sha=world.sha))
+    assert proc.returncode == 0, both(proc)
+
+    log = world.log()
+    installed = next(i for i, line in enumerate(log)
+                     if line.startswith("rsync ") and "qevik-worker.service" in line)
+    reloaded = next(i for i, line in enumerate(log)
+                    if line.startswith("systemctl ") and "daemon-reload" in line)
+    restarted = next(i for i, line in enumerate(log)
+                     if line.startswith("systemctl ") and " restart" in line)
+    assert installed < reloaded < restarted, (
+        "units must be on the host, and systemd told about them, before the "
+        "deploy restarts anything")

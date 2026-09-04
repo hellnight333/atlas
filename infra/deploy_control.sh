@@ -811,6 +811,36 @@ ssh_ "systemd-run --wait --collect --pipe --quiet \
   rollback_and_report
 }
 
+# Services *and* timers. A `.timer` matched nothing here until now, so the
+# schedule on a host was whatever had been installed by hand, and no deploy could
+# correct it. Shipping a timer file does not start anything — a timer is inert
+# until `systemctl enable`, which no deploy does — so the repository becomes the
+# source of truth for the schedule without a deploy ever activating one. The
+# snapshot and the rollback cover the same glob, or a rollback would delete a
+# timer it never saved.
+# Units this repository ships, installed **before anything is restarted** — and
+# that ordering is load-bearing twice over.
+#
+# A unit named in $WORKERS but absent from $UNIT_DIR makes `systemctl restart`
+# return non-zero for the whole list, and `ssh_` then retried it, which stopped
+# and started the four healthy workers twelve times and tripped StartLimitBurst
+# on all of them. Four dead workers from one missing file.
+#
+# And on a host that has never been deployed to, the units do not exist at all,
+# so restarting before installing cannot work: the first deploy to qevik-prod-01
+# failed with "Unit qevik-control.service not found" and rolled back. ADR-0010
+# parked this as a behaviour change to do later; a first deploy proves it is a
+# correctness bug. Installing first also means a changed api or control unit
+# takes effect in the deploy that shipped it rather than at some later restart.
+echo "==> installing the unit files"
+for unit in "$EXPORT"/infra/qevik-*.service "$EXPORT"/infra/qevik-*.timer; do
+  [ -f "$unit" ] || continue
+  rsync_ "$unit" "$TARGET:$UNIT_DIR/" >/dev/null || {
+    echo "FAILED: $(basename "$unit") could not be installed"; rollback_and_report; }
+done
+ssh_ "systemctl daemon-reload" || {
+  echo "FAILED: systemctl daemon-reload"; rollback_and_report; }
+
 echo "==> restarting $SERVICE"
 ssh_ "chown -R qevik:qevik $REMOTE_APP/packages/kernel/atlas_kernel $CONSOLE_DIR 2>/dev/null; systemctl restart $SERVICE qevik-api.service" || {
   echo "FAILED: $SERVICE could not be restarted"; rollback_and_report; }
@@ -837,27 +867,6 @@ for attempt in $(seq 1 60); do
   fi
   sleep 2
 done
-
-# Units this repository ships, installed before anything is restarted. A unit
-# named in $WORKERS but absent from $UNIT_DIR makes `systemctl restart` return
-# non-zero for the whole list -- and `ssh_` then retried it, which stopped and
-# started the four healthy workers twelve times and tripped StartLimitBurst on
-# all of them. Four dead workers from one missing file.
-# Services *and* timers. A `.timer` matched nothing here until now, so the
-# schedule on a host was whatever had been installed by hand, and no deploy could
-# correct it. Shipping a timer file does not start anything — a timer is inert
-# until `systemctl enable`, which no deploy does — so the repository becomes the
-# source of truth for the schedule without a deploy ever activating one. The
-# snapshot and the rollback cover the same glob, or a rollback would delete a
-# timer it never saved.
-echo "==> installing the unit files"
-for unit in "$EXPORT"/infra/qevik-*.service "$EXPORT"/infra/qevik-*.timer; do
-  [ -f "$unit" ] || continue
-  rsync_ "$unit" "$TARGET:$UNIT_DIR/" >/dev/null || {
-    echo "FAILED: $(basename "$unit") could not be installed"; rollback_and_report; }
-done
-ssh_ "systemctl daemon-reload" || {
-  echo "FAILED: systemctl daemon-reload"; rollback_and_report; }
 
 # Now every file this deploy places is on the host, so ask the host what it
 # holds rather than believing rsync's exit code. A check that cannot run -- a
