@@ -521,6 +521,37 @@ MODELS: dict[str, ModelSpec] = {
         base_url=NVIDIA_BASE_URL, context_tokens=131_072,
         max_output_tokens=8_192, supports_json=True,
         terms=Terms.EVALUATION_ONLY),
+    # Reasoning. The one named on the day this was set up, and the fastest
+    # thing here that reasons: 1.1 s, against 42 s for the 550B and 106 s for
+    # kimi-k3. Latency spread across this catalogue is three orders of
+    # magnitude, which is most of what a bench is for.
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": ModelSpec(
+        id="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=16_384, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "nvidia/nemotron-3-ultra-550b-a55b": ModelSpec(
+        id="nvidia/nemotron-3-ultra-550b-a55b", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=16_384, supports_tools=True, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "openai/gpt-oss-20b": ModelSpec(
+        id="openai/gpt-oss-20b", provider="nvidia", base_url=NVIDIA_BASE_URL,
+        context_tokens=131_072, max_output_tokens=16_384, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "moonshotai/kimi-k3": ModelSpec(
+        id="moonshotai/kimi-k3", provider="nvidia", base_url=NVIDIA_BASE_URL,
+        context_tokens=262_144, max_output_tokens=16_384, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "minimaxai/minimax-m3": ModelSpec(
+        id="minimaxai/minimax-m3", provider="nvidia", base_url=NVIDIA_BASE_URL,
+        context_tokens=131_072, max_output_tokens=8_192, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    # Code.
+    "poolside/laguna-xs-2.1": ModelSpec(
+        id="poolside/laguna-xs-2.1", provider="nvidia", base_url=NVIDIA_BASE_URL,
+        context_tokens=131_072, max_output_tokens=8_192, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
     # Vision, and proven by sending it an image rather than by reading a
     # capability table — the mistake `qwen-plus` was carrying.
     "meta/llama-3.2-11b-vision-instruct": ModelSpec(

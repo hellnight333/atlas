@@ -77,8 +77,12 @@ PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     # Evaluation only — see `llm.models.Terms` and docs/qevik-docs/13_NVIDIA.md.
     # Listed here so the Credential Centre and the Models page can show them;
     # `ModelRegistry.resolve` is what stops one being selected for real work.
-    "nvidia": ("nvidia/nemotron-3.5-lightning-30b-a3b",
+    "nvidia": ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+               "nvidia/nemotron-3.5-lightning-30b-a3b",
                "nvidia/nemotron-3-super-120b-a12b",
+               "nvidia/nemotron-3-ultra-550b-a55b",
+               "openai/gpt-oss-20b", "moonshotai/kimi-k3",
+               "minimaxai/minimax-m3", "poolside/laguna-xs-2.1",
                "deepseek-ai/deepseek-v4-flash-0731",
                "google/gemma-4-31b-it",
                "meta/llama-3.2-11b-vision-instruct"),

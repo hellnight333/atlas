@@ -197,8 +197,12 @@ def default_registry() -> ModelRegistry:
         # bench you cannot reach is not a bench — comparing a candidate against
         # the model actually in use is the entire value of this provider.
         nvidia = OpenAICompatibleProvider(name="nvidia", key_env="NVIDIA_API_KEY")
-        for name in ("nvidia/nemotron-3.5-lightning-30b-a3b",
+        for name in ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                     "nvidia/nemotron-3.5-lightning-30b-a3b",
                      "nvidia/nemotron-3-super-120b-a12b",
+                     "nvidia/nemotron-3-ultra-550b-a55b",
+                     "openai/gpt-oss-20b", "moonshotai/kimi-k3",
+                     "minimaxai/minimax-m3", "poolside/laguna-xs-2.1",
                      "deepseek-ai/deepseek-v4-flash-0731",
                      "google/gemma-4-31b-it",
                      "meta/llama-3.2-11b-vision-instruct"):
