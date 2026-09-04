@@ -128,6 +128,14 @@ install -d -o "$APP_USER" -g "$APP_USER" -m 0750 \
   "$STATE" "$STATE/control" "$STATE/control/reports" "$STATE/scratch" \
   "$STATE/worktrees" "$STATE/jobs" "$STATE/evidence" "$STATE/prospects" \
   "$STATE/outreach" "$STATE/audits" "$STATE/briefs" "$STATE/workspaces"
+# The application tree itself. `deploy_control.sh` rsyncs *into* these
+# directories and rsync will not create a missing destination root: on a fresh
+# host the first deploy fails with "change_dir /opt/qevik/atlas: No such file or
+# directory" after eleven retries, which reads like a network fault and is a
+# missing mkdir. The layout is this script's job, so it makes them.
+install -d -o "$APP_USER" -g "$APP_USER" -m 0755 \
+  "$APP" "$APP/packages" "$APP/packages/kernel" "$APP/packages/kernel/atlas_kernel" \
+  "$APP/infra"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0755 /srv/sites /srv/qevik-public /srv/qevik-control
 install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$DUMPS"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$BASE/market"
