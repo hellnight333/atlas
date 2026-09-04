@@ -325,3 +325,17 @@ def test_every_python_unit_says_where_the_kernel_is() -> None:
         assert "PYTHONPATH=" in text, (
             f"{unit.name} runs the kernel without saying where it is; it will "
             "start only on a host that happens to have the project installed")
+
+
+@pytest.mark.real_auth
+def test_the_floor_shell_is_reachable_but_its_data_is_not(client) -> None:
+    """The shell is a console page like any other; the numbers on it are not.
+
+    A signed-out visitor should get the page and then be told to sign in, rather
+    than a 401 on an HTML file — while `/api/fabric/office` stays closed, because
+    it reports which agents exist and what blocks them.
+    """
+    from atlas_kernel.auth.api import CONSOLE_PATHS
+
+    assert "/office" in CONSOLE_PATHS and "/office/index.html" in CONSOLE_PATHS
+    assert client.get("/api/fabric/office").status_code == 401

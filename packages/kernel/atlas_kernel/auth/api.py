@@ -55,6 +55,11 @@ CONSOLE_PATHS = frozenset({
     "/", "/dashboard", "/roadmap", "/missions", "/chat", "/actions",
     "/credentials", "/models", "/businesses", "/publications", "/measurements",
     "/reports", "/history", "/settings",
+    # The agent floor. A shell, exactly like the others: it carries no data and
+    # every number on it arrives from `/api/fabric/office`, which is not public.
+    # Both spellings, because a person types the first and a browser follows a
+    # link to the second.
+    "/office", "/office/index.html",
 })
 
 #: Cookie rather than a header for the browser UI, so the token is not reachable
