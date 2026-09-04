@@ -101,9 +101,18 @@ outreach and the customer-website work cannot reach it. That is the point.
 
 **`nemo-retriever` (the skill and its CLI)** — indexes a folder of PDFs,
 images, Office documents, HTML, audio and video into LanceDB and serves vector
-search over it. Runs locally, needs no GPU and no NVIDIA key. This is the
-`knowledge/embeddings` layer of the architecture, available today, and the
-skill's own instruction is the right one: *do not write a custom RAG.*
+search over it. This is the `knowledge/embeddings` layer of the architecture,
+available today, and the skill's own instruction is the right one: *do not write
+a custom RAG.*
+
+Installed at `~/.claude/skills/nemo-retriever`. One caveat that decides what it
+may be pointed at: **without a local GPU it needs a remote embedding endpoint**,
+and the one to hand is the trial API. So it is right for *our* corpora —
+competitor sites, market documents, our own research — and wrong for a
+customer's files, because §4.3 forbids sending personal or financial information
+and §3.3(iv) lets NVIDIA train on what arrives. The moment a GPU exists, the
+bundled `llama-nemotron-embed-1b-v2` runs locally and that constraint
+disappears.
 
 **SkillSpector** — NVIDIA's scanner for agent skills (prompt injection,
 exfiltration, supply-chain risk). Useful against *any* third-party skill,
