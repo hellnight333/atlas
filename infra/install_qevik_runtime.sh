@@ -191,18 +191,30 @@ fi
 if [ "$MODE" = all ] || [ "$MODE" = python ]; then
   say "5/6 virtualenv"
   if [ ! -d "$APP" ]; then
-    echo "no application tree at $APP yet — deploy first, then re-run with --python"
+    echo "no application tree at $APP — run install_qevik_infra.sh first, which owns the layout"
   else
     if [ ! -x "$APP/.venv/bin/python" ]; then
       runuser -u "$APP_USER" -- python3 -m venv "$APP/.venv"
       echo "created $APP/.venv"
     fi
     runuser -u "$APP_USER" -- "$APP/.venv/bin/python" -m pip install -q --upgrade pip
+
+    # Dependencies only — the kernel itself is never installed into the venv.
+    #
+    # `pip install -e .` cannot work here and it took a failed deploy to see it:
+    # the ADR-0010 payload ships `packages/kernel/atlas_kernel`, `infra/` and the
+    # console, and deliberately not `pyproject.toml`, so there is no project on
+    # the host to install. The units already say `PYTHONPATH=…/packages/kernel`
+    # and import the tree directly, which is the design — the venv is there to
+    # hold third-party wheels, nothing else.
+    #
+    # The old host looks different only because `bootstrap_qevik_server.sh` git
+    # cloned the whole repository there. That is the thing this script replaces.
     if [ -f "$CONSTRAINTS" ]; then
-      echo "installing with constraints from $(basename "$CONSTRAINTS")"
-      runuser -u "$APP_USER" -- "$APP/.venv/bin/python" -m pip install -q -e "$APP" -c "$CONSTRAINTS"
+      echo "installing production's pinned stack from $(basename "$CONSTRAINTS")"
+      runuser -u "$APP_USER" -- "$APP/.venv/bin/python" -m pip install -q -r "$CONSTRAINTS"
     else
-      runuser -u "$APP_USER" -- "$APP/.venv/bin/python" -m pip install -q -e "$APP"
+      die "no $CONSTRAINTS. The stack is pinned rather than resolved: copy the file from the repository, or regenerate it from a host whose venv is known good."
     fi
     "$APP/.venv/bin/python" -V
     echo "$("$APP/.venv/bin/pip" list --format=freeze | wc -l | tr -d ' ') distributions installed"
