@@ -337,5 +337,8 @@ def test_the_floor_shell_is_reachable_but_its_data_is_not(client) -> None:
     """
     from atlas_kernel.auth.api import CONSOLE_PATHS
 
-    assert "/office" in CONSOLE_PATHS and "/office/index.html" in CONSOLE_PATHS
+    # Every spelling a browser can produce. The trailing-slash form was missing
+    # and returned 401 on an HTML page from a plain link.
+    for spelling in ("/office", "/office/", "/office/index.html"):
+        assert spelling in CONSOLE_PATHS, spelling
     assert client.get("/api/fabric/office").status_code == 401

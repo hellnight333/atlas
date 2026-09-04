@@ -57,9 +57,12 @@ CONSOLE_PATHS = frozenset({
     "/reports", "/history", "/settings",
     # The agent floor. A shell, exactly like the others: it carries no data and
     # every number on it arrives from `/api/fabric/office`, which is not public.
-    # Both spellings, because a person types the first and a browser follows a
-    # link to the second.
-    "/office", "/office/index.html",
+    # Three spellings, because a person types the first, a browser normalises a
+    # directory link to the second, and the file itself is the third. Missing
+    # the trailing-slash form meant a link to /office/ returned 401 on an HTML
+    # page while /office/index.html loaded — found by asking the deployed host
+    # for all three rather than by reasoning about routing.
+    "/office", "/office/", "/office/index.html",
 })
 
 #: Cookie rather than a header for the browser UI, so the token is not reachable
