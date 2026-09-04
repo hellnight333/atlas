@@ -103,10 +103,130 @@ class TestWhatTheAgentClaims:
         with pytest.raises(MalformedResult):
             _agent(text="   ").implement(A_PLAN, workspace_root="/tmp")
 
-    def test_done_is_a_claim_and_is_named_as_one(self) -> None:
-        assert _agent().implement(A_PLAN, workspace_root="/tmp").claims_done is True
+    def test_done_reflects_what_happened_not_what_the_model_said(self, tmp_path) -> None:
+        """This asserted `claims_done is True` for a reply of "done" that
+        changed nothing — which encoded the behaviour that made every real
+        mission fail. `claims_done` now follows the workspace."""
+        prose = _agent().implement(A_PLAN, workspace_root=str(tmp_path))
+        assert prose.claims_done is False, "said done, wrote nothing"
+
+        wrote = LLMCodingAgent(_provider("<<<FILE a.md\nreal\n>>>END\n"),
+                               MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+        assert wrote.claims_done is True
 
     def test_planning_returns_a_plan_the_model_actually_wrote(self) -> None:
         plan = _agent(text="step one: read the router").plan("add a health route")
         assert "read the router" in plan.why
         assert plan.approval_required is True
+
+
+class TestItActuallyChangesTheWorkspace:
+    """`implement` asked the model and returned its prose, having touched
+    nothing.
+
+    So every mission run by this agent reported success, changed no file, and
+    was correctly refused by the worker: three attempts, then failed. Observed
+    on production as mission-2e19f410464e. The end-to-end chain — sentence to
+    commit — was only ever proven with `FakeCodingAgent`, which does write.
+    """
+
+    BLOCK = ("Here is the change.\n"
+             "<<<FILE docs/notes/backup.md\n"
+             "# Backups\n"
+             "\n"
+             "An off-host copy survives the machine.\n"
+             ">>>END\n"
+             "That is all.\n")
+
+    def test_a_returned_file_reaches_the_workspace(self, tmp_path) -> None:
+        outcome = LLMCodingAgent(_provider(self.BLOCK), MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+
+        written = tmp_path / "docs" / "notes" / "backup.md"
+        assert written.is_file(), "the agent reported a change and wrote nothing"
+        assert written.read_text(encoding="utf-8").startswith("# Backups")
+        assert outcome.files == ("docs/notes/backup.md",)
+        assert outcome.claims_done is True
+
+    def test_a_reply_with_no_file_does_not_claim_to_be_done(self, tmp_path) -> None:
+        """The exact claim the worker exists to catch. Better to be honest here
+        than to make it catch us."""
+        outcome = LLMCodingAgent(_provider("I have completed the work."),
+                                 MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+        assert outcome.claims_done is False
+        assert outcome.files == ()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_several_files_in_one_reply(self, tmp_path) -> None:
+        reply = ("<<<FILE a.md\nfirst\n>>>END\n"
+                 "<<<FILE nested/b.md\nsecond\n>>>END\n")
+        outcome = LLMCodingAgent(_provider(reply), MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+        assert set(outcome.files) == {"a.md", "nested/b.md"}
+        assert (tmp_path / "nested" / "b.md").read_text().strip() == "second"
+
+    def test_an_unterminated_block_is_dropped(self, tmp_path) -> None:
+        """A file cut off mid-way is worse than no file, because it looks like
+        a change."""
+        reply = "<<<FILE a.md\nfirst\n>>>END\n<<<FILE b.md\nsecond, and no end"
+        outcome = LLMCodingAgent(_provider(reply), MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+        assert outcome.files == ("a.md",)
+        assert not (tmp_path / "b.md").exists()
+
+
+class TestItCannotWriteOutsideTheWorkspace:
+    """The distance between "may write the files it names" and "may do what it
+    likes" is the whole of what this architecture refuses."""
+
+    def _implement(self, reply: str, tmp_path):
+        return LLMCodingAgent(_provider(reply), MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+
+    @pytest.mark.parametrize("path", [
+        "../escaped.md",
+        "/etc/passwd",
+        "nested/../../escaped.md",
+        ".git/config",
+        "nested/.git/hooks/pre-commit",
+    ])
+    def test_a_path_leaving_the_repository_is_refused(self, path, tmp_path) -> None:
+        with pytest.raises(MalformedResult):
+            self._implement(f"<<<FILE {path}\nowned\n>>>END\n", tmp_path)
+
+    def test_one_bad_path_writes_none_of_them(self, tmp_path) -> None:
+        """All-or-nothing on the paths. A partial write leaves a workspace that
+        is neither the old state nor the requested one, and the commit that
+        followed would be of something nobody asked for."""
+        reply = ("<<<FILE fine.md\nlegitimate\n>>>END\n"
+                 "<<<FILE ../escaped.md\nnot\n>>>END\n")
+        with pytest.raises(MalformedResult):
+            self._implement(reply, tmp_path)
+        assert not (tmp_path / "fine.md").exists()
+
+    def test_too_many_files_is_refused_before_anything_is_written(self, tmp_path) -> None:
+        reply = "".join(f"<<<FILE f{i}.md\nx\n>>>END\n" for i in range(200))
+        with pytest.raises(MalformedResult, match="the limit is"):
+            self._implement(reply, tmp_path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_too_many_bytes_is_refused_before_anything_is_written(self, tmp_path) -> None:
+        reply = f"<<<FILE big.md\n{'x' * 3_000_000}\n>>>END\n"
+        with pytest.raises(MalformedResult, match="the limit is"):
+            self._implement(reply, tmp_path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_agent_runs_nothing(self) -> None:
+        """Writing is all it does. A model that can aim a tool is the thing the
+        architecture refuses, and this is the class a model's words reach."""
+        import inspect
+
+        from atlas_kernel.mission import agents
+
+        source = inspect.getsource(agents.LLMCodingAgent)
+        for forbidden in ("subprocess", "os.system", "popen", "shutil.rmtree",
+                          "eval(", "exec(", "unlink", "rmdir"):
+            assert forbidden not in source, (
+                f"the model-backed agent can do more than write files: {forbidden}")

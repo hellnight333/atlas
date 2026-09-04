@@ -286,13 +286,134 @@ class LLMCodingAgent:
         return Plan(goal=request, why=text, approval_required=True,
                     steps=(PlanStep(order=1, title=request),))
 
+    #: How the model is asked to return a change, and the only form that is read.
+    #:
+    #: A sentinel rather than JSON: a file body inside JSON has to be escaped,
+    #: and a model that gets one newline wrong turns a correct change into a
+    #: parse error. This survives anything the body contains except the sentinel
+    #: itself, which is checked for.
+    WRITE_FORMAT = (
+        "Return the complete new contents of every file you change, each in "
+        "this exact form and nothing else between them:\n"
+        "\n"
+        "<<<FILE relative/path/from/the/repository/root\n"
+        "the entire file, exactly as it should be saved\n"
+        ">>>END\n"
+        "\n"
+        "Rules that are enforced rather than requested:\n"
+        "- Paths are relative to the repository root. An absolute path, or one "
+        "containing '..', is refused and the change is rejected.\n"
+        "- Nothing under .git/ may be written.\n"
+        "- Give the whole file, not a diff and not an excerpt. What you return "
+        "replaces the file.\n"
+        "- If the work needs no file to change, return no blocks at all. Saying "
+        "you did something and changing nothing is the one answer that is "
+        "always wrong here.")
+
+    #: Bounds. A model that loops can produce an unbounded reply, and the point
+    #: at which that becomes a problem is where it is written to disk.
+    MAX_FILES = 40
+    MAX_BYTES = 2_000_000
+
+    @staticmethod
+    def _parse_files(text: str) -> list[tuple[str, str]]:
+        """The `<<<FILE … >>>END` blocks, in order. Never raises on shape.
+
+        A reply with no blocks is not a parse failure — it is a model that
+        changed nothing, which the caller reports as exactly that.
+        """
+        found: list[tuple[str, str]] = []
+        path: str | None = None
+        body: list[str] = []
+        for line in text.splitlines():
+            if path is None:
+                if line.startswith("<<<FILE "):
+                    path = line[len("<<<FILE "):].strip()
+                    body = []
+                continue
+            if line.strip() == ">>>END":
+                found.append((path, "\n".join(body) + "\n"))
+                path = None
+                continue
+            body.append(line)
+        # An unterminated final block is dropped rather than written: a file cut
+        # off mid-way is worse than no file, because it looks like a change.
+        return found
+
+    def _write(self, files: list[tuple[str, str]], workspace_root: str
+               ) -> tuple[str, ...]:
+        """Write inside the workspace, or refuse the whole change.
+
+        All-or-nothing on the *paths*: every destination is resolved before any
+        byte is written, so a reply naming one legitimate file and one escape
+        writes neither. A partial write would leave a workspace that is neither
+        the old state nor the requested one, and the commit that followed would
+        be of something nobody asked for.
+        """
+        root = Path(workspace_root).resolve()
+        planned: list[tuple[Path, str]] = []
+
+        if len(files) > self.MAX_FILES:
+            raise MalformedResult(
+                f"{self._name} returned {len(files)} files; the limit is "
+                f"{self.MAX_FILES}")
+        total = sum(len(body.encode("utf-8")) for _, body in files)
+        if total > self.MAX_BYTES:
+            raise MalformedResult(
+                f"{self._name} returned {total} bytes; the limit is {self.MAX_BYTES}")
+
+        for name, body in files:
+            if not name or name.startswith("/") or ".." in Path(name).parts:
+                raise MalformedResult(
+                    f"{self._name} named a path outside the repository: {name!r}")
+            destination = (root / name).resolve()
+            if not destination.is_relative_to(root):
+                raise MalformedResult(
+                    f"{self._name} named a path outside the repository: {name!r}")
+            if ".git" in destination.relative_to(root).parts:
+                raise MalformedResult(
+                    f"{self._name} tried to write inside .git: {name!r}")
+            planned.append((destination, body))
+
+        written: list[str] = []
+        for destination, body in planned:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(body, encoding="utf-8")
+            written.append(str(destination.relative_to(root)))
+        return tuple(written)
+
     def implement(self, plan: Plan, *, workspace_root: str,
                   context: str = "") -> AgentOutcome:
+        """Ask for a change, and put it in the workspace.
+
+        This used to ask the model and return its prose with
+        `claims_done=True`, having touched nothing. So every mission run by this
+        agent reported success, changed no file, and was correctly refused by
+        the worker — three attempts, then failed. The end-to-end chain was only
+        ever proven with `FakeCodingAgent`, which does write.
+
+        Writing is all this does. No commands, no shell, no fetches: the model
+        returns file contents and they are written inside the workspace. A model
+        that can aim a tool is the thing this architecture refuses, and the
+        distance between "may write files it names" and "may run what it likes"
+        is the whole of that refusal.
+        """
         text, invocation = self._ask(
-            "implement", f"{context}\n\nImplement this plan:\n{plan.goal}")
-        # `claims_done` is the model's assertion and is treated as one.
-        return AgentOutcome(summary=text[:400], notes=text, claims_done=True,
-                            invocation=invocation)
+            "implement",
+            f"{context}\n\nImplement this plan:\n{plan.goal}\n\n{self.WRITE_FORMAT}")
+
+        files = self._parse_files(text)
+        written = self._write(files, workspace_root) if files else ()
+
+        # `claims_done` reflects what happened, not what the model said. A reply
+        # with no file blocks changed nothing, and reporting that as done is the
+        # exact claim the worker exists to catch — better to be honest here than
+        # to make it catch us.
+        return AgentOutcome(summary=(f"wrote {len(written)} file(s): "
+                                     f"{', '.join(written)}" if written
+                                     else text[:400]),
+                            notes=text, files=written,
+                            claims_done=bool(written), invocation=invocation)
 
     def review(self, plan: Plan, outcome: AgentOutcome, *,
                diff: str = "") -> AgentOutcome:
