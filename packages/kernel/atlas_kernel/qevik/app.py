@@ -258,7 +258,15 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.model_selections = wiring.model_selections or SelectionStore()
     # `is not None`, never truthiness: `Timeline` defines `__len__`, so a new
     # one is falsy and `or` would swap durable storage for a list.
-    business = (Timeline(wiring.business_timeline)
+    # The customer factory, because that is what writes here: a customer marking
+    # a task done. `customer/api.py::_append` refuses to accept a write it
+    # cannot persist, on the grounds that "a write route that returns 200 and
+    # persists nothing is how a customer marks a task done, sees it accepted,
+    # and finds it outstanding again tomorrow" — which is precisely what an
+    # unnamed factory produced on a Postgres host.
+    from ..customer.tasks import FACTORY as CUSTOMER_FACTORY
+
+    business = (Timeline(wiring.business_timeline, factory=CUSTOMER_FACTORY)
                 if wiring.business_timeline is not None else None)
     app.state.business_events = (business if business is not None
                                  else wiring.business_events)
@@ -592,7 +600,9 @@ def _ledger_for(timeline: Path | None) -> Any:
 
     if timeline is None:
         return QuotaLedger()
-    events = Timeline(timeline)
+    from ..quota.ledger import FACTORY as QUOTA_FACTORY
+
+    events = Timeline(timeline, factory=QUOTA_FACTORY)
     return QuotaLedger(events=events.read(), sink=events.append)
 
 

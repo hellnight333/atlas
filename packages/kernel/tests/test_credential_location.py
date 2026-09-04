@@ -245,7 +245,13 @@ def test_every_credential_timeline_in_the_tree_names_its_factory() -> None:
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "Timeline(" not in line:
                 continue
-            if ".records" in line and "factory=" not in line:
+            # Every timeline whose events are not mission events. Named by the
+            # wiring field, because that is what identifies them at the call
+            # site — and the list grew from one to four while this was written,
+            # which is the argument for deriving it rather than fixing each.
+            elsewhere = (".records", "credential_timeline", "chat_timeline",
+                         "business_timeline")
+            if any(name in line for name in elsewhere) and "factory=" not in line:
                 offenders.append(f"{path.relative_to(root)}:{number}")
     assert offenders == [], (
         "a credential timeline built without naming its factory writes rows "
