@@ -238,6 +238,16 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     fabric_api.install(app)
     crm_api.install(app)
 
+    # The roadmap the repository maintains, served rather than restated. The
+    # console page for it 404'd on every load since it was written, against a
+    # payload shape nobody had built.
+    from ..auth.api import Scope, User, requires
+    from ..roadmap import master_state
+
+    @app.get("/control/roadmap", include_in_schema=False)
+    def _roadmap(_: User = Depends(requires(Scope.READ))) -> dict:
+        return master_state.read()
+
     timeline = (Timeline(wiring.mission_timeline)
                 if wiring.mission_timeline is not None else None)
 
