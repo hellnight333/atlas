@@ -148,6 +148,33 @@ The ranking is the point: it separated a clinic with no website from one with a
 website, and both from an unrelated document. And the same registry refused to
 serve real work, which is the other half.
 
+### The provider selection matrix, from that run
+
+Measured through the production adapters on 2026-09-04, from the host:
+
+| Provider | Models | Reached | Range | Read |
+|---|---|---|---|---|
+| **Qwen (DashScope)** | 7 | **7** | 346 ms – 1.1 s | Every model, every time, about a second. Paid, production-licensed. |
+| **NVIDIA (trial)** | 11 | 6 | 940 ms – 150 s | Two 503s and two timeouts in one pass. Free, evaluation only. |
+| **Anthropic** | 2 | 0 | — | Key valid, balance empty: "accepted the credentials and declined to bill them". |
+
+Which decides the routing, and the decision is not close:
+
+- **Everything routine → Qwen.** It is the only provider here where every model
+  answered, and answered fast. It is also the only one licensed to do the work.
+- **NVIDIA → the bench, and only the bench.** Six of eleven answered in that
+  pass; `nemotron-3-nano-omni` and `poolside/laguna-xs` both returned 503 having
+  worked an hour earlier, and two others timed out at 180 s. A free tier that
+  fails a fifth of its calls under no load at all is not a foundation, and the
+  licence had already settled that.
+- **Anthropic → nothing, until there is credit.** Registered, most expensive, so
+  never selected by default; the refusal names the reason rather than reading as
+  a malformed request.
+
+The three states earned their keep in that single run: two 503s are REFUSED (the
+provider answered), two timeouts are NOT_VERIFIED (it did not), and reporting
+those the same way would have condemned four models when two were merely busy.
+
 ### How this stays true
 
 `llm/benchmark.py` calls each registered model through the same adapter
