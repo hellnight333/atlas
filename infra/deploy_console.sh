@@ -95,13 +95,18 @@ echo "==> copying the console to $REMOTE"
 ssh $SSH_ID "$TARGET" "mkdir -p $REMOTE.incoming"
 scp $SSH_ID -q -r "$LOCAL"/* "$TARGET:$REMOTE.incoming/"
 
-# The floor ships inside the same staging directory, so it goes live in the one
-# atomic swap below or not at all. It is not its own origin on purpose: it reads
-# the session out of the console's sessionStorage and is allowed by the console's
-# CSP, and a second origin would mean a second login for the same operator.
-echo "==> copying the floor to $REMOTE/office"
-ssh $SSH_ID "$TARGET" "mkdir -p $REMOTE.incoming/office"
-scp $SSH_ID -q "$HERE/../apps/office/index.html" "$TARGET:$REMOTE.incoming/office/"
+# The floor needs no step of its own any more. It lives at
+# apps/control/src/office/index.html, so the recursive copy above already
+# carries it into the same staging directory and it goes live in the one atomic
+# swap below or not at all.
+#
+# It had a step of its own here, and that is the whole reason it was broken: two
+# deploy scripts, only one of which knew the floor existed. `deploy_control.sh`
+# — the one that actually runs — ships a fixed list of prefixes and
+# `apps/office/` was in none of them, so the floor never reached a host while
+# this script's existence made it look shipped. One location, carried by
+# whichever script runs, is the fix; a third copy step here would rebuild the
+# trap.
 
 # Swap, rather than overwrite in place: a half-copied console is a broken
 # console that is live, which is worse than the previous one still being live.

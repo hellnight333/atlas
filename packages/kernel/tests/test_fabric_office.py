@@ -243,25 +243,54 @@ def test_the_office_is_not_public(client) -> None:
 
 
 # --- the floor is actually shipped ---------------------------------------------
+#
+# Every path below is derived from the kernel's own `CONSOLE`, never written out
+# again. These four tests spelled `apps/office/index.html` themselves and passed
+# for as long as the floor sat in a directory `deploy_control.sh` — the script
+# that actually runs — did not ship. A test that repeats a path cannot notice
+# the path is wrong; it can only notice the file is missing from where the test
+# thinks it lives, which was true and useless.
 
-def test_the_floor_is_staged_before_the_swap_that_promotes_it() -> None:
-    """Order, not merely presence.
 
-    The first version of this copied the floor *after* the console's
-    `.incoming` → live swap, which creates a fresh staging directory nothing
-    ever promotes: the deploy would have exited zero having shipped a floor
-    nobody could reach. Both copies must land in the staging directory, and the
-    swap must come after both.
+def _floor_path():
+    from atlas_kernel.qevik.app import CONSOLE
+
+    return CONSOLE / "office" / "index.html"
+
+
+def _floor() -> str:
+    return _floor_path().read_text(encoding="utf-8")
+
+
+def test_the_floor_is_inside_the_bundle_every_deploy_copies() -> None:
+    """Not "a deploy mentions it" — inside the directory both deploys carry.
+
+    This replaces a test that checked `deploy_console.sh` copied the floor in a
+    step of its own, between the console copy and the atomic swap. It did, and
+    the floor still never reached the host, because there are two deploy scripts
+    and the other one ships a fixed list of prefixes that did not include it.
+    Checking one script's steps proved something about that script rather than
+    about the host.
     """
     from pathlib import Path
 
-    deploy = (Path(__file__).resolve().parents[3] / "infra" / "deploy_console.sh"
-              ).read_text(encoding="utf-8")
-    console = deploy.index('scp $SSH_ID -q -r "$LOCAL"/*')
-    floor = deploy.index("apps/office/index.html")
-    swap = deploy.index("mv $REMOTE.incoming $REMOTE")
-    assert console < floor < swap, (
-        "the floor must be staged with the console and promoted by the same swap")
+    from atlas_kernel.qevik.app import CONSOLE
+
+    root = Path(__file__).resolve().parents[3]
+    relative = CONSOLE.resolve().relative_to(root).as_posix()
+
+    assert _floor_path().is_file(), f"there is no floor at {_floor_path()}"
+    assert _floor_path().resolve().is_relative_to(CONSOLE.resolve())
+
+    control = (root / "infra" / "deploy_control.sh").read_text(encoding="utf-8")
+    assert f"{relative}/" in control, "deploy_control.sh does not ship the console bundle"
+
+    console = (root / "infra" / "deploy_console.sh").read_text(encoding="utf-8")
+    copy = console.index('scp $SSH_ID -q -r "$LOCAL"/*')
+    swap = console.index("mv $REMOTE.incoming $REMOTE")
+    assert copy < swap, "the console is promoted before it is staged"
+    assert "apps/office/index.html" not in console, (
+        "a step of its own for the floor is what made two locations possible")
 
 
 def test_the_floor_is_a_single_self_contained_file() -> None:
@@ -271,33 +300,39 @@ def test_the_floor_is_a_single_self_contained_file() -> None:
     production and only in production — the failure mode this whole
     no-build-step architecture exists to avoid.
     """
-    from pathlib import Path
-
-    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
-            ).read_text(encoding="utf-8")
+    page = _floor()
     assert "<script" in page and "<style" in page
-    for forbidden in ("src=\"http", "href=\"http", "cdn.", "fonts.googleapis", "unpkg"):
+    for forbidden in ('src="http', 'href="http', "cdn.", "fonts.googleapis", "unpkg"):
         assert forbidden not in page, f"the floor reaches outside its own origin: {forbidden}"
 
 
 def test_the_floor_hardcodes_no_host() -> None:
     """It is served from the machine it reads, so a baked-in address is how a
-    console ends up reporting another host's state as its own."""
+    console ends up reporting another host's state as its own.
+
+    The addresses come from the deployment registry rather than being written
+    here. Spelling them out made this file the thing that put a production IP in
+    the source tree, which is the rule the registry exists to keep.
+    """
     from pathlib import Path
 
-    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
-            ).read_text(encoding="utf-8")
-    assert "2.28.62.83" not in page and "91.107.244.253" not in page
+    registry = (Path(__file__).resolve().parents[3] / "infra" / "deploy_targets.conf"
+                ).read_text(encoding="utf-8")
+    hosts = [line.split("|")[1].split("@")[-1]
+             for line in registry.splitlines()
+             if line.strip() and not line.startswith("#") and "|" in line]
+    assert hosts, "the target registry named no host, so this test checks nothing"
+
+    page = _floor()
+    for host in hosts:
+        assert host not in page, f"the floor names a deployment host: {host}"
 
 
 def test_the_floor_keeps_the_session_off_disk() -> None:
     """sessionStorage, never localStorage — the console's own rule, and the
     floor shares its origin, so a divergence here would leave a bearer token on
     disk for the same operator."""
-    from pathlib import Path
-
-    page = (Path(__file__).resolve().parents[3] / "apps" / "office" / "index.html"
-            ).read_text(encoding="utf-8")
+    page = _floor()
     assert "sessionStorage" in page
     assert "localStorage" not in page
 

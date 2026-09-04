@@ -495,7 +495,27 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
             f"the undecided-draft queue carries {deciding!r}; a control on a "
             "list of fourteen is how fourteen strangers get written to at once")
 
-    assert Path(CONSOLE / "index.html").stat().st_size < 148_000
+    # Raised again for the Pipeline page. The CRM derivation existed, had
+    # tests, was deployed, and no surface asked it anything — a pipeline nobody
+    # can see is a pipeline nobody acts on. Same condition as last time: a
+    # capability the operator gains, and a stricter rule arriving with it.
+    #
+    # The stricter rule is the one the CRM's whole design rests on. Every stage
+    # is derived from evidence — a message row that says `sent`, an event that
+    # says `replied` — so nothing on that page may offer to set one. A control
+    # that appears to move a company and does not is worse than no control: it
+    # teaches an operator that the board is theirs to arrange, and the next
+    # thing they believe is a stage nobody earned.
+    for setting in ("crm/stage", "set_stage", "setStage", "draggable",
+                    "/api/crm', {", 'method: "POST"'):
+        assert setting not in source, (
+            f"the pipeline carries {setting!r}; every stage on that page is "
+            "derived, and a control that seems to change one cannot")
+    assert "derived from what happened" in source, (
+        "the pipeline page does not tell the operator its stages are derived, "
+        "so it reads like every CRM they have used, which can be typed into")
+
+    assert Path(CONSOLE / "index.html").stat().st_size < 156_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and
