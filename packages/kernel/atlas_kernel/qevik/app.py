@@ -49,6 +49,7 @@ from ..credentials.vault import FileSecretStore, Vault
 from ..credits import CreditService
 from ..customer import api as customer_api
 from ..fabric import Registry as AgentRegistry
+from ..crm import api as crm_api
 from ..fabric import api as fabric_api
 from ..fabric.sandbox import Confinement
 from ..fabric.sandbox import available as sandbox_available
@@ -72,7 +73,7 @@ log = logging.getLogger(__name__)
 #: what happened to all of them before this module existed.
 SURFACES: tuple[str, ...] = (
     "auth", "customer", "mission", "credentials", "models", "chat", "sales",
-    "fabric",
+    "fabric", "crm",
 )
 
 #: Where the vault keeps ciphertext when a deployment does not say otherwise.
@@ -230,6 +231,7 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     sales_api.install(app)
     discovery_api.install(app)
     fabric_api.install(app)
+    crm_api.install(app)
 
     timeline = (Timeline(wiring.mission_timeline)
                 if wiring.mission_timeline is not None else None)
