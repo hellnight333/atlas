@@ -76,15 +76,63 @@ nobody deciding anything at all.
 
 ---
 
-## The catalogue is not an inventory
+## The catalogue is not an inventory — measured
 
-`GET /v1/models` returns 81 models for this key. Most of them cannot be called:
-404 "Function not found", 410 "Gone", 503 "temporarily overloaded". A page built
-from that listing would present offerings nobody has tried.
+`GET /v1/models` returns **81 models** for this key. Every one of them was
+called on 2026-09-04:
 
-So Qevik measures instead. `llm/benchmark.py` calls each registered model
-through the same adapter production uses and records REACHED / REFUSED /
-NOT_VERIFIED, with latency and cost. The Models page shows it. Nothing scores
+| | |
+|---|---|
+| **REACHED** — answered | **19** |
+| **REFUSED** — 404 "Function not found", 410 "Gone" | **59** |
+| **NOT_VERIFIED** — the call never completed | **3** |
+
+A page built from that listing would have offered 81 things, 62 of which do not
+work.
+
+Latency across the nineteen spans three orders of magnitude, which is most of
+what a bench is for:
+
+| Model | Latency | Note |
+|---|---|---|
+| `meta/llama-3.2-11b-vision-instruct` | 173 ms | vision, proved with an image |
+| `nvidia/riva-translate-4b-instruct-v2` | 226 ms | translation |
+| `poolside/laguna-xs-2.1` | 367 ms | code |
+| `nvidia/nemotron-3-super-120b-a12b` | 664 ms | tools + JSON |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | 875 ms | |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **1.1 s** | the fastest thing here that reasons |
+| `minimaxai/minimax-m3` | 2.2 s | |
+| `openai/gpt-oss-20b` | 41 s | |
+| `nvidia/nemotron-3-ultra-550b-a55b` | 42 s | |
+| `google/gemma-4-31b-it` | 57 s | |
+| `deepseek-ai/deepseek-v4-flash-0731` | 99 s | "flash" |
+| `moonshotai/kimi-k3` | 106 s | |
+
+Anything past about two seconds is a batch model on this tier, whatever its
+name says.
+
+### Two corrections the survey forced, both about method
+
+**Embedding models are not broken.** The chat survey reported every one of them
+REFUSED — because it asked them a chat question. Asked at `/v1/embeddings`,
+`nvidia/nemotron-3-embed-1b` answers in **200 ms** and
+`nvidia/llama-nemotron-embed-vl-1b-v2` in **174 ms**, both **2048 dimensions**.
+Six others in the same catalogue genuinely 404 there. An endpoint mismatch is a
+fact about the caller, and reporting it as a verdict on the model is exactly
+what the three states exist to prevent.
+
+**Reranking is gone.** `/v1/retrieval/…/reranking` answers `410 Gone — this
+endpoint has reached its end of life on 2026-05-18` and no replacement path
+works on this key. So there is no rerank capability in Qevik, and the reason is
+written into `llm/embeddings.py` rather than left for the next person to
+rediscover.
+
+### How this stays true
+
+`llm/benchmark.py` calls each registered model through the same adapter
+production uses — a second HTTP client would be a second answer to "does this
+work" — and records REACHED / REFUSED / NOT_VERIFIED with latency and cost.
+`infra/benchmark_models.py` runs it; the Models page shows it. Nothing scores
 quality: one trivial prompt cannot, and a number that looked like a quality
 score would be believed.
 
