@@ -6,6 +6,14 @@ Wants=network-online.target
 OnFailure=qevik-backup-failed@%p.service
 
 [Service]
+# Both streams, named. Without these the unit inherits defaults, and the one
+# thing that never reached the journal was the failure message: `die` and the
+# ERR trap write to stderr, so every explanation this script produced when it
+# went wrong was the part nobody could read.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qevik-offsite
+
 Type=oneshot
 # Root, unlike qevik-backup.service: the Storage Box key lives in /root/.ssh and
 # the backup set spans /var/lib/qevik, /srv, /etc/caddy and the unit directory.

@@ -226,3 +226,81 @@ def test_the_guard_does_not_depend_on_timestamps() -> None:
         "unarchived_migrated_dumps() {", 1)[1].split("\n}", 1)[0]
     for timeish in ("uptime", "newermt", "date -d", "-mtime"):
         assert timeish not in guard, guard
+
+
+# --- the env-name manifest, and the backup it stopped ---------------------------
+
+def _env_names(base: Path) -> subprocess.CompletedProcess:
+    """Run the offsite script's `env_names` against a directory of env files.
+
+    The function is sourced out of the real script rather than restated here, so
+    this exercises the shipped code and not a copy of it that agrees with the
+    test.
+    """
+    state = base / "state"
+    state.mkdir(exist_ok=True)
+    script = (
+        f'set -euo pipefail\n'
+        f'BASE={base!s}\n'
+        f'STATE_DIR={state!s}\n'
+        f'FAILED="$STATE_DIR/FAILED"\n'
+        # Just the function, lifted from the file by its own name.
+        + OFFSITE.read_text(encoding="utf-8").split("env_names() {", 1)[1]
+          .split("\n}\n", 1)[0].join(("env_names() {", "\n}\n"))
+        + "\nenv_names\ncat \"$STATE_DIR/env-names.txt\"\n"
+    )
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+def test_an_env_file_of_only_comments_does_not_stop_the_backup(tmp_path: Path) -> None:
+    """The failure that stopped every off-host backup on the new host.
+
+    `grep -v '^\\s*#' file | grep = | ...` under `set -euo pipefail`: a file
+    with nothing but comments leaves grep with no match, grep exits 1, pipefail
+    propagates it, and `set -e` ends the script — before restic runs, before
+    anything is logged, with exit status 1 and not one line of output.
+
+    A comments-only env file is not exotic. Every scaffold starts as one,
+    waiting for its values, and creating one is how this broke.
+    """
+    (tmp_path / "scaffold.env").write_text(
+        "# QEVIK_SOMETHING=\n# still waiting for its value\n", encoding="utf-8")
+    (tmp_path / "real.env").write_text("A_NAME=a-value\n", encoding="utf-8")
+
+    result = _env_names(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "A_NAME" in result.stdout
+    assert "scaffold.env" in result.stdout, "the file is still listed, just empty"
+
+
+def test_the_manifest_carries_names_and_never_values(tmp_path: Path) -> None:
+    """The reason this manifest exists at all is that a rebuild needs the names.
+    A value in it would put a secret in the off-host repository."""
+    (tmp_path / "real.env").write_text(
+        "A_NAME=super-secret-value\nB_NAME=another-one\n", encoding="utf-8")
+
+    result = _env_names(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "A_NAME" in result.stdout and "B_NAME" in result.stdout
+    assert "super-secret-value" not in result.stdout
+    assert "another-one" not in result.stdout
+
+
+def test_the_backup_says_why_it_died_even_when_it_dies_unexpectedly() -> None:
+    """A `set -e` abort has no message, and the successful runs are the verbose
+    ones. That is backwards: the log is read when something went wrong."""
+    text = OFFSITE.read_text(encoding="utf-8")
+    assert "trap 'on_unexpected_exit" in text, (
+        "an unchosen exit leaves no trace, so a backup can stop for days while "
+        "the journal shows only 'status=1/FAILURE'")
+    assert "$LINENO" in text and "$BASH_COMMAND" in text, (
+        "a failure report that names neither the line nor the command is not "
+        "one somebody can act on")
+
+
+def test_the_unit_sends_the_failure_stream_to_the_journal() -> None:
+    """`die` and the trap write to stderr. If the unit does not route it, the
+    only messages that explain a failure are the ones nobody can read."""
+    unit = (REPO_ROOT / "infra" / "qevik-offsite.service").read_text(encoding="utf-8")
+    assert "StandardError=journal" in unit
+    assert "StandardOutput=journal" in unit

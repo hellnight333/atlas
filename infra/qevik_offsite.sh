@@ -58,6 +58,26 @@ STATE_PATHS=(
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { log "FAILED: $*" >&2; exit 1; }
 
+# Any exit this script did not choose.
+#
+# `set -e` aborts without a word, so a backup could stop at line 94 for four
+# days while the journal showed only "Main process exited, code=exited,
+# status=1" — no message, no failing command, nothing to search for. The
+# successful runs logged in detail and the failures explained nothing, which is
+# the wrong way round: an operator reads this log precisely when it went wrong.
+#
+# Reports the line and the command, then leaves the FAILED marker the status
+# probe already looks for, so a silent death is still a visible one.
+on_unexpected_exit() {
+  local code=$? line=$1 command=$2
+  [ "$code" -eq 0 ] && return 0
+  log "FAILED: line ${line} exited ${code}: ${command}" >&2
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s line %s exited %s: %s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$line" "$code" "$command" >> "$FAILED" 2>/dev/null || true
+}
+trap 'on_unexpected_exit "$LINENO" "$BASH_COMMAND"' ERR
+
 # --status needs neither root nor the repository: it is what a health probe calls.
 if [ "${1:-}" = "--status" ]; then
   [ -f "$STATUS" ] && cat "$STATUS" || echo '{"result":"never-run"}'
@@ -91,7 +111,14 @@ env_names() {
   for f in "$BASE"/*.env; do
     [ -f "$f" ] || continue
     printf '# %s (%s)\n' "$f" "$(stat -c '%U:%G %a' "$f")" >> "$out"
-    grep -v '^\s*#' "$f" | grep '=' | cut -d= -f1 | sed 's/^/  /' >> "$out"
+    # `|| true`, and it is load-bearing. Under `set -euo pipefail` a `grep` that
+    # matches nothing exits 1 and takes the whole pipeline — and therefore the
+    # whole backup — down with it. An env file holding only comments is a real
+    # and ordinary state: every scaffold file starts that way, waiting for its
+    # values. One of them (a comments-only brave.env) stopped every off-host
+    # backup on this host from the moment it was created, and stopped it without
+    # printing anything, because a `set -e` abort has no message.
+    { grep -v '^\s*#' "$f" | grep '=' | cut -d= -f1 | sed 's/^/  /' >> "$out"; } || true
   done
   # Unit files are configuration, not secrets; they are what a rebuild replays.
   ls -1 /etc/systemd/system/qevik-* 2>/dev/null > "${STATE_DIR}/units.txt" || true
