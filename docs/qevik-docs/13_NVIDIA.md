@@ -127,6 +127,27 @@ works on this key. So there is no rerank capability in Qevik, and the reason is
 written into `llm/embeddings.py` rather than left for the next person to
 rediscover.
 
+### Proved end to end, not only in tests
+
+Through `llm/embeddings.py` against the live endpoint, from the production host:
+
+```
+chose nvidia/llama-nemotron-embed-vl-1b-v2 (2048d, terms=evaluation_only)
+embedded 3 passages in 286 ms, 62 tokens, 2048d
+
+ranked against "dental clinics that have no website":
+  0.3858  Al Noor Dental Clinic, Dubai. No website recorded by OpenStreetMap.
+  0.3340  Gulf Orthodontics, Sharjah. Modern site, online booking, https.
+  0.0950  A recipe for lentil soup with cumin and lemon.
+
+and for real work: NoEmbedderAvailable — every registered embedding model is
+licensed for evaluation only
+```
+
+The ranking is the point: it separated a clinic with no website from one with a
+website, and both from an unrelated document. And the same registry refused to
+serve real work, which is the other half.
+
 ### How this stays true
 
 `llm/benchmark.py` calls each registered model through the same adapter
