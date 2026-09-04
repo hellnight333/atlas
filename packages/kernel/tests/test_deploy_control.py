@@ -1151,11 +1151,29 @@ def test_a_health_failure_restores_every_target_and_the_previous_marker(world: W
     # then each worker on its own with `reset-failed` first.
     log = world.log()
     assert "systemctl restart qevik-control.service qevik-api.service" in log
-    for unit in ("qevik-worker.service", "qevik-worker-research.service",
-                 "qevik-worker-delivery.service", "qevik-worker-publish.service",
-                 "qevik-worker-healthcheck.service"):
-        assert f"systemctl reset-failed {unit}" in log
-        assert f"systemctl restart {unit}" in log
+    # Derived from the repository under deploy, not listed here.
+    #
+    # This named five units. The deploy named the same five in a variable, and
+    # the day a sixth worker was added both stayed at five: the deploy left
+    # that worker running stale code and this test kept passing. The
+    # fingerprint gate would not have caught it either — it reads DISTINCT
+    # versions from the registry, and a stale worker that agrees with itself
+    # adds nothing to a set that already holds its value.
+    #
+    # Reading the *world's* repo rather than the real one is the point: this
+    # world ships exactly one worker unit, so restarting exactly that one is
+    # the correct behaviour, and a deploy that restarted five would be reading
+    # a list from somewhere other than what it shipped.
+    units = sorted(p.name for p in (world.repo / "infra").glob("qevik-worker*.service"))
+    assert units, "the world ships no worker units, so this proves nothing"
+    for unit in units:
+        assert f"systemctl reset-failed {unit}" in log, unit
+        assert f"systemctl restart {unit}" in log, unit
+    restarted = {line.split()[-1] for line in log
+                 if line.startswith("systemctl restart qevik-worker")}
+    assert restarted == set(units), (
+        f"the deploy restarted {restarted} for a repository shipping {set(units)}; "
+        "the list it used did not come from the units it deployed")
 
 
 def test_restored_bytes_are_measured_against_the_previous_manifest(world: World):
@@ -1775,3 +1793,31 @@ def test_units_are_installed_before_anything_is_restarted(world: World):
     assert installed < reloaded < restarted, (
         "units must be on the host, and systemd told about them, before the "
         "deploy restarts anything")
+
+
+def test_the_deploy_restarts_every_worker_unit_this_repository_ships() -> None:
+    """A hardcoded list goes stale on the day a worker is added.
+
+    It did. `qevik-worker-llm.service` — the only worker that can carry out an
+    approved plan — was absent from the list, so a deploy would have updated
+    five workers and left that one running whatever code it started with.
+
+    Nothing would have reported it. The fingerprint gate reads DISTINCT
+    versions from the worker registry, and a stale worker that agrees with
+    itself contributes one value to a set that already contains it. The deploy
+    would print "all N workers report <fingerprint>" and be wrong.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    script = (root / "infra" / "deploy_control.sh").read_text(encoding="utf-8")
+    units = sorted(p.name for p in (root / "infra").glob("qevik-worker*.service"))
+    assert units, "no worker units, so this test proves nothing"
+
+    assert "ls qevik-worker*.service" in script, (
+        "the worker list is written out rather than derived; the next worker "
+        "added will silently run stale code after every deploy")
+    for unit in units:
+        assert unit not in script.split("# Derived from the unit files")[0], (
+            f"{unit} is named literally before the derivation, which is the "
+            "hardcoded list coming back")

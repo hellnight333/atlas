@@ -80,7 +80,28 @@ KEY="$QEVIK_TARGET_KEY"
 echo "target: $QEVIK_TARGET_NAME -> $TARGET (identity ${KEY:-ssh_config})"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE="qevik-control.service"
-WORKERS="qevik-worker.service qevik-worker-research.service qevik-worker-delivery.service qevik-worker-publish.service qevik-worker-healthcheck.service"
+# Derived from the unit files this repository ships, never written out again.
+#
+# It was written out again, and it went stale the day a sixth worker was added:
+# qevik-worker-llm.service was not in the list, so every deploy updated five
+# workers and left that one running whatever code it started with. Nothing would
+# have reported it — the fingerprint check below reads DISTINCT versions from
+# the registry, and a stale worker that agrees with itself is invisible in a set.
+#
+# From the working tree, which is safe precisely because this script refuses to
+# run against a dirty tree: the tree and the commit being deployed are the same
+# bytes, so the units listed here are the units shipped.
+#
+# `basename`, sorted, so the order is stable and a new unit joins by existing.
+WORKERS="$(cd "$ROOT/infra" && ls qevik-worker*.service 2>/dev/null | sort | tr '\n' ' ')"
+if [ -z "${WORKERS// /}" ]; then
+  echo "REFUSED: no qevik-worker*.service unit files in $ROOT/infra" >&2
+  exit 2
+fi
+# Printed, because a derived list that silently shrank would restart fewer
+# workers and still say "all N report the fingerprint" — N being however many
+# it asked.
+echo "workers: $WORKERS"
 
 # The host layout. The defaults are production; the overrides are the test
 # seams described in the header.
