@@ -17,7 +17,7 @@
 #
 #   installed by the deploy      every qevik-*.service and qevik-*.timer file
 #   installed here, once         qevik-jobs.slice, qevik-api.service.d/resources.conf
-#   enabled here                 api, control and the five workers — the units that
+#   enabled here                 api, control and the six workers — the units that
 #                                must survive a reboot
 #   enabled only after data      qevik-backup.timer  (a backup of an empty database
 #                                is not a backup, and its retention would begin
@@ -41,7 +41,14 @@ UNIT_DIR="${QEVIK_UNIT_DIR:-/etc/systemd/system}"
 SRC="${QEVIK_INFRA_SRC:-$APP/infra}"
 
 #: The units that must come back after a reboot.
+# qevik-worker-llm.service is here, and it is the only one that calls a paid
+# provider. Without it an approved plan reaches `queued` and stops: every other
+# worker serves a different agent, and `policy.refuse_agent_substitution`
+# correctly refuses to let one carry out a plan approved for another. A host
+# built without this unit has a complete chat-to-mission pipeline and nobody at
+# the end of it.
 LONG_RUNNING="qevik-api.service qevik-control.service qevik-worker.service \
+qevik-worker-llm.service \
 qevik-worker-research.service qevik-worker-delivery.service \
 qevik-worker-publish.service qevik-worker-healthcheck.service"
 
