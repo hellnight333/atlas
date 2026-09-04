@@ -32,15 +32,31 @@ OWNER="${QEVIK_APP_USER:-qevik}"
 
 say() { printf '%s\n' "$*"; }
 
+# As the owner, always. Git refuses a repository owned by another user
+# ("dubious ownership"), so root asking these questions gets an error — and the
+# first version of this check answered `|| echo 0`, which printed
+# "commits: 0 / branch: none" for a repository that had one commit on main.
+#
+# That is the failure this whole file is downstream of: a state nobody could
+# read, rendered as a state somebody could. Not knowing is its own answer.
+as_owner() { sudo -u "$OWNER" git -C "$REPO" "$@"; }
+
 if [ "${1:-}" = "--check" ]; then
-  if [ -d "$REPO/.git" ]; then
-    say "present: $REPO"
-    say "owner:   $(stat -c '%U:%G' "$REPO")"
-    say "commits: $(git -C "$REPO" rev-list --count HEAD 2>/dev/null || echo 0)"
-    say "branch:  $(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"
-  else
+  if [ ! -d "$REPO/.git" ]; then
     say "absent: $REPO"
     exit 1
+  fi
+  say "present: $REPO"
+  say "owner:   $(stat -c '%U:%G' "$REPO")"
+  if commits="$(as_owner rev-list --count HEAD 2>/dev/null)"; then
+    say "commits: $commits"
+    say "branch:  $(as_owner rev-parse --abbrev-ref HEAD 2>/dev/null || echo UNREADABLE)"
+  else
+    # Present and unreadable is neither "empty" nor "fine", and a worker will
+    # fail to clone it. Non-zero, because a check that cannot check has not
+    # passed.
+    say "commits: UNREADABLE — git would not answer for $OWNER"
+    exit 2
   fi
   exit 0
 fi
