@@ -553,6 +553,39 @@ the verbose ones. `health()` can now say *broken* as distinct from *absent*
 Proven end to end: a plan produced by `qwen-turbo` from a key held only in the
 vault, with no model credential anywhere in the environment.
 
+## NVIDIA, measured and fenced (2026-09-04)
+
+A key for `build.nvidia.com` arrived with an instruction to use it broadly. The
+research said otherwise, and the code now says it too.
+
+**The API is contractually a trial.** Its Terms of Service permit "internal
+testing and evaluation purposes, not in production", forbid distributing the
+generated content to anybody — which is what a platform that writes a customer's
+website does — and grant NVIDIA the right to train on what passes through. So
+`ModelSpec.terms` carries PRODUCTION or EVALUATION_ONLY and the registry refuses
+to select an evaluation-only model for real work, including when it is named.
+Enforced rather than documented because a free tier is the cheapest thing in any
+catalogue and the registry picks cheapest-capable: the failure guarded against
+is not somebody deciding to break the terms, it is nobody deciding anything.
+
+**The catalogue is not an inventory.** 81 models listed, 19 reachable. Latency
+across those nineteen spans 173 ms to 106 seconds. Two embedding models answer
+in ~200 ms at 2048 dimensions — including the one named on the day — and
+reranking is gone, with an explicit end-of-life date of 2026-05-18.
+
+**`llm/benchmark.py`** records what each model did through the same adapters
+production uses, as REACHED / REFUSED / NOT_VERIFIED. The Models page shows it.
+Nothing scores quality.
+
+**`llm/embeddings.py`** is the knowledge layer's first piece, proved against the
+live endpoint: three passages in 286 ms, and the ranking separated a clinic with
+no website from one with a website and both from an unrelated document.
+
+Two skills installed from `NVIDIA/skills` — `nemo-retriever` and
+`nvidia-skill-finder`. The full USE NOW / ARCHITECT FOR LATER / REJECT decision,
+with the licence gates and the GPU numbers behind each, is in
+`docs/qevik-docs/13_NVIDIA.md`.
+
 ## Deferred
 - Broad package/schema/database rename.
 - High-volume autonomous prospecting.
