@@ -695,3 +695,89 @@ def test_the_worker_re_reads_credentials_before_it_checks_them() -> None:
     assert refresh < check, (
         "the worker checks credentials before re-reading them, so a key "
         "connected since the last tick still does not count")
+
+
+class TestTheActionCentreAsksBothStores:
+    """Ten of twenty-one items on the operator's home screen were work already
+    done.
+
+    "Connect Qwen (DashScope)", "Connect Claude" and "Connect NVIDIA" were
+    listed as *blocking* on a deployment where all three were CONNECTED, tested,
+    and running every mission. `Integration.status` asks a `ConnectionStore` —
+    the reference model publishing has always used — and the Credential Centre
+    writes to the vault. Two stores, one question.
+
+    `Integration.status` already carries a note about the previous instance of
+    this, about a filesystem target, ending: "One wrong item is how a human
+    action list stops being read, which costs more than the item was worth."
+    """
+
+    def _view(self, service, connections=None):
+        from atlas_kernel.credentials.service import ConnectedEither
+
+        return ConnectedEither(connections, service)
+
+    def test_a_credential_in_the_vault_counts_as_connected(self, service) -> None:
+        from atlas_kernel.credentials.service import Status
+
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        service.verify(provider="qwen", tenant=A,
+                       probe=lambda _: (Status.CONNECTED, "accepted"))
+        assert self._view(service).for_target("qwen", tenant=A) is not None
+
+    def test_a_stored_but_untested_credential_still_counts(self, service) -> None:
+        """PENDING_CREDENTIAL means somebody entered a key nobody has exercised.
+        That is not an outstanding task for them — the key is there."""
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        assert self._view(service).for_target("qwen", tenant=A) is not None
+
+    def test_a_disabled_credential_does_not_count(self, service) -> None:
+        """A record that exists and cannot be used is still somebody's move.
+        Reporting it as connected would hide the action rather than duplicate
+        it — the opposite failure and the worse one."""
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        service.set_enabled(provider="qwen", tenant=A, enabled=False)
+        assert self._view(service).for_target("qwen", tenant=A) is None
+
+    def test_a_rejected_credential_does_not_count(self, service) -> None:
+        from atlas_kernel.credentials.service import Status
+
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        service.verify(provider="qwen", tenant=A,
+                       probe=lambda _: (Status.INVALID_CREDENTIAL, "rejected"))
+        assert self._view(service).for_target("qwen", tenant=A) is None
+
+    def test_nothing_stored_is_still_nothing(self, service) -> None:
+        assert self._view(service).for_target("qwen", tenant=A) is None
+
+    def test_the_connection_store_wins_when_it_has_one(self, service) -> None:
+        """Neither store is authoritative alone, and the existing one keeps
+        answering exactly as it did."""
+        class Publishing:
+            def for_target(self, target, *, tenant):
+                return f"connection-from-publishing:{target}"
+
+        assert self._view(service, Publishing()).for_target(
+            "qwen", tenant=A) == "connection-from-publishing:qwen"
+
+    def test_a_store_that_raises_is_not_a_no(self, service) -> None:
+        """An unreadable store and an absent credential are different facts,
+        and only one of them is the operator's move."""
+        class Broken:
+            def for_target(self, target, *, tenant):
+                raise RuntimeError("connection refused")
+
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        assert self._view(service, Broken()).for_target("qwen", tenant=A) is not None
+
+    def test_the_route_uses_it(self) -> None:
+        """The join existing is not the same as the action centre using it."""
+        from pathlib import Path
+
+        api = (Path(__file__).resolve().parents[1] / "atlas_kernel" / "mission" /
+               "api.py").read_text(encoding="utf-8")
+        centre = api.split("controlplane.centre(", 1)[1].split(")", 1)[0]
+        assert "ConnectedEither" in centre, (
+            "the action centre reads only the publication store, so a "
+            "credential entered through the Credential Centre still appears "
+            "as an outstanding task")

@@ -560,6 +560,78 @@ def read(events: list, *, tenant: TenantId | None = None) -> list[dict]:
         found.append({**dict(detail), "kind": kind})
     return sorted(found, key=lambda d: d.get("at", ""), reverse=True)
 
+#: Statuses that mean a person still has something to do about this provider.
+#: A subset of `UNUSABLE`, and the difference is `PENDING_CREDENTIAL` — see
+#: `ConnectedEither.for_target`.
+_NOT_A_CONNECTION: frozenset[Status] = frozenset({
+    Status.NOT_CONFIGURED, Status.DISABLED, Status.INVALID_CREDENTIAL,
+    Status.INSUFFICIENT_PERMISSION,
+})
+
+
+class ConnectedEither:
+    """Whether a provider is connected, asked of both places it can be.
+
+    Two stores can answer "is this connected". `publication.ConnectionStore`
+    holds the reference model publishing has always used; the vault holds what
+    an operator enters through the Credential Centre. `CredentialService`
+    already calls its `connection()` "the join"; this is that join applied to
+    the one question the action centre asks.
+
+    Without it the action centre listed "Connect Qwen (DashScope)", "Connect
+    Claude" and "Connect NVIDIA" as *blocking* on a deployment where all three
+    were CONNECTED, tested and running every mission — ten of its twenty-one
+    items were work already done, and the seven that genuinely needed a person
+    sat underneath them.
+
+    `Integration.status` already carries a note about the previous instance of
+    exactly this, ending: "One wrong item is how a human action list stops
+    being read, which costs more than the item was worth." This is the same
+    sentence, one store over.
+    """
+
+    __slots__ = ("_connections", "_credentials")
+
+    def __init__(self, connections: object, credentials: object) -> None:
+        self._connections = connections
+        self._credentials = credentials
+
+    def for_target(self, target: str, *, tenant: TenantId | None):
+        """The first store that has one. Neither is authoritative alone."""
+        found = None
+        if self._connections is not None:
+            try:
+                found = self._connections.for_target(target, tenant=tenant)
+            except Exception:  # noqa: BLE001 - a store that cannot answer is not a no
+                found = None
+        if found is not None:
+            return found
+        if self._credentials is None:
+            return None
+        try:
+            record = self._credentials.record(provider=target, tenant=tenant)
+        except Exception:  # noqa: BLE001 - see above
+            return None
+        # A record that exists and cannot be used is not a connection: DISABLED
+        # and INVALID_CREDENTIAL both mean somebody still has something to do,
+        # and reporting those as connected would hide the action rather than
+        # duplicate it — the opposite failure and the worse one.
+        #
+        # PENDING_CREDENTIAL is deliberately *not* in that set here, though it
+        # is in `UNUSABLE`. The two questions differ: the scheduler asks "may I
+        # dispatch work against this", where an untested key is rightly no; the
+        # action centre asks "does a person still have to do something", where a
+        # key they have already entered is rightly not "Connect X". Testing it
+        # is a button on the Credentials page, not an outstanding task.
+        if record is None or record.status in _NOT_A_CONNECTION:
+            return None
+        return self._credentials.connection(provider=target, tenant=tenant)
+
+    def __getattr__(self, name: str):
+        """Everything else goes to the connection store, unchanged."""
+        return getattr(self._connections, name)
+
+
 def usable_for(service: object, *, tenant: object) -> frozenset[str]:
     """Which providers `resolve()` would actually hand over a secret for.
 

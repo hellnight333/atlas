@@ -577,8 +577,16 @@ def build_router() -> APIRouter:
         except Exception:                          # noqa: BLE001 - reported
             addressable = None
 
+        # Asked of both stores. The vault is where the Credential Centre puts
+        # what an operator enters, and the action centre was reading only the
+        # publication store — so it told them to connect three providers that
+        # were connected, tested, and running every mission.
+        from ..credentials.service import ConnectedEither
+
         found = controlplane.centre(
-            store=store, tenant=tenant,
+            store=ConnectedEither(store, getattr(request.app.state,
+                                                 "credentials", None)),
+            tenant=tenant,
             known_nodes=None if known is None
             else tuple(node.node_id for node in known),
             sending_identity=sending,
