@@ -26,7 +26,9 @@ from .models import (
     NotConfigured,
     RateLimited,
     Role,
+    Terms,
     Unaffordable,
+    Unreachable,
 )
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
@@ -60,6 +62,25 @@ def qwen_base_url() -> str:
 
 
 QWEN_BASE_URL = qwen_base_url()
+
+#: NVIDIA's hosted inference, OpenAI-compatible.
+#:
+#: `build.nvidia.com` is the catalogue people browse; `integrate.api.nvidia.com`
+#: is what a key actually calls. Overridable for a self-hosted NIM, which speaks
+#: the same protocol on a different address — that is the point of NIM and the
+#: reason nothing here hard-codes the host.
+DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+
+def nvidia_base_url() -> str:
+    for prefix in ("QEVIK_", "ATLAS_", ""):
+        value = os.environ.get(f"{prefix}NVIDIA_BASE_URL", "")
+        if value.strip():
+            return value.strip().rstrip("/")
+    return DEFAULT_NVIDIA_BASE_URL
+
+
+NVIDIA_BASE_URL = nvidia_base_url()
 ANTHROPIC_VERSION = "2023-06-01"
 REQUEST_TIMEOUT_SECONDS = 180.0
 
@@ -155,7 +176,7 @@ class AnthropicProvider:
                 json=payload,
             )
         except httpx.HTTPError as error:
-            raise LLMError(f"could not reach Anthropic: {error}") from error
+            raise Unreachable(f"could not reach Anthropic: {error}") from error
 
         _raise_for_status(response, "Anthropic")
         body = response.json()
@@ -247,7 +268,7 @@ class OpenAICompatibleProvider:
                 },
             )
         except httpx.HTTPError as error:
-            raise LLMError(f"could not reach {self._name}: {error}") from error
+            raise Unreachable(f"could not reach {self._name}: {error}") from error
 
         _raise_for_status(response, self._name)
         body = response.json()
@@ -467,6 +488,47 @@ MODELS: dict[str, ModelSpec] = {
         supports_tools=True,
         supports_json=True,
     ),
+    # NVIDIA's hosted catalogue, and every one of these was called against this
+    # key before being listed — the catalogue reports 81 models and most of them
+    # answer 404 "Function not found" or 410 "Gone".
+    #
+    # All EVALUATION_ONLY, and that is not caution: the API Trial Terms of
+    # Service §1.4 permit "internal testing and evaluation purposes, not in
+    # production", §4.2 forbid distributing the generated content to anybody,
+    # and §3.3(iv) grant NVIDIA the right to train on what passes through. The
+    # registry refuses to select these for real work; see `models.Terms`.
+    #
+    # Cost is zero because the trial is not billed per token, and zero cost is
+    # exactly why the terms have to be enforced in code — cheapest-first would
+    # otherwise route everything here. See docs/qevik-docs/13_NVIDIA.md.
+    "nvidia/nemotron-3.5-lightning-30b-a3b": ModelSpec(
+        id="nvidia/nemotron-3.5-lightning-30b-a3b", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=8_192, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "nvidia/nemotron-3-super-120b-a12b": ModelSpec(
+        id="nvidia/nemotron-3-super-120b-a12b", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=16_384, supports_tools=True, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "deepseek-ai/deepseek-v4-flash-0731": ModelSpec(
+        id="deepseek-ai/deepseek-v4-flash-0731", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=8_192, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    "google/gemma-4-31b-it": ModelSpec(
+        id="google/gemma-4-31b-it", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=131_072,
+        max_output_tokens=8_192, supports_json=True,
+        terms=Terms.EVALUATION_ONLY),
+    # Vision, and proven by sending it an image rather than by reading a
+    # capability table — the mistake `qwen-plus` was carrying.
+    "meta/llama-3.2-11b-vision-instruct": ModelSpec(
+        id="meta/llama-3.2-11b-vision-instruct", provider="nvidia",
+        base_url=NVIDIA_BASE_URL, context_tokens=128_000,
+        max_output_tokens=4_096, supports_vision=True,
+        terms=Terms.EVALUATION_ONLY),
+
     # Self-hosted. Declared for when the Z8 becomes a worker; costs nothing per
     # token, so the registry will prefer it over everything above.
     "qwen3-72b": ModelSpec(

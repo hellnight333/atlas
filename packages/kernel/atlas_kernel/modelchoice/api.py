@@ -100,6 +100,59 @@ def build_router() -> APIRouter:
                      "refusing."),
         }
 
+    @router.get("/benchmark")
+    def benchmark(request: Request, tenant: TenantId = Depends(current_tenant),
+                  _: User = Depends(requires(Scope.READ))) -> dict:
+        """What each model did when it was last called, and what it cost.
+
+        Measured, not claimed. A provider's catalogue is not a list of what you
+        can run — NVIDIA's lists 81 models and most of them answer 404 with a
+        key that works — so this reports calls that were made and says
+        NOT_VERIFIED about everything else.
+
+        Joined onto the registry rather than served alone, so a model that is
+        registered and never measured appears (as unmeasured) and a measurement
+        for a model no longer registered does not vanish silently.
+        """
+        from pathlib import Path
+
+        from ..llm import benchmark as bench
+
+        path = getattr(request.app.state, "model_measurements", None)
+        if path is None:
+            return {"known": False, "rows": [], "summary": {},
+                    "detail": ("this deployment has no state directory, so no "
+                               "measurement has ever been stored — which is not "
+                               "the same as every model failing")}
+
+        store = bench.Store(Path(path))
+        latest = store.latest()
+        credentials = _credentials(request)
+        registered = {m["model"]: m for m in available(credentials, tenant=tenant)}
+
+        rows = []
+        for name in sorted(set(registered) | set(latest)):
+            model = registered.get(name, {})
+            row = latest.get(name)
+            rows.append({
+                "model": name,
+                "provider": model.get("provider") or (row or {}).get("provider", ""),
+                "registered": name in registered,
+                "usable": bool(model.get("usable")),
+                # Three states, and the third is the one a fresh deployment is
+                # entirely made of.
+                "state": (row or {}).get("state", bench.State.NOT_VERIFIED.value),
+                "at": (row or {}).get("at", ""),
+                "latency_ms": (row or {}).get("latency_ms"),
+                "cost_usd": (row or {}).get("cost_usd"),
+                "input_tokens": (row or {}).get("input_tokens"),
+                "output_tokens": (row or {}).get("output_tokens"),
+                "reason": (row or {}).get("reason", ""),
+            })
+
+        return {"known": True, "rows": rows, "summary": bench.summary(latest),
+                "corrupt_lines": store.corrupt}
+
     @router.put("/selection/{role}")
     def choose(role: str, body: RoleChoice, request: Request,
                tenant: TenantId = Depends(current_tenant),

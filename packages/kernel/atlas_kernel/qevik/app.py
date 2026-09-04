@@ -174,6 +174,10 @@ class Wiring:
     #: month's usage is not forgotten by a redeploy — and the worker draws on
     #: the same file, so both processes see one balance rather than two.
     quota_timeline: Path | None = None
+    #: Where model measurements are appended. Beside the rest of the durable
+    #: state, so the benchmark runner and this surface agree without either
+    #: being configured.
+    model_measurements: Path | None = None
 
     def build_credentials(self) -> CredentialService:
         """The vault, sealed unless a master key is in the environment.
@@ -266,6 +270,10 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
     app.state.chat_sink = (chat.append if chat is not None
                            else wiring.chat_events.append)
     app.state.model_selections = wiring.model_selections or SelectionStore()
+    # Absent is a real configuration: a deployment with no state directory has
+    # measured nothing, which the surface reports as NOT_VERIFIED rather than as
+    # a fleet of broken models.
+    app.state.model_measurements = wiring.model_measurements
     # `is not None`, never truthiness: `Timeline` defines `__len__`, so a new
     # one is falsy and `or` would swap durable storage for a list.
     # The customer factory, because that is what writes here: a customer marking
@@ -706,6 +714,12 @@ def from_environment() -> FastAPI:
     if not quota and state:
         quota = str(Path(state) / "quota.jsonl")
 
+    from ..llm.benchmark import FILE as MEASUREMENTS_FILE
+
+    measurements = os.environ.get("QEVIK_MODEL_MEASUREMENTS", "")
+    if not measurements and state:
+        measurements = str(Path(state) / MEASUREMENTS_FILE)
+
     chat = os.environ.get("QEVIK_CHAT_TIMELINE", "")
     if not chat and state:
         chat = str(Path(state) / "chat.jsonl")
@@ -732,6 +746,7 @@ def from_environment() -> FastAPI:
         repository_root=root,
         console=Path(console) if console else None,
         mission_timeline=Path(timeline) if timeline else None,
+        model_measurements=Path(measurements) if measurements else None,
         vault_path=credentials_at.vault,
         credential_timeline=credentials_at.records,
         reports_root=Path(report_root) if report_root else None,

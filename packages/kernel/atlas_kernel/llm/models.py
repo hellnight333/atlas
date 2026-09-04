@@ -48,6 +48,33 @@ class Message(BaseModel):
     content: str
 
 
+class Terms(StrEnum):
+    """What the provider's licence permits this model to be used for.
+
+    A property of the *terms*, not of the model, and it belongs in the spec
+    because the registry is the only place that decides what runs a job.
+
+    NVIDIA's hosted catalogue is the reason this exists. Its API Trial Terms of
+    Service §1.4 say, verbatim: "Unless you purchase a Subscription from NVIDIA
+    or a Service Provider (as applicable), you may only use the API Service for
+    internal testing and evaluation purposes, not in production." §3.3(iv)
+    additionally grants NVIDIA the right to use content sent through it "to
+    improve NVIDIA products and services, including AI models", and §4.3
+    forbids uploading personal, financial, health or governmental information.
+
+    So the free tier is genuinely excellent for evaluating a model and
+    genuinely not available for running a customer's work — and that is exactly
+    the kind of thing that gets forgotten between the day it is read and the day
+    a mission picks the cheapest model. The registry enforces it instead.
+    """
+
+    #: Paid, or licensed for production. The default, because a model whose
+    #: terms nobody recorded should not be quietly excluded from doing work.
+    PRODUCTION = "production"
+    #: Trial or evaluation licence. Never selected for customer-facing work.
+    EVALUATION_ONLY = "evaluation_only"
+
+
 class ModelSpec(BaseModel):
     """One model, described in terms every provider can answer.
 
@@ -71,6 +98,8 @@ class ModelSpec(BaseModel):
     supports_tools: bool = False
     supports_json: bool = False
     supports_vision: bool = False
+    #: What the provider's licence permits. See `Terms`.
+    terms: Terms = Terms.PRODUCTION
     #: Free-form provider extras — Qwen's `enable_thinking`, DeepSeek's
     #: `reasoning_effort`. Kept opaque so a new provider needs no schema change.
     options: dict[str, Any] = Field(default_factory=dict)
@@ -126,6 +155,16 @@ class NotConfigured(LLMError):
 
 class RateLimited(LLMError):
     """Provider throttled the request. Retryable, unlike the others."""
+
+
+class Unreachable(LLMError):
+    """The request never got an answer: DNS, TLS, a disconnect, a timeout.
+
+    Its own type because "the provider refused" and "I could not reach the
+    provider" are different facts about different things, and only the first is
+    about the model. Reported as one kind, a network blip becomes a broken
+    model on a page somebody then acts on.
+    """
 
 
 class Unaffordable(LLMError):

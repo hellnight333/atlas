@@ -137,6 +137,25 @@ def qwen(secret: str) -> tuple[Status, str]:
                 "DashScope")
 
 
+#: Where NVIDIA's hosted inference lives. Overridable for a self-hosted NIM,
+#: which speaks the same protocol at a different address.
+NVIDIA_DEFAULT = "https://integrate.api.nvidia.com/v1"
+
+
+def nvidia(secret: str) -> tuple[Status, str]:
+    """NVIDIA's hosted inference, through its OpenAI-compatible surface.
+
+    One caution worth knowing about this provider: a burst of concurrent
+    requests gets the *calling address* blocked at the edge, and the block
+    answers `403 Forbidden` as an nginx HTML page for every request — including
+    ones with a perfectly good key. `_classify` reads 403 as a credentials
+    problem, which is right for this API's JSON refusals and wrong for that one.
+    A single probe will not trigger it; a catalogue survey will, and did.
+    """
+    base = (os.environ.get("QEVIK_NVIDIA_BASE_URL") or NVIDIA_DEFAULT).rstrip("/")
+    return _ask(f"{base}/models", {"Authorization": f"Bearer {secret}"}, "NVIDIA")
+
+
 def stripe(secret: str) -> tuple[Status, str]:
     return _ask("https://api.stripe.com/v1/balance",
                 {"Authorization": f"Bearer {secret}"}, "Stripe")
@@ -151,6 +170,7 @@ def cloudflare(secret: str) -> tuple[Status, str]:
 #: a 501 that says so, which is the honest answer — better than a probe that
 #: always passes and turns the Credential Centre into decoration.
 PROBES: dict[str, Probe] = {
+    "nvidia": nvidia,
     "anthropic": anthropic,
     "qwen": qwen,
     "openai": openai,

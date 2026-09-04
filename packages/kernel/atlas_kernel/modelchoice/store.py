@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from ..llm.models import Terms
+from ..llm.providers import MODELS
 from ..credentials.models import (
     PROVIDER_CREDENTIAL,
     PROVIDER_MODELS,
@@ -98,15 +100,27 @@ def available(credentials: CredentialService, *, tenant: TenantId | None
         record = credentials.record(provider=provider, tenant=tenant)
         status = record.status if record else Status.NOT_CONFIGURED
         for model in models:
+            spec = MODELS.get(model)
+            # What the provider's licence permits. Surfaced beside the
+            # credential status because they are two different reasons a model
+            # cannot do a job, and only one of them is fixed by entering a key.
+            evaluation_only = bool(
+                spec is not None and spec.terms is Terms.EVALUATION_ONLY)
             rows.append({
                 "model": model,
                 "provider": provider,
                 "credential": PROVIDER_CREDENTIAL.get(provider, provider),
                 "status": status.value,
                 "usable": model in usable,
+                "evaluation_only": evaluation_only,
+                "terms": (spec.terms.value if spec is not None
+                          else Terms.PRODUCTION.value),
                 # Why not, in the words a person can act on. An empty string
                 # here means it is usable and there is nothing to say.
-                "blocked_by": "" if model in usable else _why(status),
+                "blocked_by": (
+                    "the provider's licence permits evaluation only, not "
+                    "customer work" if evaluation_only
+                    else "" if model in usable else _why(status)),
             })
     return rows
 

@@ -59,6 +59,7 @@ class Role(StrEnum):
 #: registry name the same thing.
 PROVIDER_CREDENTIAL: dict[str, str] = {
     "qwen": "qwen",
+    "nvidia": "nvidia",
     "anthropic": "anthropic",
     "openai": "openai",
     "deepseek": "deepseek",
@@ -73,6 +74,14 @@ PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     "qwen": ("qwen-turbo", "qwen-plus", "qwen-max", "qwen3-max",
              "qwen3-coder-plus", "qwen-vl-plus", "qwen-vl-max"),
     "anthropic": ("claude-sonnet-5", "claude-opus-5"),
+    # Evaluation only — see `llm.models.Terms` and docs/qevik-docs/13_NVIDIA.md.
+    # Listed here so the Credential Centre and the Models page can show them;
+    # `ModelRegistry.resolve` is what stops one being selected for real work.
+    "nvidia": ("nvidia/nemotron-3.5-lightning-30b-a3b",
+               "nvidia/nemotron-3-super-120b-a12b",
+               "deepseek-ai/deepseek-v4-flash-0731",
+               "google/gemma-4-31b-it",
+               "meta/llama-3.2-11b-vision-instruct"),
 }
 
 

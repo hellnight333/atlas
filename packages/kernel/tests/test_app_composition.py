@@ -515,7 +515,22 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
         "the pipeline page does not tell the operator its stages are derived, "
         "so it reads like every CRM they have used, which can be typed into")
 
-    assert Path(CONSOLE / "index.html").stat().st_size < 156_000
+    # Raised again, for the measured band on the Models page and the licence
+    # column beside it. Same condition as the two before: a capability the
+    # operator gains, and a stricter rule arriving with it.
+    #
+    # The stricter rule is the one the licence work exists for. A model whose
+    # provider permits evaluation and forbids customer work must not appear in
+    # a control that assigns it to a role — a select box listing something the
+    # server will reject is a choice that is not one, and the operator finds out
+    # by picking it and watching a role stop working.
+    for offering in ("evaluation_only ? '' :", ".map((m) => `<option"):
+        assert offering not in source.replace(
+            ".filter((m) => !m.evaluation_only).map((m) =>", ""), (
+            "the role selector lists models without filtering out the ones "
+            "whose licence forbids the work")
+
+    assert Path(CONSOLE / "index.html").stat().st_size < 162_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and
@@ -1556,3 +1571,26 @@ def test_the_approval_sends_the_repository_it_displayed() -> None:
     handler = html.split("if (yes) yes.addEventListener", 1)[1].split("});", 1)[0]
     assert "input[type=hidden][name=origin]" in handler, (
         "the handler looks only for `:checked`, which a hidden input never is")
+
+
+def test_an_evaluation_only_model_cannot_be_picked_for_a_role() -> None:
+    """The registry refuses one, and the screen must not offer one either.
+
+    A select box listing a model the server will reject is a control that looks
+    like a choice and is not, and the operator learns that only after picking it
+    and watching a role stop working.
+    """
+    from atlas_kernel.qevik.app import CONSOLE
+
+    html = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    page = html.split("views.models = async", 1)[1].split("views.businesses", 1)[0]
+
+    selector = page.split("<select data-role=", 1)[1].split("</select>", 1)[0]
+    assert "evaluation_only" in selector, (
+        "the role selector offers every model, including ones whose licence "
+        "forbids the work the role does")
+    assert "filter(" in selector
+
+    assert "evaluation only" in page, (
+        "the model table does not say which models are licensed for evaluation "
+        "only, so the reason one is missing from the selector is invisible")

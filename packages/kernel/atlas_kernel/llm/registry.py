@@ -17,6 +17,19 @@ from .models import Completion, LLMError, Message, ModelSpec
 from .providers import LLMProvider
 
 
+def _evaluation_only(registration: Registration) -> bool:
+    """Whether this model's licence forbids production work.
+
+    Read defensively: a spec from an older deployment has no `terms` field, and
+    the safe reading of "unrecorded" here is *production* — refusing every model
+    whose terms nobody wrote down would take a working deployment offline for a
+    reason that is not about the models.
+    """
+    from .models import Terms
+
+    return getattr(registration.spec, "terms", Terms.PRODUCTION) is Terms.EVALUATION_ONLY
+
+
 class NoModelAvailable(LLMError):
     """Nothing registered can serve the request.
 
@@ -63,13 +76,31 @@ class ModelRegistry:
         needs_json: bool = False,
         min_context: int = 0,
         max_cost_per_mtok: float | None = None,
+        evaluating: bool = False,
     ) -> Registration:
+        """The cheapest registered model that meets the requirement.
+
+        `evaluating` admits models whose licence permits evaluation only. It
+        defaults to False, so ordinary work never lands on one: a free trial
+        tier is the cheapest thing in any catalogue, and cheapest-first would
+        otherwise select it for every job — including a customer's, which the
+        licence forbids and which would send that customer's content to a
+        provider entitled to train on it.
+
+        Named `evaluating` rather than `allow_trial` on purpose: the caller is
+        stating what it is doing, not asking for a restriction to be lifted.
+        """
         if not self._registrations:
             raise NoModelAvailable("no model registered for text.generate")
 
         if preferred is not None:
             for registration in self._registrations:
                 if registration.name == preferred:
+                    if not evaluating and _evaluation_only(registration):
+                        raise NoModelAvailable(
+                            f"{preferred} is licensed for evaluation only and "
+                            "this is not an evaluation. Its provider's terms "
+                            "permit internal testing, not production work.")
                     return registration
             known = ", ".join(sorted(r.name for r in self._registrations))
             raise NoModelAvailable(f"model {preferred!r} is not registered (known: {known})")
@@ -77,7 +108,8 @@ class ModelRegistry:
         candidates = [
             r
             for r in self._registrations
-            if (not needs_tools or r.spec.supports_tools)
+            if (evaluating or not _evaluation_only(r))
+            and (not needs_tools or r.spec.supports_tools)
             and (not needs_vision or r.spec.supports_vision)
             and (not needs_json or r.spec.supports_json)
             and r.spec.context_tokens >= min_context
@@ -95,10 +127,14 @@ class ModelRegistry:
                 )
                 if on
             ]
+            excluded = [r.name for r in self._registrations if _evaluation_only(r)]
             raise NoModelAvailable(
                 f"no registered model satisfies: {', '.join(wanted) or 'the request'}"
                 + (f", context >= {min_context}" if min_context else "")
                 + (f", cost <= ${max_cost_per_mtok}/Mtok" if max_cost_per_mtok else "")
+                + (f". {len(excluded)} model(s) were excluded as evaluation-only: "
+                   f"{', '.join(sorted(excluded)[:4])}" if excluded and not evaluating
+                   else "")
             )
 
         # Local first, then cheapest. A self-hosted model costs nothing per
@@ -155,6 +191,18 @@ def default_registry() -> ModelRegistry:
         for name in ("qwen-turbo", "qwen-plus", "qwen-max", "qwen3-max",
                      "qwen3-coder-plus", "qwen-vl-plus", "qwen-vl-max"):
             registry.register(Registration(provider=qwen, spec=MODELS[name]))
+
+    if configured("NVIDIA_API_KEY"):
+        # Evaluation only, enforced by `resolve`. Registered anyway, because a
+        # bench you cannot reach is not a bench — comparing a candidate against
+        # the model actually in use is the entire value of this provider.
+        nvidia = OpenAICompatibleProvider(name="nvidia", key_env="NVIDIA_API_KEY")
+        for name in ("nvidia/nemotron-3.5-lightning-30b-a3b",
+                     "nvidia/nemotron-3-super-120b-a12b",
+                     "deepseek-ai/deepseek-v4-flash-0731",
+                     "google/gemma-4-31b-it",
+                     "meta/llama-3.2-11b-vision-instruct"):
+            registry.register(Registration(provider=nvidia, spec=MODELS[name]))
 
     if configured("ANTHROPIC_API_KEY"):
         anthropic = AnthropicProvider()

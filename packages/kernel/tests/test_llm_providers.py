@@ -353,3 +353,124 @@ class TestTheCatalogueMatchesWhatTheModelsActuallyDo:
         for registration in default_registry().models:
             assert registration.name in MODELS
             assert registration.spec is MODELS[registration.name]
+
+
+class TestALicenceThatForbidsProductionIsEnforced:
+    """NVIDIA's hosted catalogue is free, excellent, and contractually unusable
+    for customer work.
+
+    From its API Trial Terms of Service, verbatim — §1.4: "Unless you purchase a
+    Subscription from NVIDIA or a Service Provider (as applicable), you may only
+    use the API Service for internal testing and evaluation purposes, not in
+    production." §3.3(iv) grants NVIDIA the right to use content sent through it
+    "to improve NVIDIA products and services, including AI models". §4.2
+    forbids distributing Generated Content to others — which is what a platform
+    that writes a customer's website does. §4.3 forbids uploading personal or
+    financial information.
+
+    A free tier is the cheapest thing in any catalogue, so a cheapest-first
+    registry selects it for everything by construction. That is the failure this
+    guards: not somebody deciding to break the terms, but nobody deciding
+    anything at all.
+    """
+
+    def _both(self):
+        from atlas_kernel.llm.models import ModelSpec, Terms
+
+        registry = ModelRegistry()
+        registry.register(Registration(
+            provider=_compatible(_openai_ok),
+            spec=ModelSpec(id="free-trial", provider="nvidia",
+                           base_url="https://example.invalid/v1",
+                           input_cost_per_mtok=0.0, output_cost_per_mtok=0.0,
+                           supports_tools=True, supports_json=True,
+                           terms=Terms.EVALUATION_ONLY)))
+        registry.register(Registration(
+            provider=_compatible(_openai_ok), spec=MODELS["qwen-turbo"]))
+        return registry
+
+    def test_free_and_forbidden_does_not_win_on_price(self) -> None:
+        assert self._both().resolve().name == "qwen-turbo"
+
+    def test_it_is_chosen_when_the_caller_says_it_is_evaluating(self) -> None:
+        """Not a flag that lifts a restriction — a caller stating what it does."""
+        assert self._both().resolve(evaluating=True).name == "free-trial"
+
+    def test_naming_it_explicitly_is_still_refused(self) -> None:
+        """A model selection is data an operator edits, so the terms cannot be
+        enforced only on the cheapest-first path."""
+        with pytest.raises(NoModelAvailable, match="evaluation only"):
+            self._both().resolve(preferred="free-trial")
+
+    def test_the_refusal_says_why_rather_than_that_nothing_exists(self) -> None:
+        from atlas_kernel.llm.models import ModelSpec, Terms
+
+        registry = ModelRegistry()
+        registry.register(Registration(
+            provider=_compatible(_openai_ok),
+            spec=ModelSpec(id="free-vision", provider="nvidia",
+                           base_url="https://example.invalid/v1",
+                           supports_vision=True, terms=Terms.EVALUATION_ONLY)))
+        with pytest.raises(NoModelAvailable, match="evaluation-only"):
+            registry.resolve(needs_vision=True)
+
+    def test_a_spec_with_no_recorded_terms_is_production(self) -> None:
+        """The safe reading of "unrecorded" is production. Refusing every model
+        whose terms nobody wrote down would take a working deployment offline
+        for a reason that is not about the models."""
+        from atlas_kernel.llm.models import Terms
+
+        assert MODELS["qwen-turbo"].terms is Terms.PRODUCTION
+        assert MODELS["claude-sonnet-5"].terms is Terms.PRODUCTION
+
+
+class TestTheNvidiaCatalogue:
+    """Registered because they were called, and fenced because of the terms."""
+
+    def test_every_nvidia_model_is_evaluation_only(self) -> None:
+        from atlas_kernel.llm.models import Terms
+
+        nvidia = [s for s in MODELS.values() if s.provider == "nvidia"]
+        assert nvidia, "no NVIDIA models are declared"
+        for spec in nvidia:
+            assert spec.terms is Terms.EVALUATION_ONLY, spec.id
+
+    def test_they_do_not_take_work_from_a_paid_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """They cost nothing per token, so cheapest-first would route every job
+        to a provider whose licence forbids exactly that."""
+        monkeypatch.setenv("QEVIK_NVIDIA_API_KEY", "n")
+        monkeypatch.setenv("QEVIK_DASHSCOPE_API_KEY", "x")
+        registry = default_registry()
+
+        assert any(r.spec.provider == "nvidia" for r in registry.models)
+        assert registry.resolve().spec.provider == "qwen"
+        assert registry.resolve(needs_vision=True).spec.provider == "qwen"
+
+    def test_with_nothing_else_configured_there_is_no_fallback_to_them(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tempting bug: a deployment with only the free key would 'work'
+        and be in breach the whole time."""
+        monkeypatch.setenv("QEVIK_NVIDIA_API_KEY", "n")
+        for prefix in ("QEVIK_", "ATLAS_", ""):
+            for name in ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "ANTHROPIC_API_KEY"):
+                monkeypatch.delenv(f"{prefix}{name}", raising=False)
+
+        registry = default_registry()
+        assert registry.models, "nothing was registered at all"
+        with pytest.raises(NoModelAvailable, match="evaluation-only"):
+            registry.resolve()
+        # And they are reachable for the thing they are for.
+        assert registry.resolve(evaluating=True).spec.provider == "nvidia"
+
+    def test_the_base_url_is_the_one_a_key_actually_calls(self) -> None:
+        """`build.nvidia.com` is the catalogue people browse; it is not an API
+        host, and pointing a client at it fails in a way that reads like a bad
+        key."""
+        from atlas_kernel.llm.providers import NVIDIA_BASE_URL
+
+        assert NVIDIA_BASE_URL.startswith("https://integrate.api.nvidia.com")
+        for spec in (s for s in MODELS.values() if s.provider == "nvidia"):
+            assert spec.base_url == NVIDIA_BASE_URL, spec.id

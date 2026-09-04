@@ -187,6 +187,14 @@ INTEGRATIONS: tuple[Integration, ...] = (
         setup_url="https://platform.openai.com/api-keys",
         blocks=("agent:implementation",)),
     Integration(
+        id="nvidia", category=Category.MODEL, name="NVIDIA (build.nvidia.com)",
+        purpose=("Run reasoning, coding, vision and embedding models on "
+                 "NVIDIA's hosted inference — one key, many model families."),
+        kind=ConnectionKind.API_TOKEN, credential="QEVIK_NVIDIA_API_KEY",
+        setup_url="https://build.nvidia.com/",
+        blocks=("agent:planning", "agent:implementation", "agent:review",
+                "agent:research")),
+    Integration(
         id="deepseek", category=Category.MODEL, name="DeepSeek",
         purpose="Run cheaper background and summarisation work.",
         kind=ConnectionKind.API_TOKEN, credential="QEVIK_DEEPSEEK_API_KEY",

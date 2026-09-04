@@ -391,6 +391,11 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .wrap-scroll { overflow-x: auto; }
 
 .note { color: var(--muted); font-size: 13px; }
+/* Digits that line up in a column. `tabular-nums` because proportional figures
+   make 900 ms and 1100 ms the same width, and a latency column is read by
+   comparing lengths before anybody reads the numbers. */
+td.num { text-align: right; font-variant-numeric: tabular-nums;
+         font-family: var(--mono, ui-monospace, monospace); }
 /* A heading between two bands of rows, so the second band is not read as a
    continuation of the first. */
 h3.section {
@@ -2390,9 +2395,62 @@ views.credentials = async () => {
   return html;
 };
 
+/* What each model did when it was last called.
+ *
+ * A provider's catalogue is not a list of what you can run: NVIDIA's lists 81
+ * models and most of them answer 404 with a key that works. So the table above
+ * says what is *registered* and this one says what was *reached*, and they are
+ * deliberately two tables rather than one column, because they answer different
+ * questions and a reader who conflates them will trust an offering nobody has
+ * tried.
+ *
+ * Three states drawn three ways, and the third is the important one. A model
+ * nobody has called has not failed; on a fresh deployment every row is that,
+ * and painting them red would invent a fleet of faults.
+ */
+function measured(bench) {
+  if (!bench) {
+    return `<div class="card"><h3>Measured</h3>
+      ${fail('The benchmark could not be read.')}</div>`;
+  }
+  if (bench.known === false) {
+    return `<div class="card"><h3>Measured</h3>
+      ${empty(esc(bench.detail || 'nothing has been measured'))}</div>`;
+  }
+  const rows = bench.rows || [];
+  const c = (bench.summary && bench.summary.counts) || {};
+  const tone = { REACHED: 'ok', REFUSED: 'bad', NOT_VERIFIED: 'warn' };
+  const fastest = (bench.summary || {}).fastest;
+
+  return `<div class="card"><h3>Measured</h3>
+    <p class="note">${c.REACHED || 0} answered · ${c.REFUSED || 0} refused ·
+      ${c.NOT_VERIFIED || 0} never called${fastest
+        ? ` · fastest <code>${esc(fastest.model)}</code> at ${fastest.latency_ms} ms`
+        : ''}</p>
+    <div class="wrap-scroll"><table><thead><tr>
+      <th>Model</th><th>Provider</th><th>State</th><th>Latency</th>
+      <th>Cost</th><th>When</th><th>Why not</th>
+    </tr></thead><tbody>
+    ${rows.map((r) => `<tr>
+      <td><code>${esc(r.model)}</code>${r.registered ? '' : ' <span class="note">(not registered)</span>'}</td>
+      <td>${esc(r.provider || '—')}</td>
+      <td>${pill(r.state, tone[r.state])}</td>
+      <td class="num">${r.latency_ms == null ? '—' : r.latency_ms + ' ms'}</td>
+      <td class="num">${r.cost_usd == null
+        ? '<span class="unknown">UNKNOWN</span>' : '$' + r.cost_usd}</td>
+      <td class="note">${r.at ? when(r.at) : '—'}</td>
+      <td class="note">${esc((r.reason || '').slice(0, 90))}</td>
+    </tr>`).join('')}
+    </tbody></table></div>
+    <p class="note" style="margin-top:.75rem">${esc((bench.summary || {}).note || '')}</p>
+    ${bench.corrupt_lines ? `<p class="note">${bench.corrupt_lines} measurement
+      line(s) would not parse and were skipped.</p>` : ''}</div>`;
+}
+
 views.models = async () => {
-  const [catalogue, selection] = await Promise.all([
+  const [catalogue, selection, bench] = await Promise.all([
     API.get('/api/models'), API.get('/api/models/selection'),
+    API.get('/api/models/benchmark').catch(() => null),
   ]);
   const html = `
     <header class="page"><h2>Models</h2>
@@ -2405,19 +2463,32 @@ views.models = async () => {
       </div><div class="actions">
         <select data-role="${esc(r.role)}">
           <option value="">registry default</option>
-          ${(catalogue.models || []).map((m) => `<option value="${esc(m.model)}"
+          ${(catalogue.models || []).filter((m) => !m.evaluation_only).map((m) =>
+            `<option value="${esc(m.model)}"
             ${selection.selection[r.role] === m.model ? 'selected' : ''}>${esc(m.model)}${
               m.usable ? '' : ' (needs ' + esc(m.credential) + ')'}</option>`).join('')}
         </select></div></div>`).join('')}</div>
     <div class="card"><h3>Available models</h3><div class="wrap-scroll">
-      <table><thead><tr><th>Model</th><th>Provider</th><th>Status</th><th>Blocked by</th></tr></thead><tbody>
+      <table><thead><tr><th>Model</th><th>Provider</th><th>Licence</th>
+      <th>Status</th><th>Blocked by</th></tr></thead><tbody>
       ${(catalogue.models || []).map((m) => `<tr><td><code>${esc(m.model)}</code></td>
-        <td>${esc(m.provider)}</td><td>${pill(m.status)}</td>
+        <td>${esc(m.provider)}</td>
+        <td>${m.evaluation_only ? pill('evaluation only', 'warn') : ''}</td>
+        <td>${pill(m.status)}</td>
         <td class="note">${esc(m.blocked_by || '')}</td></tr>`).join('')}
       </tbody></table></div>
+      ${(catalogue.models || []).some((m) => m.evaluation_only) ? `
+      <p class="note" style="margin-top:.75rem"><strong>Evaluation only</strong>
+      means the provider's licence permits internal testing and not customer
+      work. Those models are absent from the selectors above and the registry
+      refuses to choose one, including when it is named. They are free, which is
+      exactly why: cheapest-first would otherwise route every job to a provider
+      whose terms forbid it, and whose terms also allow it to train on whatever
+      passes through.</p>` : ''}
       <p class="note" style="margin-top:.75rem">Cost per call is reported by the
       provider on each invocation and shown on the mission. Where a provider does
-      not report one it is ${pill('UNKNOWN')}, never zero.</p></div>`;
+      not report one it is ${pill('UNKNOWN')}, never zero.</p></div>
+    ${measured(bench)}`;
 
   queueMicrotask(() => {
     document.querySelectorAll('select[data-role]').forEach((select) => {
