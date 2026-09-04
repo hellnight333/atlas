@@ -147,7 +147,13 @@ def default_registry() -> ModelRegistry:
 
     if configured("DASHSCOPE_API_KEY") or configured("QWEN_API_KEY"):
         qwen = OpenAICompatibleProvider(name="qwen", key_env="DASHSCOPE_API_KEY")
-        for name in ("qwen-turbo", "qwen-plus", "qwen-max"):
+        # Every one of these was called against the configured workspace before
+        # being listed here. A Model Studio workspace serves the models it has
+        # been granted and 403s the rest, so a catalogue copied from the vendor's
+        # documentation registers models this account cannot run — which the
+        # cheapest-first policy then selects first, by construction.
+        for name in ("qwen-turbo", "qwen-plus", "qwen-max", "qwen3-max",
+                     "qwen3-coder-plus", "qwen-vl-plus", "qwen-vl-max"):
             registry.register(Registration(provider=qwen, spec=MODELS[name]))
 
     if configured("ANTHROPIC_API_KEY"):

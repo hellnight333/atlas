@@ -18,7 +18,16 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-from .models import Completion, LLMError, Message, ModelSpec, NotConfigured, RateLimited, Role
+from .models import (
+    Completion,
+    LLMError,
+    Message,
+    ModelSpec,
+    NotConfigured,
+    RateLimited,
+    Role,
+    Unaffordable,
+)
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 
@@ -264,10 +273,54 @@ def _raise_for_status(response: httpx.Response, provider: str) -> None:
     """
     if response.status_code == 429:
         raise RateLimited(f"{provider} rate-limited the request (429)")
+    if response.status_code < 400:
+        return
+
+    # Billing is checked before credentials, because the two failures arrive
+    # wearing each other's status codes. A valid Anthropic key with an empty
+    # balance answers 400; an Aliyun workspace that has not purchased a model
+    # answers 403 with a key that is perfectly good. Reading either by status
+    # alone points the reader at the wrong repair.
+    #
+    # The body decides, but never reaches the message: provider errors echo the
+    # request, and for this capability the request is the prompt. So these are
+    # markers to match on, and every raise below carries a fixed sentence.
+    marker = _billing_marker(response)
+    if marker:
+        raise Unaffordable(
+            f"{provider} accepted the credentials and declined to bill them "
+            f"({marker}). The key is not the problem: the account cannot pay "
+            f"for this model. Add credit, or route to a model that is paid for."
+        )
+
     if response.status_code in (401, 403):
         raise NotConfigured(f"{provider} rejected the credentials ({response.status_code})")
-    if response.status_code >= 400:
-        raise LLMError(f"{provider} refused the request ({response.status_code})")
+    raise LLMError(f"{provider} refused the request ({response.status_code})")
+
+
+#: Substrings that mean "your account cannot pay for this", lowercased. Each is
+#: a phrase a provider actually returned, not one guessed from documentation:
+#: the first two came from Anthropic and Aliyun replies to live probes.
+_BILLING_MARKERS: tuple[tuple[str, str], ...] = (
+    ("credit balance is too low", "no credit"),
+    ("accessdenied.unpurchased", "model not purchased"),
+    ("insufficient_quota", "quota exhausted"),
+    ("insufficient balance", "no credit"),
+    ("exceeded your current quota", "quota exhausted"),
+    ("billing", "a billing problem"),
+)
+
+
+def _billing_marker(response: httpx.Response) -> str | None:
+    """Name the billing failure, or return None. Never returns provider text."""
+    try:
+        body = response.text[:4000].lower()
+    except Exception:  # pragma: no cover - a body that cannot be read is not billing
+        return None
+    for needle, verdict in _BILLING_MARKERS:
+        if needle in body:
+            return verdict
+    return None
 
 
 def _completion(
@@ -346,7 +399,13 @@ MODELS: dict[str, ModelSpec] = {
         output_cost_per_mtok=1.20,
         supports_tools=True,
         supports_json=True,
-        supports_vision=True,
+        # Text only. This said `supports_vision=True` and was wrong, which the
+        # registry turned into the worst available outcome: a vision request
+        # picked qwen-plus as the cheapest capable model, and the model replied
+        # "I can't view or analyze images" with HTTP 200 — a confident answer
+        # about a picture it never received. Sending it a red square and reading
+        # the reply is what found it; nothing in the type system could.
+        supports_vision=False,
     ),
     "qwen-max": ModelSpec(
         id="qwen-max",
@@ -356,6 +415,55 @@ MODELS: dict[str, ModelSpec] = {
         max_output_tokens=32_768,
         input_cost_per_mtok=1.60,
         output_cost_per_mtok=6.40,
+        supports_tools=True,
+        supports_json=True,
+    ),
+    # Qwen's vision line. Verified by sending an image and checking that the
+    # answer described it — the only test that distinguishes a model which sees
+    # from one which politely guesses.
+    "qwen-vl-plus": ModelSpec(
+        id="qwen-vl-plus",
+        provider="qwen",
+        base_url=QWEN_BASE_URL,
+        context_tokens=131_072,
+        max_output_tokens=8_192,
+        input_cost_per_mtok=0.21,
+        output_cost_per_mtok=0.63,
+        supports_json=True,
+        supports_vision=True,
+    ),
+    "qwen-vl-max": ModelSpec(
+        id="qwen-vl-max",
+        provider="qwen",
+        base_url=QWEN_BASE_URL,
+        context_tokens=131_072,
+        max_output_tokens=8_192,
+        input_cost_per_mtok=0.80,
+        output_cost_per_mtok=3.20,
+        supports_json=True,
+        supports_vision=True,
+    ),
+    "qwen3-max": ModelSpec(
+        id="qwen3-max",
+        provider="qwen",
+        base_url=QWEN_BASE_URL,
+        context_tokens=262_144,
+        max_output_tokens=32_768,
+        input_cost_per_mtok=1.20,
+        output_cost_per_mtok=6.00,
+        supports_tools=True,
+        supports_json=True,
+    ),
+    # Code. Cheaper than any Claude tier and the reason a coding job does not
+    # have to wait on a topped-up Anthropic balance.
+    "qwen3-coder-plus": ModelSpec(
+        id="qwen3-coder-plus",
+        provider="qwen",
+        base_url=QWEN_BASE_URL,
+        context_tokens=1_000_000,
+        max_output_tokens=65_536,
+        input_cost_per_mtok=1.00,
+        output_cost_per_mtok=5.00,
         supports_tools=True,
         supports_json=True,
     ),

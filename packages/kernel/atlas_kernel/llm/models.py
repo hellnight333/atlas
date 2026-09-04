@@ -126,3 +126,19 @@ class NotConfigured(LLMError):
 
 class RateLimited(LLMError):
     """Provider throttled the request. Retryable, unlike the others."""
+
+
+class Unaffordable(LLMError):
+    """The account cannot pay for this model right now.
+
+    Its own type because the fix is neither a retry nor a new key, and both of
+    the generic answers send the reader somewhere useless. A valid Anthropic key
+    with an empty balance answers HTTP 400, which mapped to "refused the request
+    (400)" and reads exactly like a malformed payload — an afternoon spent
+    reading a prompt that was always fine. An Aliyun workspace that has not
+    purchased a model answers 403, which mapped to "rejected the credentials"
+    and sends the reader to rotate a key that works.
+
+    Distinguishing this from :class:`NotConfigured` is the whole point: one is
+    "there is no key", this one is "the key is good and the wallet is not".
+    """

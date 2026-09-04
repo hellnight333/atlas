@@ -250,3 +250,106 @@ class TestDefaults:
         assert {"qwen-turbo", "qwen-plus", "qwen-max"} <= set(MODELS)
         assert MODELS["qwen3-72b"].input_cost_per_mtok == 0.0
         assert "deepseek-chat" in MODELS
+
+
+class TestBillingIsNotAuthentication:
+    """The two failures arrive wearing each other's status codes.
+
+    Both of these are transcripts of live replies, not invented fixtures. A
+    valid Anthropic key with an empty balance answers 400; an Aliyun workspace
+    that has not purchased a model answers 403 with a key that works elsewhere.
+    Read by status alone, the first reads as a malformed request and the second
+    as a bad key, and both send the reader to fix something that is not broken.
+    """
+
+    ANTHROPIC_NO_CREDIT = (
+        '{"type":"error","error":{"type":"invalid_request_error","message":'
+        '"Your credit balance is too low to access the Anthropic API. Please go '
+        'to Plans & Billing to upgrade or purchase credits."}}'
+    )
+    ALIYUN_UNPURCHASED = (
+        '{"error":{"message":"Access to model denied. Please make sure you are '
+        'eligible for using the model.","type":"AccessDenied.Unpurchased",'
+        '"code":"AccessDenied.Unpurchased"}}'
+    )
+
+    def test_an_empty_balance_is_not_a_malformed_request(self) -> None:
+        from atlas_kernel.llm.models import Unaffordable
+
+        handler = lambda r: httpx.Response(400, text=self.ANTHROPIC_NO_CREDIT)  # noqa: E731
+        with pytest.raises(Unaffordable) as raised:
+            _anthropic(handler).complete(
+                HELLO, MODELS["claude-sonnet-5"], max_tokens=10, temperature=0
+            )
+        assert "no credit" in str(raised.value)
+        assert "key is not the problem" in str(raised.value)
+
+    def test_an_unpurchased_model_is_not_a_rejected_key(self) -> None:
+        from atlas_kernel.llm.models import NotConfigured, Unaffordable
+
+        handler = lambda r: httpx.Response(403, text=self.ALIYUN_UNPURCHASED)  # noqa: E731
+        with pytest.raises(Unaffordable) as raised:
+            _compatible(handler).complete(
+                HELLO, MODELS["qwen-plus"], max_tokens=10, temperature=0
+            )
+        # And specifically not the type that means "go and find a key".
+        assert not isinstance(raised.value, NotConfigured)
+        assert "not purchased" in str(raised.value)
+
+    def test_a_billing_failure_still_never_echoes_the_prompt(self) -> None:
+        """The new branch reads the body. It must still not repeat it."""
+        from atlas_kernel.llm.models import Unaffordable
+
+        body = '{"error":{"message":"insufficient_quota","prompt":"SECRET-PROMPT-TEXT"}}'
+        with pytest.raises(Unaffordable) as raised:
+            _anthropic(lambda r: httpx.Response(400, text=body)).complete(
+                HELLO, MODELS["claude-sonnet-5"], max_tokens=10, temperature=0
+            )
+        assert "SECRET-PROMPT-TEXT" not in str(raised.value)
+
+    def test_a_plain_401_is_still_a_credentials_problem(self) -> None:
+        """The billing check must not swallow the failure it sits in front of."""
+        with pytest.raises(NotConfigured):
+            _anthropic(lambda r: httpx.Response(401, text='{"error":"bad key"}')).complete(
+                HELLO, MODELS["claude-sonnet-5"], max_tokens=10, temperature=0
+            )
+
+
+class TestTheCatalogueMatchesWhatTheModelsActuallyDo:
+    def test_a_text_model_is_not_advertised_as_seeing(self) -> None:
+        """qwen-plus was declared vision-capable and is not.
+
+        The cost-first policy made that the worst possible kind of wrong: a
+        request needing vision selected qwen-plus as the cheapest model carrying
+        the flag, and got back "I can't view or analyze images" with HTTP 200 —
+        a fluent answer about an image the model never received. Sending it a
+        red square is what found it.
+        """
+        assert MODELS["qwen-plus"].supports_vision is False
+        assert MODELS["qwen-max"].supports_vision is False
+        assert MODELS["qwen-turbo"].supports_vision is False
+
+    def test_a_vision_request_routes_to_a_model_that_can_see(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QEVIK_DASHSCOPE_API_KEY", "x")
+        chosen = default_registry().resolve(needs_vision=True)
+        assert chosen.name.startswith("qwen-vl-"), chosen.name
+        assert MODELS[chosen.name].supports_vision is True
+
+    def test_the_cheap_default_is_still_the_cheap_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Adding models must not quietly promote an expensive one to default."""
+        monkeypatch.setenv("QEVIK_DASHSCOPE_API_KEY", "x")
+        monkeypatch.setenv("QEVIK_ANTHROPIC_API_KEY", "y")
+        assert default_registry().resolve().name == "qwen-turbo"
+
+    def test_every_registered_model_exists_in_the_catalogue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QEVIK_DASHSCOPE_API_KEY", "x")
+        monkeypatch.setenv("QEVIK_ANTHROPIC_API_KEY", "y")
+        for registration in default_registry().models:
+            assert registration.name in MODELS
+            assert registration.spec is MODELS[registration.name]
