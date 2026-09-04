@@ -532,7 +532,7 @@ while IFS= read -r line; do
     MISMATCHES=$((MISMATCHES + 1))
   fi
 done <<< "$(git -C "$ROOT" -c core.quotepath=false ls-tree -r "$SHA" \
-             -- packages/kernel/atlas_kernel infra apps/control/src)"
+             -- packages/kernel/atlas_kernel infra apps/control/src $ROADMAP_PATH)"
 
 FOUND="$(find "$EXPORT" \( -type f -o -type l \) -print | wc -l | tr -d ' ')"
 if [ "$MISMATCHES" != 0 ] || [ "$FOUND" != "$EXPECTED" ]; then
