@@ -106,29 +106,73 @@ def _fleet(*workers: dict) -> dict:
     return {"known": True, "workers": list(workers), "counts": {"total": len(workers)}}
 
 
-def test_a_free_worker_makes_its_capability_ready() -> None:
-    result = floor(_fleet({"name": "worker-research", "capabilities": ["research"],
+def test_a_free_worker_makes_the_agent_it_serves_ready() -> None:
+    """The shape production actually publishes: a `serves` field and tool ids."""
+    result = floor(_fleet({"name": "worker-research", "serves": "researcher",
+                           "capabilities": ["dns", "http-fetch"],
                            "healthy": True, "available": True, "load": 0}))
     desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
     assert desks["researcher"]["state"] == "ready"
     assert desks["researcher"]["worker"] == "worker-research"
-    # An agent whose capability nothing serves is idle, not ready.
+    # An agent nothing serves is idle, not ready.
     assert desks["planner"]["state"] == "idle"
 
 
-def test_a_busy_worker_makes_its_capability_working() -> None:
-    result = floor(_fleet({"name": "worker-1", "capabilities": ["verify"],
+def test_a_worker_is_matched_by_its_tools_as_well_as_by_serves() -> None:
+    """One machine started for one agent can still run another whose tools it
+    has — the website builders all need `website-generator`."""
+    result = floor(_fleet({"name": "worker-delivery", "serves": "website-builder",
+                           "capabilities": ["website-generator"],
+                           "healthy": True, "available": True}))
+    desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
+    assert desks["website-builder"]["state"] == "ready"      # by serves
+    assert desks["portfolio-builder"]["state"] == "ready"    # by tools
+    assert desks["site-publisher"]["state"] == "idle"        # needs site-publish
+
+
+def test_an_agent_with_no_tools_is_not_served_by_everything() -> None:
+    """"needs nothing" is not "runs anywhere".
+
+    The planner declares no tools. Matching it on an empty subset would draw it
+    ready on a machine that can only publish sites.
+    """
+    result = floor(_fleet({"name": "publisher", "serves": "site-publisher",
+                           "capabilities": ["site-publish"],
+                           "healthy": True, "available": True}))
+    desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
+    assert desks["planner"]["state"] == "idle"
+    assert desks["site-publisher"]["state"] == "ready"
+
+
+def test_a_worker_speaking_the_agent_vocabulary_matches_nothing() -> None:
+    """The bug this join replaced.
+
+    Workers publish tools and a `serves` role; nothing anywhere publishes a
+    `Capability`. Joining on one produced a floor where five ready workers drew
+    twenty-one idle desks — which looked plausible, and was wrong.
+    """
+    result = floor(_fleet({"name": "wrong-vocabulary", "capabilities": ["research"],
+                           "healthy": True, "available": True}))
+    desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
+    assert desks["researcher"]["state"] == "idle"
+
+
+def test_a_busy_worker_makes_the_desk_working() -> None:
+    result = floor(_fleet({"name": "worker-1", "serves": "self-check",
+                           "capabilities": ["filesystem", "shell"],
                            "healthy": True, "available": False, "load": 1}))
     desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
     assert desks["self-check"]["state"] == "working"
     assert "worker-1" in desks["self-check"]["detail"]
 
 
-def test_a_free_worker_wins_over_a_busy_one_for_the_same_capability() -> None:
+def test_a_free_worker_wins_over_a_busy_one_serving_the_same_agent() -> None:
     """Two machines, one busy: the room reads ready, because work can start."""
     result = floor(_fleet(
-        {"name": "busy", "capabilities": ["research"], "healthy": True, "available": False},
-        {"name": "free", "capabilities": ["research"], "healthy": True, "available": True},
+        {"name": "busy", "serves": "researcher", "capabilities": ["dns", "http-fetch"],
+         "healthy": True, "available": False},
+        {"name": "free", "serves": "researcher", "capabilities": ["dns", "http-fetch"],
+         "healthy": True, "available": True},
     ))
     desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
     assert desks["researcher"]["state"] == "ready"
@@ -138,7 +182,8 @@ def test_a_free_worker_wins_over_a_busy_one_for_the_same_capability() -> None:
 def test_a_stale_worker_serves_nothing() -> None:
     """Stale keeps the mission it holds and takes nothing new — so the desk it
     would have served is idle, not ready."""
-    result = floor(_fleet({"name": "gone", "capabilities": ["research"],
+    result = floor(_fleet({"name": "gone", "serves": "researcher",
+                           "capabilities": ["dns", "http-fetch"],
                            "healthy": False, "available": True}))
     desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
     assert desks["researcher"]["state"] == "idle"
@@ -151,7 +196,8 @@ def test_a_blocked_agent_stays_blocked_even_with_a_free_worker() -> None:
     The correspondent has a worker that could run it and no key to send with;
     reporting that as `ready` is how an operator concludes outreach works.
     """
-    result = floor(_fleet({"name": "any", "capabilities": ["correspond"],
+    result = floor(_fleet({"name": "any", "serves": "correspondent",
+                           "capabilities": ["smtp"],
                            "healthy": True, "available": True}))
     desks = {d["agent"]: d for room in result["rooms"] for d in room["desks"]}
     assert desks["correspondent"]["state"] == "blocked"

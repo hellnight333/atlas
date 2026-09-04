@@ -89,10 +89,45 @@ def _room_of(capability: Capability) -> str:
     return "unassigned"
 
 
-def _desk(agent: Agent, *, fleet_known: bool, serving: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _serving_node(agent: Agent, workers: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Which machine, if any, could run this agent's work.
+
+    A worker does not advertise capabilities in the agent's vocabulary. It
+    reports the **tools** it has — `http-fetch`, `site-publish`, `shell` — and a
+    `serves` field naming the agent it was started for. The first version of
+    this joined on `Capability`, which nothing publishes, so a host with five
+    ready workers drew twenty-one idle desks. Found by reading the live floor,
+    not by reading the code.
+
+    Two joins, most precise first:
+
+    1. `serves` names exactly this agent.
+    2. every tool the agent needs is present on the worker. An agent with no
+       tools at all is not matched this way: "needs nothing" is not "runs
+       anywhere", and claiming otherwise would draw a planner as ready on a
+       machine that only publishes sites.
+
+    A free worker wins over a busy one, so a room with one of each reads
+    `ready` — work can start.
+    """
+    best: dict[str, Any] | None = None
+    for node in workers:
+        if not node.get("healthy"):
+            continue  # stale: keeps its mission, takes nothing new
+        tools = set(node.get("capabilities", []) or [])
+        serves = node.get("serves") == agent.id
+        by_tools = bool(agent.tools) and set(agent.tools) <= tools
+        if not (serves or by_tools):
+            continue
+        if best is None or (node.get("available") and not best.get("available")):
+            best = node
+    return best
+
+
+def _desk(agent: Agent, *, fleet_known: bool, workers: list[dict[str, Any]]) -> dict[str, Any]:
     """One agent, as a seat on the floor."""
     blockers = [need.value for need in agent.blocked_by]
-    node = serving.get(agent.capability.value)
+    node = _serving_node(agent, workers) if fleet_known else None
 
     if blockers:
         state = "blocked"
@@ -141,18 +176,8 @@ def floor(fleet: dict[str, Any] | None = None,
     fleet = fleet or {"known": False, "workers": []}
     fleet_known = bool(fleet.get("known"))
 
-    # Capability → the best node serving it. Prefer a free one, so a room with
-    # one busy and one free worker reads "ready", not "working".
-    serving: dict[str, dict[str, Any]] = {}
-    for node in fleet.get("workers", []) if fleet_known else []:
-        if not node.get("healthy"):
-            continue  # stale: keeps its mission, takes nothing new
-        for capability in node.get("capabilities", []):
-            best = serving.get(capability)
-            if best is None or (node.get("available") and not best.get("available")):
-                serving[capability] = node
-
-    desks = [_desk(agent, fleet_known=fleet_known, serving=serving) for agent in AGENTS]
+    workers = list(fleet.get("workers", [])) if fleet_known else []
+    desks = [_desk(agent, fleet_known=fleet_known, workers=workers) for agent in AGENTS]
     by_room: dict[str, list[dict[str, Any]]] = {}
     for desk in desks:
         by_room.setdefault(desk["room"], []).append(desk)

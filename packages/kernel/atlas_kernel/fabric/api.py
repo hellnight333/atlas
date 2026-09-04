@@ -49,6 +49,11 @@ def build_router() -> APIRouter:
             workers = [{
                 "name": node.worker_name,
                 "capabilities": sorted(node.capabilities),
+                # The agent this worker was started for. It is how a desk finds
+                # its machine: without it the floor joins on a vocabulary
+                # nothing publishes, and a host with five ready workers draws
+                # twenty-one idle desks.
+                "serves": node.serves,
                 "healthy": node.fresh,
                 "available": node.free,
                 "load": node.load,
