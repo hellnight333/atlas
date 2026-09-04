@@ -493,21 +493,6 @@ if ! git -C "$ROOT" archive --format=tar "$SHA" \
   exit 3
 fi
 
-# MASTER_STATE.md is a document the *runtime* reads: `/control/roadmap` serves
-# it and the console's Roadmap page renders it. It lives at the repository root,
-# which is not one of the three shipped subtrees, so the deployed host had the
-# route and not the document — the route reported "could not be read", honestly
-# and uselessly, exactly the way /office answered 200 with the wrong page.
-#
-# Moved into the infra subtree here rather than made a fourth shipped path:
-# infra is already exported, manifested, transferred and verified, so this
-# inherits all four instead of adding a parallel route through each. The reader
-# looks for it in both places — the repository root in development, `infra/`
-# on a host — and a test asserts this line and that reader agree.
-if [ -f "$EXPORT/MASTER_STATE.md" ]; then
-  mv "$EXPORT/MASTER_STATE.md" "$EXPORT/infra/MASTER_STATE.md"
-fi
-
 # Verify the export against the commit before anything reads it. `git archive`
 # honours attributes (export-ignore above all), so "the tar unpacked" is not
 # the same as "this is the commit": every blob the commit lists must be present
@@ -556,6 +541,28 @@ if [ "$MISMATCHES" != 0 ] || [ "$FOUND" != "$EXPECTED" ]; then
   exit 3
 fi
 echo "export verified: $EXPECTED files from $SHA"
+
+# MASTER_STATE.md is a document the *runtime* reads: `/control/roadmap` serves
+# it and the console's Roadmap page renders it. It lives at the repository root,
+# which is not one of the three shipped subtrees, so the deployed host had the
+# route and not the document — the route reported "could not be read", honestly
+# and uselessly, exactly the way /office answered 200 with the wrong page.
+#
+# Moved into the infra subtree rather than made a fourth shipped path: infra is
+# already manifested, transferred and verified, so this inherits all three
+# instead of adding a parallel route through each. The reader looks in both
+# places — repository root in a checkout, `infra/` on a host — and a test
+# asserts this line and that reader agree.
+#
+# **After** the export verification, not before. That check counts every file
+# under the export against the commit's own listing for the three subtrees, so
+# a file moved into one of them beforehand is one more than the commit has and
+# the deploy refuses — which is the check working, and the reason this sits
+# here instead.
+if [ -f "$EXPORT/MASTER_STATE.md" ]; then
+  mv "$EXPORT/MASTER_STATE.md" "$EXPORT/infra/MASTER_STATE.md"
+  echo "shipping MASTER_STATE.md as infra/MASTER_STATE.md"
+fi
 
 # The host manifest verifies files by their content, and a symlink has none: it
 # would be listed as its target's bytes or not at all, and either way the check

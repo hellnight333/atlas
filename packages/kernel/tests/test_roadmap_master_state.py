@@ -161,8 +161,20 @@ def test_the_deploy_ships_the_document_the_reader_looks_for() -> None:
     script = (root / "infra" / "deploy_control.sh").read_text(encoding="utf-8")
 
     exported = script.split('git -C "$ROOT" archive', 1)[1][:400]
-    assert "MASTER_STATE.md" in exported, (
+    assert "$ROADMAP_PATH" in exported, (
         "the export does not include MASTER_STATE.md, so nothing reaches the host")
+    assert 'cat-file -e "$SHA:MASTER_STATE.md"' in script, (
+        "whether to ship it is not asked of the commit, so a commit that "
+        "predates the document would fail to export at all")
+
+    # After the export verification, never before: that check counts files
+    # against the commit's own listing, and a file moved into a shipped subtree
+    # early is one more than the commit has.
+    verified = script.index('echo "export verified:')
+    moved = script.index('mv "$EXPORT/MASTER_STATE.md"')
+    assert verified < moved, (
+        "the document is moved into a shipped subtree before the export is "
+        "verified, so every deploy refuses with an off-by-one file count")
 
     destination = script.split('mv "$EXPORT/MASTER_STATE.md" "$EXPORT/', 1)[1
                                ].split('"', 1)[0]
