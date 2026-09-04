@@ -338,6 +338,40 @@ explicit that the goal is not to make dental discovery work but to prove the
 generic primitive. Building an extractor now would be picking a source before
 reassessing the architecture, which is the step the brief asks for next.
 
+## A sentence became a change — 2026-09-04
+
+The claim `test_chat_to_commit.py` makes was true and had only ever been proven
+with `--agent fake`. Everything between the sentence and the commit was real;
+the agent in the middle was a stub that writes files, and the model-backed one
+could not.
+
+`LLMCodingAgent.implement` asked the model, returned its prose and set
+`claims_done=True` having touched nothing. Observed on production as
+`mission-2e19f410464e`: three qwen-turbo calls, $0.000041 recorded, three
+attempts, "the agent reported success and produced nothing", a report written,
+and nothing done. The worker was right every time.
+
+It now returns whole files in a sentinel form and they are written inside the
+workspace. Writing is all it does — no commands, no shell, no fetches, with a
+test that reads the class and fails on `subprocess`, `eval`, `unlink` and their
+neighbours. Paths resolve before any byte is written, so a reply naming one
+legitimate file and one escape writes neither. `claims_done` follows the
+workspace rather than the model's confidence.
+
+Four things had to be true before that mattered, and none of them were:
+
+| What was wrong | How it looked |
+|---|---|
+| The console refused its own operator on every tenant-scoped page | 59 companies in the database, empty screens |
+| The ledger wrote one factory's rows and read another's | credentials, chat, customer tasks and quota all written, none readable — on a Postgres host only |
+| The vault gated registration while the shell supplied the key | a credential stored, enabled, verified, and every call failing |
+| No process ran `--agent llm` | an approved plan reached `queued` and stopped, permanently |
+
+And two more found while proving it: a worker held the credential records it
+read at boot, so a key verified in the Credential Centre never reached it
+without a restart; and the model-backed worker had no `--origin`, so the only
+missions it could accept had no workspace to work in.
+
 ## Blocked, precisely
 
 **Verifying that a business has no website needs a search provider.** 53 of the
