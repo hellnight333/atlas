@@ -25,6 +25,7 @@ nothing has failed yet.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Callable
@@ -401,6 +402,72 @@ def _serve_console(app: FastAPI, root: Path | None) -> None:
         raise HTTPException(status_code=404, detail="no such path")
 
 
+#: Where the off-host backup leaves its verdict. Written by `qevik_offsite.sh`
+#: after every run and by `qevik-backup-failed@.service` when one fails.
+#: World-readable and secret-free by design, so this process can read it without
+#: any privilege the control plane does not already have.
+BACKUP_STATE = Path("/var/lib/qevik/backup")
+
+
+def backup_health(state_dir: Path | None = None) -> dict:
+    """Whether the off-host copy is fresh and proven.
+
+    Reading a file rather than running restic: this is a status probe on a web
+    request, and shelling out to a backup tool from one is how a slow Storage
+    Box becomes a slow dashboard.
+
+    The marker file already existed and already said the right thing. Nothing
+    read it. `qevik-backup-failed@.service` describes itself as existing because
+    "a backup that fails silently for five days is the failure this unit exists
+    to make loud" — it wrote the marker faithfully while the off-host backup was
+    broken for a day, and the loudness reached nobody, because the last step
+    (surfacing it) was left for a later phase that had not arrived.
+
+    Three states, not two. A host that has never run a backup has not failed
+    one, and drawing those the same way invents an incident.
+    """
+    directory = state_dir or BACKUP_STATE
+    failed = directory / "FAILED"
+    status = directory / "status.json"
+
+    if failed.is_file():
+        # The marker is the verdict, whatever status.json last said: a
+        # successful run is what removes it.
+        try:
+            last = failed.read_text(encoding="utf-8").strip().splitlines()[-1]
+        except (OSError, IndexError):
+            last = ""
+        return {"configured": True, "healthy": False, "state": "FAILED",
+                "detail": f"the last off-host backup failed: {last}"
+                          if last else "the off-host backup failed"}
+
+    if not status.is_file():
+        return {"configured": False, "healthy": None, "state": "NOT_VERIFIED",
+                "detail": ("no off-host backup has run on this host. That is "
+                           "not the same as one having failed, and not the "
+                           "same as one having succeeded.")}
+
+    try:
+        report = json.loads(status.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"configured": True, "healthy": None, "state": "NOT_VERIFIED",
+                "detail": "the backup status file could not be read"}
+
+    result = str(report.get("result", "")).lower()
+    verified = str(report.get("restore_verified", ""))
+    return {
+        "configured": True,
+        "healthy": result in ("ok", "success"),
+        "state": "OK" if result in ("ok", "success") else result.upper() or "UNKNOWN",
+        "last_run_utc": report.get("last_run_utc", ""),
+        "snapshot": report.get("snapshot", ""),
+        # "copied" is not "restorable", and only one of them is a backup.
+        "restore_verified": verified,
+        "detail": (f"last run {report.get('last_run_utc', 'unknown')}, "
+                   f"restore {verified or 'not verified'}"),
+    }
+
+
 def health(app: FastAPI) -> dict:
     """What is configured, what is not, and what that costs.
 
@@ -458,6 +525,12 @@ def health(app: FastAPI) -> dict:
             **describe_sandbox(getattr(state, "sandbox", None)
                                or sandbox_available()),
         },
+        "backup": {
+            # The off-host copy. Reported here because this is the screen an
+            # operator looks at, and a backup nobody looks at is a backup that
+            # has already failed and not told anybody.
+            **backup_health(getattr(state, "backup_state_dir", None)),
+        },
         "probes": {
             # Named separately from `credentials` because they fail differently:
             # a vault with no probes can store keys it cannot test, and showing
@@ -468,14 +541,22 @@ def health(app: FastAPI) -> dict:
     }
     missing = [name for name, c in components.items()
                if not c.get("configured")]
+    # Configured, present, and reporting that it is broken. The note below has
+    # always said "degraded means a component is absent, not that one failed" —
+    # and there was no way to say the second thing at all. A failed off-host
+    # backup is configured and healthy is False, so it appeared in neither list
+    # and the summary read "ready".
+    failing = [name for name, c in components.items()
+               if c.get("healthy") is False]
     return {
         "surfaces": list(SURFACES),
         "components": components,
         "degraded": missing,
-        "status": "ready" if not missing else "degraded",
-        "note": ("Degraded means a component is absent, not that one failed. "
-                 "Nothing here reports healthy on the grounds that nothing has "
-                 "broken yet."),
+        "failing": failing,
+        "status": ("failing" if failing else "degraded" if missing else "ready"),
+        "note": ("Degraded means a component is absent; failing means one is "
+                 "present and broken. Nothing here reports healthy on the "
+                 "grounds that nothing has broken yet."),
     }
 
 

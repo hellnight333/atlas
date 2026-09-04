@@ -673,6 +673,21 @@ views.dashboard = async () => {
     ? `<div class="card"><h3>Degraded</h3><p class="note">${health.degraded.map(esc).join(', ')}
        — a component is absent, not failed. ${esc(health.note || '')}</p></div>` : '';
 
+  /* Present and broken, which is a different sentence from absent and a much
+     louder one. The off-host backup failed every night for a day while this
+     screen said "Nothing needs you": the marker file was written correctly, the
+     health payload had no way to express "failed", and so nothing asked.
+
+     Drawn above the fold rather than as a card, because a card is reference and
+     this is an instruction. */
+  const failing = ((health && health.failing) || []).map((name) => {
+    const c = (health.components || {})[name] || {};
+    return `<div class="row"><div class="body">
+      <div class="title">${pill('FAILED', 'bad')} ${esc(name)}</div>
+      <div class="meta">${esc(c.detail || 'no detail reported')}</div>
+    </div></div>`;
+  }).join('');
+
   /* The answer, before the metrics.
    *
    * Six identical cards have rhythm and no hierarchy: nothing on the screen was
@@ -699,12 +714,20 @@ views.dashboard = async () => {
        ${named ? `<p class="lead-note">${named}</p>` : ''}
        <p class="lead-note">${waiting ? esc(waiting + ' waiting for approval') : ''}${
         waiting && blocking ? ' · ' : ''}${blocking ? esc(blocking + ' blocked on a credential') : ''}</p>`
-    : `<p class="lead lead-clear">Nothing needs you.</p>
-       <p class="lead-note">${c.running || 0} running · ${c.total || 0} total</p>`;
+    : failing
+      /* "Nothing needs you" over a broken backup is the screen actively
+         reassuring an operator about the thing that is wrong. */
+      ? `<p class="lead"><strong>${((health && health.failing) || []).length}</strong> ${
+          ((health && health.failing) || []).length === 1
+            ? 'component is' : 'components are'} broken.</p>
+         <p class="lead-note">Listed above. Nothing else is waiting on you.</p>`
+      : `<p class="lead lead-clear">Nothing needs you.</p>
+         <p class="lead-note">${c.running || 0} running · ${c.total || 0} total</p>`;
 
   return `
     <header class="page"><h2>Dashboard</h2>
       <p>Everything below is read from the kernel. Nothing on this page decides anything.</p></header>
+    ${failing ? `<h3 class="section">Broken</h3><div class="rows">${failing}</div>` : ''}
     <div class="answer">${lead}</div>
     <div class="grid">
       <div class="card"><h3>Missions</h3><div class="stat">${c.total || 0}</div>

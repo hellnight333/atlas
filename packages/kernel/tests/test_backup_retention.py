@@ -304,3 +304,70 @@ def test_the_unit_sends_the_failure_stream_to_the_journal() -> None:
     unit = (REPO_ROOT / "infra" / "qevik-offsite.service").read_text(encoding="utf-8")
     assert "StandardError=journal" in unit
     assert "StandardOutput=journal" in unit
+
+
+# --- and somebody actually looks at it ------------------------------------------
+
+def test_a_failed_backup_reaches_the_operators_screen(tmp_path: Path) -> None:
+    """The half of this that was missing.
+
+    `qevik-backup-failed@.service` says it exists because "a backup that fails
+    silently for five days is the failure this unit exists to make loud". It
+    wrote its marker faithfully through a day of broken backups. Nothing read
+    the marker, so the loudness reached nobody.
+    """
+    from atlas_kernel.qevik.app import backup_health
+
+    (tmp_path / "FAILED").write_text(
+        "2026-09-04T04:15:15Z unit=qevik-offsite.service result=exit-code\n",
+        encoding="utf-8")
+    report = backup_health(tmp_path)
+    assert report["healthy"] is False
+    assert report["state"] == "FAILED"
+    assert "qevik-offsite" in report["detail"]
+
+
+def test_never_run_is_not_drawn_as_failed(tmp_path: Path) -> None:
+    """Three states, not two. A host that has never run a backup has not failed
+    one, and painting it red invents an incident somebody then repeats aloud."""
+    from atlas_kernel.qevik.app import backup_health
+
+    report = backup_health(tmp_path)
+    assert report["healthy"] is None
+    assert report["state"] == "NOT_VERIFIED"
+    assert "not the same as one having failed" in report["detail"]
+
+
+def test_a_good_run_reports_the_restore_not_only_the_copy(tmp_path: Path) -> None:
+    """"Copy succeeded" is never evidence; a restore is — the offsite script's
+    own words. So the health payload carries the restore, not just the run."""
+    import json
+
+    from atlas_kernel.qevik.app import backup_health
+
+    (tmp_path / "status.json").write_text(json.dumps({
+        "unit": "qevik-offsite", "last_run_utc": "2026-09-04T08:08:54Z",
+        "result": "ok", "snapshot": "78ca7d70",
+        "restore_verified": "qevik-20260903T033126Z.dump sha256 match (current)",
+    }), encoding="utf-8")
+
+    report = backup_health(tmp_path)
+    assert report["healthy"] is True
+    assert report["snapshot"] == "78ca7d70"
+    assert "sha256 match" in report["restore_verified"]
+
+
+def test_the_marker_outranks_a_stale_success(tmp_path: Path) -> None:
+    """A run that failed after a run that worked leaves both files. The marker
+    is the verdict; a successful run is what removes it."""
+    import json
+
+    from atlas_kernel.qevik.app import backup_health
+
+    (tmp_path / "status.json").write_text(
+        json.dumps({"result": "ok", "last_run_utc": "2026-09-03T16:26:45Z"}),
+        encoding="utf-8")
+    (tmp_path / "FAILED").write_text("2026-09-04T04:15:15Z unit=qevik-offsite\n",
+                                     encoding="utf-8")
+
+    assert backup_health(tmp_path)["healthy"] is False
