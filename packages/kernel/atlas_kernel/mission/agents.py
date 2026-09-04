@@ -258,17 +258,22 @@ class LLMCodingAgent:
         if not text:
             raise MalformedResult(f"{self._name} returned nothing for {task}")
 
-        usage = getattr(completion, "usage", None)
-        prompt_tokens = getattr(usage, "input_tokens", None) if usage else None
-        output_tokens = getattr(usage, "output_tokens", None) if usage else None
+        # `Completion` carries these directly. This read them from a `usage`
+        # attribute the model has never had, so `getattr` returned None every
+        # time and every invocation in the ledger was recorded as UNKNOWN cost
+        # with the provider's own token counts sitting in the object unused.
+        # Nothing failed — the spend column was simply always empty.
+        prompt_tokens = completion.input_tokens or None
+        output_tokens = completion.output_tokens or None
         # Cost only where the price table has both numbers. ESTIMATED says so;
         # a figure with no provenance would be the one number nobody can check.
         cost = None
         status = "UNKNOWN"
         if prompt_tokens is not None and output_tokens is not None and (
                 self._spec.input_cost_per_mtok or self._spec.output_cost_per_mtok):
-            cost = (prompt_tokens / 1_000_000 * self._spec.input_cost_per_mtok
-                    + output_tokens / 1_000_000 * self._spec.output_cost_per_mtok)
+            # The provider already priced it from this same spec. Recomputing
+            # here is a second answer that can disagree with the first.
+            cost = completion.cost_usd
             status = "ESTIMATED"
         return text, AgentInvocation(
             provider=self._spec.provider, model=self._spec.id, task=task,
