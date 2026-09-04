@@ -1,8 +1,13 @@
+#
+# `atlas==0.12.0a2` was in the captured freeze and is removed: that is this
+# project, which `pip list` reports as a pinned version because the old host had
+# it installed editable. It is not on any index, and the units import it from
+# PYTHONPATH rather than from the venv, so asking pip for it fails the whole
+# install. Removed lines: atlas==0.12.0a2
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
 ast_serialize==0.8.0
-atlas==0.12.0a2
 black==26.5.1
 certifi==2026.7.22
 cfgv==3.5.0
