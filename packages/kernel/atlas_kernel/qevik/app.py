@@ -592,8 +592,19 @@ def from_environment() -> FastAPI:
     if state:
         Path(state).mkdir(parents=True, exist_ok=True)
 
+    # Where the console's files are, when this process is the one serving them.
+    #
+    # In production Caddy serves `/srv/qevik-control` and the application never
+    # sees the files, which is why this defaults to unset. But before a cutover
+    # there is no Caddy in front of anything, and an operator with an SSH tunnel
+    # to :8081 could reach the API and not the interface — the deployment was
+    # complete and unusable at the same time. Naming the directory here makes
+    # the same process serve both, over one tunnel, with the same session.
+    console = os.environ.get("QEVIK_CONSOLE", "")
+
     return create_app(Wiring(
         repository_root=root,
+        console=Path(console) if console else None,
         mission_timeline=Path(timeline) if timeline else None,
         vault_path=credentials_at.vault,
         credential_timeline=credentials_at.records,

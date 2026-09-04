@@ -247,3 +247,91 @@ def test_wait_says_the_job_may_still_be_running_elsewhere() -> None:
     message = str(caught.value)
     assert "may still be running on the provider" in message
     assert "not a cancellation there" in message
+
+
+# --- the composition point ------------------------------------------------------
+
+def test_an_unconfigured_installation_has_no_providers(monkeypatch) -> None:
+    """The honest answer to "can you make an image" when nothing is connected.
+
+    Registering a provider that would fail at the first call turns a
+    configuration state into a render failure, which is the harder of the two to
+    diagnose.
+    """
+    from atlas_kernel.media.registry import NoProviderAvailable, from_environment
+
+    monkeypatch.delenv("QEVIK_REPLICATE_API_TOKEN", raising=False)
+    registry = from_environment()
+    assert registry.names() == []
+    with pytest.raises(NoProviderAvailable, match="image.generate"):
+        registry.resolve("image.generate")
+
+
+def test_a_configured_token_registers_image_and_video(monkeypatch) -> None:
+    from atlas_kernel.media.registry import from_environment
+
+    monkeypatch.setenv("QEVIK_REPLICATE_API_TOKEN", "r8_test")
+    registry = from_environment()
+    assert registry.names() == ["replicate"]
+    for capability in ("image.generate", "video.generate"):
+        assert registry.resolve(capability).name == "replicate"
+
+
+def test_the_cloud_provider_is_excluded_when_cloud_is_disabled(monkeypatch) -> None:
+    """Local-first is a policy the registry already enforces; a cloud provider
+    that ignored `allow_cloud=False` would quietly bill for work a deployment
+    said must stay on its own machines."""
+    from atlas_kernel.media.registry import NoProviderAvailable, from_environment
+
+    monkeypatch.setenv("QEVIK_REPLICATE_API_TOKEN", "r8_test")
+    registry = from_environment(allow_cloud=False)
+    with pytest.raises(NoProviderAvailable, match="cloud providers are disabled"):
+        registry.resolve("image.generate")
+
+
+def test_no_price_is_invented_for_a_provider_that_bills_per_model() -> None:
+    """A fabricated cost is used to choose between providers and is wrong in a
+    way nobody can see."""
+    from atlas_kernel.media.registry import from_environment
+    import os
+
+    os.environ["QEVIK_REPLICATE_API_TOKEN"] = "r8_test"
+    try:
+        registration = from_environment().resolve("image.generate")
+        assert registration.cost_per_second == 0.0
+        assert "reported after the fact" in registration.labels["billing"]
+    finally:
+        os.environ.pop("QEVIK_REPLICATE_API_TOKEN", None)
+
+
+def test_one_provider_can_serve_more_than_one_capability() -> None:
+    """The registry de-duplicated by provider name alone, so registering the
+    same provider for a second capability evicted the first. Nothing caught it
+    because every registration until now used exactly one capability."""
+    from atlas_kernel.media.registry import MediaProviderRegistry, ProviderRegistration
+
+    class Both:
+        name = "both"
+
+    registry = MediaProviderRegistry()
+    provider = Both()
+    registry.register(ProviderRegistration(provider=provider, capability="image.generate"))
+    registry.register(ProviderRegistration(provider=provider, capability="video.generate"))
+
+    assert registry.resolve("image.generate").name == "both"
+    assert registry.resolve("video.generate").name == "both"
+
+
+def test_re_registering_the_same_pair_replaces_rather_than_duplicates() -> None:
+    from atlas_kernel.media.registry import MediaProviderRegistry, ProviderRegistration
+
+    class P:
+        name = "p"
+
+    registry = MediaProviderRegistry()
+    registry.register(ProviderRegistration(provider=P(), capability="image.generate",
+                                           cost_per_second=1.0))
+    registry.register(ProviderRegistration(provider=P(), capability="image.generate",
+                                           cost_per_second=2.0))
+    assert registry.resolve("image.generate").cost_per_second == 2.0
+    assert registry.names() == ["p"]

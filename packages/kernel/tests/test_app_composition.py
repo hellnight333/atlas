@@ -1260,3 +1260,37 @@ class TestWhichAppsAreActuallyRunning:
 
         assert "Parked is **not** retired" in listed
         assert "retired" not in listed.replace("Parked is **not** retired", "")
+
+
+def test_the_console_directory_can_be_named_by_the_environment(tmp_path) -> None:
+    """Before a cutover there is no Caddy, and an API without an interface is a
+    deployment that is complete and unusable at the same time.
+
+    Unset stays unset: in production Caddy serves the files and the application
+    must not start guessing at a directory it does not own.
+    """
+    import os
+
+    from atlas_kernel.qevik.app import from_environment
+
+    console = tmp_path / "console"
+    console.mkdir()
+    (console / "index.html").write_text("<h1>console</h1>", encoding="utf-8")
+    (console / "office").mkdir()
+    (console / "office" / "index.html").write_text("<h1>floor</h1>", encoding="utf-8")
+
+    previous = os.environ.get("QEVIK_CONSOLE")
+    os.environ["QEVIK_CONSOLE"] = str(console)
+    try:
+        with TestClient(from_environment()) as client:
+            assert client.get("/").status_code == 200
+            assert "console" in client.get("/").text
+            # A sub-directory asset, which is how the floor is reached.
+            assert "floor" in client.get("/office/index.html").text
+            # Still never a catch-all: an unknown path is a 404, not the shell.
+            assert client.get("/not-a-page").status_code == 404
+    finally:
+        if previous is None:
+            os.environ.pop("QEVIK_CONSOLE", None)
+        else:
+            os.environ["QEVIK_CONSOLE"] = previous

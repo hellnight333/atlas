@@ -50,7 +50,20 @@ class MediaProviderRegistry:
         self.allow_cloud = allow_cloud
 
     def register(self, registration: ProviderRegistration) -> ProviderRegistration:
-        self._registrations = [r for r in self._registrations if r.name != registration.name]
+        """Register, replacing any earlier entry for the same provider *and*
+        capability.
+
+        Keyed on both, not on the name alone. One provider serving several
+        capabilities is the normal case — Replicate renders images and video
+        through one API — and de-duplicating by name meant the second
+        registration silently evicted the first, so a provider could only ever
+        serve whichever capability was registered last. Nothing noticed, because
+        every registration lived in a test that used one capability.
+        """
+        self._registrations = [
+            r for r in self._registrations
+            if not (r.name == registration.name and r.capability == registration.capability)
+        ]
         self._registrations.append(registration)
         return registration
 
@@ -85,4 +98,54 @@ class MediaProviderRegistry:
         )[0]
 
     def names(self) -> list[str]:
-        return sorted(r.name for r in self._registrations)
+        """Which providers this installation has — distinct, not one per row.
+
+        A provider serving both image and video is one provider. Listing it
+        twice reads as two installations of the same thing, which is exactly the
+        confusion the de-duplication fix above was about.
+        """
+        return sorted({r.name for r in self._registrations})
+
+
+def from_environment(*, allow_cloud: bool = True) -> MediaProviderRegistry:
+    """What this deployment can actually render with, right now.
+
+    The registry existed for a year with no production caller: every
+    registration lived in a test, so a deployment's answer to "can you make an
+    image" was decided nowhere. This is the composition point, and it mirrors
+    `llm.registry.from_environment` deliberately — one pattern for "which
+    providers does this installation have", not two.
+
+    A provider appears only when its credential is present. An unconfigured
+    installation gets an empty registry and `resolve` raises
+    `NoProviderAvailable`, which is the honest answer and the one the caller can
+    act on; registering a provider that would fail at the first call would turn
+    a configuration state into a render failure.
+    """
+    import os
+
+    registry = MediaProviderRegistry(allow_cloud=allow_cloud)
+
+    if os.environ.get("QEVIK_REPLICATE_API_TOKEN", "").strip():
+        from .providers.replicate import ReplicateProvider
+
+        provider = ReplicateProvider()
+        for capability in ("image.generate", "video.generate"):
+            registry.register(ProviderRegistration(
+                provider=provider,
+                capability=capability,
+                # Cloud, and honest about it: `allow_cloud=False` must exclude
+                # it, and a local GPU when one exists must win.
+                is_local=False,
+                # Deliberately 0.0 rather than a guess. Replicate prices per
+                # model and reports the time a prediction actually took *after*
+                # it runs; a made-up per-second figure would be used to choose
+                # between providers and would be wrong in a way nobody could
+                # see. With one cloud provider there is nothing to choose
+                # between; when a second arrives, this becomes a real number
+                # from real invoices or it stays absent.
+                cost_per_second=0.0,
+                labels={"vendor": "replicate", "billing": "per-model, reported after the fact"},
+            ))
+
+    return registry
