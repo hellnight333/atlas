@@ -1524,3 +1524,35 @@ def test_the_model_backed_worker_has_a_repository_it_may_write_to() -> None:
         f"the installer creates {root}/{made} and the unit names {path}")
     assert made == name, (
         f"the installer's origin is called {made!r} and the unit calls it {name!r}")
+
+
+def test_the_approval_sends_the_repository_it_displayed() -> None:
+    """With one origin the picker showed a fact and rendered no input.
+
+    So the approve handler's `querySelector('input[name=origin]:checked')` found
+    nothing and posted an empty origin — and empty is not "the one we just
+    displayed". `chat.service.approve` reads it as Qevik's own source. The screen
+    said "Repository: no source" and queued a self-modification mission, which
+    the worker then refused, correctly, for an origin the operator never chose.
+
+    Read out of the source because there is no browser here. What it checks is
+    the one thing that made the two disagree: the single-origin branch emits an
+    input carrying the name, and the handler looks for that spelling too.
+    """
+    from atlas_kernel.qevik.app import CONSOLE
+
+    html = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    picker = html.split("function originChoice(", 1)[1].split("\n}\n", 1)[0]
+    # To the branch's own closing brace at its indentation, not to the first
+    # `}` — the first one is inside a `${...}` interpolation.
+    single = picker.split("if (list.length === 1)", 1)[1].split("\n  }\n", 1)[0]
+
+    assert 'name="origin"' in single, (
+        "the one-origin branch renders no input, so the approval posts an "
+        "empty origin and the API reads that as Qevik's own source")
+    assert 'value="${esc(list[0].name)}"' in single, (
+        "the input does not carry the origin the branch just displayed")
+
+    handler = html.split("if (yes) yes.addEventListener", 1)[1].split("});", 1)[0]
+    assert "input[type=hidden][name=origin]" in handler, (
+        "the handler looks only for `:checked`, which a hidden input never is")

@@ -1551,9 +1551,21 @@ function originChoice(available) {
       will run against ${esc(originOf('').word)}.</p>`;
   }
   if (list.length === 1) {
+    /* A fact, not a choice — and still an input.
+     *
+     * It rendered no input at all, so the approve handler's
+     * `querySelector('input[name=origin]:checked')` found nothing and posted an
+     * empty origin. Empty is not "the one we just showed you": the API reads it
+     * as Qevik's own source. So this screen said "Repository: no source" and
+     * queued a self-modification mission.
+     *
+     * Hidden rather than a disabled radio: there is nothing to choose, and a
+     * control that cannot be operated is a control. What matters is that the
+     * value sent is the value shown. */
     const only = originOf(list[0].name);
     return `<dl class="facts"><dt>Repository</dt>
-      <dd>${pill(only.word, only.tone)} <span class="note">${esc(only.says)}</span></dd></dl>`;
+      <dd>${pill(only.word, only.tone)} <span class="note">${esc(only.says)}</span>
+      <input type="hidden" name="origin" value="${esc(list[0].name)}" checked></dd></dl>`;
   }
   return `<fieldset class="origins">
     <legend>Which repository?</legend>
@@ -1978,7 +1990,12 @@ async function conversation(id) {
     const yes = document.querySelector('[data-yes]');
     if (yes) yes.addEventListener('click', async () => {
       yes.disabled = true; yes.textContent = 'Queueing…';
-      const picked = document.querySelector('input[name=origin]:checked');
+      /* `:checked` matches a radio; the single-origin case emits a hidden
+         input, which is never `:checked`. Both spellings, because sending an
+         empty origin does not mean "the default we displayed" — it means
+         Qevik's own source. */
+      const picked = document.querySelector('input[name=origin]:checked')
+        || document.querySelector('input[type=hidden][name=origin]');
       try {
         await API.post('/api/chat/' + encodeURIComponent(id) + '/decide',
                        { approved: true, origin: picked ? picked.value : '' });
