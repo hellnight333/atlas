@@ -150,6 +150,19 @@ class Business(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_new_id)
+    #: Which tenant knows about this company.
+    #:
+    #: The repository has always described `list_businesses` as TENANT_SCOPED
+    #: and filtered on `b.tenant_id`, and neither this model nor the table had
+    #: such a field — so on production the column did not exist, the outreach
+    #: queue answered HTTP 500, and every other business read worked only
+    #: because the operator console asks with ALL_TENANTS, whose predicate is
+    #: always true and never names the column.
+    #:
+    #: Empty means *not established*, exactly as it does on `User`: a business
+    #: with no tenant is invisible to every tenant-scoped read, which is the
+    #: safe direction to be wrong in and still a bug.
+    tenant_id: str = ""
     name: str
     geography: str = ""
     website: str | None = None

@@ -1080,6 +1080,7 @@ def init_db() -> None:
             text("""
         CREATE TABLE IF NOT EXISTS atlas_businesses (
             id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
             name TEXT NOT NULL,
             geography TEXT NOT NULL DEFAULT '',
             website TEXT,
@@ -1248,9 +1249,33 @@ def init_db() -> None:
         ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP WITH TIME ZONE
             NOT NULL DEFAULT now(),
         ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE
-            NOT NULL DEFAULT now()
+            NOT NULL DEFAULT now(),
+        ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT ''
         """)
         )
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS atlas_businesses_tenant_idx "
+            "ON atlas_businesses (tenant_id)"))
+        # One-time, and structurally guarded rather than dated.
+        #
+        # A database that predates tenancy holds businesses belonging to nobody,
+        # and a business belonging to nobody is invisible to every tenant-scoped
+        # read — which is how a console with 59 companies showed empty screens
+        # and the outreach queue answered 500. They were discovered by the house,
+        # so the house is who they belong to.
+        #
+        # The guard is "no row has a tenant yet". Once any business has a real
+        # one this database is past the migration and the UPDATE never runs
+        # again, so a customer's business inserted later with an empty tenant is
+        # not swept into the house by a migration — that would be a real bug and
+        # a dated guard would not prevent it.
+        already = conn.execute(text(
+            "SELECT count(*) FROM atlas_businesses WHERE tenant_id <> ''")).scalar()
+        if not already:
+            from .opportunity.tenancy import HOUSE_TENANT
+
+            conn.execute(text("UPDATE atlas_businesses SET tenant_id = :house "
+                              "WHERE tenant_id = ''"), {"house": HOUSE_TENANT})
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS niche"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS source"))
         conn.execute(text("ALTER TABLE atlas_businesses DROP COLUMN IF EXISTS discovered_at"))

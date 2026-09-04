@@ -213,3 +213,66 @@ def test_every_scoped_method_requires_and_applies(method) -> None:
     assert "_require_tenant" in source, f"{method} does not require a tenant"
     assert "_tenant_predicate" in source or "owns(" in source, \
         f"{method} requires a tenant but never applies it"
+
+
+# --- the column the queries were written against -------------------------------
+
+def test_a_business_carries_the_tenant_its_repository_filters_on() -> None:
+    """`list_businesses` has always been documented TENANT_SCOPED and filtered
+    on `b.tenant_id`. Neither the model nor the table had such a field.
+
+    On production the column did not exist, so `/api/missions/outreach-unreviewed`
+    answered HTTP 500 with `column b.tenant_id does not exist`, and every other
+    business read worked only because the operator console asks with
+    ALL_TENANTS — whose predicate is always true and never names the column.
+    The tenancy was real in the SQL, real in the docstrings, and absent from
+    the schema.
+    """
+    from atlas_kernel.opportunity.models import Business
+
+    assert "tenant_id" in Business.model_fields
+    assert Business(name="Al Noor Dental").tenant_id == "", (
+        "empty means not established, exactly as it does on User")
+
+
+def test_the_schema_creates_and_indexes_the_column() -> None:
+    from pathlib import Path
+
+    db = (Path(__file__).resolve().parents[1] / "atlas_kernel" / "db.py"
+          ).read_text(encoding="utf-8")
+    create = db.split("CREATE TABLE IF NOT EXISTS atlas_businesses", 1)[1][:400]
+    assert "tenant_id" in create, "a fresh database would not have the column"
+    assert "ADD COLUMN IF NOT EXISTS tenant_id" in db, (
+        "an existing database would not gain it")
+    assert "atlas_businesses_tenant_idx" in db
+
+
+def test_the_backfill_is_guarded_by_state_and_not_by_a_date() -> None:
+    """It runs on a database that predates tenancy and never again.
+
+    A dated guard would still be a guard: it would sweep a customer's business
+    inserted with an empty tenant into the house on the next migration. The
+    condition is "no business has a tenant yet", which stops being true the
+    moment this runs once.
+    """
+    from pathlib import Path
+
+    db = (Path(__file__).resolve().parents[1] / "atlas_kernel" / "db.py"
+          ).read_text(encoding="utf-8")
+    assert "WHERE tenant_id <> ''" in db, "the backfill has no guard"
+    assert "UPDATE atlas_businesses SET tenant_id" in db
+
+
+def test_saving_a_business_writes_its_tenant() -> None:
+    """The insert named ten columns and `tenant_id` was not among them, so every
+    business the opportunity factory created belonged to nobody — visible only
+    to a reader asking with ALL_TENANTS."""
+    from pathlib import Path
+
+    repository = (Path(__file__).resolve().parents[1] / "atlas_kernel" /
+                  "opportunity" / "repository.py").read_text(encoding="utf-8")
+    insert = repository.split("INSERT INTO atlas_businesses", 1)[1][:600]
+    assert "tenant_id" in insert.split("ON CONFLICT")[0], (
+        "a saved business does not record which tenant knows about it")
+    assert "tenant_id = EXCLUDED.tenant_id" not in insert, (
+        "seeing a company again must not move it between tenants")

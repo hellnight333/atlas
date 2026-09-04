@@ -295,6 +295,11 @@ class OpportunityRepository:
     @staticmethod
     def _business_from_row(row) -> Business:
         payload = dict(row)
+        # A row written before the column existed reads back NULL, and NULL and
+        # "" mean the same thing here: not established. Coerced rather than
+        # declared `str | None`, so there is one representation of "no tenant"
+        # and every ownership check compares against one value.
+        payload["tenant_id"] = payload.get("tenant_id") or ""
         payload["identity_keys"] = list(_decoded(payload.get("identity_keys") or []))
         payload["sources"] = list(_decoded(payload.get("sources") or []))
         payload["metadata"] = dict(_decoded(payload.get("metadata") or {}))
@@ -305,11 +310,12 @@ class OpportunityRepository:
             session.execute(
                 text("""
                 INSERT INTO atlas_businesses
-                    (id, name, geography, website, email, phone, identity_keys,
-                     sources, metadata, first_seen_at, last_seen_at)
-                VALUES (:id, :name, :geography, :website, :email, :phone,
-                        :identity_keys, :sources, :metadata, :first_seen_at,
-                        :last_seen_at)
+                    (id, tenant_id, name, geography, website, email, phone,
+                     identity_keys, sources, metadata, first_seen_at,
+                     last_seen_at)
+                VALUES (:id, :tenant_id, :name, :geography, :website, :email,
+                        :phone, :identity_keys, :sources, :metadata,
+                        :first_seen_at, :last_seen_at)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     geography = EXCLUDED.geography,
@@ -320,6 +326,9 @@ class OpportunityRepository:
                     sources = EXCLUDED.sources,
                     metadata = EXCLUDED.metadata,
                     last_seen_at = EXCLUDED.last_seen_at
+                    -- `tenant_id` is deliberately not updated. Seeing a company
+                    -- again is evidence about the company, never a reason to
+                    -- move it to whichever tenant happened to see it last.
                 """),
                 {
                     **business.model_dump(exclude={"metadata", "identity_keys", "sources"}),
