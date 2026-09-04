@@ -18,6 +18,11 @@ EnvironmentFile=/opt/qevik/atlas.env
 # Absent by default, so the scan runs free against OpenStreetMap until a Places
 # key exists. -EnvironmentFile means "use it if present" rather than fail.
 EnvironmentFile=-/opt/qevik/places.env
+# Same reason as every other unit: the payload ships the package, not the
+# project, so the kernel is imported from here. Without it this fails when the
+# timer fires rather than when the deploy runs — a 06:00 failure nobody is
+# watching, instead of one in front of the person deploying.
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
 # --source places because the scan itself measured why: reachability was
 # 2–17% on OpenStreetMap and 83–100% on Places, and an unreachable prospect is
 # not a prospect. A whole run is roughly $0.58.

@@ -254,3 +254,28 @@ def test_the_floor_keeps_the_session_off_disk() -> None:
             ).read_text(encoding="utf-8")
     assert "sessionStorage" in page
     assert "localStorage" not in page
+
+
+# --- every unit can find the kernel --------------------------------------------
+
+def test_every_python_unit_says_where_the_kernel_is() -> None:
+    """The payload ships the package, not the project.
+
+    `deploy_control.sh` sends `packages/kernel/atlas_kernel` and deliberately not
+    `pyproject.toml`, so nothing installs the kernel into the venv and every unit
+    has to import it from PYTHONPATH. `qevik-api.service` was the one that did
+    not say so, and it survived only because the old host had the project
+    installed editable from a git clone — the provisioning route that
+    `install_qevik_runtime.sh` replaces. On the first properly provisioned host
+    it failed with `ModuleNotFoundError: No module named 'atlas_kernel'`.
+    """
+    from pathlib import Path
+
+    infra = Path(__file__).resolve().parents[3] / "infra"
+    for unit in sorted(infra.glob("qevik-*.service")):
+        text = unit.read_text(encoding="utf-8")
+        if ".venv/bin/python" not in text:
+            continue  # not a Python service (the failure-marker template)
+        assert "PYTHONPATH=" in text, (
+            f"{unit.name} runs the kernel without saying where it is; it will "
+            "start only on a host that happens to have the project installed")

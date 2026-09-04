@@ -21,6 +21,15 @@ WorkingDirectory=/opt/qevik/atlas
 # password in `systemctl cat`.
 EnvironmentFile=/opt/qevik/atlas.env
 
+# Where the kernel is imported from. Every other unit has said this all along;
+# this one did not, and got away with it because the old host's venv had the
+# project installed editable — `bootstrap_qevik_server.sh` git-cloned the whole
+# repository there. The ADR-0010 payload ships the package and not
+# `pyproject.toml`, so on a host provisioned the supported way there is nothing
+# to install and `python -m uvicorn atlas_kernel.api:app` cannot find its own
+# package. The first deploy to qevik-prod-01 failed exactly there.
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+
 # Bound to loopback deliberately. This API has no authentication layer, so it
 # must not be reachable from the internet. Access is over an SSH tunnel until
 # there is a real auth story. Changing this line to 0.0.0.0 publishes an
