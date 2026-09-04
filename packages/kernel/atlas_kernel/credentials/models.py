@@ -66,7 +66,12 @@ PROVIDER_CREDENTIAL: dict[str, str] = {
 
 #: Models grouped by the provider that serves them.
 PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
-    "qwen": ("qwen-turbo", "qwen-plus", "qwen-max"),
+    # Kept in step with `llm.registry.default_registry`, and for the same
+    # reason: every one of these was called against the configured workspace
+    # before being listed. A model the account cannot run is one the
+    # cheapest-first policy selects first.
+    "qwen": ("qwen-turbo", "qwen-plus", "qwen-max", "qwen3-max",
+             "qwen3-coder-plus", "qwen-vl-plus", "qwen-vl-max"),
     "anthropic": ("claude-sonnet-5", "claude-opus-5"),
 }
 
@@ -112,9 +117,33 @@ def registry_for(credentials: CredentialService, *, tenant: TenantId | None,
         names = PROVIDER_MODELS.get(provider, ())
         if not names:
             continue
-        adapter = (AnthropicProvider() if provider == "anthropic"
-                   else OpenAICompatibleProvider(name=provider,
-                                                 key_env=f"{provider.upper()}_API_KEY"))
+
+        # The stored secret, handed to the adapter.
+        #
+        # This is the one thing this module exists to do, and it did not do it:
+        # the adapters were built with a `key_env` and no key, so they read
+        # `os.environ` exactly as before while the vault decided only *whether*
+        # to register them. A deployment could have a credential stored, enabled
+        # and verified, and still fail every call because the shell that started
+        # the process had no matching variable — the failure this file's own
+        # docstring describes as the reason it was written.
+        try:
+            secret = credentials.resolve(provider=credential, tenant=tenant)
+        except Exception as failure:            # noqa: BLE001 - see below
+            # Never the key material, and never a traceback that might carry it.
+            log.info("model registry: skipping %s (%s)", provider,
+                     type(failure).__name__)
+            continue
+        if not secret:
+            continue
+
+        adapter = (AnthropicProvider(key=secret) if provider == "anthropic"
+                   else OpenAICompatibleProvider(
+                       name=provider, key_env=f"{provider.upper()}_API_KEY",
+                       key=secret))
+        # `key_env` stays as the shape the adapter wants, but `key` is set, so
+        # it is never consulted. Leaving it lets a self-hosted endpoint with no
+        # stored credential keep working the way it always has.
         for name in names:
             if name in MODELS:
                 registry.register(Registration(provider=adapter, spec=MODELS[name]))

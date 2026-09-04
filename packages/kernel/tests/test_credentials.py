@@ -538,3 +538,65 @@ def test_records_stay_in_memory_when_no_timeline_is_given() -> None:
     first.store(provider="anthropic", tenant="t1", secret="k-not-real")
     assert CredentialService(vault).status(
         provider="anthropic", tenant="t1") is Status.NOT_CONFIGURED
+
+
+class TestTheRegistryUsesTheStoredKeyNotTheShell:
+    """The one thing `credentials.models` exists to do.
+
+    Its docstring: "what it could not do was get its keys from anywhere but
+    `os.environ`, which is exactly the failure the vault exists to fix — a key
+    that lives in a shell dies with it." It then built every adapter with a
+    `key_env` and no key, so the vault decided only *whether* to register a
+    provider and the key still came from the environment.
+
+    A deployment could therefore have a credential stored, enabled and verified
+    and fail every call, because the shell that started the process had no
+    matching variable. Nothing in the credential centre would show it: the
+    record is green, and the failure appears as a provider 401 much later.
+    """
+
+    def test_the_adapter_carries_the_secret_from_the_vault(self, service) -> None:
+        from atlas_kernel.credentials.models import registry_for
+
+        service.store(provider="qwen", tenant=A, secret="stored-in-the-vault")
+        registration = registry_for(service, tenant=A).models[0]
+        assert registration.provider._api_key() == "stored-in-the-vault"
+
+    def test_an_empty_environment_does_not_stop_it(
+        self, service, monkeypatch
+    ) -> None:
+        """The whole point: the process's environment is irrelevant."""
+        for prefix in ("QEVIK_", "ATLAS_", ""):
+            for name in ("QWEN_API_KEY", "DASHSCOPE_API_KEY"):
+                monkeypatch.delenv(f"{prefix}{name}", raising=False)
+
+        from atlas_kernel.credentials.models import registry_for
+
+        service.store(provider="qwen", tenant=A, secret="stored-in-the-vault")
+        registration = registry_for(service, tenant=A).models[0]
+        assert registration.provider._api_key() == "stored-in-the-vault"
+
+    def test_the_environment_never_overrides_what_was_stored(
+        self, service, monkeypatch
+    ) -> None:
+        """Two sources for one key is one source too many, and the shell is the
+        one that dies. If they disagree, the vault wins."""
+        monkeypatch.setenv("QEVIK_QWEN_API_KEY", "from-the-shell")
+
+        from atlas_kernel.credentials.models import registry_for
+
+        service.store(provider="qwen", tenant=A, secret="stored-in-the-vault")
+        registration = registry_for(service, tenant=A).models[0]
+        assert registration.provider._api_key() == "stored-in-the-vault"
+
+    def test_a_disabled_credential_registers_nothing_and_says_nothing(
+        self, service, caplog
+    ) -> None:
+        """Skipping is right; naming the key while skipping would not be."""
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        service.set_enabled(provider="qwen", tenant=A, enabled=False)
+
+        from atlas_kernel.credentials.models import registry_for
+
+        assert registry_for(service, tenant=A).models == []
+        assert "a-real-looking-secret" not in caplog.text
