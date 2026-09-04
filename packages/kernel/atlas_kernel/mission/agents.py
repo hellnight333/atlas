@@ -290,8 +290,9 @@ class LLMCodingAgent:
     #:
     #: A sentinel rather than JSON: a file body inside JSON has to be escaped,
     #: and a model that gets one newline wrong turns a correct change into a
-    #: parse error. This survives anything the body contains except the sentinel
-    #: itself, which is checked for.
+    #: parse error. This survives anything a file body contains except a line
+    #: that is exactly the terminator — which would truncate the file silently,
+    #: so `_write` refuses a reply whose terminators outnumber its openers.
     WRITE_FORMAT = (
         "Return the complete new contents of every file you change, each in "
         "this exact form and nothing else between them:\n"
@@ -340,8 +341,8 @@ class LLMCodingAgent:
         # off mid-way is worse than no file, because it looks like a change.
         return found
 
-    def _write(self, files: list[tuple[str, str]], workspace_root: str
-               ) -> tuple[str, ...]:
+    def _write(self, files: list[tuple[str, str]], workspace_root: str,
+               *, reply: str = "") -> tuple[str, ...]:
         """Write inside the workspace, or refuse the whole change.
 
         All-or-nothing on the *paths*: every destination is resolved before any
@@ -352,6 +353,20 @@ class LLMCodingAgent:
         """
         root = Path(workspace_root).resolve()
         planned: list[tuple[Path, str]] = []
+
+        # A file body containing a line that is exactly the terminator would end
+        # its block early, and the rest of that file would be read as prose
+        # between blocks — a truncated file written as if it were whole, which
+        # looks like a change and is not one. Detectable in the aggregate even
+        # though the parser cannot tell which block was cut: one terminator per
+        # opener, or the reply is not trustworthy.
+        openers = sum(1 for line in reply.splitlines() if line.startswith("<<<FILE "))
+        closers = sum(1 for line in reply.splitlines() if line.strip() == ">>>END")
+        if reply and closers > openers:
+            raise MalformedResult(
+                f"{self._name} returned {closers} block terminators for "
+                f"{openers} files; one of them is inside a file body and that "
+                "file would be silently truncated")
 
         if len(files) > self.MAX_FILES:
             raise MalformedResult(
@@ -403,7 +418,7 @@ class LLMCodingAgent:
             f"{context}\n\nImplement this plan:\n{plan.goal}\n\n{self.WRITE_FORMAT}")
 
         files = self._parse_files(text)
-        written = self._write(files, workspace_root) if files else ()
+        written = self._write(files, workspace_root, reply=text) if files else ()
 
         # `claims_done` reflects what happened, not what the model said. A reply
         # with no file blocks changed nothing, and reporting that as done is the

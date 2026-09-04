@@ -230,3 +230,18 @@ class TestItCannotWriteOutsideTheWorkspace:
                           "eval(", "exec(", "unlink", "rmdir"):
             assert forbidden not in source, (
                 f"the model-backed agent can do more than write files: {forbidden}")
+
+
+def test_a_terminator_inside_a_file_body_is_refused(tmp_path) -> None:
+    """It would end the block early and the remainder would be read as prose:
+    a truncated file written as if it were whole, which looks like a change and
+    is not one. The parser cannot tell which block was cut; the counts can."""
+    reply = ("<<<FILE doc.md\n"
+             "here is how the format works:\n"
+             ">>>END\n"
+             "and that is the end marker\n"
+             ">>>END\n")
+    with pytest.raises(MalformedResult, match="silently truncated"):
+        LLMCodingAgent(_provider(reply), MODELS["qwen-plus"]).implement(
+            A_PLAN, workspace_root=str(tmp_path))
+    assert list(tmp_path.iterdir()) == []
