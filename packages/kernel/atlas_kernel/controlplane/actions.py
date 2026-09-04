@@ -440,6 +440,15 @@ def centre(*, store: ConnectionStore, tenant: TenantId | None,
     )
     ordered = sorted(actions, key=lambda a: (not a.blocking, a.created_at))
     return {
+        # When this answer was computed.
+        #
+        # The page needs it because half of what it shows has no age of its own:
+        # a derived action is recomputed on every request, so its `created_at`
+        # is the moment somebody loaded the page. Rendering that as "raised just
+        # now" would say a credential missing for weeks appeared two seconds
+        # ago. The reader gets one honest timestamp for the whole view, and real
+        # ages only where a real record exists.
+        "as_of": datetime.now(UTC).isoformat(),
         "open": [a.summary() for a in ordered],
         "blocking": [a.summary() for a in ordered if a.blocking],
         "counts": {

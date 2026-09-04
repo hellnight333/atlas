@@ -450,3 +450,44 @@ class TestWhatStopsTheDomainSending:
 
         assert "QEVIK_SMTP_PASSWORD" not in rendered
         assert "sk-" not in rendered
+
+
+def test_the_action_centre_says_when_it_was_computed() -> None:
+    """"How old is what I am looking at" is the first question about any list
+    like this, and the answer is the same for every row: as of when the page
+    asked.
+
+    Asserted on `centre()` rather than through a route, because it is the
+    payload builder every surface shares.
+    """
+    from datetime import UTC, datetime
+
+    from atlas_kernel import controlplane
+    from atlas_kernel.publication.connections import ConnectionStore
+
+    built = controlplane.centre(store=ConnectionStore(), tenant="tenant-qevik")
+    assert built.get("as_of"), "the payload does not say when it was computed"
+    computed = datetime.fromisoformat(built["as_of"])
+    assert abs((datetime.now(UTC) - computed).total_seconds()) < 60
+
+
+def test_a_derived_action_is_not_presented_as_freshly_raised() -> None:
+    """Half of this list has no age of its own.
+
+    A derived action is recomputed from current state on every request, so its
+    `created_at` is the instant the page loaded. Rendering that as "raised just
+    now" would say a credential missing for weeks appeared two seconds ago —
+    false freshness, which costs the reader their trust in every other date on
+    the screen.
+    """
+    from pathlib import Path
+
+    console = (Path(__file__).resolve().parents[3] / "apps" / "control" / "src" /
+               "index.html").read_text(encoding="utf-8")
+    page = console.split("views.actions = async", 1)[1].split("\nviews.", 1)[0]
+
+    assert "live check" in page, (
+        "derived actions are shown with a timestamp they do not have")
+    assert "a.posed" in page.split("const age", 1)[1][:400], (
+        "the age helper does not distinguish a posed request, which has a real "
+        "created_at, from a derived action, which does not")
