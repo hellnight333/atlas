@@ -55,6 +55,14 @@ CONSOLE_PATHS = frozenset({
     "/", "/dashboard", "/roadmap", "/missions", "/chat", "/actions",
     "/credentials", "/models", "/businesses", "/publications", "/measurements",
     "/reports", "/history", "/settings",
+    # Seven that were missing, found by comparing this set with the console's
+    # own PAGES list rather than by anybody following a link. A page here and
+    # not there gets a 401 on an HTML document when somebody bookmarks it,
+    # reloads it, or is sent it — exactly the failure that hid the floor for a
+    # week, in seven more places. There is a test deriving one from the other
+    # now, so an eighth cannot be added quietly.
+    "/schedule", "/opportunities", "/discovery", "/pipeline", "/outreach",
+    "/fabric", "/more",
     # The agent floor. A shell, exactly like the others: it carries no data and
     # every number on it arrives from `/api/fabric/office`, which is not public.
     # Three spellings, because a person types the first, a browser normalises a

@@ -1428,3 +1428,99 @@ def test_the_house_tenant_is_the_one_the_workers_actually_watch() -> None:
         assert named == HOUSE_TENANT, (
             f"{unit.name} watches {named!r} but the operator writes to "
             f"{HOUSE_TENANT!r}; missions from the console would never be seen")
+
+
+def test_every_console_page_can_be_opened_by_its_own_link() -> None:
+    """A page in the rail and not in CONSOLE_PATHS 401s on an HTML document.
+
+    Not on navigation — the single-page app changes the hash and never asks the
+    server. It fails when somebody bookmarks the page, reloads it, or is sent
+    the link: exactly the way the agent floor was broken, and exactly the way
+    nobody noticed, because the person who added the page had already navigated
+    to it from inside the app.
+
+    Seven pages were in this state when this test was written. It derives both
+    lists so an eighth cannot be added quietly.
+    """
+    import re
+
+    from atlas_kernel.auth.api import CONSOLE_PATHS
+    from atlas_kernel.qevik.app import CONSOLE
+
+    html = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    declared = html.split("const PAGES = [", 1)[1].split("];", 1)[0]
+    pages = re.findall(r"\['([a-z-]+)'", declared)
+    assert len(pages) > 10, f"the rail did not parse: {pages}"
+
+    unreachable = [p for p in pages
+                   if p != "dashboard" and f"/{p}" not in CONSOLE_PATHS]
+    assert unreachable == [], (
+        "these pages are in the console's rail and not in CONSOLE_PATHS, so a "
+        f"link to any of them answers 401 on an HTML page: {unreachable}")
+
+
+def test_console_paths_names_no_page_the_rail_does_not_have() -> None:
+    """The other direction. An entry here for a page that no longer exists
+    serves the shell for a route the app will redirect away from, which is
+    harmless — but it is also a list nobody trimmed, and this list is the one
+    that decides what is reachable without a session."""
+    import re
+
+    from atlas_kernel.auth.api import CONSOLE_PATHS
+    from atlas_kernel.qevik.app import CONSOLE
+
+    html = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    declared = html.split("const PAGES = [", 1)[1].split("];", 1)[0]
+    pages = set(re.findall(r"\['([a-z-]+)'", declared))
+
+    # The floor is its own document, not a hash route, so it is expected here
+    # and absent from PAGES.
+    allowed = pages | {"", "office", "office/", "office/index.html"}
+    stale = [p for p in CONSOLE_PATHS if p.strip("/").split("/")[0] not in
+             {a.strip("/").split("/")[0] for a in allowed}]
+    assert stale == [], f"CONSOLE_PATHS names pages the console does not have: {stale}"
+
+
+def test_the_model_backed_worker_has_a_repository_it_may_write_to() -> None:
+    """A worker with no origin can only take missions declaring `none`, and
+    `none` has no workspace.
+
+    So a coding agent reports success, changes no file, and the worker refuses
+    the claim — three attempts, then failed. That refusal is correct: an agent's
+    "done" is a claim and the workspace is what decides. But it means a
+    conversation in the console can never finish, which is not a design, it is
+    a missing argument.
+
+    Observed on production before this was added: mission-2e19f410464e, three
+    attempts, "the agent reported success and produced nothing".
+    """
+    from pathlib import Path
+
+    infra = Path(__file__).resolve().parents[3] / "infra"
+    unit = (infra / "qevik-worker-llm.service").read_text(encoding="utf-8")
+
+    assert "--origin " in unit, (
+        "the model-backed worker has no writable origin, so every coding "
+        "mission it accepts fails having produced nothing")
+    named = unit.split("--origin ", 1)[1].split()[0]
+    name, _, path = named.partition("=")
+    assert name and path, f"--origin must be NAME=PATH, got {named!r}"
+    assert not path.startswith("/opt/qevik/atlas"), (
+        "the origin points inside the deployment; the worker refuses that at "
+        "start-up and the unit should not ask for it")
+
+    installer = infra / "install_notes_origin.sh"
+    assert installer.is_file(), (
+        f"the unit names origin {path} and nothing creates it")
+
+    # The installer composes its path from two defaults. Composed here the same
+    # way rather than matched as a literal, so the two cannot drift: a unit
+    # naming a directory the installer does not create is a worker that refuses
+    # to start, on a host that was just provisioned.
+    script = installer.read_text(encoding="utf-8")
+    root = script.split('ORIGIN_ROOT="${QEVIK_ORIGIN_ROOT:-', 1)[1].split('}"', 1)[0]
+    made = script.split('NAME="${QEVIK_ORIGIN_NAME:-', 1)[1].split('}"', 1)[0]
+    assert f"{root}/{made}" == path, (
+        f"the installer creates {root}/{made} and the unit names {path}")
+    assert made == name, (
+        f"the installer's origin is called {made!r} and the unit calls it {name!r}")

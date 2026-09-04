@@ -54,10 +54,23 @@ ExecStart=/opt/qevik/atlas/.venv/bin/python \
   --tenant tenant-qevik \
   --name worker-llm \
   --agent llm \
+  --origin notes=/srv/origins/notes \
   --interval 10
-# No --repository. A mission names its own origin and the worker resolves it
-# against an allow-list; the built-ins 'qevik' (this checkout,
-# self-modification) and 'none' (no source) need no configuration.
+# `--origin notes=/srv/origins/notes` is a real, writable repository this worker
+# may change. Without one this worker can only take missions declaring origin
+# `none`, and `none` has no workspace — so a coding agent reports success,
+# changes no file, and the worker correctly refuses the claim three times and
+# fails the mission. That is the right refusal and a useless outcome: it means
+# a console conversation can never finish.
+#
+# 'qevik' (self-modification) is *not* available on a deployed host and needs no
+# configuration to be absent: ADR-0010 ships a git archive, so /opt/qevik/atlas
+# has no .git and the registry does not offer it. The console's default origin
+# is `qevik`, which is why a conversation approved without naming one is refused
+# here by design rather than by accident.
+#
+# Created by infra/install_notes_origin.sh. An origin pointing at Qevik's own
+# repository is refused at start-up.
 #
 # This worker DOES need a provider credential, and it is the only one here that
 # does. `roles_for` builds its registry from the vault and raises rather than
