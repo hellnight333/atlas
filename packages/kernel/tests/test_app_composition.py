@@ -1403,3 +1403,28 @@ def test_every_surface_in_the_console_bundle_is_shipped_by_the_deploy() -> None:
         assert (surface / "index.html").is_file(), (
             f"{surface.name}/ is in the bundle with no index.html, so /{surface.name} 404s"
         )
+
+
+def test_the_house_tenant_is_the_one_the_workers_actually_watch() -> None:
+    """A second name for one thing is a mission nobody picks up.
+
+    Every worker unit runs `--tenant tenant-qevik`. If the operator's own tenant
+    were called anything else, a mission created from the console would be
+    written into a tenant no running process was watching: it would sit in
+    `queued` forever, and nothing anywhere would say why. This constant was
+    briefly `"house"`, which is exactly that bug.
+    """
+    from atlas_kernel.opportunity.tenancy import HOUSE_TENANT
+
+    infra = Path(__file__).resolve().parents[3] / "infra"
+    units = sorted(infra.glob("qevik-worker*.service"))
+    assert units, "no worker units found, so this test proves nothing"
+
+    for unit in units:
+        text = unit.read_text(encoding="utf-8")
+        if "--tenant" not in text:
+            continue
+        named = text.split("--tenant", 1)[1].split()[0].strip()
+        assert named == HOUSE_TENANT, (
+            f"{unit.name} watches {named!r} but the operator writes to "
+            f"{HOUSE_TENANT!r}; missions from the console would never be seen")

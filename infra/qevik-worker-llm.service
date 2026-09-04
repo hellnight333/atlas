@@ -1,0 +1,97 @@
+# The model-backed worker: the one that carries out an approved plan.
+#
+#   cp infra/qevik-worker-llm.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now qevik-worker-llm
+#
+# This is the unit that makes "say what you want in the console, close the
+# browser, come back to a report" true. Everything before it existed — the chat
+# surface, the planner, the approval gate, the mission queue, the report writer
+# — and nothing on this host ran `--agent llm`, so an approved plan reached
+# `queued` and stopped there. The worker that was running served `self-check`,
+# and `policy.refuse_agent_substitution` correctly refuses to let one agent
+# carry out a plan approved for another. It was refusing exactly as designed;
+# there was simply nobody to accept.
+#
+# One agent per process, like every other role here. See
+# qevik-worker-research.service for why that is two units and not a flag.
+#
+# Unlike every other worker unit, this one calls a provider and therefore costs
+# money. The key is read from the credential vault at the moment of use — see
+# `credentials.models.registry_for` — so it never reaches a process listing or a
+# shell history, and a worker with no stored credential refuses to start rather
+# than substituting a stub that would mark missions complete having done
+# nothing.
+[Unit]
+Description=Qevik mission worker (approved plans, model-backed)
+# Five failures in five minutes stops it. Without this the "refuses to start"
+# safety becomes a restart loop nobody reads. These belong in [Unit]; systemd
+# ignores them in [Service] with a warning that is easy to miss.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not `Requires=qevik-control.service`: the whole design is that this survives
+# the control plane restarting.
+
+[Service]
+Type=simple
+User=qevik
+Group=qevik
+WorkingDirectory=/opt/qevik/atlas
+EnvironmentFile=/opt/qevik/atlas.env
+EnvironmentFile=-/opt/qevik/control.env
+EnvironmentFile=-/opt/qevik/worker.env
+Environment=PYTHONPATH=/opt/qevik/atlas/packages/kernel
+Environment=QEVIK_STATE=/var/lib/qevik/control
+
+ExecStart=/opt/qevik/atlas/.venv/bin/python \
+  /opt/qevik/atlas/infra/mission_worker.py \
+  --timeline /var/lib/qevik/control/missions.jsonl \
+  --reports /var/lib/qevik/control/reports \
+  --worktrees /var/lib/qevik/worktrees \
+  --scratch /var/lib/qevik/scratch \
+  --state /var/lib/qevik/control \
+  --tenant tenant-qevik \
+  --name worker-llm \
+  --agent llm \
+  --interval 10
+# No --repository. A mission names its own origin and the worker resolves it
+# against an allow-list; the built-ins 'qevik' (this checkout,
+# self-modification) and 'none' (no source) need no configuration.
+#
+# This worker DOES need a provider credential, and it is the only one here that
+# does. `roles_for` builds its registry from the vault and raises rather than
+# falling back: a worker that quietly substituted a deterministic stub would
+# commit files, write reports and mark missions complete, and every one of those
+# artefacts would claim work no model ever did.
+# --claims-dsn and --require-atomic-claims come from /opt/qevik/worker.env.
+# The DSN carries a password, and a password on an argv line is readable by
+# every user on the host through `ps`.
+
+# on-failure, not always: a worker that refuses to start because its claim
+# database is unreachable should stay down and be noticed, not restart-loop
+# quietly. A crash mid-mission is different, and that is what this covers.
+Restart=on-failure
+RestartSec=15
+# The worker writes worktrees and reports and nothing else on this host.
+NoNewPrivileges=yes
+PrivateTmp=yes
+# strict, not full. `full` only makes /usr, /boot and /etc read-only — /opt is
+# left writable, so removing /opt/qevik/atlas from ReadWritePaths below did
+# nothing at all until this line changed. Measured, not assumed: under `full` a
+# write probe into /opt/qevik/atlas succeeded; under `strict` it returns
+# "Read-only file system".
+ProtectSystem=strict
+ProtectHome=yes
+# /opt/qevik/atlas is deliberately NOT here. The worker reads the production
+# checkout to clone it and never writes to it, so the kernel refuses the write
+# even if the code regresses. It used to be writable because `git worktree add`
+# ran inside it — which is precisely the thing that was wrong: a mission left a
+# ref, a worktree entry and its objects behind in production simply by running.
+#
+# If this unit ever fails with EACCES under /opt/qevik/atlas, that is the guard
+# working. Find what is writing there; do not add the path back.
+ReadWritePaths=/var/lib/qevik
+
+[Install]
+WantedBy=multi-user.target

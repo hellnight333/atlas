@@ -90,7 +90,14 @@ def require(tenant: TenantId | None, *, method: str) -> TenantId:
 #: or read nothing, so a console with 59 companies in its database showed the
 #: operator an empty screen on every page. A house tenant is a real tenant that
 #: happens to be us, which is both true and the thing that makes writes work.
-HOUSE_TENANT = "house"
+#:
+#: The value is `tenant-qevik` because that is what the house tenant has always
+#: been called: every worker unit runs `--tenant tenant-qevik`, and
+#: `serve_console.py` creates its operator with it. This constant was briefly
+#: `"house"` — a second name for a thing that already had one, which would have
+#: put the operator's missions in a tenant no running worker was watching. They
+#: would have queued, and nothing would have said why.
+HOUSE_TENANT = "tenant-qevik"
 
 
 def of_user(user, *, method: str) -> TenantId:
