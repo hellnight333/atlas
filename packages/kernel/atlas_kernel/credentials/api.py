@@ -47,13 +47,19 @@ NOT_FOUND = "no such provider"
 
 
 def current_tenant(user: User = Depends(current_user)) -> TenantId:
-    tenant = (user.tenant_id or "").strip()
-    if not tenant:
-        raise HTTPException(
-            status_code=403,
-            detail="this account is not attached to a tenant, so it has no "
-                   "credentials of its own.")
-    return tenant
+    """Whose rows this request touches. Decided in `tenancy.of_user`, once.
+
+    This was eight lines of its own here, and the same eight lines in four other
+    modules with four different wordings. An operator with no customer tenant
+    got a 403 from every one of them, which is a console that refuses its own
+    administrator on every page it has.
+    """
+    from ..opportunity.tenancy import TenantRequired, of_user
+
+    try:
+        return of_user(user, method="credentials")
+    except TenantRequired as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 def _service(request: Request) -> CredentialService:

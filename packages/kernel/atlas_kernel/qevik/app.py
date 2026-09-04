@@ -303,12 +303,13 @@ def create_app(wiring: Wiring | None = None, *, title: str = "Qevik") -> FastAPI
         Tenant-scoped: the digest is computed over one tenant's events, so a
         change in another tenant's work cannot even signal.
         """
-        tenant = (user.tenant_id or "").strip()
-        if not tenant:
-            raise HTTPException(
-                status_code=403,
-                detail="this account is not attached to a tenant, so it has no "
-                       "status of its own.")
+        # The fifth copy of one decision. See `tenancy.of_user`.
+        from ..opportunity.tenancy import TenantRequired, of_user
+
+        try:
+            tenant = of_user(user, method="the live status feed")
+        except TenantRequired as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         current = live.snapshot(getattr(request.app.state, "mission_events", []),
                                 getattr(request.app.state, "chat_events", []),
                                 tenant=tenant)

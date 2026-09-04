@@ -735,9 +735,37 @@ def test_attaching_a_tenant_is_an_admin_route_not_a_database_edit(client
 
 # ============================================ live status
 
-def test_status_is_tenant_scoped_and_refuses_without_one(client) -> None:
-    """A change in another tenant's work must not even signal."""
+def test_status_is_tenant_scoped(client, monkeypatch) -> None:
+    """A change in another tenant's work must not even signal.
+
+    An account with no tenant at all is refused — except an administrator, who
+    is scoped to the house tenant instead. That exception is the point: this
+    asserted a flat 403 and was satisfied by a console that refused its own
+    operator on every tenant-scoped page it has. Refusing is not the same as
+    scoping, and only one of them is a working console.
+    """
+    from atlas_kernel.auth import Scope, User
+    from atlas_kernel.auth.models import hash_password
+    from atlas_kernel.auth.store import AuthStore
+    from atlas_kernel.opportunity.tenancy import HOUSE_TENANT
+
+    def as_user(**kwargs):
+        monkeypatch.setattr(AuthStore, "authenticate", lambda self, token: User(
+            username="somebody", password_hash=hash_password("test-only-password"),
+            **kwargs))
+
+    as_user(tenant_id="", scopes=frozenset({Scope.READ}))
     assert client.get("/api/status").status_code == 403
+
+    as_user(tenant_id="", scopes=frozenset({Scope.READ, Scope.ADMIN}))
+    assert client.get("/api/status").status_code == 200
+
+    # And the house is a tenant like any other, not a bypass: a mission in
+    # somebody else's tenant must still not move this version.
+    as_user(tenant_id=HOUSE_TENANT, scopes=frozenset({Scope.READ, Scope.ADMIN}))
+    house = client.get("/api/status").json()["version"]
+    as_user(tenant_id="", scopes=frozenset({Scope.READ, Scope.ADMIN}))
+    assert client.get("/api/status").json()["version"] == house
 
 
 def _tenanted(monkeypatch, tenant: str = "tenant-alpha"):

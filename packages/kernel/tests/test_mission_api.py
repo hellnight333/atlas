@@ -282,9 +282,24 @@ def test_one_tenant_never_sees_anothers_missions(client, app) -> None:
 
 
 def test_an_account_with_no_tenant_reaches_none_of_it(client) -> None:
-    client.acting_as(_user(""))
-    for path in ("/api/missions", "/api/missions/costs", "/api/missions/blockers"):
+    """A tenantless account reaches nothing — unless it is the operator.
+
+    `_user("")` grants every scope by default, ADMIN included, so this asserted
+    a 403 for the one account that must not get one: the administrator running
+    the console has no customer tenant, and refusing them here refused them on
+    every tenant-scoped page at once. They are scoped to the house tenant
+    instead. A tenantless account without ADMIN is still refused, which is the
+    isolation this test was written for.
+    """
+    paths = ("/api/missions", "/api/missions/costs", "/api/missions/blockers")
+
+    client.acting_as(_user("", Scope.READ))
+    for path in paths:
         assert client.get(path).status_code == 403, path
+
+    client.acting_as(_user(""))  # every scope, ADMIN included
+    for path in paths:
+        assert client.get(path).status_code == 200, path
 
 
 def test_reading_requires_read_and_writing_requires_execute(client, app) -> None:

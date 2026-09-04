@@ -38,7 +38,28 @@ from .tenancy import TenantId
 
 
 def current_tenant(user: User = Depends(current_user)) -> TenantId:
-    return user.tenant_id
+    """Whose rows this request touches. One decision, in `tenancy.of_user`."""
+    from .tenancy import TenantRequired, of_user
+
+    try:
+        return of_user(user, method="discovery")
+    except TenantRequired as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+def console_tenant(user: User = Depends(current_user)) -> TenantId:
+    """What the operator console reads: across tenants for an administrator.
+
+    A separate dependency from `current_tenant` rather than a parameter on it,
+    so a route that reads the whole house says so at the point of use and
+    `grep console_tenant` lists every one of them.
+    """
+    from .tenancy import TenantRequired, console_scope
+
+    try:
+        return console_scope(user, method="the operator console")
+    except TenantRequired as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 def build_router() -> APIRouter:

@@ -355,9 +355,21 @@ def test_one_tenant_never_sees_anothers_conversations(client, app) -> None:
 
 
 def test_an_account_with_no_tenant_reaches_nothing(client) -> None:
-    client.acting_as(_user(""))
+    """A tenantless account reaches nothing — unless it is the operator.
+
+    `_user("")` grants every scope by default, ADMIN included, so this asserted
+    a 403 for the one account that must not get one: the administrator running
+    the console has no customer tenant, and refusing them here refused them on
+    every tenant-scoped page at once. They are scoped to the house tenant
+    instead. A tenantless account without ADMIN is still refused, which is the
+    isolation this test was written for.
+    """
+    client.acting_as(_user("", Scope.READ, Scope.EXECUTE))
     assert client.get("/api/chat").status_code == 403
     assert client.post("/api/chat", json={"text": "hi"}).status_code == 403
+
+    client.acting_as(_user(""))  # every scope, ADMIN included
+    assert client.get("/api/chat").status_code == 200
 
 
 def test_approving_with_no_mission_timeline_refuses_rather_than_marking_it_done(

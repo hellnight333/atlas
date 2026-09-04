@@ -83,6 +83,60 @@ def require(tenant: TenantId | None, *, method: str) -> TenantId:
     return tenant
 
 
+#: The tenant an operator account belongs to when it belongs to no customer.
+#:
+#: An administrator running the console is not a customer, and before this they
+#: had `tenant_id = ""` — which meant every tenant-scoped surface answered 403
+#: or read nothing, so a console with 59 companies in its database showed the
+#: operator an empty screen on every page. A house tenant is a real tenant that
+#: happens to be us, which is both true and the thing that makes writes work.
+HOUSE_TENANT = "house"
+
+
+def of_user(user, *, method: str) -> TenantId:
+    """The tenant a request writes to. One definition, not five.
+
+    This decision lived as five copies of the same eight lines — in chat,
+    models, credentials, missions and the app — each with its own wording and
+    its own opportunity to drift. It is one thing: whose rows is this caller
+    touching.
+    """
+    from ..auth.models import Scope
+
+    tenant = (getattr(user, "tenant_id", "") or "").strip()
+    if tenant:
+        return tenant
+    # An operator running Qevik itself has no customer tenant — that is what the
+    # `User.tenant_id` docstring means by "they use the internal surfaces, which
+    # name a tenant explicitly". This is that naming, in the one place it can
+    # be, rather than each surface answering 403 and leaving the operator a
+    # console where chat, models and credentials all refuse them.
+    if Scope.ADMIN in (getattr(user, "scopes", frozenset()) or frozenset()):
+        return HOUSE_TENANT
+    raise TenantRequired(
+        f"{method} is tenant-scoped and this account is attached to no tenant.")
+
+
+def console_scope(user, *, method: str) -> TenantId:
+    """What an operator console *reads*, which is not what it writes.
+
+    Deliberately a second function rather than a flag on the first, because the
+    two answers differ for the same person and hiding that behind a boolean is
+    how one of them ends up applied to the other. An administrator writes to
+    their own tenant and reads across all of them; anybody else does both within
+    their own.
+
+    Every cross-tenant read in this system is therefore greppable: it either
+    names ALL_TENANTS or it calls this.
+    """
+    from ..auth.models import Scope
+
+    scopes = getattr(user, "scopes", frozenset()) or frozenset()
+    if Scope.ADMIN in scopes:
+        return ALL_TENANTS
+    return of_user(user, method=method)
+
+
 def predicate(tenant: TenantId, *, column: str = "tenant_id",
               alias: str = "") -> tuple[str, dict]:
     """The SQL fragment and parameters that scope a query.

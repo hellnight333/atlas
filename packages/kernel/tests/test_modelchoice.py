@@ -269,6 +269,18 @@ def test_every_entry_point_requires_a_tenant(credentials) -> None:
 
 
 def test_an_account_with_no_tenant_reaches_nothing(client) -> None:
-    client.acting_as(_user(""))
+    """A tenantless account reaches nothing — unless it is the operator.
+
+    `_user("")` grants every scope by default, ADMIN included, so this asserted
+    a 403 for the one account that must not get one: the administrator running
+    the console has no customer tenant, and refusing them here refused them on
+    every tenant-scoped page at once. They are scoped to the house tenant
+    instead. A tenantless account without ADMIN is still refused, which is the
+    isolation this test was written for.
+    """
+    client.acting_as(_user("", Scope.READ))
     assert client.get("/api/models").status_code == 403
     assert client.get("/api/models/selection").status_code == 403
+
+    client.acting_as(_user(""))  # every scope, ADMIN included
+    assert client.get("/api/models").status_code == 200

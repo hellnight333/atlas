@@ -18,8 +18,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..auth.api import Scope, User, requires
-from ..opportunity.api import current_tenant
-from ..opportunity.tenancy import TenantId
+from ..opportunity.api import console_tenant, current_tenant
+from ..opportunity.tenancy import TenantId, TenantRequired
 from . import pipeline
 
 
@@ -100,7 +100,7 @@ def build_router() -> APIRouter:
 
     @router.get("/pipeline")
     def whole_pipeline(request: Request, limit: int = 200,
-                       tenant: TenantId = Depends(current_tenant),
+                       tenant: TenantId = Depends(console_tenant),
                        _: User = Depends(requires(Scope.READ))) -> dict[str, Any]:
         """Every relationship, with the board over it.
 
@@ -112,6 +112,13 @@ def build_router() -> APIRouter:
         channels = _channels_ready(request)
         try:
             businesses = list(repository.list_businesses(tenant=tenant))
+        except TenantRequired:
+            # Not caught. A tenant-scoped call made without a tenant is this code
+            # being wrong, and reporting it as "the store could not be read"
+            # is a third fact that is true of neither — it sent me looking at a
+            # database that was answering fine while the console showed an
+            # operator an empty pipeline over 59 companies.
+            raise
         except Exception:
             # The store could not be read. Not an empty pipeline — the two are
             # different facts and only one of them means "there is no work".
