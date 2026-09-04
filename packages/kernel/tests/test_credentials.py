@@ -600,3 +600,98 @@ class TestTheRegistryUsesTheStoredKeyNotTheShell:
 
         assert registry_for(service, tenant=A).models == []
         assert "a-real-looking-secret" not in caplog.text
+
+
+class TestAWorkerSeesACredentialConnectedWhileItRuns:
+    """A long-running process folded the timeline once and held that answer.
+
+    For the control plane that is fine — it is the process doing the writing.
+    For a worker it was not: an operator tested a credential in the Credential
+    Centre, it became CONNECTED, and the worker went on refusing to dispatch
+    against its boot snapshot. Two missions sat in `queued` on this host logging
+    "needs qwen, anthropic, openai in the Credential Centre" while that centre
+    said CONNECTED, and only a restart cleared it.
+    """
+
+    def test_a_credential_stored_after_start_up_becomes_visible(self, tmp_path,
+                                                                monkeypatch) -> None:
+        from atlas_kernel.credentials.service import CredentialService, Status
+        from atlas_kernel.credentials.vault import FileSecretStore, Vault
+        from atlas_kernel.mission.timeline import Timeline
+        from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
+
+        monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
+        records = Timeline(tmp_path / "credentials.jsonl", factory=CREDENTIAL_FACTORY)
+        vault = Vault(FileSecretStore(tmp_path / "vault.json"))
+
+        # The worker: started before anything was stored.
+        worker = CredentialService(vault, events=records.read(), sink=records.append)
+        worker.follow(records.read)
+        assert worker.status(provider="qwen", tenant=A) is Status.NOT_CONFIGURED
+
+        # The console, a different process, storing and verifying.
+        console = CredentialService(vault, events=records.read(), sink=records.append)
+        console.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        console.verify(provider="qwen", tenant=A,
+                       probe=lambda _: (Status.CONNECTED, "accepted"))
+
+        assert worker.refresh() is True
+        assert worker.status(provider="qwen", tenant=A) is Status.CONNECTED
+
+    def test_refresh_reports_when_nothing_changed(self, tmp_path, monkeypatch) -> None:
+        """So a worker can log a change without logging every tick."""
+        from atlas_kernel.credentials.service import CredentialService
+        from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
+        from atlas_kernel.credentials.vault import FileSecretStore, Vault
+        from atlas_kernel.mission.timeline import Timeline
+
+        monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
+        records = Timeline(tmp_path / "credentials.jsonl", factory=CREDENTIAL_FACTORY)
+        service = CredentialService(Vault(FileSecretStore(tmp_path / "vault.json")),
+                                    events=records.read(), sink=records.append)
+        service.follow(records.read)
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+        assert service.refresh() is False
+        assert service.refresh() is False
+
+    def test_a_service_that_follows_nothing_is_unchanged(self, service) -> None:
+        """A test or a single request builds one of these and must not acquire
+        new behaviour by existing."""
+        assert service.refresh() is False
+
+    def test_an_unreadable_timeline_keeps_the_last_good_view(self, tmp_path,
+                                                             monkeypatch) -> None:
+        """Emptying the view on a transient read failure would turn it into "no
+        credentials are configured" — which reads as a deliberate state and
+        stops work for a reason that is not true."""
+        from atlas_kernel.credentials.service import CredentialService, Status
+        from atlas_kernel.credentials.service import FACTORY as CREDENTIAL_FACTORY
+        from atlas_kernel.credentials.vault import FileSecretStore, Vault
+        from atlas_kernel.mission.timeline import Timeline
+
+        monkeypatch.setenv("QEVIK_VAULT_MASTER_KEY", "test-only-master-key")
+        records = Timeline(tmp_path / "credentials.jsonl", factory=CREDENTIAL_FACTORY)
+        service = CredentialService(Vault(FileSecretStore(tmp_path / "vault.json")),
+                                    events=records.read(), sink=records.append)
+        service.store(provider="qwen", tenant=A, secret="a-real-looking-secret")
+
+        def unreadable():
+            raise OSError("the ledger is unreachable")
+
+        service.follow(unreadable)
+        assert service.refresh() is False
+        assert service.status(provider="qwen", tenant=A) is Status.PENDING_CREDENTIAL
+
+
+def test_the_worker_re_reads_credentials_before_it_checks_them() -> None:
+    """The fix only works if something calls it, and on the dispatch path."""
+    from pathlib import Path
+
+    worker = (Path(__file__).resolve().parents[3] / "infra" / "mission_worker.py"
+              ).read_text(encoding="utf-8")
+    assert "service.follow(records.read)" in worker
+    refresh = worker.index("credentials.refresh()")
+    check = worker.index("connected=usable_for(credentials")
+    assert refresh < check, (
+        "the worker checks credentials before re-reading them, so a key "
+        "connected since the last tick still does not count")

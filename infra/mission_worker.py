@@ -1009,15 +1009,29 @@ def build_worker(name: str, timeline: Timeline, *, worktrees: Path,
 
 
 def credential_service(credentials_at: CredentialPaths) -> object:
-    """The vault this worker reads, opened once.
+    """The vault this worker reads. One object, kept current.
 
     Separate from `roles_for` so the dispatch check and the agents share one
     view: two `CredentialService` objects over the same files would answer the
     same question at different moments and disagree about what is configured.
+
+    It used to be opened once and *folded* once, which is a different thing and
+    was the bug. An operator testing a credential in the Credential Centre moved
+    it to CONNECTED, and this worker went on refusing to dispatch against its
+    boot snapshot. Two missions sat in `queued` logging "needs qwen, anthropic,
+    openai in the Credential Centre" while that centre said CONNECTED, and only
+    a restart cleared it — the worst kind of fix, because it teaches an operator
+    to restart things rather than to believe what a screen says.
+
+    `follow` keeps it one object and one view; `pass_once` re-reads before the
+    dispatch check, so a credential connected since the last tick counts on this
+    one.
     """
     records = Timeline(credentials_at.records, factory=CREDENTIAL_FACTORY)
-    return CredentialService(Vault(FileSecretStore(credentials_at.vault)),
-                             events=records.read(), sink=records.append)
+    service = CredentialService(Vault(FileSecretStore(credentials_at.vault)),
+                                events=records.read(), sink=records.append)
+    service.follow(records.read)
+    return service
 
 
 def tenant_headroom(ledger: object, tenant: str) -> float | None:
@@ -1176,6 +1190,12 @@ def pass_once(timeline: Timeline, *, tenant: str, name: str, worktrees: Path,
     # The allowance, before choosing work rather than after doing it. The
     # scheduler refuses a mission whose estimate the tenant cannot carry, and an
     # unpriced mission needs headroom of its own.
+    # Before the dispatch check reads it, so a credential connected since the
+    # last pass counts on this one.
+    if getattr(credentials, "refresh", None) and credentials.refresh():
+        log.info("credentials changed: %s",
+                 ", ".join(sorted(usable_for(credentials, tenant=tenant))) or "none usable")
+
     waiting = queued(timeline, tenant=tenant,
                      connected=usable_for(credentials, tenant=tenant),
                      remaining_units=tenant_headroom(ledger, tenant),

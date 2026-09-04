@@ -195,11 +195,51 @@ class CredentialService:
         """
         self._vault = vault
         self._sink = sink
+        self._source: Callable[[], list] | None = None
         self._records: dict[str, CredentialRecord] = (
             restore(events) if events is not None else {})
         if self._records:
             log.info("credentials: restored %d record(s) from the timeline",
                      len(self._records))
+
+    def follow(self, source: Callable[[], list]) -> None:
+        """Read the records again whenever `refresh()` is called.
+
+        A long-running process folds the timeline once at start-up and then
+        holds that answer forever. For the control plane that is fine — it is
+        the process doing the writing. For a worker it is not: an operator
+        tests a credential in the Credential Centre, it becomes CONNECTED, and
+        the worker goes on refusing to dispatch against the boot snapshot,
+        silently, until somebody restarts it.
+
+        That happened on this host. Two missions sat in `queued` logging
+        "needs qwen, anthropic, openai in the Credential Centre" while the
+        Credential Centre said CONNECTED, and a restart fixed it — which is the
+        worst kind of fix, because it teaches an operator to restart things
+        rather than to believe what a screen says.
+        """
+        self._source = source
+
+    def refresh(self) -> bool:
+        """Re-fold the records. Returns whether anything changed.
+
+        A no-op when nothing is following, so a service constructed for a test
+        or for a single request behaves exactly as before.
+        """
+        if self._source is None:
+            return False
+        try:
+            rebuilt = restore(self._source())
+        except Exception:  # noqa: BLE001 - an unreadable timeline is not a change
+            # Keeping the previous view. Emptying it here would turn a transient
+            # read failure into "no credentials are configured", which reads as
+            # a deliberate state and stops work for a reason that is not true.
+            log.warning("credentials: the record timeline could not be re-read; "
+                        "keeping the view from the last successful read")
+            return False
+        changed = rebuilt != self._records
+        self._records = rebuilt
+        return changed
 
     def _remember(self, record: CredentialRecord, kind: str, *,
                   actor: str = "operator") -> None:

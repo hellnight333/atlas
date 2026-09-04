@@ -178,9 +178,9 @@ def test_no_action_contains_a_credential(store, monkeypatch) -> None:
 
 # ============================================ through the API
 
-def _as(tenant: str) -> User:
+def _as(tenant: str, *, scopes=frozenset(Scope)) -> User:
     return User(username=f"u-{tenant}", password_hash=hash_password("test-only-password"),
-                tenant_id=tenant, scopes=frozenset(Scope))
+                tenant_id=tenant, scopes=scopes)
 
 
 @pytest.fixture
@@ -231,9 +231,17 @@ def test_one_tenant_never_sees_anothers_actions(client, store) -> None:
 
 
 def test_an_account_with_no_tenant_sees_no_actions(client) -> None:
-    client.acting_as(_as(""))
+    """`_as("")` grants every scope, ADMIN included — so this asserted a 403 for
+    the one account that must not get one. An administrator with no customer
+    tenant acts for the house; anybody else with no tenant is still refused."""
+    from atlas_kernel.auth import Scope
+
+    client.acting_as(_as("", scopes=frozenset({Scope.READ})))
     assert client.get("/api/customer/actions").status_code == 403
     assert client.get("/api/customer/integrations").status_code == 403
+
+    client.acting_as(_as(""))  # the operator
+    assert client.get("/api/customer/actions").status_code == 200
 
 
 # ============================================ the plan surface

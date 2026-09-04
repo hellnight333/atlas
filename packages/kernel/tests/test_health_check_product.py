@@ -384,10 +384,17 @@ class TestItCanActuallyBeDelivered:
         the failure the fingerprint check exists to catch."""
         from pathlib import Path as _Path
 
-        script = (_Path(__file__).resolve().parents[3]
-                  / "infra" / "deploy_control.sh").read_text()
+        root = _Path(__file__).resolve().parents[3]
+        script = (root / "infra" / "deploy_control.sh").read_text()
 
-        assert "qevik-worker-healthcheck.service" in script
+        # Derived. This named one unit and the deploy named five in a variable;
+        # neither noticed when a sixth worker was added. The deploy now builds
+        # its list from the unit files, so the check is that it still does.
+        assert "ls qevik-worker*.service" in script, (
+            "the deploy writes its worker list out again, so the next worker "
+            "added will run stale code after every deploy")
+        assert (root / "infra" / "qevik-worker-healthcheck.service").is_file(), (
+            "there is no health-check worker unit for the deploy to pick up")
 
 
 class TestTheResearchAHealthCheckIsGiven:
