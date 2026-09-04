@@ -1287,6 +1287,14 @@ def test_the_console_directory_can_be_named_by_the_environment(tmp_path) -> None
             assert "console" in client.get("/").text
             # A sub-directory asset, which is how the floor is reached.
             assert "floor" in client.get("/office/index.html").text
+            # And the two spellings a person and a browser actually use. All
+            # three used to answer 200 with the *console* shell, which reads as
+            # working right up until somebody opens it.
+            for spelling in ("/office", "/office/"):
+                page = client.get(spelling)
+                assert page.status_code == 200, spelling
+                assert "floor" in page.text, spelling
+                assert "console" not in page.text, spelling
             # Still never a catch-all: an unknown path is a 404, not the shell.
             assert client.get("/not-a-page").status_code == 404
     finally:
@@ -1294,3 +1302,56 @@ def test_the_console_directory_can_be_named_by_the_environment(tmp_path) -> None
             os.environ.pop("QEVIK_CONSOLE", None)
         else:
             os.environ["QEVIK_CONSOLE"] = previous
+
+
+def test_the_floor_the_repository_actually_ships_is_the_one_served() -> None:
+    """Serve the real bundle, not a fixture that agrees with the test.
+
+    The test above builds its own `console/office/index.html` and passed for as
+    long as the floor lived at `apps/office/` — a directory the deploy never
+    shipped and this application never served. A fixture that invents the
+    layout it is checking cannot notice that the layout is wrong, so this one
+    reads the repository.
+
+    Titles rather than markup: they are what a person sees in the tab, and they
+    are the shortest thing that tells the two documents apart.
+    """
+    from atlas_kernel.qevik.app import CONSOLE, Wiring, create_app
+
+    assert CONSOLE.is_dir(), f"the console bundle is missing: {CONSOLE}"
+    assert (CONSOLE / "office" / "index.html").is_file(), (
+        "the floor is not inside the console bundle, so no deploy carries it"
+    )
+
+    with TestClient(create_app(Wiring(console=CONSOLE))) as client:
+        assert "<title>Qevik Control</title>" in client.get("/").text
+        for spelling in ("/office", "/office/", "/office/index.html"):
+            page = client.get(spelling)
+            assert page.status_code == 200, spelling
+            assert "<title>Qevik Floor</title>" in page.text, (
+                f"{spelling} served something that is not the floor"
+            )
+
+
+def test_every_surface_in_the_console_bundle_is_shipped_by_the_deploy() -> None:
+    """A surface the deploy does not copy is a surface that does not exist.
+
+    The floor was written, tested, committed and deployed while sitting outside
+    every shipped prefix. Nothing failed — the host simply answered with the
+    console. Deriving this from the bundle means the next surface cannot repeat
+    it: put a directory under the console and the deploy already carries it.
+    """
+    from atlas_kernel.qevik.app import CONSOLE
+
+    script = (Path(__file__).resolve().parents[3] / "infra" / "deploy_control.sh")
+    text = script.read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[3]
+    relative = CONSOLE.resolve().relative_to(root).as_posix()
+
+    assert f"{relative}/" in text, (
+        f"the deploy does not ship {relative}/, so nothing under it reaches a host"
+    )
+    for surface in sorted(d for d in CONSOLE.iterdir() if d.is_dir()):
+        assert (surface / "index.html").is_file(), (
+            f"{surface.name}/ is in the bundle with no index.html, so /{surface.name} 404s"
+        )

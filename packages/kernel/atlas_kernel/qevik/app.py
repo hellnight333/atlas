@@ -378,8 +378,21 @@ def _serve_console(app: FastAPI, root: Path | None) -> None:
         # path comes from the URL, and serving whatever it names is an
         # arbitrary-file-read with extra steps.
         candidate = (directory / path).resolve()
-        if candidate.is_file() and candidate.is_relative_to(directory.resolve()):
+        if not candidate.is_relative_to(directory.resolve()):
+            raise HTTPException(status_code=404, detail="no such path")
+        if candidate.is_file():
             return FileResponse(candidate)
+        # A directory serves its index, which is how a second surface reaches
+        # the browser at all. `apps/control/src/office/` is the agent floor: a
+        # separate document, shipped inside the console bundle so one rsync
+        # carries both and there is no second transfer path to keep in sync.
+        #
+        # Without this, `/office` fell through to the console shell below and
+        # returned it with a 200. Three spellings all answered 200 and I read
+        # that as the floor being served; the operator opened it and got the
+        # dashboard. A status code is not a page.
+        if candidate.is_dir() and (candidate / "index.html").is_file():
+            return FileResponse(candidate / "index.html")
         if f"/{path}" in CONSOLE_PATHS:
             # A client-side route. The shell rather than a 404 is what makes a
             # deep link survive a reload.
