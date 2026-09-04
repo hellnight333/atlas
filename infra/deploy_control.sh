@@ -476,10 +476,36 @@ echo "==> deploying $SHA"
 EXPORT="$(mktemp -d)"
 WORK="$(mktemp -d)"   # the manifest is built here, outside the export
 trap 'rm -rf "$EXPORT" "$WORK"' EXIT
+# Asked of the commit, not of the working tree, and asked *before* the archive:
+# `git archive` fails outright on a pathspec that matches nothing, so naming a
+# file a commit may not carry would refuse the whole deploy. An older commit —
+# which this script accepts deliberately, so redeploying the previous state is
+# one variable — predates this document.
+ROADMAP_PATH=""
+if git -C "$ROOT" cat-file -e "$SHA:MASTER_STATE.md" 2>/dev/null; then
+  ROADMAP_PATH="MASTER_STATE.md"
+fi
+
 if ! git -C "$ROOT" archive --format=tar "$SHA" \
-     -- packages/kernel/atlas_kernel infra apps/control/src | tar -x -C "$EXPORT"; then
+     -- packages/kernel/atlas_kernel infra apps/control/src $ROADMAP_PATH \
+     | tar -x -C "$EXPORT"; then
   echo "REFUSED: $SHA could not be exported." >&2
   exit 3
+fi
+
+# MASTER_STATE.md is a document the *runtime* reads: `/control/roadmap` serves
+# it and the console's Roadmap page renders it. It lives at the repository root,
+# which is not one of the three shipped subtrees, so the deployed host had the
+# route and not the document — the route reported "could not be read", honestly
+# and uselessly, exactly the way /office answered 200 with the wrong page.
+#
+# Moved into the infra subtree here rather than made a fourth shipped path:
+# infra is already exported, manifested, transferred and verified, so this
+# inherits all four instead of adding a parallel route through each. The reader
+# looks for it in both places — the repository root in development, `infra/`
+# on a host — and a test asserts this line and that reader agree.
+if [ -f "$EXPORT/MASTER_STATE.md" ]; then
+  mv "$EXPORT/MASTER_STATE.md" "$EXPORT/infra/MASTER_STATE.md"
 fi
 
 # Verify the export against the commit before anything reads it. `git archive`

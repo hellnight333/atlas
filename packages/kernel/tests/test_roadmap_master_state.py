@@ -141,3 +141,47 @@ class TestTheRoute:
         for invented in ("product_a", "product_b", "product_c"):
             assert invented not in page, (
                 f"the page still expects {invented}, which nothing serves")
+
+
+def test_the_deploy_ships_the_document_the_reader_looks_for() -> None:
+    """The route existed on the host and the document did not.
+
+    `MASTER_STATE.md` is at the repository root, which is not one of the three
+    subtrees `deploy_control.sh` ships, so `/control/roadmap` answered "could
+    not be read" on a perfectly healthy deployment — honest, and useless. The
+    same shape as /office: a surface whose data was never copied.
+
+    A fallback nobody checks is how two locations become one bug, so this
+    asserts the deploy's move and the reader's candidate list are the same
+    place.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    script = (root / "infra" / "deploy_control.sh").read_text(encoding="utf-8")
+
+    exported = script.split('git -C "$ROOT" archive', 1)[1][:400]
+    assert "MASTER_STATE.md" in exported, (
+        "the export does not include MASTER_STATE.md, so nothing reaches the host")
+
+    destination = script.split('mv "$EXPORT/MASTER_STATE.md" "$EXPORT/', 1)[1
+                               ].split('"', 1)[0]
+    assert destination == "infra/MASTER_STATE.md", destination
+
+    relative = [c for c in master_state.CANDIDATES
+                if c != master_state.CANDIDATES[0]]
+    assert relative, "the reader looks in only one place and the deploy moves it"
+    assert relative[0].parent.name == "infra", (
+        f"the deploy puts it in {destination} and the reader looks in "
+        f"{relative[0].parent.name}/")
+
+
+def test_the_reader_resolves_per_call_not_once_at_import() -> None:
+    """A process that starts before the payload lands would otherwise cache
+    "absent" for its whole life."""
+    import inspect
+
+    source = inspect.getsource(master_state.read)
+    assert "_document()" in source, (
+        "read() uses the module-level constant, so the answer is fixed at "
+        "import time")

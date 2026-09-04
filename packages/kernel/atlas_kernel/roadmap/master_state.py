@@ -21,9 +21,37 @@ import re
 from pathlib import Path
 from typing import Any
 
-#: The document. Four levels up from this module is the repository root:
+#: Where the document lives, in the order to look.
+#:
+#: Two places, because it is one file with two homes. In the repository it sits
+#: at the root, which is not one of the three subtrees `deploy_control.sh`
+#: ships — so the deployed host had the route and not the document, and
+#: `/control/roadmap` answered "could not be read": honest, and useless.
+#:
+#: The deploy moves it into `infra/` on the way out, inheriting that subtree's
+#: export, manifest, transfer and verification rather than adding a fourth path
+#: through each. So on a host it is beside `mission_worker.py`; in a checkout it
+#: is at the root. A test asserts the deploy and this list agree, because a
+#: fallback nobody checks is how two locations become one bug.
+#:
 #: roadmap -> atlas_kernel -> kernel -> packages -> root.
-MASTER_STATE = Path(__file__).resolve().parents[4] / "MASTER_STATE.md"
+_ROOT = Path(__file__).resolve().parents[4]
+CANDIDATES: tuple[Path, ...] = (
+    _ROOT / "MASTER_STATE.md",            # a checkout
+    _ROOT / "infra" / "MASTER_STATE.md",  # a deployed payload
+)
+
+
+def _document() -> Path:
+    """The first candidate that exists, or the first one, so the error names a
+    path somebody can look for rather than the last thing tried."""
+    for candidate in CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return CANDIDATES[0]
+
+
+MASTER_STATE = _document()
 
 #: Which sections the roadmap surface shows, in the order it shows them, with
 #: the one-line note that says what each is for.
@@ -130,7 +158,9 @@ def read(path: Path | None = None) -> dict[str, Any]:
     roadmap with nothing on it — the distinction this codebase draws everywhere
     a store might be unreachable.
     """
-    document = path or MASTER_STATE
+    # Resolved per call, not once at import: a process that starts before the
+    # payload lands would cache "absent" for its whole life.
+    document = path or _document()
     try:
         text = document.read_text(encoding="utf-8")
     except OSError:

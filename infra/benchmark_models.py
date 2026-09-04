@@ -18,6 +18,18 @@ Politeness is not optional with some providers. NVIDIA's edge blocked the
 calling *address* after a concurrent burst — `403 Forbidden` as an nginx HTML
 page for every request, from every model, with a key that worked fine
 elsewhere. So this is serial, with a pause.
+
+**It needs the vault open.** `QEVIK_VAULT_MASTER_KEY` lives in `control.env`,
+not `atlas.env`, so a run given only the latter finds a sealed vault and reports
+"no models are registered" — which is true of that process and false of the
+deployment. Run it with both:
+
+    systemd-run --wait --collect --pipe \
+      --property=EnvironmentFile=/opt/qevik/atlas.env \
+      --property=EnvironmentFile=/opt/qevik/control.env \
+      --setenv=QEVIK_STATE=/var/lib/qevik/control \
+      --property=User=qevik --property=Group=qevik \
+      /opt/qevik/atlas/.venv/bin/python infra/benchmark_models.py
 """
 
 from __future__ import annotations
@@ -51,6 +63,13 @@ def registry_for_tenant(tenant: str):
     return registry_for(service, tenant=tenant), where
 
 
+def _vault_of(where):
+    """The vault this run opened, for reporting why it found nothing."""
+    from atlas_kernel.credentials.vault import FileSecretStore, Vault
+
+    return Vault(FileSecretStore(where.vault))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tenant", default="tenant-qevik")
@@ -68,8 +87,17 @@ def main(argv: list[str] | None = None) -> int:
                      if not args.provider or r.spec.provider == args.provider]
 
     if not registrations:
-        # Not an error, and not silence. A deployment with no model credential
-        # has nothing to measure, and saying so is the useful output.
+        # Not an error, and not silence. But "no credential" and "a sealed
+        # vault" are different facts, and the first version of this said the
+        # first when the second was true — which sends the reader to the
+        # Credential Centre to add keys that are already there.
+        sealed = getattr(_vault_of(where), "sealed", None)
+        if sealed:
+            print("the vault is sealed in this process, so no stored credential "
+                  "could be read. QEVIK_VAULT_MASTER_KEY lives in control.env, "
+                  "not atlas.env — see this file's docstring for the invocation.",
+                  file=sys.stderr)
+            return 2
         print("no models are registered for this tenant. Add a model "
               "credential in the Credential Centre first.", file=sys.stderr)
         return 1
