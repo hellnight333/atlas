@@ -593,6 +593,27 @@ function fail(message) {
 }
 const empty = (m) => `<div class="empty">${esc(m)}</div>`;
 
+/* Wiring that must run after the page is in the DOM.
+ *
+ * Every view used `queueMicrotask` to attach its click handlers, and every one
+ * of them attached to nothing. `render()` does
+ * `main.innerHTML = await views[page]()`: the view schedules its microtask
+ * *before* it returns, and the `await` continuation that assigns innerHTML is
+ * queued after it. So the handler ran against a document that did not yet
+ * contain a single one of its buttons.
+ *
+ * Nine handlers, all dead. Decisions could not be answered, a model could not
+ * be chosen, a credential could not be saved or tested, a message could not be
+ * sent. The console rendered perfectly and did nothing — which is why it went
+ * unnoticed: every page looked right.
+ *
+ * `onRendered` defers to `render()`, which drains this after the assignment.
+ * A view that needs the DOM asks for it; it cannot get the timing wrong,
+ * because it no longer chooses the timing.
+ */
+const pendingWiring = [];
+const onRendered = (fn) => pendingWiring.push(fn);
+
 /* --------------------------------------------------------------- state */
 const state = { page: 'dashboard', arg: null, me: null, counts: {},
                 origins: null };
@@ -1004,7 +1025,7 @@ async function missionDetail(id) {
     ${report ? `<div class="card"><h3>Report</h3><pre>${esc(report.report)}</pre></div>`
       : '<div class="card"><h3>Report</h3><p class="note">No report yet. One is written when the mission finishes.</p></div>'}`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const a = document.querySelector('[data-approve]');
     if (a) a.addEventListener('click', async () => {
       a.disabled = true; a.textContent = 'Queueing…';
@@ -1393,7 +1414,7 @@ views.more = async () => {
       </div>
     </div>`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const out = $('more-signout');
     /* Sign out lives here on a phone because the rail that holds it is hidden.
      * Without this the only way out of a session on a phone is clearing the
@@ -1426,7 +1447,7 @@ views.chat = async () => {
       </div><div class="actions">${pill(c.status)}</div></div>`).join('')
       || empty('No conversations yet.')}</div>`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const form = $('start');
     if (form) form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1707,7 +1728,7 @@ async function opportunities() {
   }
   const rows = found.opportunities || [];
 
-  queueMicrotask(() => {
+  onRendered(() => {
     document.querySelectorAll('[data-approve-opportunity]').forEach((button) => {
       const signal = button.dataset.approveOpportunity;
       const said = document.querySelector(`[data-said="${signal}"]`);
@@ -1983,7 +2004,7 @@ async function conversation(id) {
         </form>` : ''}
     </div>`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const plan = document.querySelector('[data-plan]');
     if (plan) plan.addEventListener('click', async () => {
       plan.disabled = true; plan.textContent = 'Asking a model…';
@@ -2161,7 +2182,7 @@ async function humanTask(id) {
     accepts.includes('defer') ? `<button data-respond="defer">Defer</button>` : '',
   ].join(' ');
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const note = document.querySelector(`[data-said="${CSS.escape(id)}"]`);
     document.querySelectorAll('[data-respond]').forEach((button) => {
       button.addEventListener('click', async () => {
@@ -2388,7 +2409,7 @@ views.credentials = async () => {
       until something tests it — reporting it as working because somebody pasted
       one is how an integration sits broken behind a green tick.</p>`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     document.querySelectorAll('form[data-provider]').forEach((form) => {
       const provider = form.dataset.provider;
       const configured = form.querySelector('button.primary').textContent === 'Rotate';
@@ -2534,7 +2555,7 @@ views.models = async () => {
       not report one it is ${pill('UNKNOWN')}, never zero.</p></div>
     ${measured(bench)}`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     document.querySelectorAll('select[data-role]').forEach((select) => {
       select.addEventListener('change', async () => {
         try { await API.put('/api/models/selection/' + encodeURIComponent(select.dataset.role),
@@ -2743,7 +2764,7 @@ views.publications = async () => {
     directory on a server is not something Qevik decided to publish.</p>
     <p><a href="#/businesses">Businesses</a></p></div>`;
 
-  queueMicrotask(() => {
+  onRendered(() => {
     const button = document.querySelector('[data-check-live]');
     if (!button) return;
     button.addEventListener('click', async () => {
@@ -3033,6 +3054,17 @@ async function render() {
       'an empty list, because an empty list reads as "you have none".</p>';
   }
   main.removeAttribute('aria-busy');
+  /* After the assignment, always — including after the error branch, so a page
+     that failed still wires whatever it did manage to draw. Spliced rather than
+     iterated: a handler that queues more wiring must not extend the loop it is
+     running inside. */
+  for (const wire of pendingWiring.splice(0)) {
+    try { wire(); } catch (e) {
+      /* One view's wiring must not stop the rest. A page with three working
+         controls and one broken one is better than four dead ones. */
+      console.error('wiring failed', e);
+    }
+  }
   drawNav();
 }
 

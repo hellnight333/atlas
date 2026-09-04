@@ -530,7 +530,7 @@ def test_the_console_carries_no_secret_and_no_business_logic() -> None:
             "the role selector lists models without filtering out the ones "
             "whose licence forbids the work")
 
-    assert Path(CONSOLE / "index.html").stat().st_size < 162_000
+    assert Path(CONSOLE / "index.html").stat().st_size < 168_000
 
     # The console cannot be the thing that sends. Nothing in this codebase can
     # today, and the console is where a send button would be most natural and
@@ -1090,6 +1090,11 @@ def _run_the_view(script: str, resolve: dict, reject: list, tmp_path) -> dict:
         "globalThis.confirm = () => false;\n"
         "globalThis.alert = () => {};\n"
         "globalThis.render = () => {};\n"
+        # The real one is drained by `render()` after the page is written. Here
+        # nothing is written, so wiring is collected and never run — which is
+        # what this harness wants: it asserts on the HTML a view returns, not on
+        # what its handlers do.
+        "globalThis.onRendered = () => {};\n"
         "globalThis.API = {\n"
         "  get(path) {\n"
         "    if (Object.prototype.hasOwnProperty.call(CASE.resolve, path)) {\n"
@@ -1594,3 +1599,40 @@ def test_an_evaluation_only_model_cannot_be_picked_for_a_role() -> None:
     assert "evaluation only" in page, (
         "the model table does not say which models are licensed for evaluation "
         "only, so the reason one is missing from the selector is invisible")
+
+
+def test_the_console_wires_its_handlers_after_the_page_exists() -> None:
+    """Every interactive control in this console was dead.
+
+    `render()` does `main.innerHTML = await views[page]()`. Each view scheduled
+    its click handlers with `queueMicrotask` *before* returning, so the handler
+    ran in a microtask queued ahead of the `await` continuation that assigns
+    innerHTML — against a document containing none of its buttons.
+
+    Nine handlers. Decisions could not be answered, a model could not be
+    chosen, a credential could not be saved or tested, a message could not be
+    sent. Nothing errored and every page looked correct, which is why it
+    survived: the failure is invisible until somebody clicks.
+
+    Views now call `onRendered`, and `render()` drains that queue after the
+    assignment. A view cannot get the timing wrong because it no longer picks
+    the timing.
+    """
+    from atlas_kernel.qevik.app import CONSOLE
+
+    html = (CONSOLE / "index.html").read_text(encoding="utf-8")
+    script = html.split("<script>", 1)[1]
+
+    assert "const onRendered" in script, "there is no post-render wiring queue"
+
+    # Drained after the assignment, not before.
+    assigned = script.index("main.innerHTML = await")
+    drained = script.index("pendingWiring.splice(0)")
+    assert assigned < drained, (
+        "the wiring queue is drained before the page is written, which is the "
+        "original bug with a different name")
+
+    # And no view goes back to scheduling its own.
+    views = script.split("const views = {", 1)[-1]
+    assert "queueMicrotask" not in views, (
+        "a view schedules its own wiring again; it will attach to nothing")
