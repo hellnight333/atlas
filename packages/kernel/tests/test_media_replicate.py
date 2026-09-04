@@ -292,8 +292,9 @@ def test_the_cloud_provider_is_excluded_when_cloud_is_disabled(monkeypatch) -> N
 def test_no_price_is_invented_for_a_provider_that_bills_per_model() -> None:
     """A fabricated cost is used to choose between providers and is wrong in a
     way nobody can see."""
-    from atlas_kernel.media.registry import from_environment
     import os
+
+    from atlas_kernel.media.registry import from_environment
 
     os.environ["QEVIK_REPLICATE_API_TOKEN"] = "r8_test"
     try:
